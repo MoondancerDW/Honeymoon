@@ -340,7 +340,10 @@ async function start() {
     stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
     target: () => selection && {...selection},
-    setDistance: distance => view.setDistance(distance),
+    setDistance: distance => {
+      element('distance').value = String(distance);
+      return view.setDistance(distance);
+    },
     getCell: (x, y, z) => world.cellAt(x, y, z),
   });
   await loadChunks(manifest.chunks);

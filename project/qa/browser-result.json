@@ -5,16 +5,16 @@
   "distances": [
     {
       "distance": 8,
-      "buildMs": 8,
-      "frames": 145,
+      "buildMs": 11,
+      "frames": 144,
       "p50": 16.7,
-      "p95": 16.8,
+      "p95": 17,
       "pausesOver50ms": 1,
-      "maxMs": 166.6,
+      "maxMs": 166.5,
       "calls": 228,
-      "preciseMiB": 48.55,
+      "preciseMiB": 48.53,
       "coarseMiB": 1.95,
-      "preciseTriangles": 978996,
+      "preciseTriangles": 978568,
       "coarseTriangles": 39340,
       "before": {
         "x": -7.5,
@@ -24,21 +24,21 @@
       "after": {
         "x": -7.5,
         "y": 65,
-        "z": -22.60194000000002
+        "z": -22.537720000000057
       }
     },
     {
       "distance": 16,
-      "buildMs": 546,
+      "buildMs": 527,
       "frames": 154,
       "p50": 16.7,
       "p95": 17,
       "pausesOver50ms": 0,
-      "maxMs": 17.2,
+      "maxMs": 17.1,
       "calls": 249,
-      "preciseMiB": 48.55,
+      "preciseMiB": 48.53,
       "coarseMiB": 7.73,
-      "preciseTriangles": 978996,
+      "preciseTriangles": 978568,
       "coarseTriangles": 155830,
       "before": {
         "x": -7.5,
@@ -48,21 +48,21 @@
       "after": {
         "x": -7.5,
         "y": 65,
-        "z": -22.095780000000026
+        "z": -22.159240000000004
       }
     },
     {
       "distance": 32,
-      "buildMs": 2194,
-      "frames": 152,
+      "buildMs": 1993,
+      "frames": 154,
       "p50": 16.7,
-      "p95": 16.8,
+      "p95": 17,
       "pausesOver50ms": 0,
-      "maxMs": 16.9,
+      "maxMs": 17.1,
       "calls": 316,
-      "preciseMiB": 48.55,
+      "preciseMiB": 48.53,
       "coarseMiB": 29.22,
-      "preciseTriangles": 978996,
+      "preciseTriangles": 978568,
       "coarseTriangles": 589260,
       "before": {
         "x": -7.5,
@@ -72,22 +72,22 @@
       "after": {
         "x": -7.5,
         "y": 65,
-        "z": -22.096540000000033
+        "z": -22.161520000000024
       }
     }
   ],
   "startup": {
-    "started": 611.6999999992549,
-    "playable": 539.4000000003725,
+    "started": 2360.100000000559,
+    "playable": 1042.5999999996275,
     "chunksLoaded": 64,
     "lastEdit": 0,
     "calls": 161,
-    "triangles": 205680,
+    "triangles": 205594,
     "geometries": 155,
     "textures": 54,
-    "preciseBytes": 50913588,
+    "preciseBytes": 50891332,
     "coarseBytes": 2045680,
-    "preciseTriangles": 978996,
+    "preciseTriangles": 978568,
     "coarseTriangles": 39340,
     "pending": 0,
     "loaded": 706,
@@ -98,10 +98,10 @@
       "z": -19.5
     },
     "renderer": "WebKit WebGL",
-    "meshP50ms": 1.7,
-    "meshP95ms": 20.7,
-    "meshMaxMs": 115.9,
-    "maxInitialFrameMs": 133.5
+    "meshP50ms": 1,
+    "meshP95ms": 15.3,
+    "meshMaxMs": 74,
+    "maxInitialFrameMs": 133.4
   },
   "edits": {
     "selected": {
@@ -116,9 +116,9 @@
       ]
     },
     "removedVisibleToSecondClient": true,
-    "removeMs": 716.2999999998137,
+    "removeMs": 130.8999999994412,
     "replacedVisibleToSecondClient": true,
-    "placeMs": 1388.7000000001863
+    "placeMs": 81.29999999981374
   },
   "emulatedTouch": {
     "controls": true,
