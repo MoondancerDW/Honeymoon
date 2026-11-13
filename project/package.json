@@ -1,0 +1,20 @@
+{
+  "name": "honeymoon",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node server/index.mjs",
+    "import:world": "node import/anvil.mjs",
+    "test": "node --test import/*.test.mjs server/*.test.mjs world/*.test.mjs"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

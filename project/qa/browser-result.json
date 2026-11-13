@@ -1,0 +1,127 @@
+{
+  "browser": "157.0.4341.46",
+  "resolution": "1280×720",
+  "errors": [],
+  "distances": [
+    {
+      "distance": 8,
+      "buildMs": 8,
+      "frames": 145,
+      "p50": 16.7,
+      "p95": 16.8,
+      "pausesOver50ms": 1,
+      "maxMs": 166.6,
+      "calls": 228,
+      "preciseMiB": 48.55,
+      "coarseMiB": 1.95,
+      "preciseTriangles": 978996,
+      "coarseTriangles": 39340,
+      "before": {
+        "x": -7.5,
+        "y": 65,
+        "z": -19.5
+      },
+      "after": {
+        "x": -7.5,
+        "y": 65,
+        "z": -22.60194000000002
+      }
+    },
+    {
+      "distance": 16,
+      "buildMs": 546,
+      "frames": 154,
+      "p50": 16.7,
+      "p95": 17,
+      "pausesOver50ms": 0,
+      "maxMs": 17.2,
+      "calls": 249,
+      "preciseMiB": 48.55,
+      "coarseMiB": 7.73,
+      "preciseTriangles": 978996,
+      "coarseTriangles": 155830,
+      "before": {
+        "x": -7.5,
+        "y": 65,
+        "z": -19.5
+      },
+      "after": {
+        "x": -7.5,
+        "y": 65,
+        "z": -22.095780000000026
+      }
+    },
+    {
+      "distance": 32,
+      "buildMs": 2194,
+      "frames": 152,
+      "p50": 16.7,
+      "p95": 16.8,
+      "pausesOver50ms": 0,
+      "maxMs": 16.9,
+      "calls": 316,
+      "preciseMiB": 48.55,
+      "coarseMiB": 29.22,
+      "preciseTriangles": 978996,
+      "coarseTriangles": 589260,
+      "before": {
+        "x": -7.5,
+        "y": 65,
+        "z": -19.5
+      },
+      "after": {
+        "x": -7.5,
+        "y": 65,
+        "z": -22.096540000000033
+      }
+    }
+  ],
+  "startup": {
+    "started": 611.6999999992549,
+    "playable": 539.4000000003725,
+    "chunksLoaded": 64,
+    "lastEdit": 0,
+    "calls": 161,
+    "triangles": 205680,
+    "geometries": 155,
+    "textures": 54,
+    "preciseBytes": 50913588,
+    "coarseBytes": 2045680,
+    "preciseTriangles": 978996,
+    "coarseTriangles": 39340,
+    "pending": 0,
+    "loaded": 706,
+    "revision": 0,
+    "position": {
+      "x": -7.5,
+      "y": 65,
+      "z": -19.5
+    },
+    "renderer": "WebKit WebGL",
+    "meshP50ms": 1.7,
+    "meshP95ms": 20.7,
+    "meshMaxMs": 115.9,
+    "maxInitialFrameMs": 133.5
+  },
+  "edits": {
+    "selected": {
+      "x": -8,
+      "y": 64,
+      "z": -18,
+      "key": "legacy:2:0",
+      "offset": [
+        0,
+        1,
+        0
+      ]
+    },
+    "removedVisibleToSecondClient": true,
+    "removeMs": 716.2999999998137,
+    "replacedVisibleToSecondClient": true,
+    "placeMs": 1388.7000000001863
+  },
+  "emulatedTouch": {
+    "controls": true,
+    "width": 412
+  }
+}

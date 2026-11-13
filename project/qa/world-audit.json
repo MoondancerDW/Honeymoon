@@ -1,0 +1,504 @@
+{
+  "worldHash": "4854bb295b595980ca0d1360f1ec7492d3244812e868a0f329ae933bfe219d01",
+  "atlas": {
+    "width": 1024,
+    "height": 1024,
+    "pngBytes": 260276,
+    "rgba8Bytes": 4194304
+  },
+  "benchmarks": [
+    {
+      "label": "Detailed district",
+      "chunks": 64,
+      "sourceCells": 21023,
+      "definitions": 4575,
+      "free16BitIdsBeforeOtherBlockTypes": 60961,
+      "fixedDefinitionRegistry": {
+        "jsonBytes": 700870,
+        "gzipBytes": 51139,
+        "parseMs": 10.22
+      },
+      "compositionDataRegistry": {
+        "jsonBytes": 634909,
+        "gzipBytes": 71203,
+        "parseMs": 5.44
+      },
+      "materialTilesSharedByBoth": 59,
+      "atlasBytesIfDuplicatingOneUniqueTilePerMaterialRGBA": 60416,
+      "sourceBoxes": 12596,
+      "buildAllMs": 35.67
+    },
+    {
+      "label": "Source radius 32",
+      "chunks": 4096,
+      "sourceCells": 431193,
+      "definitions": 54229,
+      "free16BitIdsBeforeOtherBlockTypes": 11307,
+      "fixedDefinitionRegistry": {
+        "jsonBytes": 9798773,
+        "gzipBytes": 559895,
+        "parseMs": 144.37
+      },
+      "compositionDataRegistry": {
+        "jsonBytes": 8568346,
+        "gzipBytes": 800382,
+        "parseMs": 78.71
+      },
+      "materialTilesSharedByBoth": 70,
+      "atlasBytesIfDuplicatingOneUniqueTilePerMaterialRGBA": 71680,
+      "sourceBoxes": 177636,
+      "buildAllMs": 254.48
+    }
+  ],
+  "approximations": [
+    {
+      "id": 750,
+      "cells": 383,
+      "reasons": {
+        "RedPower wire connection geometry": 259,
+        "RedPower tube connection geometry": 124
+      }
+    },
+    {
+      "id": 219,
+      "cells": 125,
+      "reasons": {
+        "Simplified Jammy Furniture model": 125
+      }
+    },
+    {
+      "id": 27,
+      "cells": 71,
+      "reasons": {
+        "Flat rail geometry": 71
+      }
+    },
+    {
+      "id": 66,
+      "cells": 67,
+      "reasons": {
+        "Flat rail geometry": 67
+      }
+    },
+    {
+      "id": 201,
+      "cells": 56,
+      "reasons": {
+        "Simplified Jammy Furniture model": 56
+      }
+    },
+    {
+      "id": 200,
+      "cells": 55,
+      "reasons": {
+        "Simplified Jammy Furniture model": 55
+      }
+    },
+    {
+      "id": 2255,
+      "cells": 52,
+      "reasons": {
+        "Simplified BiblioCraft model": 52
+      }
+    },
+    {
+      "id": 220,
+      "cells": 43,
+      "reasons": {
+        "Simplified Jammy Furniture model": 43
+      }
+    },
+    {
+      "id": 763,
+      "cells": 43,
+      "reasons": {
+        "Simplified RedPower machine or control component": 43
+      }
+    },
+    {
+      "id": 768,
+      "cells": 40,
+      "reasons": {
+        "Simplified RedPower shaped lamp": 40
+      }
+    },
+    {
+      "id": 203,
+      "cells": 33,
+      "reasons": {
+        "Simplified Jammy Furniture model": 33
+      }
+    },
+    {
+      "id": 211,
+      "cells": 29,
+      "reasons": {
+        "Simplified Jammy Furniture model": 29
+      }
+    },
+    {
+      "id": 2249,
+      "cells": 28,
+      "reasons": {
+        "Simplified BiblioCraft model": 28
+      }
+    },
+    {
+      "id": 764,
+      "cells": 27,
+      "reasons": {
+        "Simplified RedPower machine or control component": 27
+      }
+    },
+    {
+      "id": 205,
+      "cells": 26,
+      "reasons": {
+        "Simplified Jammy Furniture model": 26
+      }
+    },
+    {
+      "id": 2254,
+      "cells": 22,
+      "reasons": {
+        "Simplified BiblioCraft model": 22
+      }
+    },
+    {
+      "id": 28,
+      "cells": 18,
+      "reasons": {
+        "Flat rail geometry": 18
+      }
+    },
+    {
+      "id": 2252,
+      "cells": 17,
+      "reasons": {
+        "Simplified BiblioCraft model": 17
+      }
+    },
+    {
+      "id": 753,
+      "cells": 13,
+      "reasons": {
+        "Simplified RedPower logic board": 13
+      }
+    },
+    {
+      "id": 2253,
+      "cells": 12,
+      "reasons": {
+        "Simplified BiblioCraft model": 12
+      }
+    },
+    {
+      "id": 207,
+      "cells": 10,
+      "reasons": {
+        "Simplified Jammy Furniture model": 10
+      }
+    },
+    {
+      "id": 214,
+      "cells": 10,
+      "reasons": {
+        "Simplified Jammy Furniture model": 10
+      }
+    },
+    {
+      "id": 218,
+      "cells": 9,
+      "reasons": {
+        "Simplified Jammy Furniture model": 9
+      }
+    },
+    {
+      "id": 3823,
+      "cells": 8,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 8
+      }
+    },
+    {
+      "id": 215,
+      "cells": 7,
+      "reasons": {
+        "Simplified Jammy Furniture model": 7
+      }
+    },
+    {
+      "id": 2240,
+      "cells": 7,
+      "reasons": {
+        "Simplified BiblioCraft model": 7
+      }
+    },
+    {
+      "id": 2248,
+      "cells": 7,
+      "reasons": {
+        "Simplified BiblioCraft model": 7
+      }
+    },
+    {
+      "id": 761,
+      "cells": 7,
+      "reasons": {
+        "Simplified RedPower machine or control component": 7
+      }
+    },
+    {
+      "id": 63,
+      "cells": 6,
+      "reasons": {
+        "Standing sign collision and panel bounds are axis-aligned": 6
+      }
+    },
+    {
+      "id": 216,
+      "cells": 5,
+      "reasons": {
+        "Simplified Jammy Furniture model": 5
+      }
+    },
+    {
+      "id": 3999,
+      "cells": 4,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 4
+      }
+    },
+    {
+      "id": 760,
+      "cells": 4,
+      "reasons": {
+        "Simplified RedPower machine or control component": 4
+      }
+    },
+    {
+      "id": 217,
+      "cells": 3,
+      "reasons": {
+        "Simplified Jammy Furniture model": 3
+      }
+    },
+    {
+      "id": 3968,
+      "cells": 3,
+      "reasons": {
+        "Related vine texture for a rare HarvestCraft crop": 3
+      }
+    },
+    {
+      "id": 3989,
+      "cells": 3,
+      "reasons": {
+        "Related vine texture for a rare HarvestCraft crop": 3
+      }
+    },
+    {
+      "id": 3943,
+      "cells": 2,
+      "reasons": {
+        "Simplified HarvestCraft sink barrel": 2
+      }
+    },
+    {
+      "id": 762,
+      "cells": 2,
+      "reasons": {
+        "Simplified RedPower machine or control component": 2
+      }
+    },
+    {
+      "id": 767,
+      "cells": 2,
+      "reasons": {
+        "Simplified RedPower machine or control component": 2
+      }
+    },
+    {
+      "id": 209,
+      "cells": 1,
+      "reasons": {
+        "Simplified Jammy Furniture model": 1
+      }
+    },
+    {
+      "id": 3827,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3829,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3835,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3838,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3902,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3919,
+      "cells": 1,
+      "reasons": {
+        "Simplified HarvestCraft candle": 1
+      }
+    },
+    {
+      "id": 3920,
+      "cells": 1,
+      "reasons": {
+        "Simplified HarvestCraft candle": 1
+      }
+    },
+    {
+      "id": 3922,
+      "cells": 1,
+      "reasons": {
+        "Simplified HarvestCraft candle": 1
+      }
+    },
+    {
+      "id": 3927,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3930,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3933,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3941,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3942,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3961,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 3976,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 4023,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 4025,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 4030,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 4033,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 4068,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 4073,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 4077,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    },
+    {
+      "id": 4089,
+      "cells": 1,
+      "reasons": {
+        "Related plant texture for a rare HarvestCraft crop": 1
+      }
+    }
+  ],
+  "entityRendering": {
+    "Painting": {
+      "count": 13,
+      "status": "original atlas, preserved Motive and direction"
+    },
+    "preservedOnly": {
+      "Chicken": 7,
+      "Item": 4,
+      "Pig": 2,
+      "Wolf": 1,
+      "npchumanmale": 2,
+      "npcpony": 1
+    }
+  }
+}

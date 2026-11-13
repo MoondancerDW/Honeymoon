@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#141f25">
+  <link rel="icon" href="data:,">
+  <title>Honeymoon — Equestria</title>
+  <link rel="stylesheet" href="/game.css">
+</head>
+<body>
+  <main id="game" aria-label="Игровой мир Honeymoon">
+    <div id="scene"></div>
+    <div id="aim" aria-hidden="true"></div>
+    <header class="top">
+      <div class="brand"><strong>Honeymoon</strong><span>Equestria</span></div>
+      <div class="tools">
+        <label class="distance" for="distance">Горизонт
+          <select id="distance">
+            <option value="4">4 чанка</option><option value="8" selected>8 чанков</option>
+            <option value="16">16 чанков</option><option value="32">32 чанка</option>
+          </select>
+        </label>
+        <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
+      </div>
+    </header>
+    <section id="entry" class="entry">
+      <div class="panel">
+        <h1>Honeymoon</h1>
+        <p id="loading" role="status">Загружаем район Equestria…</p>
+        <button id="play" type="button" disabled>Войти в мир</button>
+        <small id="entry-help">WASD — ходьба · Пробел — прыжок · Esc — пауза</small>
+      </div>
+    </section>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <div id="touch" aria-label="Сенсорное управление">
+      <div id="stick"><i></i></div>
+      <div class="touch-actions">
+        <button id="jump" type="button">↑</button>
+        <button id="touch-remove" type="button" aria-label="Удалить блок">−</button>
+        <button id="touch-place" type="button" aria-label="Установить блок">+</button>
+        <button id="touch-copy" type="button">Копия</button>
+        <button id="touch-use" type="button">Действие</button>
+      </div>
+    </div>
+    <footer class="bottom">
+      <span id="coords" aria-label="Координаты"></span>
+      <span id="selected">Ячейка не выбрана</span>
+      <span id="keys">ЛКМ — убрать · ПКМ — поставить · Q — копировать · E — действие</span>
+    </footer>
+  </main>
+  <script type="module" src="/game.mjs"></script>
+</body>
+</html>
