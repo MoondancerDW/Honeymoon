@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server/index.mjs",
     "import:world": "node import/anvil.mjs",
-    "test": "node --test import/*.test.mjs server/*.test.mjs world/*.test.mjs"
+    "test": "node --test --test-concurrency=1 client/*.test.mjs import/*.test.mjs server/*.test.mjs world/*.test.mjs"
   },
   "dependencies": {
     "three": "0.187.0"

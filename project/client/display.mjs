@@ -34,6 +34,7 @@ export class Display {
       return worker;
     });
     this.meshTimes = [];
+    this.visibleEdits = new Map();
     this.frameTimes = [];
     this.rings = new Map();
     this.ringData = new Map();
@@ -98,9 +99,15 @@ export class Display {
     for (const entity of chunk.entities) this.addEntity(entity);
   }
 
-  remesh(x, y, z) {
+  remesh(x, y, z, revision) {
     const cx = Math.floor(x / 16), cy = Math.floor(y / 16), cz = Math.floor(z / 16);
     this.schedule(cx, cy, cz, true);
+    const id = sectionKey(cx, cy, cz);
+    const job = this.pending.get(id);
+    if (job && revision) {
+      const previous = this.visibleEdits.get(id);
+      this.visibleEdits.set(id, {revision, received: previous?.revision === revision ? previous.received : performance.now()});
+    }
     for (const [dx, dy, dz] of [[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,-1],[0,0,1]]) {
       const xx = Math.floor((x + dx) / 16), yy = Math.floor((y + dy) / 16), zz = Math.floor((z + dz) / 16);
       if (xx !== cx || yy !== cy || zz !== cz) this.schedule(xx, yy, zz, true);
@@ -218,6 +225,11 @@ export class Display {
     }
     this.scene.add(group);
     this.groups.set(result.id, group);
+    const edit = this.visibleEdits.get(result.id);
+    if (edit) {
+      this.lastEditRender = {revision: edit.revision, ms: performance.now() - edit.received};
+      this.visibleEdits.delete(result.id);
+    }
     this.meshTimes.push(result.elapsed);
     if (this.meshTimes.length > 2500) this.meshTimes.shift();
   }
@@ -299,7 +311,7 @@ export class Display {
     return {calls: render.calls, triangles: render.triangles, geometries: memory.geometries, textures: memory.textures,
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles,
       pending: this.pending.size + this.active.size + this.ready.length,
-      loaded: this.groups.size, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
+      loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
   }
 }
 

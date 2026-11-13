@@ -1,0 +1,19 @@
+{
+  "sourcePosition": [30, 65, -15],
+  "key": "cover:750:0:00037289e64ae7e1ce90eb99badf7aa42e2afb2528fbf358f7155f50d32da095",
+  "composition": {
+    "type": "Covers",
+    "id": 750,
+    "meta": 0,
+    "cvm": 4211328,
+    "cvs": "KQIpAikCIwI=",
+    "parts": [
+      { "material": 41, "shape": 2, "slot": 7 },
+      { "material": 41, "shape": 2, "slot": 9 },
+      { "material": 41, "shape": 2, "slot": 14 },
+      { "material": 35, "shape": 2, "slot": 22 }
+    ],
+    "malformed": false
+  },
+  "ray": { "start": [-1, 0.1875, 0.5625], "direction": [1, 0, 0] }
+}

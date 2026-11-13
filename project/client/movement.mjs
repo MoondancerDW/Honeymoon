@@ -1,4 +1,4 @@
-import {collisionFor, shapeFor} from '/world/geometry.mjs';
+import {collisionFor, shapeFor} from '../world/geometry.mjs';
 
 const HALF = .29;
 export const HEIGHT = 1.77;
@@ -53,13 +53,34 @@ export class Movement {
     return true;
   }
 
+  horizontal(position, axis, amount) {
+    if (!amount) return;
+    const before = position[axis];
+    if (!this.axis(position, axis, amount) || !this.grounded) return;
+    const partial = position[axis];
+    const feet = position.y;
+    // Test clearance during the lift before trying the horizontal step.
+    for (let lift = .125; lift <= .5; lift += .125) {
+      const raised = feet + lift;
+      if (this.blocked(position.x, raised, position.z)) return;
+      position.y = raised;
+      position[axis] = before + amount;
+      if (!this.blocked(position.x, raised, position.z)) {
+        this.axis(position, 'y', -lift);
+        return;
+      }
+      position.y = feet;
+      position[axis] = partial;
+    }
+  }
+
   update(position, dx, dz, jump, dt) {
     if (jump && this.grounded) { this.fall = 6.8; this.grounded = false; }
     const n = Math.max(1, Math.ceil(dt / .016));
     const step = dt / n;
     for (let i = 0; i < n; i++) {
-      this.axis(position, 'x', dx * step);
-      this.axis(position, 'z', dz * step);
+      this.horizontal(position, 'x', dx * step);
+      this.horizontal(position, 'z', dz * step);
       this.fall = Math.max(-16, this.fall - 20 * step);
       const hit = this.axis(position, 'y', this.fall * step);
       this.grounded = hit && this.fall < 0;

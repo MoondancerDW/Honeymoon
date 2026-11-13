@@ -58,7 +58,7 @@ function effects(data) {
 
 function changes(list = [], revision = 0) {
   for (const change of list) {
-    if (world.setOverride(change) && world.hasChunk(change.x, change.z)) view.remesh(change.x, change.y, change.z);
+    if (world.setOverride(change) && world.hasChunk(change.x, change.z)) view.remesh(change.x, change.y, change.z, change.revision);
   }
   worldRevision = Math.max(worldRevision, revision);
 }
@@ -300,19 +300,25 @@ async function loadChunks(chunks) {
   const remaining = chunks.slice().sort(([x, z], [xx, zz]) =>
     Math.hypot(x * 16 + 8 - position.x, z * 16 + 8 - position.z) -
     Math.hypot(xx * 16 + 8 - position.x, zz * 16 + 8 - position.z));
-  const near = new Set(remaining.slice(0, 9).map(([x, z]) => chunkKey(x, z)));
+  const nearest = remaining.slice(0, 9);
+  const near = new Set(nearest.map(([x, z]) => chunkKey(x, z)));
+  const centerY = Math.floor(position.y / 16);
+  const spawnSections = nearest.flatMap(([x,z]) => [centerY - 1, centerY, centerY + 1].map(y => [x,y,z]));
+  function enableWhenReady() {
+    const waiting = spawnSections.some(([x,y,z]) => world.chunks.get(chunkKey(x,z))?.sections.has(y) &&
+      !view.groups.has([x,y,z].join(',')));
+    if (waiting) { requestAnimationFrame(enableWhenReady); return; }
+    metrics.playable = performance.now() - metrics.started;
+    button.disabled = false;
+    loading.textContent = 'Район загружен';
+  }
   await Promise.all(Array.from({length: 6}, async () => {
     while (remaining.length) {
       const [x, z] = remaining.shift();
       const data = await json('/generated/world/chunks/' + x + '.' + z + '.json');
       view.addChunk(world.addChunk(data));
       metrics.chunksLoaded++;
-      near.delete(chunkKey(x, z));
-      if (!near.size && button.disabled) {
-        metrics.playable = performance.now() - metrics.started;
-        button.disabled = false;
-        loading.textContent = 'Район загружен';
-      }
+      if (near.delete(chunkKey(x, z)) && near.size === 0) requestAnimationFrame(enableWhenReady);
     }
   }));
 }

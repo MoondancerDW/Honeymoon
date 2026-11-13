@@ -82,6 +82,7 @@ try {
   const second = await browser.newContext();
   const peer = await second.newPage();
   await ready(peer);
+  await settled(peer);
   await page.evaluate(() => honeymoon.look(Math.PI, -.66));
   await page.waitForFunction(() => Boolean(honeymoon.target()));
   const selected = await page.evaluate(() => {
@@ -93,7 +94,10 @@ try {
   await page.mouse.down({button:'left'});
   await page.mouse.up({button:'left'});
   await peer.waitForFunction(({x,y,z}) => !honeymoon.getCell(x,y,z), selected, {timeout:10000});
-  results.edits = {selected, removedVisibleToSecondClient: true, removeMs: (await stats(page)).lastEdit};
+  const remove = await stats(page);
+  await peer.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision === revision, remove.revision);
+  results.edits = {selected, removedVisibleToSecondClient: true, removeMs: remove.lastEdit,
+    peerRemoveMeshMs: (await stats(peer)).lastEditRender.ms};
   await page.waitForFunction(({x,y,z}) => { const next = honeymoon.target(); return next && next.x+next.offset[0]===x && next.y+next.offset[1]===y && next.z+next.offset[2]===z; }, selected, {timeout:10000});
   await page.mouse.down({button:'right'});
   await page.mouse.up({button:'right'});
@@ -102,7 +106,10 @@ try {
     return (typeof cell === 'string' ? cell : cell?.key) === key;
   }, selected, {timeout:10000});
   results.edits.replacedVisibleToSecondClient = true;
-  results.edits.placeMs = (await stats(page)).lastEdit;
+  const place = await stats(page);
+  await peer.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision === revision, place.revision);
+  results.edits.placeMs = place.lastEdit;
+  results.edits.peerPlaceMeshMs = (await stats(peer)).lastEditRender.ms;
   await second.close();
 
   await context.close();
@@ -111,7 +118,17 @@ try {
   await ready(touch);
   await touch.locator('#play').tap();
   await touch.locator('#stick').waitFor();
-  results.emulatedTouch = {controls: await touch.locator('#touch-use').isVisible(), width: await touch.evaluate(() => innerWidth)};
+  await settled(touch);
+  const before = (await stats(touch)).position;
+  const pad = await touch.locator('#stick').boundingBox();
+  const cdp = await phone.newCDPSession(touch);
+  const point = {x: Math.round(pad.x + pad.width / 2), y: Math.round(pad.y + pad.height / 2 - 30)};
+  await cdp.send('Input.dispatchTouchEvent', {type:'touchStart', touchPoints:[point]});
+  await touch.waitForTimeout(700);
+  await cdp.send('Input.dispatchTouchEvent', {type:'touchEnd', touchPoints:[]});
+  const after = (await stats(touch)).position;
+  if (Math.hypot(after.x - before.x, after.z - before.z) < .5) throw new Error('Touch joystick did not move player');
+  results.emulatedTouch = {controls: await touch.locator('#touch-use').isVisible(), width: await touch.evaluate(() => innerWidth), before, after};
   await touch.screenshot({path:resolve(directory,'touch.png')});
   await phone.close();
 } catch (error) {
