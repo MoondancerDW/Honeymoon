@@ -5,6 +5,7 @@ const DIAGNOSTIC = 'diagnostic';
 const WORLD = 'world';
 const SWITCH = 'game:switch';
 const DOOR = 'game:door';
+const WOOD_DOOR = /^legacy:64:(\d+)$/;
 
 function layoutNearSpawn(base, geometry) {
   const [sx, sy, sz] = base.manifest.spawn.map(Math.floor);
@@ -101,6 +102,42 @@ function makeDiagnostics(base, store, geometry) {
   };
 }
 
+function woodDoorMeta(cell) {
+  const match = WOOD_DOOR.exec(cell);
+  return match ? Number(match[1]) : -1;
+}
+
+const woodDoors = {
+  id: 'wood-doors',
+  version: 1,
+  prepareInteraction({ x, y, z, current, getCell, playerOverlaps }) {
+    const meta = woodDoorMeta(current.cell);
+    if (meta < 0 || meta > 15) return null;
+
+    const upperSelected = Boolean(meta & 8);
+    const lower = upperSelected ? getCell(x, y - 1, z) : current;
+    const upper = upperSelected ? current : getCell(x, y + 1, z);
+    const lowerMeta = woodDoorMeta(lower.cell);
+    const upperMeta = woodDoorMeta(upper.cell);
+    if (lowerMeta < 0 || lowerMeta >= 8 || upperMeta < 8 || upperMeta > 15) return null;
+
+    const nextMeta = lowerMeta ^ 4;
+    const nextLower = { ...lower, cell: `legacy:64:${nextMeta}` };
+    const plannedUpper = (dx, dy, dz) => dx === 0 && dy === 1 && dz === 0 ? upper.cell : undefined;
+    const plannedLower = (dx, dy, dz) => dx === 0 && dy === -1 && dz === 0 ? nextLower.cell : undefined;
+    if (playerOverlaps(x, lower.y, z, nextLower.cell, plannedUpper)
+      || playerOverlaps(x, upper.y, z, upper.cell, plannedLower)) {
+      throw new RequestError(409, 'occupied');
+    }
+    // The upper metadata stays the same, but its shape follows the lower half's open bit.
+    const open = Boolean(nextMeta & 4);
+    return {
+      cells: [nextLower, upper],
+      effects: [{ type: 'door', open, message: open ? 'Дверь открыта' : 'Дверь закрыта' }],
+    };
+  },
+};
+
 export function registerMechanics(base, store, geometry) {
-  return [makeDiagnostics(base, store, geometry)];
+  return [makeDiagnostics(base, store, geometry), woodDoors];
 }

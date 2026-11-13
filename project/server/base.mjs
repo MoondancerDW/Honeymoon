@@ -41,11 +41,16 @@ export function loadBase(directory) {
     throw new Error('Unsupported import format. Rebuild the base world before launching.');
   }
 
-  const coordinates = new Set(manifest.chunks.map(([x, z]) => `${x}.${z}`));
+  const coordinates = new Set([...manifest.chunks, ...(manifest.visualChunks ?? [])].map(([x, z]) => `${x}.${z}`));
   const chunks = new Map();
   const bounds = manifest.bounds;
   const hash = manifest.contentHash ?? createHash('sha256').update(rawManifest).digest('hex');
-  const catalog = new Set(manifest.palette);
+  const corePalette = manifest.palette.slice(0, manifest.corePaletteSize ?? manifest.palette.length);
+  const catalog = new Set(corePalette);
+  for (const key of corePalette) {
+    const lowerDoor = /^legacy:64:([0-7])$/.exec(key);
+    if (lowerDoor) catalog.add(`legacy:64:${Number(lowerDoor[1]) ^ 4}`);
+  }
 
   function inBounds(x, y, z) {
     return x >= bounds.minX && x < bounds.maxX + 1 && y >= bounds.minY && y < bounds.maxY + 1

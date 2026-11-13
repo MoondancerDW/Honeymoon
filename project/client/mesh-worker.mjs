@@ -1,10 +1,12 @@
 import * as geometry from '/world/geometry.mjs';
 import {decodeIndices} from './world-data.mjs';
+import {glassTexture, paneTexture} from '/world/connected-textures.mjs';
+import {coverShade, legacyLight, linearByte, FACE_SHADE} from './lighting.mjs';
 
 const {shapeFor, ATLAS_GRID, TILE_SIZE, FACES} = geometry;
 const SIDE = 18;
 const STRIDE = [1, SIDE * SIDE, SIDE];
-const NORMAL_SHADE = [.76, .76, .54, 1, .85, .85];
+const waterKey = key => key?.startsWith('legacy:8:') || key?.startsWith('legacy:9:');
 const MAX = ['x1', 'y1', 'z1'];
 const MIN = ['x0', 'y0', 'z0'];
 let cells = [];
@@ -15,16 +17,15 @@ function layer() {
   return {positions: [], colors: [], uvs: [], indices: []};
 }
 
-function quad(out, corners, tile, uv, light, tint = 0xffffff) {
+function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1) {
   const start = out.positions.length / 3;
   const u0 = (tile % ATLAS_GRID) / ATLAS_GRID;
   const v0 = 1 - Math.floor(tile / ATLAS_GRID) / ATLAS_GRID;
   const padding = .25 / TILE_SIZE;
   const scale = 1 - 2 * padding;
-  const linear = value => value < .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
-  const r = Math.round(255 * light * linear(((tint >> 16) & 255) / 255));
-  const g = Math.round(255 * light * linear(((tint >> 8) & 255) / 255));
-  const b = Math.round(255 * light * linear((tint & 255) / 255));
+  const r = linearByte(light[0], shade, (tint >> 16) & 255);
+  const g = linearByte(light[1], shade, (tint >> 8) & 255);
+  const b = linearByte(light[2], shade, tint & 255);
   for (let i = 0; i < 4; i++) {
     out.positions.push(...corners[i]);
     out.colors.push(r, g, b);
@@ -39,7 +40,7 @@ const FULL_UV = [[0, 1], [1, 1], [1, 0], [0, 0]];
 const AXES = [[2, 1], [1, 2], [0, 2], [2, 0], [1, 0], [0, 1]];
 const UV_AXES = [[2, 1], [2, 1], [0, 2], [0, 2], [0, 1], [0, 1]];
 
-function faceQuad(out, box, face, origin, brightness, tile = box.faces[face]) {
+function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], shade = 1) {
   if (!Number.isInteger(tile) || tile < 0) return;
   const axis = face >> 1;
   const outward = face & 1;
@@ -58,11 +59,11 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face]) {
       horizontal = (horizontal - box[MIN[textureU]]) / (box[MAX[textureU]] - box[MIN[textureU]]);
       vertical = (vertical - box[MIN[textureV]]) / (box[MAX[textureV]] - box[MIN[textureV]]);
     }
-    if ((face === 1 || face === 4) !== Boolean(box.mirrorU)) horizontal = 1 - horizontal;
+    if ((face === 1 || face === 4) !== Boolean(box.mirrorFaces?.[face] ?? box.mirrorU)) horizontal = 1 - horizontal;
     uv.push([horizontal, axis === 1 ? vertical : 1 - vertical]);
     corners.push(point.map((value, i) => value + origin[i]));
   }
-  quad(out, corners, tile, uv, brightness, box.tintFaces?.[face] ?? box.tint);
+  quad(out, corners, tile, uv, brightness, box.tintFaces?.[face] ?? box.tint, shade);
 }
 
 function fullCube(box) {
@@ -89,7 +90,7 @@ function makeShape(index, at, cell, neighbors) {
   return shape;
 }
 
-function precise({indices, light, objects}) {
+function precise({indices, light, objects, connectedTextures}) {
   const layers = {opaque: layer(), cutout: layer(), blend: layer()};
   const indexedObjects = new Map(objects);
   const rendered = new Map();
@@ -113,6 +114,12 @@ function precise({indices, light, objects}) {
         if (!indices[at]) continue;
         const {boxes} = shape(at);
         const origin = [x, y, z];
+        const blockKey = cells[indices[at]];
+        const ctm = connectedTextures && (blockKey.startsWith('legacy:20:') || blockKey.startsWith('legacy:102:'));
+        const glass = ctm && blockKey.startsWith('legacy:20:');
+        const water = waterKey(blockKey);
+        const cover = blockKey.startsWith('cover:750:0:');
+        const neighbors = ctm ? (dx, dy, dz) => cell(at + dx + dz * SIDE + dy * SIDE * SIDE) : null;
         if (indexedObjects.has(at)) {
           const sign = geometry.signFor?.(cell(at));
           if (sign) signs.push({...sign, x: x + sign.x, y: y + sign.y, z: z + sign.z});
@@ -120,7 +127,7 @@ function precise({indices, light, objects}) {
         for (const box of boxes) {
           const out = layers[box.mode] || layers.opaque;
           if (box.kind === 'cross') {
-            const shade = .38 + .62 * light[at] / 15;
+            const shade = legacyLight(light[at]);
             const a = x + box.x0, b = x + box.x1, c = y + box.y0, d = y + box.y1;
             const e = z + box.z0, f = z + box.z1;
             quad(out, [[a,c,e],[b,c,f],[b,d,f],[a,d,e]], box.faces[0], FULL_UV, shade, box.tint);
@@ -131,15 +138,22 @@ function precise({indices, light, objects}) {
             const axis = f >> 1;
             const adjacent = at + FACES[f][axis] * STRIDE[axis];
             const onEdge = f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0;
+            if (water && (onEdge || f === 3) && waterKey(cells[indices[adjacent]])) continue;
             if (onEdge) {
               const neighbor = shape(adjacent)?.full;
               if (neighbor?.mode === 'opaque' ||
                   (neighbor && box.mode !== 'opaque' && indices[adjacent] === indices[at])) continue;
             }
             if (boxes.length > 1 && boxes.some(other => coversFace(other, box, f))) continue;
-            const value = Math.max(light[at] || 0, light[adjacent] || 0);
-            const brightness = box.emissive ? 1 : NORMAL_SHADE[f] * (.32 + .68 * (value / 15) ** 1.2);
-            faceQuad(out, box, f, origin, brightness);
+            const brightness = box.emissive ? [255, 255, 255] : legacyLight(light[onEdge ? adjacent : at]);
+            const shade = box.emissive ? 1 : FACE_SHADE[f] * (cover ? coverShade(light[adjacent]) : 1);
+            let tile = box.faces[f];
+            if (glass) tile = glassTexture(f, neighbors, Number(blockKey.slice(10))) ?? tile;
+            else if (ctm && axis !== 1) {
+              const alongX = box.x1 - box.x0 > box.z1 - box.z0;
+              if (axis === (alongX ? 2 : 0)) tile = paneTexture(f, neighbors) ?? tile;
+            }
+            faceQuad(out, box, f, origin, brightness, tile, shade);
           }
         }
       }
@@ -178,7 +192,7 @@ function coarse({chunks, origin, stride}) {
     for (let f = 0; f < 6; f++) {
       const [dx, dy, dz] = FACES[f];
       if (lookup.has((x + dx * stride) + ',' + (y + dy * stride) + ',' + (z + dz * stride))) continue;
-      faceQuad(layers.opaque, box, f, [localX, y, localZ], NORMAL_SHADE[f] * .91, shape.faces[f]);
+      faceQuad(layers.opaque, box, f, [localX, y, localZ], legacyLight(240), shape.faces[f], FACE_SHADE[f]);
     }
   }
   return {layers, signs: []};

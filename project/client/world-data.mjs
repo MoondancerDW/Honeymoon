@@ -31,11 +31,11 @@ export class World {
     this.overrides = new Map();
   }
 
-  addChunk(chunk) {
+  addChunk(chunk, visualOnly = false) {
     const sections = new Map(chunk.sections.map(({y, indices, skyLight, blockLight}) => [y, {
       indices: decodeIndices(indices), sky: decodeBytes(skyLight), block: decodeBytes(blockLight)
     }]));
-    const stored = {x: chunk.x, z: chunk.z, sections, entities: chunk.entities || []};
+    const stored = {x: chunk.x, z: chunk.z, sections, visualOnly, entities: chunk.entities || []};
     this.chunks.set(chunkKey(chunk.x, chunk.z), stored);
     for (const object of chunk.objects || []) this.objects.set(cellKey(...object.position), object);
     return stored;
@@ -60,7 +60,8 @@ export class World {
   }
 
   hasChunk(x, z) {
-    return this.chunks.has(chunkKey(Math.floor(x / 16), Math.floor(z / 16)));
+    const chunk = this.chunks.get(chunkKey(Math.floor(x / 16), Math.floor(z / 16)));
+    return Boolean(chunk && !chunk.visualOnly);
   }
 
   section(x, y, z) {
@@ -74,6 +75,7 @@ export class World {
   }
 
   cellAt(x, y, z) {
+    if (!this.hasChunk(x, z)) return null;
     const key = this.palette[this.indexAt(x, y, z)] || 'air';
     if (key === 'air') return null;
     const position = cellKey(x, y, z);
@@ -107,7 +109,7 @@ export class World {
           const shift = (index & 1) * 4;
           const sky = section?.sky ? (section.sky[index >> 1] >> shift) & 15 : 15;
           const block = section?.block ? (section.block[index >> 1] >> shift) & 15 : 0;
-          light[i] = Math.max(sky, block);
+          light[i] = (sky << 4) | block;
           const object = override ? override.object : this.objects.get(key);
           if (object && indices[i]) objects.push([i, object]);
         }

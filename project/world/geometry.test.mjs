@@ -41,6 +41,21 @@ test('RedPower hollow cover is physically open and retains multiple materials', 
   assert.equal(shapeFor('cover-material:28')[0].faces[0], 198);
 });
 
+test('door halves use the legacy panels, hinge and inset edge UVs', () => {
+  const lower = shapeFor('legacy:64:3', () => 'legacy:64:8')[0];
+  const upper = shapeFor('legacy:64:8', () => 'legacy:64:3')[0];
+  const open = shapeFor('legacy:64:8', () => 'legacy:64:7')[0];
+  assert.deepEqual(aabb(lower), [0, 0, 0.8125, 1, 1, 1]);
+  assert.deepEqual(aabb(upper), aabb(lower));
+  assert.deepEqual(aabb(open), [0, 0, 0, 0.1875, 1, 1]);
+  assert.deepEqual(lower.faces, [97, 97, 97, 97, 97, 97]);
+  assert.deepEqual(upper.faces, [81, 81, 97, 97, 81, 81]);
+  assert.equal(upper.mirrorFaces[4], true);
+  assert.equal(upper.mirrorFaces[5], false);
+  assert.equal(open.mirrorFaces[0], true);
+  assert.equal(upper.uv, undefined);
+});
+
 test('frame is pickable and full collision; clouds use their source collision height', () => {
   const frame = { key: 'cover:765:0:fixture', parts: [] };
   assert.equal(shapeFor(frame).length, 6);

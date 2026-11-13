@@ -6,8 +6,13 @@ export class Display {
     this.world = world;
     this.container = container;
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#a9d8f5');
-    this.scene.fog = new THREE.Fog('#a9d8f5', 70, 175);
+    this.scene.background = new THREE.Color('#86acfa');
+    this.scene.fog = new THREE.Fog('#95aad5', 70, 175);
+    this.sky = createSky();
+    this.scene.add(this.sky);
+    this.visualEntities = new THREE.Group();
+    this.visualEntities.visible = false;
+    this.scene.add(this.visualEntities);
     this.camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
@@ -51,7 +56,11 @@ export class Display {
 
   async loadTextures() {
     const loader = new THREE.TextureLoader();
-    const map = await loader.loadAsync('/generated/textures/atlas.png');
+    const [map, atlas] = await Promise.all([
+      loader.loadAsync('/generated/textures/atlas.png'),
+      json('/generated/textures/atlas.json').catch(() => null),
+    ]);
+    this.connectedTextures = atlas?.connectedTextures === true;
     map.colorSpace = THREE.SRGBColorSpace;
     map.magFilter = THREE.NearestFilter;
     map.minFilter = THREE.NearestFilter;
@@ -80,11 +89,12 @@ export class Display {
 
   schedule(cx, cy, cz, edit = false) {
     const id = sectionKey(cx, cy, cz);
-    const hasData = this.world.chunks.get(chunkKey(cx, cz))?.sections.has(cy);
+    const chunk = this.world.chunks.get(chunkKey(cx, cz));
+    const hasData = chunk?.sections.has(cy);
     if (!hasData && !edit && !this.groups.has(id)) return;
     const version = (this.versions.get(id) || 0) + 1;
     this.versions.set(id, version);
-    this.pending.set(id, {id, cx, cy, cz, version, type: 'precise', edit});
+    this.pending.set(id, {id, cx, cy, cz, version, type: 'precise', edit, visualOnly: chunk?.visualOnly});
   }
 
   addChunk(chunk) {
@@ -96,7 +106,7 @@ export class Display {
       this.schedule(chunk.x, cy, chunk.z, !chunk.sections.has(cy));
       for (const [dx, dz] of [[-1,0], [1,0], [0,-1], [0,1]]) this.schedule(chunk.x + dx, cy, chunk.z + dz);
     }
-    for (const entity of chunk.entities) this.addEntity(entity);
+    for (const entity of chunk.entities) this.addEntity(entity, chunk.visualOnly);
   }
 
   remesh(x, y, z, revision) {
@@ -116,8 +126,10 @@ export class Display {
 
   async setDistance(distance) {
     this.requestedDistance = distance;
+    this.visualEntities.visible = distance > 4;
     for (const [id, group] of this.groups) {
       if (id.startsWith('lod:')) group.visible = Number(id.split(':')[1]) <= distance;
+      else if (group.userData.visualOnly) group.visible = distance > 4;
     }
     for (const [id] of this.pending) {
       if (id.startsWith('lod:') && Number(id.split(':')[1]) > distance) this.pending.delete(id);
@@ -149,7 +161,7 @@ export class Display {
     }
   }
 
-  addEntity(entity) {
+  addEntity(entity, visualOnly) {
     if (!this.paint || entity.type !== 'Painting') return;
     const art = paintings[entity.data.Motive];
     const dir = entity.data.Dir ?? entity.data.Direction;
@@ -163,7 +175,7 @@ export class Display {
       new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide}));
     mesh.position.set(...entity.position);
     mesh.rotation.y = [0, Math.PI / 2, Math.PI, -Math.PI / 2][dir & 3];
-    this.scene.add(mesh);
+    (visualOnly ? this.visualEntities : this.scene).add(mesh);
   }
 
   signMesh(sign) {
@@ -208,6 +220,8 @@ export class Display {
       group.visible = Number(result.id.split(':')[1]) <= this.requestedDistance;
     } else {
       group.position.set(...coords.map(value => value * 16));
+      group.userData.visualOnly = this.world.chunks.get(chunkKey(coords[0], coords[2]))?.visualOnly === true;
+      if (group.userData.visualOnly) group.visible = this.requestedDistance > 4;
     }
     for (const [mode, data] of Object.entries(result.layers)) {
       const geometry = new THREE.BufferGeometry();
@@ -245,7 +259,7 @@ export class Display {
       const z = job.cz * 16 + scale - eye.z;
       const distance = Math.hypot(x, y, z);
       const visible = x * direction.x + y * direction.y + z * direction.z > 0;
-      return distance * (visible ? .8 : 1.2) + (job.type === 'coarse' ? 260 : 0) - (job.edit ? 500 : 0);
+      return distance * (visible ? .8 : 1.2) + (job.type === 'coarse' ? 260 : job.visualOnly ? 100 : 0) - (job.edit ? 500 : 0);
     }
     for (const worker of this.workers) {
       if (this.active.has(worker) || !this.pending.size || this.ready.length > 5) continue;
@@ -258,7 +272,8 @@ export class Display {
       this.active.set(worker, job.id);
       if (job.type === 'precise') {
         const halo = this.world.halo(job.cx, job.cy, job.cz);
-        worker.postMessage({id: job.id, type: job.type, version: job.version, palette: this.world.palette, ...halo},
+        worker.postMessage({id: job.id, type: job.type, version: job.version, palette: this.world.palette,
+          connectedTextures: this.connectedTextures, ...halo},
           [halo.indices.buffer, halo.light.buffer]);
       } else {
         const chunks = [];
@@ -291,6 +306,7 @@ export class Display {
     }
     this.outline.visible = Boolean(selection);
     if (selection) this.outline.position.set(selection.x + .5, selection.y + .5, selection.z + .5);
+    this.sky.position.copy(this.camera.position);
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -313,6 +329,38 @@ export class Display {
       pending: this.pending.size + this.active.size + this.ready.length,
       loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
   }
+}
+
+function createSky() {
+  const material = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      zenith: {value: new THREE.Color('#84abfc')},
+      horizon: {value: new THREE.Color('#95aad5')},
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 skyDirection;
+      void main() {
+        skyDirection = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 zenith;
+      uniform vec3 horizon;
+      varying vec3 skyDirection;
+      void main() {
+        float height = normalize(skyDirection).y;
+        float mixAmount = 1.0 - exp(-max(height, 0.0) * 8.0);
+        gl_FragColor = vec4(mix(horizon, zenith, mixAmount), 1.0);
+        #include <colorspace_fragment>
+      }
+    `,
+  });
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(660, 24, 12), material);
+  mesh.renderOrder = -10;
+  return mesh;
 }
 
 const paintings = {

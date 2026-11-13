@@ -67,11 +67,12 @@ export function createGame(base, store, geometry, { clock = () => performance.no
     return positions.get(player)?.position ?? spawn;
   }
 
-  function playerOverlaps(x, y, z, key, activePlayer) {
+  function playerOverlaps(x, y, z, key, activePlayer, plannedNeighbor) {
     const now = clock();
-    if (physical.overlaps(playerAt(activePlayer), x, y, z, key)) return true;
+    if (physical.overlaps(playerAt(activePlayer), x, y, z, key, plannedNeighbor)) return true;
     for (const [player, entry] of positions) {
-      if (player !== activePlayer && now - entry.updated < MAX_ACTIVE_IDLE_MS && physical.overlaps(entry.position, x, y, z, key)) return true;
+      if (player !== activePlayer && now - entry.updated < MAX_ACTIVE_IDLE_MS
+        && physical.overlaps(entry.position, x, y, z, key, plannedNeighbor)) return true;
     }
     return false;
   }
@@ -82,7 +83,7 @@ export function createGame(base, store, geometry, { clock = () => performance.no
       player,
       getCell: getCurrent,
       readState: (owner, key) => store.getState(module.id, owner, key),
-      playerOverlaps: (x, y, z, cell) => playerOverlaps(x, y, z, cell, player),
+      playerOverlaps: (x, y, z, cell, plannedNeighbor) => playerOverlaps(x, y, z, cell, player, plannedNeighbor),
     };
   }
 
@@ -97,7 +98,11 @@ export function createGame(base, store, geometry, { clock = () => performance.no
       const value = entry.useRevision ? { ...entry.value, revision } : entry.value;
       store.putState(module.id, entry.owner, entry.key, module.version, value);
     }
-    return { worldRevision: revision, changes, effects: plan.effects ?? [] };
+    return {
+      worldRevision: revision,
+      changes: changes.map(change => ({ ...change, object: displayObject(change.object) })),
+      effects: plan.effects ?? [],
+    };
   }
 
   function writeCell(current, cell, object) {
@@ -244,7 +249,8 @@ export function createGame(base, store, geometry, { clock = () => performance.no
     snapshot(player) {
       return {
         bounds: base.manifest.bounds, spawn: base.manifest.spawn, worldRevision: store.worldRevision(), contentHash: base.hash,
-        overrides: [...store.edits(), ...snapshotCells()], mechanics: descriptions(player),
+        overrides: [...store.edits().map(edit => ({ ...edit, object: displayObject(edit.object) })), ...snapshotCells()],
+        mechanics: descriptions(player),
       };
     },
     didCommit(event) {

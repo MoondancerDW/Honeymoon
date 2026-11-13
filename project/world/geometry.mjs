@@ -174,9 +174,19 @@ function door(id, meta, neighbors) {
   const lowerMeta = upper && peer[0] === id ? peer[1] : meta;
   const upperMeta = upper ? meta : peer[0] === id ? peer[1] : 0;
   const closed = lowerMeta & 3;
-  const edge = lowerMeta & 4 ? (closed + (upperMeta & 1 ? 3 : 1)) & 3 : closed;
-  const tile = (id === 71 ? 98 : 97) + (upper ? 0 : 16);
-  return [turnedBox([0, 0, 0, 0.1875, 1, 1], tile, -edge, { uv: 'box', mode: 'cutout' })];
+  const open = Boolean(lowerMeta & 4);
+  const hinge = Boolean(upperMeta & 1);
+  const edge = open ? (closed + (hinge ? 3 : 1)) & 3 : closed;
+  const tile = id === 71 ? 98 : 97;
+  const mirrorFaces = [false, false, false, false, false, false];
+  const mirrored = open ? [4, 1, 5, 0][closed] : [1, 5, 0, 4][closed];
+  mirrorFaces[mirrored] = true;
+  if (!open && hinge) {
+    for (const face of [0, 1, 4, 5]) mirrorFaces[face] = !mirrorFaces[face];
+  }
+  const faces = [tile, tile, tile, tile, tile, tile];
+  if (upper) for (const face of [0, 1, 4, 5]) faces[face] -= 16;
+  return [box(rotateBounds([0, 0, 0, 0.1875, 1, 1], -edge), faces, { mode: 'cutout', mirrorFaces })];
 }
 
 function fence(id, meta, neighbors, pane = false) {
@@ -487,6 +497,15 @@ function furniture(id, meta) {
       object([x, 0, z, x + 0.125, 0.4375, z + 0.125], base + 10))),
   ];
   if (id === 200) return [object([0.1875, 0, 0.1875, 0.8125, 1, 0.8125], base + 7 + (meta >> 2))];
+  if (id === 201 && meta < 8) {
+    const firstTile = 3210 + (meta >> 2) * 12;
+    const faces = part => Array.from({length: 6}, (_, face) => firstTile + part * 6 + face);
+    const cabinet = {...options, mirrorU: true};
+    return [
+      object(CUBE, faces(0), cabinet),
+      object([0.5625, 0.375, -0.0625, 0.625, 0.5625, 0], faces(1), {...cabinet, solid: false}),
+    ];
+  }
   if (id === 201) return [object([0, 0, 0.0625, 1, 0.9375, 0.9375], base + 11 + (meta >> 2))];
   if (id === 203) return [object([0.1875, 0, 0.21875, 0.8125, 0.40625, 0.78125], base + 15)];
   if (id === 205) return [object([0, 0, 0.0625, 1, 0.9375, 0.9375], base + 16 + (meta >> 2))];

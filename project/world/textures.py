@@ -14,6 +14,7 @@ DEFAULT_SOURCE = HERE.parents[1] / "sources" / "Honeymoon"
 DEFAULT_OUTPUT = HERE.parent / "generated" / "textures"
 GRID = 64
 TILE = 16
+CONNECTED_TEXTURE_START = 3328
 
 # Keep the source atlas's own tile indices. The base IDs mirror geometry.mjs.
 ATLAS_SOURCES = (
@@ -64,7 +65,7 @@ class TextureAtlas:
                 raise ValueError(f"Invalid ZIP or JAR archive: {path}") from error
         return self.archives[name]
 
-    def resolve(self, resource, dependency, override_aliases=()):
+    def resolve(self, resource, dependency, override_aliases=(), required=True):
         # Pack exact path takes precedence. Aliases account for the older model paths
         # in this particular pack. Fall back to the mod, then the base archive.
         ordered = [("pack", candidate) for candidate in (resource, *override_aliases)]
@@ -90,6 +91,8 @@ class TextureAtlas:
             }
             with Image.open(BytesIO(contents)) as image:
                 return image.convert("RGBA")
+        if not required:
+            return None
         searched = "\n  ".join(attempted)
         hint = ""
         if self.archives["vanilla"] is None:
@@ -161,6 +164,15 @@ def add_armchairs(atlas):
                 atlas.paste(2560 + color * 64 + part * 6 + side, patch)
 
 
+def add_kitchen_cupboards(atlas):
+    for variant, name in enumerate(("kitchencupboardnotop", "kitchencupboard")):
+        source = atlas.jammy(name)
+        for part, dimensions in enumerate(((0, 0, 16, 16, 16), (0, 0, 1, 3, 1))):
+            for side, rect in enumerate(model_faces(*dimensions)):
+                patch = get_patch(source, rect).transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+                atlas.paste(3210 + variant * 12 + part * 6 + side, patch)
+
+
 def add_bookcases(atlas):
     for wood in range(4):
         source = atlas.resolve(f"jds/bibliocraft/textures/BookcaseTexture{wood + 1}.png", "biblio")
@@ -199,16 +211,21 @@ def build(source, output, vanilla_jar=None):
         atlas = TextureAtlas(source, resources, vanilla_jar)
         for index, resource, dependency in ATLAS_SOURCES:
             atlas.grid(index, atlas.resolve(resource, dependency))
+        terrain = atlas.resolve("terrain.png", "vanilla")
+        connected = atlas.resolve("ctm.png", "vanilla", required=False)
+        connected_textures = connected is not None and connected.size == terrain.size
+        if connected_textures:
+            atlas.grid(CONNECTED_TEXTURE_START, connected)
         add_armchairs(atlas)
+        add_kitchen_cupboards(atlas)
         add_bookcases(atlas)
         add_furniture(atlas)
-        water = atlas.resolve("misc/water.png", "vanilla")
-        if water.getchannel("A").getextrema() == (255, 255):
-            water.putalpha(168)
-        atlas.paste(3200, water)
+        # The original OptiFine profile uses the pack terrain tiles instead of
+        # generated water. Its still tile 205 and flow tile 206 are identical.
+        # misc/water.png is the first-person overlay used underwater.
+        atlas.paste(3200, terrain.crop((13 * 16, 12 * 16, 14 * 16, 13 * 16)))
         # Old Minecraft animates liquids procedurally. Keep the stored lava
         # source tile as the static frame, if the pack provides one.
-        terrain = atlas.resolve("terrain.png", "vanilla")
         atlas.paste(3201, terrain.crop((13 * 16, 14 * 16, 14 * 16, 15 * 16)))
         chest = atlas.resolve("item/chest.png", "vanilla")
         for offset, rect in ((4, (0, 14, 14, 33)), (5, (14, 0, 28, 14)), (6, (14, 14, 28, 33))):
@@ -224,7 +241,8 @@ def build(source, output, vanilla_jar=None):
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
-            "schemaVersion": 1, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
+            "schemaVersion": 2, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
+            "connectedTextures": connected_textures,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return len(atlas.resources)
 

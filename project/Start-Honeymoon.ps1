@@ -33,13 +33,17 @@ try {
     $importRequired = !(Test-Path -LiteralPath $worldPath)
     if (!$importRequired -and $TerrainRadius) {
         $world = Get-Content -Raw -LiteralPath $worldPath | ConvertFrom-Json
-        $importRequired = $TerrainRadius -notin $world.terrain.radius
+        $importRequired = $TerrainRadius -notin $world.terrain.radius -or !$world.visualChunks
     }
     if ($importRequired) {
         & $nodePath import/anvil.mjs --terrain-radius $TerrainRadius
         if ($LASTEXITCODE) { throw 'World import failed.' }
     }
-    if (!(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
+    $atlasMetadata = 'generated\textures\atlas.json'
+    $atlasVersion = if (Test-Path -LiteralPath $atlasMetadata) {
+        (Get-Content -Raw -LiteralPath $atlasMetadata | ConvertFrom-Json).schemaVersion
+    }
+    if ($atlasVersion -ne 2 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
         & $pythonPath -B world/textures.py
         if ($LASTEXITCODE) { throw 'Texture extraction failed. Install Pillow from world/requirements.txt.' }
     }

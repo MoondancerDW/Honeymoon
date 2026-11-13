@@ -16,7 +16,7 @@ const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
 let playing = false, jump = false, lastFrame = 0, lastSync = 0, lastPosition = '', timer;
 let sync = Promise.resolve(), acting = false, syncing = false;
-let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, lastEdit: 0};
+let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
 
 if (touchMode) {
@@ -353,7 +353,20 @@ async function start() {
     getCell: (x, y, z) => world.cellAt(x, y, z),
   });
   await loadChunks(manifest.chunks);
-  await view.setDistance(Number(distance.value));
+  const scenery = (manifest.visualChunks || []).slice().sort(([x,z], [xx,zz]) =>
+    Math.hypot(x * 16 + 8 - position.x, z * 16 + 8 - position.z) -
+    Math.hypot(xx * 16 + 8 - position.x, zz * 16 + 8 - position.z));
+  await Promise.all([
+    view.setDistance(Number(distance.value)),
+    ...Array.from({length: 4}, async () => {
+      while (scenery.length) {
+        const [x,z] = scenery.shift();
+        const chunk = await json('/generated/world/chunks/' + x + '.' + z + '.json');
+        view.addChunk(world.addChunk(chunk, true));
+        metrics.visualChunksLoaded++;
+      }
+    }),
+  ]);
 }
 
 start().catch(error => {

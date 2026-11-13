@@ -82,10 +82,11 @@ function scanCompositions(level, compositions) {
   return materials;
 }
 
-export function writeTerrainRings(output, maxRadius, loadChunk) {
+export function writeTerrainRings(output, maxRadius, loadChunk, visualRadius = 0) {
   const compositions = new Set();
   const summary = [];
-  let innerRadius = DETAIL_RADIUS;
+  const detailRadius = Math.max(DETAIL_RADIUS, visualRadius);
+  let innerRadius = detailRadius;
   for (const radius of RING_RADII) {
     if (radius > maxRadius) break;
     const chunks = [];
@@ -96,7 +97,7 @@ export function writeTerrainRings(output, maxRadius, loadChunk) {
     for (let z = -radius; z < radius; z += 1) {
       for (let x = -radius; x < radius; x += 1) {
         const inner = x >= -innerRadius && x < innerRadius && z >= -innerRadius && z < innerRadius;
-        if (inner && innerRadius !== DETAIL_RADIUS) continue;
+        if (inner && innerRadius !== detailRadius) continue;
         const level = loadChunk(x, z);
         if (!level) {
           if (!inner) missingChunks.push([x, z]);

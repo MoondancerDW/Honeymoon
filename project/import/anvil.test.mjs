@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { loadBase } from '../server/base.mjs';
 import { importWorld } from './anvil.mjs';
 import { readNbt, readRegionChunk, sectionBlocks } from './nbt.mjs';
 
@@ -49,7 +50,12 @@ test('Reimports all 64 real chunks reproducibly with exact negative-coordinate s
     const out = join(temporary, 'world');
     const initial = importWorld({ out, terrainRadius: 8 });
     const next = importWorld({ out, terrainRadius: 8 });
+    const core = importWorld({ out: join(temporary, 'core'), terrainRadius: 8, visualRadius: 0 });
     assert.equal(initial.contentHash, next.contentHash);
+    assert.equal(initial.contentHash, core.contentHash);
+    assert.equal(initial.visualHash, next.visualHash);
+    assert.deepEqual(initial.chunkHash, core.chunkHash);
+    assert.deepEqual(next.palette.slice(0, next.corePaletteSize), core.palette);
     assert.deepEqual(initial.terrain, next.terrain);
     assert.equal(initial.counts.chunks, 64);
     assert.equal(initial.counts.ids, 143);
@@ -66,10 +72,16 @@ test('Reimports all 64 real chunks reproducibly with exact negative-coordinate s
       position: [-59, 76, -50], cell: 'legacy:2250:1', objectType: 'BookcaseTile',
     });
     const files = readdirSync(join(out, 'chunks'));
-    assert.equal(files.length, 64);
+    assert.equal(files.length, 144);
+    assert.equal(next.visualChunks.length, 80);
+    assert.ok(next.visualChunks.some(([x, z]) => x === -1 && z === -5));
+    const base = loadBase(out);
+    assert.ok(base.publicChunk(-1, -5).sections.length);
+    assert.equal(base.getCell(-7, 66, -80).key, 'air');
+    assert.equal(base.catalog.has(next.palette[next.corePaletteSize]), false);
     for (const file of files) {
       const bytes = readFileSync(join(out, 'chunks', file));
-      assert.equal(sha256(bytes), next.chunkHash[file]);
+      if (next.chunkHash[file]) assert.equal(sha256(bytes), next.chunkHash[file]);
       const chunk = JSON.parse(bytes);
       assert.equal(file, `${chunk.x}.${chunk.z}.json`);
       for (const section of chunk.sections) {
@@ -84,10 +96,11 @@ test('Reimports all 64 real chunks reproducibly with exact negative-coordinate s
     }
 
     const terrain = JSON.parse(readFileSync(join(out, 'terrain-8.json')));
-    assert.equal(terrain.chunks.length, 192);
+    assert.equal(terrain.innerRadius, 6);
+    assert.equal(terrain.chunks.length, 112);
     assert.ok(terrain.palette.some((key) => key.startsWith('cover-material:')));
     for (const { x, z, levels } of terrain.chunks) {
-      assert.ok(x < -4 || x >= 4 || z < -4 || z >= 4);
+      assert.ok(x < -6 || x >= 6 || z < -6 || z >= 6);
       for (const { indices } of levels) assert.equal(Buffer.from(indices, 'base64').length, 128);
     }
     assert.throws(() => importWorld({ out: source }), /Output must be separate/);
