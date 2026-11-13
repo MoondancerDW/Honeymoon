@@ -1,0 +1,208 @@
+{
+  "schemaVersion": 1,
+  "minecraft": {
+    "version": "1.4.7",
+    "bytes": 5005735,
+    "sha1": "53ed4b9d5c358ecfff2d8b846b4427b888287028",
+    "sha256": "c5f4972bd775e03b1d3a1255d962ffc00f8c1f6ad98a30a149d5f107153c0da6",
+    "url": "https://launcher.mojang.com/v1/objects/53ed4b9d5c358ecfff2d8b846b4427b888287028/client.jar"
+  },
+  "forge": {
+    "version": "6.6.2.534",
+    "downloads": "https://files.minecraftforge.net/net/minecraftforge/forge/index_1.4.7.html",
+    "sha1": "bd0f40a78c18140265ff042a96d73f01c4f60906"
+  },
+  "liteLoader": "1.4.7",
+  "optiFine": {
+    "version": "1.4.6 HD U D5",
+    "downloads": "https://optifine.net/adload?f=OptiFine_1.4.6_HD_U_D5.zip",
+    "sha256": "c82aa254a3462c8f9ce1dfbb2fcb116ea6f603e4d8049432ba40243c77db27cb"
+  },
+  "originalModifiedJar": {
+    "path": "minecraft.jar",
+    "bytes": 6746912,
+    "sha256": "b7c9b85f39bb084cc82f4caa8ee30e35a5df8dfd6c031021f7f8618f08a85a3d"
+  },
+  "atlasInputs": [
+    {
+      "path": "mods/1.4.7_Jammy_Furniture_Mod_V4.1.zip",
+      "bytes": 3885787,
+      "sha256": "51d02b92c221e9008c832555e0fa0c61d0e4cfae0dc0a3cdb928856e701145cc",
+      "upstream": "https://www.minecraftforum.net/forums/mapping-and-modding-java-edition/minecraft-mods/1282205-v4-5-1-6-2-forge-smp-jammy-furniture-mod"
+    },
+    {
+      "path": "mods/BiblioCraft.zip",
+      "bytes": 415526,
+      "sha256": "d37b6560773851c97acb42ff39375d1b209f548bbf2ab8419cba2d8d864a3eeb",
+      "upstream": "https://www.bibliocraftmod.com/downloads/"
+    },
+    {
+      "path": "mods/MLB-CORE_147.zip",
+      "bytes": 696836,
+      "sha256": "9c9f22d1926ef63d10d31ab3d2a658a36c4b35c3c7fe723847beee0368b6663d"
+    },
+    {
+      "path": "mods/Pam's HarvestCraft.zip",
+      "bytes": 1516649,
+      "sha256": "ff8ebed96972e3bfc8bbbb8898ec1b773e7051b4ed4bdadef06eee16df27efd5",
+      "upstream": "https://www.curseforge.com/minecraft/mc-mods/pams-harvestcraft"
+    },
+    {
+      "path": "texturepacks/My-Little-Ponyach-147f.zip",
+      "bytes": 2867846,
+      "sha256": "94d64cfa426cf5925f42ce5373150fdf75fc39e1a1cbff4e9753d108f4cb2ad3"
+    }
+  ],
+  "originalMods": [
+    {
+      "path": "coremods/CodeChickenCore 0.7.3.jar",
+      "bytes": 201204,
+      "sha256": "02c1d1432a3e72caf44604be482684a5928875d0ae035d6ee6999e1b855b4842"
+    },
+    {
+      "path": "coremods/DynamicLights_1.4.6.jar",
+      "bytes": 43154,
+      "sha256": "64413d12400976ea7fa085583d93ae57a5bbd139b8e32986d07ab927b6bdb28c"
+    },
+    {
+      "path": "coremods/GuiAPI-0.15.2-1.4.7.jar",
+      "bytes": 1090147,
+      "sha256": "4e6ba5cd70fbc3fa3bf0de3efa4fd86492ab394cda43bb8fa1159ef8edc63d41"
+    },
+    {
+      "path": "coremods/NotEnoughItems 1.4.7.0.jar",
+      "bytes": 344590,
+      "sha256": "13e1c5766911f6e8ff6f9dbc4b04a372a04d317c208a91f991c477de5208fef7"
+    },
+    {
+      "path": "mods/1.4.7_Jammy_Furniture_Mod_V4.1.zip",
+      "bytes": 3885787,
+      "sha256": "51d02b92c221e9008c832555e0fa0c61d0e4cfae0dc0a3cdb928856e701145cc"
+    },
+    {
+      "path": "mods/1.4.7_TabbyChat_1.9.02.zip",
+      "bytes": 156927,
+      "sha256": "6217251e03bc879fbeb1bd23072c877e1f8978f5d33135cd5672e74b1c0617c7"
+    },
+    {
+      "path": "mods/Audiotori_r3__1_4_6.zip",
+      "bytes": 70282,
+      "sha256": "8e448df0a894e3510b233a5d850003734843520aece9ab96871b0ba4b1e77c09"
+    },
+    {
+      "path": "mods/BiblioCraft.zip",
+      "bytes": 415526,
+      "sha256": "d37b6560773851c97acb42ff39375d1b209f548bbf2ab8419cba2d8d864a3eeb"
+    },
+    {
+      "path": "mods/CampfireMod_2.4_for_1.4.7.zip",
+      "bytes": 65934,
+      "sha256": "744b9e5fc5cb8a57b248e6209568c5a9b1ff0ea163c9a1fddc9babe6e43ce07b"
+    },
+    {
+      "path": "mods/ChiselRetro_beta0.9_mc1.4.7.zip",
+      "bytes": 3836497,
+      "sha256": "c74e6889636d08a43e6c584297c8435a42249839f24b9bb391f5de7ea16a0144"
+    },
+    {
+      "path": "mods/Coinmod.zip",
+      "bytes": 16737,
+      "sha256": "8f0c46aef478a399fc6aa18be0c866820da4cc4e24f190689305bc80a935c1e5"
+    },
+    {
+      "path": "mods/CustomMobSpawner 1.11.2.zip",
+      "bytes": 20345,
+      "sha256": "11392023cce61a221004eda96e2de97dd87f8e71c7cacbbd74123816e61cc15c"
+    },
+    {
+      "path": "mods/CustomNPCs_1.4.7.zip",
+      "bytes": 109186373,
+      "sha256": "4d777f885bf507641cb6090b5b380a8223960748e62e321b475ed12a73955b8c"
+    },
+    {
+      "path": "mods/DrZharks MoCreatures Mod v4.7.0.zip",
+      "bytes": 18422813,
+      "sha256": "e8a90d5680ed797b4cebc0d222b17050a1a44a12270827798d753f5f652dea09"
+    },
+    {
+      "path": "mods/Lilium.Items.zip",
+      "bytes": 934575,
+      "sha256": "9ff4e4a3e19c7b5c09284cbe6e1dcdc09844179f176be29ba91a420ea6038a8c"
+    },
+    {
+      "path": "mods/MLB-CLOUDS_147.zip",
+      "bytes": 85398,
+      "sha256": "223de82d62c189fb671b467e19bcb341c8bd981de642d5c95f1c158f051d2f52"
+    },
+    {
+      "path": "mods/MLB-CORE_147.zip",
+      "bytes": 696836,
+      "sha256": "9c9f22d1926ef63d10d31ab3d2a658a36c4b35c3c7fe723847beee0368b6663d"
+    },
+    {
+      "path": "mods/MLB-RENDER_147b.zip",
+      "bytes": 9542,
+      "sha256": "4f4354767c850baf68e8d825d99511150a7983ced14d3e5be876e62a1c694b9d"
+    },
+    {
+      "path": "mods/MLB-VEG_147.zip",
+      "bytes": 42187,
+      "sha256": "01ef6f1c34c2768b202ee1fae8fe7659a445c53bb075e878b04e8f54c5b7c1a8"
+    },
+    {
+      "path": "mods/Pam's HarvestCraft.zip",
+      "bytes": 1516649,
+      "sha256": "ff8ebed96972e3bfc8bbbb8898ec1b773e7051b4ed4bdadef06eee16df27efd5"
+    },
+    {
+      "path": "mods/RedPowerCompat-2.0pr6.zip",
+      "bytes": 93628,
+      "sha256": "123a97ce6081a71b4badd9513774efa2a018df514760af3b9ff77f3e78d9a3f5"
+    },
+    {
+      "path": "mods/RedPowerCore-2.0pr6.zip",
+      "bytes": 337974,
+      "sha256": "92638a55df978caf89cf824e1196d12ef2eb5c9c187954257d0030a122efa05a"
+    },
+    {
+      "path": "mods/RedPowerDigital-2.0pr6.zip",
+      "bytes": 200964,
+      "sha256": "a1d5f4b69b7efdb967eed3c4c56fc33bfe68cbcd13381fc38d3768b7cdecf5b9"
+    },
+    {
+      "path": "mods/RedPowerMechanical-2.0pr6.zip",
+      "bytes": 590750,
+      "sha256": "533cb509fdc6cb7c28419b9dba78bdff9fd93eb54bf6a3036c39e378f9c0f975"
+    },
+    {
+      "path": "mods/Weaponmod.zip",
+      "bytes": 200487,
+      "sha256": "55b0a3e4db6377e140c8885ab3825e2ca71502c8d165d73d3c526e9abbc22b20"
+    },
+    {
+      "path": "mods/matmos_packaged.zip",
+      "bytes": 397307,
+      "sha256": "42fcf7aa230dbf1e083bf92ea3af0d73ed6188da6cefc089816c654e4f30646f"
+    },
+    {
+      "path": "mods/mod_macros_0.9.8_for_1.4.7.litemod",
+      "bytes": 1061350,
+      "sha256": "ddea4b0cddee6d020cf684562dfd89e999b922a7663cd6690a0905b8559d7335"
+    },
+    {
+      "path": "mods/mod_worldeditcui_1.4.6_00_lite_mc1.4.6.litemod",
+      "bytes": 351747,
+      "sha256": "99c687f50c1aaa901649d3a2ab246a1f8929fe4d7889325ce8e685000fa60407"
+    },
+    {
+      "path": "mods/reiminimap.zip",
+      "bytes": 243784,
+      "sha256": "dcde8a14c32da0e05aa30b0fc17ac3d5518c2c1ea40bbee5145b0dac9c1a4606"
+    },
+    {
+      "path": "mods/twilightforest-1.15.4.jar",
+      "bytes": 2271279,
+      "sha256": "266bead77d46f17b4c8a33f2c9a14b797030b5f6c88ee557bfa4328376eb7aff"
+    }
+  ]
+}

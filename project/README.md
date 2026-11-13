@@ -21,10 +21,10 @@ npm start
 Импорт читает исходный мир из `../sources/Honeymoon/saves/equestria/`.
 Архивы карты из [GitHub Release](https://github.com/MoondancerDW/Honeymoon/releases/tag/equestria-source)
 распаковываются в `sources/Honeymoon/saves/` так, чтобы получился каталог
-`equestria/region/`. Для текстур добавьте в `sources/Honeymoon/` локальные
-ресурсы оригинального клиента, включая `minecraft.jar`, текстурпак
-`My-Little-Ponyach-147f.zip` и архивы модов, перечисленные в
-[скрипте извлечения](world/textures.py). Альтернативные пути задаются
+`equestria/region/`. Для исходного визуала добавьте в `sources/Honeymoon/` пять архивов
+текстурпака и модов из [манифеста](legacy/README.md). Их можно проверить
+командой `node legacy/verify-inputs.mjs atlas`.
+Альтернативные пути задаются
 `node import/anvil.mjs --world …` и `python world/textures.py --source …`.
 Оригиналы открываются для чтения. Промежуточные файлы, производные текстуры и
 SQLite сохраняются под `project/`.

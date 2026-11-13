@@ -4,7 +4,7 @@ from contextlib import ExitStack
 from io import BytesIO
 import json
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 from PIL import Image, ImageDraw
 
@@ -42,10 +42,27 @@ ARCHIVES = {
 
 
 class TextureAtlas:
-    def __init__(self, archives):
-        self.archives = archives
+    def __init__(self, source, stack, vanilla_jar=None):
+        self.archive_paths = {name: source / path for name, path in ARCHIVES.items()}
+        self.archive_labels = ARCHIVES.copy()
+        if vanilla_jar is not None:
+            self.archive_paths["vanilla"] = vanilla_jar
+            self.archive_labels["vanilla"] = vanilla_jar.name
+        self.stack = stack
+        self.archives = {}
         self.image = Image.new("RGBA", (GRID * TILE, GRID * TILE))
         self.resources = {}
+
+    def open_archive(self, name):
+        if name not in self.archives:
+            path = self.archive_paths[name]
+            try:
+                self.archives[name] = self.stack.enter_context(ZipFile(path))
+            except FileNotFoundError:
+                self.archives[name] = None
+            except BadZipFile as error:
+                raise ValueError(f"Invalid ZIP or JAR archive: {path}") from error
+        return self.archives[name]
 
     def resolve(self, resource, dependency, override_aliases=()):
         # Pack exact path takes precedence. Aliases account for the older model paths
@@ -54,17 +71,30 @@ class TextureAtlas:
         if dependency not in {"vanilla", "pack"}:
             ordered.append((dependency, resource))
         ordered.append(("vanilla", resource))
+        attempted = []
         for archive, candidate in ordered:
+            source = self.open_archive(archive)
+            path = self.archive_paths[archive]
+            if source is None:
+                message = f"{path} (missing archive)"
+                if message not in attempted:
+                    attempted.append(message)
+                continue
             try:
-                contents = self.archives[archive].read(candidate)
+                contents = source.read(candidate)
             except KeyError:
+                attempted.append(f"{path} (missing {candidate})")
                 continue
             self.resources[resource] = {
-                "archive": ARCHIVES[archive], "resource": candidate,
+                "archive": self.archive_labels[archive], "resource": candidate,
             }
             with Image.open(BytesIO(contents)) as image:
                 return image.convert("RGBA")
-        raise FileNotFoundError(resource)
+        searched = "\n  ".join(attempted)
+        hint = ""
+        if self.archives["vanilla"] is None:
+            hint = "\nFor base-game textures, use --vanilla-jar with an installed Minecraft Java 1.4.7 JAR."
+        raise FileNotFoundError(f"Texture {resource!r} could not be found. Searched:\n  {searched}{hint}")
 
     def paste(self, index, image):
         if not 0 <= index < GRID * GRID:
@@ -164,10 +194,9 @@ def add_furniture(atlas):
         atlas.paste(3072 + index, patch.crop(opaque) if opaque else patch)
 
 
-def build(source, output):
+def build(source, output, vanilla_jar=None):
     with ExitStack() as resources:
-        archives = {name: resources.enter_context(ZipFile(source / path)) for name, path in ARCHIVES.items()}
-        atlas = TextureAtlas(archives)
+        atlas = TextureAtlas(source, resources, vanilla_jar)
         for index, resource, dependency in ATLAS_SOURCES:
             atlas.grid(index, atlas.resolve(resource, dependency))
         add_armchairs(atlas)
@@ -204,5 +233,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--vanilla-jar", type=Path, help="Use an installed Minecraft Java 1.4.7 JAR as a fallback")
     args = parser.parse_args()
-    print(f"Extracted {build(args.source, args.output)} resources to {args.output}")
+    try:
+        count = build(args.source, args.output, args.vanilla_jar)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"Texture extraction failed: {error}\n")
+    print(f"Extracted {count} resources to {args.output}")

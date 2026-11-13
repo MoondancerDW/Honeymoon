@@ -5,9 +5,11 @@ Honeymoon. В прототипе можно ходить, копировать, 
 целые ячейки. Правки сохраняются и видны другим гостевым сессиям.
 
 - [Подготовка и запуск](project/README.md)
+- [Архив браузерного клиента](https://github.com/MoondancerDW/Honeymoon/releases/download/equestria-source/honeymoon-browser-client.zip)
+- [Манифест исходного клиента Minecraft](project/legacy/README.md)
 - [Проверки, визуальные замены и замеры](project/REPORT.md)
 - [Архивы карты Equestria](https://github.com/MoondancerDW/Honeymoon/releases/tag/equestria-source)
 
 Архивы мира распаковываются в один каталог, чтобы объединить регионы.
-Для извлечения оригинального визуала понадобится локальный комплект
-Honeymoon с исходным текстурпаком и ресурсами модов.
+Для извлечения оригинального визуала понадобятся пять архивов
+из локального комплекта Honeymoon.
