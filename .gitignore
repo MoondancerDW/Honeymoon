@@ -1,0 +1,8 @@
+/sources/
+/analysis/rerun/
+/project/work/
+/project/generated/
+/project/state/
+/project/node_modules/
+__pycache__/
+*.pyc
