@@ -8,6 +8,7 @@ import {test} from 'node:test';
 import * as geometry from '../world/geometry.mjs';
 import {decodeVoxels, voxelIndex, voxelKey, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {createHoneymoonServer} from './index.mjs';
+import {chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 
 const stone = 'legacy:1:0', planks = 'legacy:5:0';
 const bounds = {minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15};
@@ -34,6 +35,53 @@ function fixture(hash = 'chisel-v1', fillEdits = false) {
 function command(type, requestId, cell, expectedRevision, extra) {
   return {type, requestId, ...cell, expectedRevision, ...extra};
 }
+
+test('copies flowing liquids off their real surface and keeps editable static eighths', async t => {
+  const base = fixture();
+  const read = base.getCell;
+  base.getCell = (x, y, z) => {
+    if (y === 1 && z === 10 && (x === 7 || x === 9)) {
+      return {key:x === 7 ? 'legacy:8:4' : 'legacy:10:4', object:null};
+    }
+    return read(x, y, z);
+  };
+  const app = createHoneymoonServer({base, geometry, state:':memory:'});
+  t.after(() => app.close());
+  app.server.listen(0,'127.0.0.1');
+  await once(app.server,'listening');
+  const url = `http://127.0.0.1:${app.server.address().port}/api/`;
+  async function post(path, body, cookie) {
+    const response = await fetch(url + path,{method:'POST',headers:{'Content-Type':'application/json',
+      ...(cookie && {Cookie:cookie})},body:JSON.stringify(body)});
+    return {status:response.status, body:await response.json(), cookie:response.headers.get('set-cookie')?.split(';')[0]};
+  }
+  const a = (await post('session', {})).cookie, b = (await post('session', {})).cookie;
+  let revision = 0;
+  for (const [sourceX, sourceKey, material, localX] of [[7,'legacy:8:4','legacy:9:0',2], [9,'legacy:10:4','legacy:11:0',4]]) {
+    const source = {x:sourceX,y:1,z:10};
+    const height = geometry.shapeFor(sourceKey)[0].y1;
+    const hit = {x:sourceX + .5,y:source.y + height,z:10.5};
+    const voxel = chiselVoxelAtHit(source, hit, [0,1,0], undefined, sourceKey);
+    const sample = command('copy_voxel', `copy-flow-${sourceX}`, source, 0, {voxel, hit});
+    assert.equal((await post('action', {...sample,requestId:`wrong-surface-${sourceX}`,hit:{...hit,y:2}}, a)).status,403);
+    const copied = await post('action', sample, a);
+    assert.equal(copied.status,200,JSON.stringify(copied));
+    assert.equal(copied.body.material,material);
+    const placed = await post('action', command('place_voxel', `place-flow-${sourceX}`, cube, revision, {
+      material, against:{...cube,y:0}, hit:{x:8 + (localX + .5) / 8,y:1,z:10.3125}, voxel:voxelIndex(localX,0,2),
+    }),a);
+    assert.equal(placed.status,200,JSON.stringify(placed));
+    assert.equal(voxelMaterialAt(placed.body.changes[0].voxels,voxelIndex(localX,0,2)),material);
+    assert.deepEqual(geometry.collisionFor({key:voxelKey,voxels:placed.body.changes[0].voxels}),[]);
+    revision = placed.body.worldRevision;
+  }
+  const remove = command('remove_voxel','remove-water-eighth',cube,revision,
+    {voxel:voxelIndex(2,0,2), hit:{x:8.3125,y:1.125,z:10.3125}});
+  assert.equal((await post('action',remove,b)).body.error,'voxel_not_owned');
+  const removed = await post('action',remove,a);
+  assert.equal(removed.status,200,JSON.stringify(removed));
+  assert.deepEqual(removed.body.changes[0].voxels.materials,['legacy:11:0']);
+});
 
 test('voxel edits preserve ownership, material, revision and exact hit through save migration and reload', async t => {
   const work = fileURLToPath(new URL('../work/', import.meta.url));

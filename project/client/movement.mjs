@@ -3,7 +3,8 @@ import {extractedModel} from '../world/extracted-models.mjs';
 import {movementMedium} from '../world/block-movement.mjs';
 import {PLAYER} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
-import {isChiselMaterial, voxelAtHit, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
+import {isChiselMaterial, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
+import {chiselMaterialKey, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 
 const {halfWidth: HALF, height: HEIGHT, eye: EYE} = PLAYER;
 const {collisionFor} = geometry;
@@ -165,6 +166,7 @@ export function pick(world, origin, direction, chiseling = false) {
   const max = origin.map((value, axis) => Math.floor(Math.max(value, value + direction[axis] * 6)));
   let best = null;
   let selectedBoxes;
+  let bestSolid;
   for (let y = min[1] - 1; y <= max[1]; y++) {
     for (let z = min[2] - 1; z <= max[2] + 1; z++) {
       for (let x = min[0] - 1; x <= max[0] + 1; x++) {
@@ -174,10 +176,14 @@ export function pick(world, origin, direction, chiseling = false) {
         const boxes = extractedModel(world.models, cell, neighbors)?.selection
           ?? (geometry.selectionFor ?? geometry.shapeFor)(cell, neighbors);
         for (const box of boxes) {
-          const result = intersectSelection(origin, direction, box, x, y, z);
-          if (!result || (best && result.length >= best.length)) continue;
+          const result = intersectSelection(origin, direction, box, x, y, z, 6, chiseling && box.solid === false);
+          if (!result) continue;
+          const solid = box.solid !== false;
+          const preferSolid = chiseling && solid && !bestSolid && Math.abs(result.length - (best?.length ?? -1)) < 1e-7;
+          if (best && result.length >= best.length && !preferSolid) continue;
           const hit = origin.map((value, axis) => value + direction[axis] * result.length);
           best = {x, y, z, cell, length: result.length, offset: result.offset, hit: {x: hit[0], y: hit[1], z: hit[2]}};
+          bestSolid = solid;
           if (Number.isInteger(box.partSlot)) {
             best.partSlot = box.partSlot;
             selectedBoxes = boxes;
@@ -194,8 +200,8 @@ export function pick(world, origin, direction, chiseling = false) {
     const state = best.cell.voxels;
     const key = typeof best.cell === 'string' ? best.cell : best.cell.key;
     if (state || isChiselMaterial(key)) {
-      const index = voxelAtHit(best, best.hit, best.offset, true, state);
-      const material = state ? voxelMaterialAt(state, index) : key;
+      const index = chiselVoxelAtHit(best, best.hit, best.offset, state, key);
+      const material = chiselMaterialKey(state ? voxelMaterialAt(state, index) : key);
       if (index != null && material) {
         best.voxel = index;
         best.voxelMaterial = material;

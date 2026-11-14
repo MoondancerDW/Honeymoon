@@ -1,5 +1,5 @@
 import {attenuationOf, emissionOf} from '../world/block-light.mjs';
-import {isOpaqueFullVoxels} from '../world/voxel-chisel.mjs';
+import {fullVoxelFluid, isOpaqueFullVoxels} from '../world/voxel-chisel.mjs';
 
 const RADIUS = 15;
 const SIDE = RADIUS * 2 + 3;
@@ -19,9 +19,13 @@ for (let dy = -MIDDLE; dy <= MIDDLE; dy++) {
 }
 
 function cellAttenuation(cell, emission) {
-  // Keep light propagation on the original block grid. Only changing between
-  // a full and an open cell needs a relight, not each cut in the same sculpture.
-  if (cell.voxels) return isOpaqueFullVoxels(cell.voxels) && !emission ? 15 : 1;
+  // Light still propagates on the original block grid. A fully flooded cell
+  // absorbs the same light as a source block. Small open shapes use air.
+  if (cell.voxels) {
+    if (isOpaqueFullVoxels(cell.voxels) && !emission) return 15;
+    if (fullVoxelFluid(cell.voxels) === 'water') return attenuationOf('legacy:9:0');
+    return 1;
+  }
   return attenuationOf(cell.key, emission);
 }
 

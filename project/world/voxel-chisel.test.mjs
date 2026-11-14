@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {collisionFor, shapeFor} from './geometry.mjs';
+import {chiselMaterialShape, collisionFor, shapeFor, tiles} from './geometry.mjs';
 import {decodeVoxels, encodeVoxels, filledVoxels, isChiselMaterial, isFullVoxels, voxelAtHit, voxelBox,
   voxelCoordinate, voxelFaces, voxelIndex, voxelKey, voxelMaterialAt, voxelPlacementAtHit, writeVoxel} from './voxel-chisel.mjs';
 
@@ -45,8 +45,9 @@ test('canonical volume packs exactly 512 samples and stores only used materials'
 
 test('full cube materials include translucent and luminous blocks and preserve their faces', () => {
   for (const key of [stone, dirt, grass, 'legacy:17:8', 'legacy:35:6', 'legacy:20:0', 'legacy:89:0',
-    'legacy:23:0', 'legacy:46:0', 'legacy:124:0', 'legacy:52:0', 'legacy:73:0']) assert.ok(isChiselMaterial(key), key);
-  for (const key of ['legacy:54:0', 'legacy:44:0','legacy:750:0', 'legacy:699:0', 'legacy:035:02']) {
+    'legacy:23:0', 'legacy:46:0', 'legacy:124:0', 'legacy:52:0', 'legacy:73:0', 'legacy:88:0',
+    'legacy:138:0', 'legacy:201:0', 'legacy:2162:0']) assert.ok(isChiselMaterial(key), key);
+  for (const key of ['legacy:54:0', 'legacy:44:0', 'legacy:36:0', 'legacy:750:0', 'legacy:699:0', 'legacy:035:02']) {
     assert.equal(isChiselMaterial(key), false, key);
   }
   for (const material of [grass, 'legacy:17:8','legacy:20:0','legacy:89:0']) {
@@ -57,6 +58,33 @@ test('full cube materials include translucent and luminous blocks and preserve t
       assert.equal(box.mode, source.mode);
       assert.equal(box.emissive, source.emissive);
     }
+  }
+});
+
+test('water and lava levels produce static eighths with the original texture and no solid collision', () => {
+  for (const [id, fluid, mode, emissive] of [[8,'water','blend',false], [9,'water','blend',false],
+    [10,'lava','opaque',true], [11,'lava','opaque',true]]) {
+    for (const meta of [0,3,7,8,15]) {
+      const key = `legacy:${id}:${meta}`;
+      const material = chiselMaterialShape(key);
+      assert.deepEqual([material.mode, material.emissive, material.solid, material.fluid], [mode,emissive,false,fluid], key);
+      assert.ok(material.faces.every(tile => tile === tiles[fluid]));
+      assert.equal(material.y1, 1, key);
+      const volume = writeVoxel(null,0,key);
+      assert.equal(shapeFor(cell(volume)).length, 1, key);
+      assert.equal(collisionFor(cell(volume)).length, 0, key);
+    }
+  }
+});
+
+test('full Jammy models use their exact exterior faces and heading', () => {
+  assert.deepEqual(chiselMaterialShape('legacy:201:0').faces, [3880,3881,3882,3883,3884,3885]);
+  assert.deepEqual(chiselMaterialShape('legacy:201:4').faces, [3892,3893,3894,3895,3896,3897]);
+  assert.deepEqual(chiselMaterialShape('legacy:205:9').faces, [3909,3908,3910,3911,3904,3905]);
+  assert.deepEqual(chiselMaterialShape('legacy:206:7').faces, [3920,3921,3926,3927,3917,3916]);
+  assert.deepEqual(chiselMaterialShape('legacy:208:12').faces, [3928,3929,3930,3931,3932,3933]);
+  for (const partial of ['legacy:205:4', 'legacy:206:0', 'legacy:208:13']) {
+    assert.equal(chiselMaterialShape(partial), null);
   }
 });
 

@@ -8,8 +8,11 @@ export const VOXEL_MATERIAL_LIMIT = VOXEL_COUNT;
 const axes = ['x', 'y', 'z'];
 const strides = [1, 64, 8];
 const empty = Object.freeze([]);
+const fullSolid = Object.freeze([Object.freeze({x0:0, y0:0, z0:0, x1:1, y1:1, z1:1, solid:true, mode:'opaque'})]);
 const decodedStates = new WeakMap();
 const collisionStates = new WeakMap();
+const selectionStates = new WeakMap();
+const fluidKinds = ['water', 'lava'];
 const gridTolerance = 1e-6;
 
 export const isChiselMaterial = key => Boolean(chiselMaterialShape(key));
@@ -29,6 +32,17 @@ export function voxelBox(index) {
   return voxelBounds(low, low.map(value => value + 1));
 }
 
+function voxelState(samples, materials) {
+  const shapes = materials.map(chiselMaterialShape);
+  const count = samples.reduce((n, value) => n + Number(value !== 0), 0);
+  const allSolid = shapes.every(shape => shape.solid);
+  const anySolid = shapes.some(shape => shape.solid);
+  const fullFluid = count === VOXEL_COUNT && shapes[0].fluid && shapes.every(shape => shape.fluid === shapes[0].fluid)
+    ? shapes[0].fluid : null;
+  const opaque = allSolid && shapes.every(shape => shape.mode === 'opaque');
+  return {samples, count, shapes, allSolid, anySolid, opaque, fullFluid};
+}
+
 function decoded(voxels) {
   if (!voxels || typeof voxels !== 'object') return null;
   if (decodedStates.has(voxels)) return decodedStates.get(voxels);
@@ -43,7 +57,7 @@ function decoded(voxels) {
   const samples = wide ? new Uint16Array(VOXEL_COUNT) : Uint8Array.from(bytes, char => char.charCodeAt(0));
   if (wide) for (let i = 0; i < VOXEL_COUNT; i++) samples[i] = bytes.charCodeAt(i * 2) | bytes.charCodeAt(i * 2 + 1) << 8;
   if (samples.length !== VOXEL_COUNT || samples.some(value => value > materials.length)) return null;
-  const state = {samples, count: samples.reduce((n, value) => n + Number(value !== 0), 0)};
+  const state = voxelState(samples, materials);
   decodedStates.set(voxels, state);
   return state;
 }
@@ -51,8 +65,9 @@ function decoded(voxels) {
 // Callers treat a decoded snapshot as immutable. Edits copy the typed array.
 export const decodeVoxels = voxels => decoded(voxels)?.samples ?? null;
 export const isFullVoxels = voxels => decoded(voxels)?.count === VOXEL_COUNT;
-export const isOpaqueFullVoxels = voxels => isFullVoxels(voxels) &&
-  voxels.materials.every(material => chiselMaterialShape(material).mode === 'opaque');
+export const isSolidFullVoxels = voxels => isFullVoxels(voxels) && decoded(voxels).allSolid;
+export const isOpaqueFullVoxels = voxels => isFullVoxels(voxels) && decoded(voxels).opaque;
+export const fullVoxelFluid = voxels => decoded(voxels)?.fullFluid ?? null;
 
 export function encodeVoxels(samples, materials) {
   if (!(samples instanceof Uint8Array || samples instanceof Uint16Array) || samples.length !== VOXEL_COUNT || !Array.isArray(materials) ||
@@ -73,7 +88,7 @@ export function encodeVoxels(samples, materials) {
     }
   }
   const result = {materials:used, data:btoa(String.fromCharCode(...bytes))};
-  decodedStates.set(result, {samples:packed, count: packed.reduce((n, value) => n + Number(value !== 0), 0)});
+  decodedStates.set(result, voxelState(packed, used));
   return result;
 }
 
@@ -84,6 +99,12 @@ export function filledVoxels(material) {
 export function voxelMaterialAt(voxels, index) {
   if (!isIndex(index)) return null;
   return voxels?.materials?.[(decodeVoxels(voxels)?.[index] ?? 0) - 1] ?? null;
+}
+
+export function voxelFluidAt(voxels, x, y, z) {
+  const state = decoded(voxels);
+  if (!state || !isCoordinate(x) || !isCoordinate(y) || !isCoordinate(z)) return null;
+  return state.shapes[state.samples[voxelIndex(x, y, z)] - 1]?.fluid ?? null;
 }
 
 export function writeVoxel(voxels, index, material) {
@@ -107,8 +128,8 @@ function inwardVoxel(cell, hit, face, voxels) {
   if (!Array.isArray(face) || face.length !== 3 || face.some(value => ![-1,0,1].includes(value)) ||
       face.filter(Boolean).length !== 1) return null;
   const normalAxis = face.findIndex(Boolean);
-  const samples = decodeVoxels(voxels);
-  if (voxels && !samples) return null;
+  const state = decoded(voxels);
+  if (voxels && !state) return null;
   const options = [];
   for (const [axis, key] of axes.entries()) {
     const grid = (hit?.[key] - cell?.[key]) * 8;
@@ -125,12 +146,13 @@ function inwardVoxel(cell, hit, face, voxels) {
   }
   for (const x of options[0]) for (const y of options[1]) for (const z of options[2]) {
     const index = voxelIndex(x, y, z);
-    if (!samples) return [x, y, z];
+    if (!state) return [x, y, z];
+    const value = state.samples[index];
+    if (!value) continue;
     const coordinate = [x, y, z];
     const adjacent = coordinate[normalAxis] + face[normalAxis];
-    if (samples[index] && (!isCoordinate(adjacent) || !samples[index + face[normalAxis] * strides[normalAxis]])) {
-      return coordinate;
-    }
+    const next = isCoordinate(adjacent) && state.samples[index + face[normalAxis] * strides[normalAxis]];
+    if (!next || state.shapes[value - 1].solid && state.shapes[next - 1].fluid) return coordinate;
   }
   return null;
 }
@@ -151,36 +173,53 @@ export function voxelPlacementAtHit(cell, hit, face, voxels) {
   return {x:cell.x + delta[0], y:cell.y + delta[1], z:cell.z + delta[2], voxel:voxelIndex(...local)};
 }
 
-export function voxelCollisionBoxes(voxels) {
+export function voxelSelectionBoxes(voxels) {
   const state = decoded(voxels);
   if (!state?.count) return empty;
-  if (collisionStates.has(voxels)) return collisionStates.get(voxels);
-  const result = [];
-  if (state.count === VOXEL_COUNT) {
-    result.push({...voxelBounds([0, 0, 0], [8, 8, 8]), solid:true, mode:'opaque'});
-  } else {
-    const mask = state.samples.slice();
-    for (let y = 0; y < 8; y++) for (let z = 0; z < 8; z++) for (let x = 0; x < 8; x++) {
-      if (!mask[voxelIndex(x, y, z)]) continue;
-      let x1 = x + 1, y1 = y + 1, z1 = z + 1;
-      while (x1 < 8 && mask[voxelIndex(x1, y, z)]) x1++;
-      const row = (yy, zz) => {
-        for (let xx = x; xx < x1; xx++) if (!mask[voxelIndex(xx, yy, zz)]) return false;
-        return true;
-      };
-      while (z1 < 8 && row(y, z1)) z1++;
-      const plane = yy => {
-        for (let zz = z; zz < z1; zz++) if (!row(yy, zz)) return false;
-        return true;
-      };
-      while (y1 < 8 && plane(y1)) y1++;
-      for (let yy = y; yy < y1; yy++) for (let zz = z; zz < z1; zz++) {
-        mask.fill(0, voxelIndex(x, yy, zz), voxelIndex(x1, yy, zz));
-      }
-      result.push({...voxelBounds([x, y, z], [x1, y1, z1]), solid:true, mode:'opaque'});
-    }
+  if (state.allSolid && state.count === VOXEL_COUNT) return fullSolid;
+  if (!selectionStates.has(voxels)) {
+    const kinds = state.shapes.map(shape => shape.solid ? 1 : shape.fluid === 'water' ? 2 : shape.fluid === 'lava' ? 3 : 4);
+    const mask = Uint8Array.from(state.samples, value => kinds[value - 1] ?? 0);
+    selectionStates.set(voxels, mergeVoxelBoxes(mask));
   }
+  return selectionStates.get(voxels);
+}
+
+export function voxelCollisionBoxes(voxels) {
+  const state = decoded(voxels);
+  if (!state?.count || !state.anySolid) return empty;
+  if (state.allSolid) return voxelSelectionBoxes(voxels);
+  if (collisionStates.has(voxels)) return collisionStates.get(voxels);
+  const solid = state.shapes.map(shape => Number(shape.solid));
+  const result = mergeVoxelBoxes(Uint8Array.from(state.samples, value => solid[value - 1] ?? 0));
   collisionStates.set(voxels, result);
+  return result;
+}
+
+function mergeVoxelBoxes(mask) {
+  const result = [];
+  for (let y = 0; y < 8; y++) for (let z = 0; z < 8; z++) for (let x = 0; x < 8; x++) {
+    const kind = mask[voxelIndex(x, y, z)];
+    if (!kind) continue;
+    let x1 = x + 1, y1 = y + 1, z1 = z + 1;
+    while (x1 < 8 && mask[voxelIndex(x1, y, z)] === kind) x1++;
+    const row = (yy, zz) => {
+      for (let xx = x; xx < x1; xx++) if (mask[voxelIndex(xx, yy, zz)] !== kind) return false;
+      return true;
+    };
+    while (z1 < 8 && row(y, z1)) z1++;
+    const plane = yy => {
+      for (let zz = z; zz < z1; zz++) if (!row(yy, zz)) return false;
+      return true;
+    };
+    while (y1 < 8 && plane(y1)) y1++;
+    for (let yy = y; yy < y1; yy++) for (let zz = z; zz < z1; zz++) {
+      mask.fill(0, voxelIndex(x, yy, zz), voxelIndex(x1, yy, zz));
+    }
+    const fluid = fluidKinds[kind - 2];
+    result.push({...voxelBounds([x, y, z], [x1, y1, z1]), solid:kind === 1,
+      mode:fluid === 'water' ? 'blend' : 'opaque', ...(fluid && {fluid})});
+  }
   return result;
 }
 
@@ -188,7 +227,7 @@ export function voxelFaces(voxels, neighbor, opaqueFullNeighbor) {
   const samples = decodeVoxels(voxels);
   if (!samples) return empty;
   const result = [];
-  const materials = voxels.materials.map(chiselMaterialShape);
+  const materials = decoded(voxels).shapes;
   const mask = new Uint16Array(64);
   for (let face = 0; face < 6; face++) {
     const axis = face >> 1, positive = face & 1;
@@ -197,9 +236,12 @@ export function voxelFaces(voxels, neighbor, opaqueFullNeighbor) {
     const [normal, uStride, vStride] = [strides[axis], strides[uAxis], strides[vAxis]];
     const adjacentCell = neighbor?.(face);
     const adjacentVoxels = adjacentCell?.voxels;
-    const adjacent = decodeVoxels(adjacentVoxels);
-    const coversBoundary = !adjacent && Boolean(opaqueFullNeighbor?.(face) ??
-      (chiselMaterialShape(typeof adjacentCell === 'string' ? adjacentCell : adjacentCell?.key)?.mode === 'opaque'));
+    const adjacentState = decoded(adjacentVoxels);
+    const adjacent = adjacentState?.samples;
+    const adjacentOpaque = !adjacent && opaqueFullNeighbor?.(face);
+    const adjacentMaterial = adjacent || adjacentOpaque !== undefined ? null :
+      chiselMaterialShape(typeof adjacentCell === 'string' ? adjacentCell : adjacentCell?.key);
+    const coversBoundary = !adjacent && Boolean(adjacentOpaque ?? (adjacentMaterial?.solid && adjacentMaterial.mode === 'opaque'));
     for (let slice = 0; slice < 8; slice++) {
       const boundary = slice === (positive ? 7 : 0);
       if (boundary && coversBoundary) continue;
@@ -208,10 +250,16 @@ export function voxelFaces(voxels, neighbor, opaqueFullNeighbor) {
       for (let v = 0; v < 8; v++) for (let u = 0; u < 8; u++) {
         const offset = u * uStride + v * vStride;
         const value = samples[plane + offset];
+        if (!value) {
+          mask[u + 8 * v] = 0;
+          continue;
+        }
         const next = boundary ? adjacent?.[neighborPlane + offset] : samples[plane + offset + side * normal];
-        const nextKey = next && (boundary ? adjacentVoxels.materials : voxels.materials)[next - 1];
-        const hidden = next && (nextKey === voxels.materials[value - 1] || chiselMaterialShape(nextKey).mode === 'opaque');
-        mask[u + 8 * v] = hidden ? 0 : value;
+        const current = materials[value - 1];
+        const nextShape = next && (boundary ? adjacentState.shapes : materials)[next - 1];
+        const covered = nextShape && (nextShape === current || (current.fluid && current.fluid === nextShape.fluid) ||
+          nextShape.solid && nextShape.mode === 'opaque');
+        mask[u + 8 * v] = covered ? 0 : value;
       }
       for (let v = 0; v < 8; v++) for (let u = 0; u < 8; u++) {
         const material = mask[u + 8 * v];

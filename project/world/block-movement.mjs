@@ -1,4 +1,5 @@
 import {hasHatchRung} from './west-cellar.mjs';
+import {VOXEL_SIZE, voxelFluidAt} from './voxel-chisel.mjs';
 
 const keyOf = cell => typeof cell === 'string' ? cell : cell?.key;
 
@@ -20,6 +21,16 @@ export function movementMedium(cellAt, x, y, z) {
   const atFeet = cellAt(xx, yy, zz);
   if (isLadder(atFeet)) return 'ladder';
   const level = liquidLevel(atFeet);
-  if (level !== null && (liquidLevel(cellAt(xx, yy + 1, zz)) !== null || y + .1 < yy + level)) return 'water';
+  const depth = y + .1;
+  let above;
+  if (level !== null) {
+    above = cellAt(xx, yy + 1, zz);
+    if (liquidLevel(above) !== null || depth < yy + level) return 'water';
+  }
+  const sampleY = Math.floor(depth);
+  const sample = sampleY === yy ? atFeet : (above ?? cellAt(xx, sampleY, zz));
+  if (sample?.voxels && voxelFluidAt(sample.voxels,
+      Math.floor((x - xx) * VOXEL_SIZE), Math.floor((depth - sampleY) * VOXEL_SIZE),
+      Math.floor((z - zz) * VOXEL_SIZE)) === 'water') return 'water';
   return null;
 }

@@ -4,7 +4,7 @@ import {connectedTubeMesh, pipeCore, tubeCore} from './redpower-tubes.mjs';
 import {wirePanels, wireSelection} from './redpower-wires.mjs';
 import {shapedLampCollision} from './redpower-lamps.mjs';
 import {fenceCubes, paneOpaqueBlocks} from './block-geometry-properties.mjs';
-import {isFullVoxels, voxelCollisionBoxes, voxelKey} from './voxel-chisel.mjs';
+import {isSolidFullVoxels, voxelCollisionBoxes, voxelKey, voxelSelectionBoxes} from './voxel-chisel.mjs';
 import {chestCollision, chestShape} from './chest-models.mjs';
 import {campfireMesh} from './campfire-model.mjs';
 import {railShape} from './rail-models.mjs';
@@ -256,7 +256,7 @@ const fenceTile = id => id === 113 ? 224 : 4;
 const wallTile = meta => meta === 1 ? 36 : 16;
 const paneFace = id => id === 102 ? 49 : 85;
 const paneEdge = id => id === 102 ? 148 : 85;
-const fullCarving = cell => isFullVoxels(cell?.voxels);
+const fullCarving = cell => isSolidFullVoxels(cell?.voxels);
 
 function barrierLinks(id, neighbors) {
   const pane = isPane(id);
@@ -1127,22 +1127,44 @@ const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 139
   ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
 const dynamic = new Set([...neighborDependent, 751, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
 const chiselMaterialShapes = new Map();
+const jammyCubeTiles = 3880;
+const chiselWater = box(CUBE, tiles.water, {mode:'blend', solid:false, fluid:'water'});
+const chiselLava = box(CUBE, tiles.lava, {solid:false, emissive:true, fluid:'lava'});
+
+function fullMaterialBox(shape) {
+  return !shape.kind && !shape.angle && shape.x0 === 0 && shape.y0 === 0 && shape.z0 === 0 &&
+    shape.x1 === 1 && shape.y1 === 1 && shape.z1 === 1 &&
+    shape.faces.every(tile => Number.isInteger(tile) && tile >= 0 && tile < MAX_ATLAS_TILES);
+}
 
 export function chiselMaterialShape(key) {
   const match = typeof key === 'string' && key.length <= 24 && legacyKey.exec(key);
   if (!match) return null;
   const id = Number(match[1]), meta = Number(match[2]);
   if (key !== `legacy:${id}:${meta}` || meta > 15 || id > 4095 || id === 750) return null;
+  // A fluid level controls the world surface, not the dimensions of a placed eighth.
+  if (id === 8 || id === 9) return chiselWater;
+  if (id === 10 || id === 11) return chiselLava;
+  // The moving piston is a render fallback. Special models use independent UVs.
+  if (id === 36 || id === 1526 || id === 3000 || id === 3001) return null;
   if (chiselMaterialShapes.has(key)) return chiselMaterialShapes.get(key);
-  const [shape, extra] = shapeFor(key);
-  const fullInRegistry = fenceCubes.has(id) || paneOpaqueBlocks.has(id);
-  const allowed = shape && !extra && shape.solid && !shape.kind && !shape.angle && !sourceAtlasModel(key)
-    && (shape.approximation !== 'Unknown legacy block definition' || fullInRegistry)
-    && shape.x0 === 0 && shape.y0 === 0 && shape.z0 === 0 && shape.x1 === 1 && shape.y1 === 1 && shape.z1 === 1
-    && shape.faces.every(tile => Number.isInteger(tile) && tile >= 0 && tile < MAX_ATLAS_TILES);
-  const result = allowed ? shape : null;
+  const result = jammyChiselCube(id, meta) ?? (id === 88 ? box(CUBE, shapeFor(key)[0].faces) :
+    shapeFor(key).find(shape => fullMaterialBox(shape) && shape.approximation !== 'Unknown legacy block definition')) ?? null;
   chiselMaterialShapes.set(key, result);
   return result;
+}
+
+function jammyChiselCube(id, meta) {
+  let variant;
+  if (id === 201 && meta < 8) variant = meta >> 2;
+  else if (id === 205 && meta >= 8 && meta < 12) variant = 2;
+  else if (id === 206 && meta >= 4 && meta < 8) variant = 3;
+  else if (id === 208 && meta === 12) variant = 4;
+  else return null;
+  const firstTile = jammyCubeTiles + variant * 12;
+  const heading = meta & 3;
+  const cap = firstTile + (heading ? 4 + heading * 2 : 2);
+  return turnedBox(CUBE, [firstTile, firstTile + 1, cap, cap + 1, firstTile + 4, firstTile + 5], -heading, GLASS);
 }
 
 export function creativeIcon(entry) {
@@ -1177,11 +1199,11 @@ export function neighborCollisionShapeDependsOn(cell) {
 
 export function shapeFor(cell, neighbors) {
   const key = keyOf(cell);
-  if (key === voxelKey) return voxelCollisionBoxes(cell.voxels);
+  if (key === voxelKey) return voxelSelectionBoxes(cell.voxels);
   if (cell?.voxels && cell.parts) {
     if (!mixedCarvingBoxes.has(cell.voxels)) mixedCarvingBoxes.set(cell.voxels, new WeakMap());
     const cache = mixedCarvingBoxes.get(cell.voxels);
-    if (!cache.has(cell.parts)) cache.set(cell.parts, [...coverBoxes(cell.parts), ...voxelCollisionBoxes(cell.voxels)]);
+    if (!cache.has(cell.parts)) cache.set(cell.parts, [...coverBoxes(cell.parts), ...voxelSelectionBoxes(cell.voxels)]);
     return cache.get(cell.parts);
   }
   if (key === 'game:switch') return [box([0.375, 0.25, 0.75, 0.625, 0.65, 1], 96, GROUND_DECOR)];

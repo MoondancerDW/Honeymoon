@@ -5,13 +5,14 @@ import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
-import { coverBoxes } from '../world/geometry.mjs';
+import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
 import { POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { blockKey, blockState, jammyAppliance, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
 import { shapedLampData } from '../world/creative-items.mjs';
-import { filledVoxels, isChiselMaterial, voxelAtHit, voxelBox, voxelKey, voxelMaterialAt,
-  voxelPlacementAtHit, VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxel } from '../world/voxel-chisel.mjs';
+import { isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt,
+  VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxel } from '../world/voxel-chisel.mjs';
+import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
@@ -143,6 +144,8 @@ export function createGame(base, store, geometry, {
   const spawn = Object.freeze({ x: sx, y: sy, z: sz });
   const diagnostic = mechanics.find(module => module.id === 'diagnostic');
   const catalog = new Set([...(base.catalog ?? []), ...creativeBlocks]);
+  catalog.add('legacy:9:0');
+  catalog.add('legacy:11:0');
   for (const item of creativeItems.values()) catalog.add(item.blockKey);
   for (const key of creativeBlocks) {
     const [id] = blockState(key);
@@ -473,7 +476,7 @@ export function createGame(base, store, geometry, {
   }
 
   function chiselMaterial(cell) {
-    return isChiselMaterial(cell.cell) && catalog.has(cell.cell);
+    return isChiselMaterial(cell.cell) && catalog.has(chiselMaterialKey(cell.cell));
   }
 
   function checkVoxelOwner(player, {x, y, z, cell}) {
@@ -521,38 +524,41 @@ export function createGame(base, store, geometry, {
       if (!multipart || current.voxels) checkVoxelOwner(player, current);
       else if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
       if (!chiselMaterial({cell: input.material})) throw new RequestError(400, 'invalid_material');
+      const material = chiselMaterialKey(input.material);
       if (current.cell !== null && !current.voxels && !multipart) throw new RequestError(409, 'occupied');
       const against = input.against;
       const anchor = getCurrent(against.x, against.y, against.z);
-      const surface = physical.targetAtHit(position, against.x, against.y, against.z, hit);
+      const surface = physical.targetAtHit(position, against.x, against.y, against.z, hit, true);
       if (!surface || against.partSlot !== surface.partSlot ||
           (!anchor.voxels && surface.partSlot === undefined && !chiselMaterial(anchor))) throw new RequestError(403, 'outside_reach');
-      const next = voxelPlacementAtHit(against, surface.hit, surface.face,
-        surface.partSlot === undefined ? anchor.voxels : undefined);
+      const next = chiselPlacementAtHit(against, surface.hit, surface.face,
+        surface.partSlot === undefined ? anchor.voxels : undefined, surface.partSlot);
       if (!next || !samePoint(next, input) || next.voxel !== voxel) throw new RequestError(403, 'outside_reach');
       if (voxelMaterialAt(current.voxels, voxel)) throw new RequestError(409, 'occupied');
       const materials = current.voxels?.materials;
-      if (materials?.length >= VOXEL_MATERIAL_LIMIT && !materials.includes(input.material)) {
+      if (materials?.length >= VOXEL_MATERIAL_LIMIT && !materials.includes(material)) {
         throw new RequestError(409, 'voxel_material_limit');
       }
       const box = voxelBox(voxel);
       if (multipart && partBoxesOverlapBox(coverBoxes(cellView(current).parts), box)) throw new RequestError(409, 'occupied');
-      if (activePositions(player).some(feet => physical.overlapsBox(feet, x, y, z, box))) {
+      if (chiselMaterialShape(material).solid && activePositions(player).some(feet => physical.overlapsBox(feet, x, y, z, box))) {
         throw new RequestError(409, 'occupied');
       }
-      return writeVoxels(player, current, writeVoxel(current.voxels, voxel, input.material), input.material);
+      return writeVoxels(player, current, writeVoxel(current.voxels, voxel, material), material);
     }
 
     if (type === 'remove_voxel') checkVoxelOwner(player, current);
     if (!current.voxels && !chiselMaterial(current)) throw new RequestError(409, 'invalid_material');
-    const surface = physical.targetAtHit(position, x, y, z, hit);
-    if (!surface || surface.partSlot !== undefined || voxelAtHit(current, surface.hit, surface.face, true, current.voxels) !== voxel) {
+    const surface = physical.targetAtHit(position, x, y, z, hit, true);
+    if (!surface || surface.partSlot !== undefined ||
+        chiselVoxelAtHit(current, surface.hit, surface.face, current.voxels, current.cell) !== voxel) {
       throw new RequestError(403, 'outside_reach');
     }
-    const material = current.voxels ? voxelMaterialAt(current.voxels, voxel) : current.cell;
+    const material = chiselMaterialKey(current.voxels ? voxelMaterialAt(current.voxels, voxel) : current.cell);
     if (!material) throw new RequestError(409, 'empty_cell');
     if (type === 'copy_voxel') return {worldRevision: store.worldRevision(), changes: [], effects: [], material};
-    const voxels = current.voxels ?? filledVoxels(current.cell);
+    const voxels = current.voxels ?? chiselSourceVolume(current.cell, geometry.shapeFor(cellView(current),
+      (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz))));
     return writeVoxels(player, current, writeVoxel(voxels, voxel, null));
   }
 

@@ -18,6 +18,7 @@ CONNECTED_TEXTURE_START = 3328
 CHISEL_CTM_START = 3584
 CHEST_START = 3660
 OPEN_CHEST_START = 3744
+JAMMY_CUBE_START = 3880
 CREATIVE_RECIPES = HERE / "creative-textures.json"
 CARPENTRY_MODEL_WIDTH, CARPENTRY_MODEL_HEIGHT = 128, 64
 
@@ -80,13 +81,16 @@ class TextureAtlas:
                 raise ValueError(f"Invalid ZIP or JAR archive: {path}") from error
         return self.archives[name]
 
-    def resolve(self, resource, dependency, override_aliases=(), required=True):
+    def resolve(self, resource, dependency, override_aliases=(), required=True, *, vanilla_first=False):
         # Pack exact path takes precedence. Aliases account for the older model paths
         # in this particular pack. Fall back to the mod, then the base archive.
         ordered = [("pack", candidate) for candidate in (resource, *override_aliases)]
+        if vanilla_first:
+            ordered.append(("vanilla", resource))
         if dependency not in {"vanilla", "pack"}:
             ordered.append((dependency, resource))
-        ordered.append(("vanilla", resource))
+        if not vanilla_first:
+            ordered.append(("vanilla", resource))
         attempted = []
         for archive, candidate in ordered:
             source = self.open_archive(archive)
@@ -200,6 +204,33 @@ def add_kitchen_cupboards(atlas):
             for side, rect in enumerate(model_faces(*dimensions)):
                 patch = get_patch(source, rect).transpose(Image.Transpose.FLIP_TOP_BOTTOM)
                 atlas.paste(3210 + variant * 12 + part * 6 + side, patch)
+
+
+def add_jammy_cubes(atlas):
+    # Full exterior ModelBoxes from the original models, in geometry.mjs order.
+    cubes = (
+        ("kitchencupboardnotop", 0, (64, 32), 4),
+        ("kitchencupboard", 0, (64, 32), 4),
+        ("cooker", 31, (128, 128), 4),
+        ("washingmachine", 25, (64, 64), 4),
+        ("roofing", 0, (128, 64), 1),
+    )
+    cap_turns = (Image.Transpose.ROTATE_180, Image.Transpose.ROTATE_90, None, Image.Transpose.ROTATE_270)
+    for variant, (name, offset_y, size, headings) in enumerate(cubes):
+        path = f"jammy780/furniture/textures/jammy_{name}.png"
+        source = atlas.resolve(path, "jammy", vanilla_first=True)
+        first_tile = JAMMY_CUBE_START + variant * 12
+        faces = model_faces(0, offset_y, 16, 16, 16)
+        faces[2], faces[3] = faces[3], faces[2]
+        for face, rect in enumerate(faces):
+            patch = legacy_patch(source, rect, size)
+            if face not in (2, 3):
+                atlas.paste(first_tile + face, patch)
+                continue
+            for heading in range(headings):
+                rotation = cap_turns[heading]
+                index = first_tile + (face if heading == 0 else 4 + heading * 2 + face - 2)
+                atlas.paste(index, patch.transpose(rotation) if rotation is not None else patch)
 
 
 def add_bookcases(atlas):
@@ -448,6 +479,7 @@ def build(source, output, vanilla_jar=None):
         add_kitchen_cupboards(atlas)
         add_bookcases(atlas)
         add_furniture(atlas)
+        add_jammy_cubes(atlas)
         # The original OptiFine profile uses the pack terrain tiles instead of
         # generated water. Its still tile 205 and flow tile 206 are identical.
         # misc/water.png is the first-person overlay used underwater.
@@ -474,7 +506,7 @@ def build(source, output, vanilla_jar=None):
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
-            "schemaVersion": 10, "grid": GRID, "rows": atlas_rows, "tileSize": TILE, "resources": atlas.resources,
+            "schemaVersion": 11, "grid": GRID, "rows": atlas_rows, "tileSize": TILE, "resources": atlas.resources,
             "creativeMissingTiles":missing, "carpentryModel":carpentry_model,
             "connectedTextures": connected_textures, "chiselConnectedTextures": chisel_connected_textures,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")

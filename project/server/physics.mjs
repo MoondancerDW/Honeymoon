@@ -155,7 +155,7 @@ export function physics(base, geometry, getCell) {
     });
   }
 
-  function targetAtHit(position, x, y, z, hit) {
+  function targetAtHit(position, x, y, z, hit, chiseling = false) {
     if (![hit?.x, hit?.y, hit?.z].every(Number.isFinite)) return null;
     const origin = [position.x, position.y + (position.eye ?? PLAYER.eye), position.z];
     const point = [hit.x, hit.y, hit.z];
@@ -167,14 +167,20 @@ export function physics(base, geometry, getCell) {
     const min = point.map((value, axis) => Math.floor(Math.min(origin[axis], value)));
     const max = point.map((value, axis) => Math.floor(Math.max(origin[axis], value)));
     let closest = null;
+    let closestSolid;
     // Same selection boxes, axis traversal and tie order as client picking.
     for (let yy = min[1] - 1; yy <= max[1]; yy++) {
       for (let zz = min[2] - 1; zz <= max[2] + 1; zz++) {
         for (let xx = min[0] - 1; xx <= max[0] + 1; xx++) {
           for (const box of boxesAt(selection, xx, yy, zz)) {
-            const result = intersectSelection(origin, direction, box, xx, yy, zz, range + tolerance);
-            if (!result || (closest && result.length >= closest.length)) continue;
+            const result = intersectSelection(origin, direction, box, xx, yy, zz, range + tolerance, chiseling && box.solid === false);
+            if (!result) continue;
+            const solid = box.solid !== false;
+            const preferSolid = chiseling && solid && !closestSolid &&
+              Math.abs(result.length - (closest?.length ?? -1)) < 1e-7;
+            if (closest && result.length >= closest.length && !preferSolid) continue;
             closest = {x: xx, y: yy, z: zz, partSlot: box.partSlot, face: result.offset, length: result.length};
+            closestSolid = solid;
           }
         }
       }

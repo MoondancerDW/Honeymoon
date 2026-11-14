@@ -11,9 +11,10 @@ import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../w
 import {jammyBenchState} from '../world/jammy-benches.mjs';
 import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
-import {ATLAS_GRID, TILE_SIZE, coverBoxes, creativeIcon} from '../world/geometry.mjs';
+import {ATLAS_GRID, TILE_SIZE, chiselMaterialShape, coverBoxes, creativeIcon} from '../world/geometry.mjs';
 import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
-import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, voxelPlacementAtHit, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
+import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
+import {chiselMaterialKey, chiselPlacementAtHit} from '../world/chisel-surface.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -92,7 +93,7 @@ function chooseCreative(entry) {
   clipboard = entry.kind === 'microblock' ? null : entry.blockKey ?? entry.key;
   heldSofa = isJammyConnectableSeat(world.models?.jammy, clipboard) ? {} : null;
   sofaTurns = 0;
-  chiselMaterial = isChiselMaterial(clipboard) ? clipboard : null;
+  chiselMaterial = isChiselMaterial(clipboard) ? chiselMaterialKey(clipboard) : null;
   if (chiseling) toggleChisel();
   setHeldPart(entry.kind === 'microblock' ? creativeMicroblock(entry) : null);
   notice(`В руке · ${entry.name}`);
@@ -156,7 +157,7 @@ const messages = {
   voxel_required: 'Нажмите V, чтобы взять резец',
   voxel_not_owned: 'Резцом можно менять только свои блоки',
   invalid_voxel: 'Наведите прицел на нужную часть блока',
-  invalid_material: 'Материал для резца берётся с полного блока или с части, созданной резцом',
+  invalid_material: 'Резец берёт материал с полного блока, жидкости или уже вырезанной части',
   voxel_material_limit: 'В кубе уже слишком много разных материалов',
   outside_playable_area: 'Граница района', protected_cell: 'Это часть контрольной механики',
   no_interaction: 'С этим объектом нельзя взаимодействовать',
@@ -427,7 +428,7 @@ const labelFor = key => {
   if (sofas && (id === sofas.left || id === sofas.right || id === sofas.center || id === sofas.corner)) return 'Секция дивана';
   if (jammyBenchState(world.models?.jammy, key)) return 'Секция скамьи';
   return world.manifest.legacyRegistry?.[id]?.name || ({1:'Камень',2:'Дёрн',3:'Земля',4:'Булыжник',
-    5:'Доски',17:'Бревно',20:'Стекло',35:'Шерсть',44:'Плита',63:'Табличка',68:'Табличка'})[id] ||
+    5:'Доски',8:'Вода',9:'Вода',10:'Лава',11:'Лава',17:'Бревно',20:'Стекло',35:'Шерсть',44:'Плита',63:'Табличка',68:'Табличка'})[id] ||
     (key.startsWith('cover:') ? 'Микроблоки' : 'Блок ' + id);
 };
 
@@ -480,11 +481,13 @@ function updatePlacement(target) {
       placement = microblockPlacement(world, target, heldPart, {rotation:partRotation});
     }
   }
-  if (placement) placement.blocked = Boolean(placement.unavailable) || overlapsPlacement(position, placement);
+  if (placement) placement.blocked = Boolean(placement.unavailable) ||
+    placement.solid !== false && overlapsPlacement(position, placement);
 }
 
 function previewVoxel(target) {
-  const next = voxelPlacementAtHit(target, target.hit, target.offset, target.partSlot === undefined ? target.cell.voxels : undefined);
+  const next = chiselPlacementAtHit(target, target.hit, target.offset,
+    target.partSlot === undefined ? target.cell.voxels : undefined, target.partSlot);
   if (!next) return null;
   const {x,y,z,voxel} = next;
   const {minX,maxX,minY,maxY,minZ,maxZ} = world.manifest.bounds;
@@ -499,7 +502,7 @@ function previewVoxel(target) {
   }
   const against = {x:target.x,y:target.y,z:target.z};
   if (target.partSlot !== undefined) against.partSlot = target.partSlot;
-  return {...next, boxes:[box], against, unavailable};
+  return {...next, boxes:[box], against, unavailable, solid:chiselMaterialShape(chiselMaterial).solid};
 }
 
 function cyclePlacement() {
@@ -538,7 +541,7 @@ function clearHeld() {
 
 function toggleChisel() {
   chiseling = !chiseling;
-  if (chiseling && !chiselMaterial && isChiselMaterial(clipboard)) chiselMaterial = clipboard;
+  if (chiseling && !chiselMaterial && isChiselMaterial(clipboard)) chiselMaterial = chiselMaterialKey(clipboard);
   placementKey = '';
   placement = null;
   chiselHint.hidden = !chiseling;
@@ -615,7 +618,7 @@ async function action(type, sneaking = false) {
     if (!placement || placement.blocked) { notice(messages[placement?.unavailable ?? 'occupied']); return; }
     const {x,y,z,voxel,against,boxes} = placement;
     Object.assign(request, {x,y,z,voxel,against,material:chiselMaterial});
-    pendingPlacement = {x,y,z,boxes};
+    if (placement.solid) pendingPlacement = {x,y,z,boxes};
   }
   request.expectedRevision = world.revisionAt(request.x, request.y, request.z);
   const started = performance.now();
