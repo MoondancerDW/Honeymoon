@@ -45,7 +45,7 @@
           <span id="skin-status" class="skin-status" role="status">PNG 64×32, 64×64, 128×64 или 256×128</span>
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
-        <small id="entry-help">WASD — ходьба · Пробел — прыжок · F — полёт · V — резец · X — сброс выбора · Esc — пауза</small>
+        <small id="entry-help">WASD — ходьба · Пробел — прыжок · I — блоки · F — полёт · V — резец · X — сброс выбора · Esc — пауза</small>
       </div>
     </section>
     <div id="toast" role="status" aria-live="polite"></div>
@@ -67,6 +67,22 @@
       <label><input id="clock-frozen" type="checkbox"> Заморозить</label>
       <div><button type="submit">Применить</button> <button id="clock-close" type="button">Закрыть</button></div>
     </form>
+    <dialog id="creative-menu" aria-labelledby="creative-title">
+      <div class="creative-header">
+        <h2 id="creative-title">Креатив</h2>
+        <input id="creative-search" type="search" aria-label="Поиск блоков" placeholder="Блок, мод или ID" autocomplete="off" spellcheck="false">
+        <button id="creative-close" type="button">Закрыть</button>
+      </div>
+      <div id="creative-tabs" role="tablist" aria-label="Категории блоков"></div>
+      <div id="creative-list" role="tabpanel" tabindex="0">
+        <div id="creative-grid"></div>
+        <button id="creative-more" type="button" hidden>Показать ещё</button>
+      </div>
+      <div class="creative-footer">
+        <span id="creative-count" role="status"></span>
+        <button id="creative-retry" type="button" hidden>Повторить загрузку</button>
+      </div>
+    </dialog>
     <div id="touch" aria-label="Сенсорное управление">
       <div id="stick"><i></i></div>
       <div class="touch-actions">
@@ -82,6 +98,7 @@
     <footer class="bottom">
       <span id="coords" aria-label="Координаты"></span>
       <span id="selected">Ячейка не выбрана</span>
+      <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" title="Креатив · I" disabled>Блоки</button>
       <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
       <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · Q взять материал</span>
       <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Shift вниз</span>

@@ -18,6 +18,8 @@ CONNECTED_TEXTURE_START = 3328
 CHISEL_CTM_START = 3584
 CHEST_START = 3660
 OPEN_CHEST_START = 3744
+CREATIVE_RECIPES = HERE / "creative-textures.json"
+CARPENTRY_MODEL_WIDTH, CARPENTRY_MODEL_HEIGHT = 128, 64
 
 # Keep the source atlas's own tile indices. The base IDs mirror geometry.mjs.
 ATLAS_SOURCES = (
@@ -39,7 +41,10 @@ ARCHIVES = {
     "mechanical": "mods/RedPowerMechanical-2.0pr6.zip",
     "redpower-core": "mods/RedPowerCore-2.0pr6.zip",
     "digital": "mods/RedPowerDigital-2.0pr6.zip",
+    "redpower-compat": "mods/RedPowerCompat-2.0pr6.zip",
     "cloud": "mods/MLB-CORE_147.zip",
+    "clouds": "mods/MLB-CLOUDS_147.zip",
+    "vegetation": "mods/MLB-VEG_147.zip",
     "campfire": "mods/CampfireMod_2.4_for_1.4.7.zip",
     "pam": "mods/Pam's HarvestCraft.zip",
     "chisel": "mods/ChiselRetro_beta0.9_mc1.4.7.zip",
@@ -47,11 +52,12 @@ ARCHIVES = {
     "twilight": "mods/twilightforest-1.15.4.jar",
     "jammy": "mods/1.4.7_Jammy_Furniture_Mod_V4.1.zip",
     "biblio": "mods/BiblioCraft.zip",
+    "customnpcs": "mods/CustomNPCs_1.4.7.zip",
 }
 
 
 class TextureAtlas:
-    def __init__(self, source, stack, vanilla_jar=None):
+    def __init__(self, source, stack, vanilla_jar=None, rows=GRID):
         self.archive_paths = {name: source / path for name, path in ARCHIVES.items()}
         self.archive_labels = ARCHIVES.copy()
         if vanilla_jar is not None:
@@ -59,7 +65,8 @@ class TextureAtlas:
             self.archive_labels["vanilla"] = vanilla_jar.name
         self.stack = stack
         self.archives = {}
-        self.image = Image.new("RGBA", (GRID * TILE, GRID * TILE))
+        self.rows = rows
+        self.image = Image.new("RGBA", (GRID * TILE, rows * TILE))
         self.resources = {}
 
     def open_archive(self, name):
@@ -108,7 +115,7 @@ class TextureAtlas:
         raise FileNotFoundError(f"Texture {resource!r} could not be found. Searched:\n  {searched}{hint}")
 
     def paste(self, index, image):
-        if not 0 <= index < GRID * GRID:
+        if not 0 <= index < GRID * self.rows:
             raise ValueError(f"Tile {index} is outside the atlas")
         self.image.paste(
             image.resize((TILE, TILE), Image.Resampling.NEAREST),
@@ -372,9 +379,48 @@ def add_campfire(atlas):
             atlas.legacy_crop(3798 + part * 6 + face, wrapped, rect, (64, 64))
 
 
+def add_creative_tiles(atlas, recipes):
+    # The original texture pack overrides resources in every legacy mod archive.
+    # Build the lookup once and keep at most one decoded image per referenced resource.
+    images = {}
+    archive_for = {}
+    for family in ("pack", *(family for family in ARCHIVES if family != "pack")):
+        source = atlas.open_archive(family)
+        if source is not None:
+            for resource in source.namelist():
+                if resource.endswith(".png"):
+                    archive_for.setdefault(resource, family)
+    missing = []
+    for index, (resource, x, y, cols, rows) in enumerate(recipes["sources"], recipes["firstTile"]):
+        if resource not in images:
+            images[resource] = atlas.resolve(resource, archive_for[resource], required=False) if resource in archive_for else None
+        image = images[resource]
+        if image is None or not 0 <= x < cols or not 0 <= y < rows or image.width % cols or image.height % rows:
+            missing.append({"tile":index, "resource":resource, "cell":[x, y], "grid":[cols, rows]})
+            atlas.paste(index, atlas.image.crop((3203 % GRID * TILE, 3203 // GRID * TILE,
+                (3203 % GRID + 1) * TILE, (3203 // GRID + 1) * TILE)))
+            continue
+        w, h = image.width // cols, image.height // rows
+        atlas.paste(index, image.crop((x * w, y * h, (x + 1) * w, (y + 1) * h)))
+    return missing
+
+
+def add_carpentry_bench(atlas, tile):
+    texture = atlas.resolve("item/customnpcs/CarpentryBench.png", "customnpcs", required=False)
+    if texture is None:
+        return False
+    texture = texture.resize((CARPENTRY_MODEL_WIDTH, CARPENTRY_MODEL_HEIGHT), Image.Resampling.NEAREST)
+    atlas.image.paste(texture, (tile % GRID * TILE, tile // GRID * TILE))
+    return True
+
+
 def build(source, output, vanilla_jar=None):
+    recipes = json.loads(CREATIVE_RECIPES.read_text(encoding="utf-8"))
+    if recipes["schemaVersion"] != 1 or recipes["firstTile"] != GRID * GRID:
+        raise ValueError("Unsupported creative texture recipe")
+    atlas_rows = recipes["carpentryTile"] // GRID + CARPENTRY_MODEL_HEIGHT // TILE
     with ExitStack() as resources:
-        atlas = TextureAtlas(source, resources, vanilla_jar)
+        atlas = TextureAtlas(source, resources, vanilla_jar, rows=atlas_rows)
         for index, resource, dependency in ATLAS_SOURCES:
             atlas.grid(index, atlas.resolve(resource, dependency))
         alloy_furnace = atlas.resolve("eloraam/base/base1.png", "redpower-core")
@@ -420,11 +466,16 @@ def build(source, output, vanilla_jar=None):
         atlas.paste(3204, Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255)))
         atlas.legacy_crop(3205, terrain, (4, 0, 5, 1), (16, 16))
         add_standing_sign(atlas)
+        missing = add_creative_tiles(atlas, recipes)
+        carpentry_model = add_carpentry_bench(atlas, recipes["carpentryTile"])
+        if missing:
+            print(f"Creative texture resources missing: {len(missing)}. See atlas.json.")
         output.mkdir(parents=True, exist_ok=True)
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
-            "schemaVersion": 9, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
+            "schemaVersion": 10, "grid": GRID, "rows": atlas_rows, "tileSize": TILE, "resources": atlas.resources,
+            "creativeMissingTiles":missing, "carpentryModel":carpentry_model,
             "connectedTextures": connected_textures, "chiselConnectedTextures": chisel_connected_textures,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return len(atlas.resources)

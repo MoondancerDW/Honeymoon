@@ -8,6 +8,8 @@ import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, mi
 import { coverBoxes } from '../world/geometry.mjs';
 import { POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
+import { blockKey, blockState, jammyAppliance, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
+import { shapedLampData } from '../world/creative-items.mjs';
 import { filledVoxels, isChiselMaterial, voxelAtHit, voxelBox, voxelKey, voxelMaterialAt,
   voxelPlacementAtHit, VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxel } from '../world/voxel-chisel.mjs';
 
@@ -16,6 +18,8 @@ const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
 const actions = new Set(['place', 'remove', 'copy', 'interact', ...partActions, ...voxelActions]);
 const axes = ['x', 'y', 'z'];
 const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
+const bedDirections = [[0,1], [-1,0], [0,-1], [1,0]];
+const pairedBlocks = new Set([26, 64, 71]);
 const MOVEMENT_GRACE = 0.24;
 const RUN_SPEED = 9;
 const MAX_ACTIVE_IDLE_MS = 30000;
@@ -40,6 +44,11 @@ function normalizeAction(body) {
   if (!actions.has(body.type)) throw new RequestError(400, 'unknown_action');
   if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw new RequestError(400, 'invalid_revision');
   const input = { type: body.type, ...point(body, true), expectedRevision: body.expectedRevision };
+  if (body.creativeItem !== undefined) {
+    if (!['place','place_part'].includes(body.type) || typeof body.creativeItem !== 'string' ||
+        !/^creative:(?:750|753|768):\d{1,5}$/.test(body.creativeItem)) throw new RequestError(400, 'unknown_cell_type');
+    input.creativeItem = body.creativeItem;
+  }
   if (body.hit !== undefined) input.hit = point(body.hit);
   if (body.type === 'interact' && body.yaw !== undefined) {
     if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
@@ -52,6 +61,7 @@ function normalizeAction(body) {
   if (body.type === 'place') {
     if (typeof body.cell !== 'string' || body.cell.length > 128) throw new RequestError(400, 'invalid_cell');
     input.cell = body.cell;
+    if (body.creative === true) input.creative = true;
     if (body.turns !== undefined) {
       if (!Number.isInteger(body.turns) || body.turns < 0 || body.turns > 3) throw new RequestError(400, 'invalid_heading');
       if (body.turns) input.turns = body.turns;
@@ -62,6 +72,7 @@ function normalizeAction(body) {
     if (!input.hit) throw new RequestError(400, 'invalid_coordinates');
     if (body.type === 'place_part') {
       if (!isMicroPart(body.part)) throw new RequestError(400, 'invalid_part');
+      if (input.creativeItem && !body.part.bounds) throw new RequestError(400, 'invalid_part');
       input.part = publicMicroPart(body.part);
       if (body.part.bounds) {
         if (!Number.isInteger(body.orientation) || body.orientation < 0 || body.orientation >= 24) {
@@ -98,8 +109,32 @@ function normalizeAction(body) {
   return input;
 }
 
+function newCreativeObject(key, position, input, item) {
+  const [id, meta] = blockState(key);
+  let type = jammyAppliance(id, meta) ? 'JammyAppliance' : id === 2255 ? 'WeaponCaseTile' : null;
+  let data = {};
+  const face = input.against && signalSides.findIndex(offset => axes.every((axis,i) => position[i] - input.against[axis] === offset[i]));
+  const mount = face >= 0 ? face ^ 1 : 0;
+  if (id === 750 && [1,2,3,5,12].includes(meta)) {
+    type = ({1:'Redwire',2:'InsRedwire',3:'RedCable',5:'Bluewire',12:'RPConRibbon'})[meta];
+    data = item?.kind === 'jacket' ? {cons:64, post:item.damage & 255, md:0, pwr:0} :
+      {cons:1 << mount, md:item?.damage & 255, pwr:0};
+  }
+  if (id === 750 && meta >= 7 && meta <= 11) type = (['RPPipe','RPTube','RPRSTube','RPRTube','RPMTube'])[meta - 7];
+  if (id === 753) {
+    type = 'RPLogic';
+    data = {sid:item?.damage & 255, rot:mount << 2, ps:0};
+  }
+  if (id === 768) {
+    type = 'RPShLamp';
+    data = shapedLampData(item?.damage ?? meta, mount);
+  }
+  return type ? {type, position, key:`tile:${position.join(':')}`, data} : null;
+}
+
 export function createGame(base, store, geometry, {
-  clock = () => performance.timeOrigin + performance.now(), modules, allowRemoval = false, models,
+  clock = () => performance.timeOrigin + performance.now(), modules, allowRemoval = false, models, creativeBlocks = new Set(),
+  creativeItems = new Map(),
 } = {}) {
   const positions = new Map();
   const seats = new Map();
@@ -107,11 +142,18 @@ export function createGame(base, store, geometry, {
   const [sx, sy, sz] = base.manifest.spawn;
   const spawn = Object.freeze({ x: sx, y: sy, z: sz });
   const diagnostic = mechanics.find(module => module.id === 'diagnostic');
+  const catalog = new Set([...(base.catalog ?? []), ...creativeBlocks]);
+  for (const item of creativeItems.values()) catalog.add(item.blockKey);
+  for (const key of creativeBlocks) {
+    const [id] = blockState(key);
+    for (const variant of relatedBlockStates(key)) catalog.add(variant);
+    if (pairedBlocks.has(id)) for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(id, meta));
+  }
   const reserved = (x, y, z) => mechanics.some(module => module.reserved?.(x, y, z));
   const spawnProtected = (x, y, z) => x === Math.floor(sx) && z === Math.floor(sz)
     && y >= Math.floor(sy) && y <= Math.floor(sy + PLAYER.height);
   const originalAt = (x, y, z) => JSON.stringify(base.getCell(x, y, z));
-  const conflicts = store.rebase(base, reserved, originalAt);
+  const conflicts = store.rebase({...base, catalog}, reserved, originalAt);
 
   const snapshotCells = () => mechanics.flatMap(module => module.snapshot?.() ?? []);
   let mechanicCells = new Map();
@@ -253,7 +295,8 @@ export function createGame(base, store, geometry, {
     for (const change of changes) {
       const { x, y, z } = change;
       if (module.reserved?.(x, y, z)) continue;
-      const owner = placement?.key === cellAddress(x, y, z) && change.cell !== null ? placement.player : null;
+      const owner = change.cell !== null && (placement?.key === cellAddress(x, y, z) ||
+        placement?.keys?.has(cellAddress(x, y, z))) ? placement.player : null;
       store.writeEdit(change, originalAt(x, y, z), owner);
     }
     for (const entry of plan.state ?? []) {
@@ -282,17 +325,20 @@ export function createGame(base, store, geometry, {
     }
   }
 
-  function writeCell(player, current, cell, object) {
-    const { x, y, z } = current;
-    checkAdjacentCollisions(player, current, {key: cell ?? 'air', object, parts: base.manifest.compositions?.[cell]?.parts});
+  function writeCell(player, {x, y, z}, cell, object, companion) {
     const change = { x, y, z, cell, object };
-    const placement = cell === null ? undefined : { key: cellAddress(x, y, z), player };
+    const changed = companion ? [change, companion] : [change];
+    for (const item of changed) {
+      checkAdjacentCollisions(player, item, {key:item.cell ?? 'air', object:item.object,
+        parts:base.manifest.compositions?.[item.cell]?.parts});
+    }
+    const placement = cell === null ? undefined : {keys:new Set(changed.map(item => cellAddress(item.x, item.y, item.z))), player};
     const effects = cell === null ? [] : [{type: 'sound', sound: 'block.place', cell, position: [x, y, z]}];
     for (const module of mechanics) {
-      const plan = module.prepareBlockChange?.(moduleContext(module, player, {change}));
+      const plan = module.prepareBlockChange?.(moduleContext(module, player, {change, changed}));
       if (plan) return writePlan(module, {...plan, effects: [...effects, ...plan.effects]}, placement);
     }
-    return writePlan({}, {cells: [change], effects}, placement);
+    return writePlan({}, {cells:changed, effects}, placement);
   }
 
   function placementAnchor(player, input) {
@@ -305,6 +351,44 @@ export function createGame(base, store, geometry, {
     ];
     const candidates = input.against ? adjacent.filter(([ax, ay, az]) => ax === input.against.x && ay === input.against.y && az === input.against.z) : adjacent;
     return candidates.some(([ax, ay, az]) => physical.visible(position, ax, ay, az, input.hit));
+  }
+
+  function creativePlacement(input, current, player) {
+    const {x, y, z} = current;
+    const [id, meta] = blockState(input.cell);
+    if (!pairedBlocks.has(id)) return {cell:input.cell};
+    const isBed = id === 26;
+    const orientation = meta & 3;
+    const [dx, dz] = bedDirections[orientation];
+    const second = {x:x + (isBed ? dx : 0), y:y + (isBed ? 0 : 1), z:z + (isBed ? dz : 0)};
+    if (!base.inBounds(second.x, second.y, second.z) || reserved(second.x, second.y, second.z) ||
+        spawnProtected(second.x, second.y, second.z) || base.getCell(second.x, second.y, second.z).key !== 'air') {
+      throw new RequestError(403, 'protected_cell');
+    }
+    if (getCurrent(second.x, second.y, second.z).cell !== null) throw new RequestError(409, 'occupied');
+    const cell = blockKey(id, isBed ? orientation : meta & 7);
+    const other = blockKey(id, isBed ? orientation | 8 : 8 | (meta & 8 ? meta & 1 : 0));
+    const atOther = (ax, ay, az) => x + ax === second.x && y + ay === second.y && z + az === second.z ? other : undefined;
+    const atOrigin = (ax, ay, az) => second.x + ax === x && second.y + ay === y && second.z + az === z ? cell : undefined;
+    if (playerOverlaps(x, y, z, cell, player, atOther) ||
+        playerOverlaps(second.x, second.y, second.z, other, player, atOrigin)) throw new RequestError(409, 'occupied');
+    return {cell, companion:{...second, cell:other, object:null}, paired:true};
+  }
+
+  function ownedCompanion(player, current) {
+    const {x, y, z} = current;
+    const [id, meta] = blockState(current);
+    let mate;
+    if (id === 26) mate = bedMate(current, current, getCurrent);
+    else if (id === 64 || id === 71) {
+      const other = getCurrent(x, y + (meta & 8 ? -1 : 1), z);
+      const [otherId, otherMeta] = blockState(other);
+      if (id === otherId && Boolean(meta & 8) !== Boolean(otherMeta & 8)) mate = other;
+    }
+    if (!mate || store.getEditOwner(mate.x, mate.y, mate.z) !== player ||
+        base.getCell(mate.x, mate.y, mate.z).key !== 'air') return undefined;
+    if (seatsAt(mate.x, mate.y, mate.z)) throw new RequestError(409, 'seat_taken');
+    return {x:mate.x, y:mate.y, z:mate.z, cell:null, object:null};
   }
 
   function writeMicroParts(current, ownedParts, placed, voxels = current.voxels) {
@@ -372,7 +456,8 @@ export function createGame(base, store, geometry, {
       throw new RequestError(403, 'outside_reach');
     }
     if (input.part.bounds) {
-      const copied = store.getClipboard(player);
+      const item = input.creativeItem && creativeItems.get(input.creativeItem);
+      const copied = input.creativeItem ? item?.part && {part:item.part, pattern:item.part.pattern} : store.getClipboard(player);
       if (!copied?.pattern || input.part.material !== copied.part.material || input.part.shape !== copied.part.shape ||
           input.part.sourceSlot !== (copied.part.sourceSlot ?? copied.part.slot)) throw new RequestError(409, 'nothing_to_copy');
       const proposal = guidedMicroblock({...against, hit: anchor.hit, offset: anchor.face}, copied.part, copied.pattern, input.orientation);
@@ -388,7 +473,7 @@ export function createGame(base, store, geometry, {
   }
 
   function chiselMaterial(cell) {
-    return isChiselMaterial(cell.cell) && base.catalog.has(cell.cell);
+    return isChiselMaterial(cell.cell) && catalog.has(cell.cell);
   }
 
   function checkVoxelOwner(player, {x, y, z, cell}) {
@@ -482,7 +567,10 @@ export function createGame(base, store, geometry, {
     if (voxelActions.has(type)) return editVoxels(player, input, current);
     if (type === 'place') {
       if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
-      if (!base.catalog.has(input.cell) || input.cell === 'air' || input.cell === voxelKey) {
+      const item = input.creativeItem && creativeItems.get(input.creativeItem);
+      const allowed = input.creativeItem ? item && !item.part && item.blockKey === input.cell :
+        input.creative ? creativeBlocks.has(input.cell) : catalog.has(input.cell);
+      if (!allowed || input.cell === 'air' || input.cell === voxelKey) {
         throw new RequestError(400, 'unknown_cell_type');
       }
       if (input.turns && !geometry.isSofa?.(input.cell)) throw new RequestError(400, 'invalid_heading');
@@ -493,14 +581,16 @@ export function createGame(base, store, geometry, {
       if (current.cell !== null) throw new RequestError(409, 'occupied');
       if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
       if (!placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
-      const copied = store.getClipboard(player);
-      const copiedObject = copied?.cell === input.cell ? copied.object : null;
+      const actual = input.creative ? creativePlacement(input, current, player) : input;
+      const copied = input.creative ? null : store.getClipboard(player);
+      const copiedObject = input.creative || item ? newCreativeObject(actual.cell, [x, y, z], input, item) :
+        copied?.cell === actual.cell ? copied.object : null;
       const object = geometry.placementObject
-        ? geometry.placementObject(input.cell, copiedObject, [x, y, z], input.turns)
+        ? geometry.placementObject(actual.cell, copiedObject, [x, y, z], input.turns)
         : copiedObject ? { ...copiedObject, position: [x, y, z], key: `tile:${x}:${y}:${z}` } : null;
-      const parts = base.manifest.compositions?.[input.cell]?.parts;
-      if (playerOverlaps(x, y, z, {key: input.cell, object, parts}, player)) throw new RequestError(409, 'occupied');
-      return writeCell(player, current, input.cell, object);
+      const parts = base.manifest.compositions?.[actual.cell]?.parts;
+      if (!actual.paired && playerOverlaps(x, y, z, {key:actual.cell, object, parts}, player)) throw new RequestError(409, 'occupied');
+      return writeCell(player, current, actual.cell, object, actual.companion);
     }
 
     if (type === 'remove' && reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
@@ -530,7 +620,7 @@ export function createGame(base, store, geometry, {
       store.putClipboard(player, { cell: current.cell, object });
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
     }
-    return writeCell(player, current, null, null);
+    return writeCell(player, current, null, null, ownedCompanion(player, current));
   }
 
   function action(player, body) {

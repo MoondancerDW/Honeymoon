@@ -397,13 +397,13 @@ function makeControls(base, geometry) {
       return current.finish();
     },
     prepareBlockChange(context) {
-      const {change} = context;
+      const {change, changed = [change]} = context;
       const point = pointOf(change), [id, meta] = blockState(change);
       const current = plan(context);
-      current.put(change);
+      for (const item of changed) current.put(item);
       if (buttonDuration(id) && (meta & 8)) current.schedule(point, id, buttonDuration(id));
       if (pressurePlate(id) && meta) current.schedule(point, id, 1000);
-      updatePower(context, current, [point]);
+      updatePower(context, current, changed.map(pointOf));
       return current.finish();
     },
     prepareTick(context) {

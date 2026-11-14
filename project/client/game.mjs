@@ -4,13 +4,15 @@ import {World, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {PlayerProfile} from './player-profile.mjs';
 import {createSocialHud} from './social-hud.mjs';
+import {createCreativeMenu} from './creative-menu.mjs';
 import {blockState} from '../world/block-interactions.mjs';
 import {seatFor, SEATED_EYE} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
 import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
-import {coverBoxes} from '../world/geometry.mjs';
+import {ATLAS_GRID, TILE_SIZE, coverBoxes, creativeIcon} from '../world/geometry.mjs';
+import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, voxelPlacementAtHit, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 
 const element = id => document.getElementById(id);
@@ -23,6 +25,7 @@ const toast = element('toast');
 const selectionStatus = element('selected');
 const coordinateStatus = element('coords');
 const clearSelection = element('clear-selection');
+const creativeToggle = element('creative-toggle');
 const microHint = element('micro-hint');
 const touchRotate = element('touch-rotate');
 const chiselHint = element('chisel-hint');
@@ -36,6 +39,11 @@ let heldPart = null, partRotation = 0, placement = null, placementKey = '';
 let heldSofa = null, sofaTurns = 0;
 let chiseling = false, chiselMaterial = null;
 let heldVersion = 0;
+let fromCreative = false;
+let heldCreativeItem = null;
+let creativeAvailable = false;
+const creativeNames = new Map();
+let iconImage;
 let selectionInputs, selectionRevision = 0;
 const positionInterval = 130;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
@@ -52,16 +60,75 @@ let nextClockUpdate = 0;
 const audio = new WorldAudio();
 const profile = new PlayerProfile({nickname:element('nickname'), skin:element('pony-skin'), status:element('skin-status'),
   clear:element('clear-skin'), label:element('player-name')}, notice);
-const social = createSocialHud({post, notice,
-  pause() { keys.clear(); jump = false; stick.x = stick.z = 0; if (document.pointerLockElement) document.exitPointerLock(); },
-  resume() {
-    if (touchMode || !view) return;
-    const canvas = view.renderer.domElement;
-    if (document.pointerLockElement === canvas) return;
-    try { Promise.resolve(canvas.requestPointerLock()).catch(() => setPlaying(false)); }
-    catch { setPlaying(false); }
-  },
-});
+const pause = () => {
+  keys.clear();
+  jump = false;
+  stick.x = stick.z = 0;
+  if (document.pointerLockElement) document.exitPointerLock();
+};
+function resume() {
+  if (touchMode || !view || !entered) return;
+  const canvas = view.renderer.domElement;
+  if (document.pointerLockElement === canvas) return;
+  try { Promise.resolve(canvas.requestPointerLock()).catch(() => setPlaying(false)); }
+  catch { setPlaying(false); }
+}
+const social = createSocialHud({post, notice, pause, resume});
+const creative = createCreativeMenu({load:loadCreative, choose:chooseCreative,
+  pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
+const menuOpen = () => social.isOpen() || creative.isOpen();
+
+async function loadCreative() {
+  const catalog = await json('/generated/creative/catalog.json');
+  for (const {key, name} of catalog.entries) if (key && name) creativeNames.set(key, name);
+  return catalog;
+}
+
+function chooseCreative(entry) {
+  if (entry.placeable === false) return false;
+  heldVersion++;
+  fromCreative = true;
+  heldCreativeItem = entry.kind ? entry : null;
+  clipboard = entry.kind === 'microblock' ? null : entry.blockKey ?? entry.key;
+  heldSofa = isJammyConnectableSeat(world.models?.jammy, clipboard) ? {} : null;
+  sofaTurns = 0;
+  chiselMaterial = isChiselMaterial(clipboard) ? clipboard : null;
+  if (chiseling) toggleChisel();
+  setHeldPart(entry.kind === 'microblock' ? creativeMicroblock(entry) : null);
+  notice(`В руке · ${entry.name}`);
+  return true;
+}
+
+async function drawCreativeIcon(entry, canvas) {
+  const model = entry.kind === 'microblock' ? {part:creativeMicroblock(entry)} :
+    entry.kind === 'shaped-lamp' ? {data:shapedLampData(entry.damage), lit:Boolean(entry.damage & 16)} : undefined;
+  const info = creativeIcon({...entry, ...model, key:entry.blockKey ?? entry.key});
+  if (!info || !Number.isInteger(info.tile) || info.tile < 0) return false;
+  if (!iconImage) {
+    const image = new Image();
+    image.src = '/generated/textures/atlas.png';
+    iconImage = image.decode().then(() => image).catch(error => { iconImage = undefined; throw error; });
+  }
+  const image = await iconImage;
+  const tile = info.tile;
+  const left = tile % ATLAS_GRID * TILE_SIZE;
+  const top = Math.floor(tile / ATLAS_GRID) * TILE_SIZE;
+  if (top + TILE_SIZE > image.naturalHeight) return false;
+  const context = canvas.getContext('2d');
+  if (!context) return false;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.imageSmoothingEnabled = false;
+  context.drawImage(image, left, top, TILE_SIZE, TILE_SIZE, 0, 0, canvas.width, canvas.height);
+  const tint = Number.isInteger(info.tint) ? [info.tint >> 16 & 255, info.tint >> 8 & 255, info.tint & 255] : info.tint;
+  if (Array.isArray(tint) && tint.some(channel => channel !== 255)) {
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    for (let offset = 0; offset < pixels.data.length; offset += 4) {
+      for (let channel = 0; channel < 3; channel++) pixels.data[offset + channel] *= tint[channel] / 255;
+    }
+    context.putImageData(pixels, 0, 0);
+  }
+  return true;
+}
 
 if (touchMode) {
   game.classList.add('touch');
@@ -214,6 +281,7 @@ function setPlaying(active) {
   if (active && !entered && !button.disabled) {
     entered = true;
     presenceDirty = true;
+    creativeToggle.disabled = !creativeAvailable;
   }
   audio.setPlaying(active);
   game.classList.toggle('playing', active);
@@ -352,6 +420,7 @@ const labelFor = key => {
   if (key === voxelKey) return 'Резной блок';
   if (key === 'game:switch') return 'Переключатель';
   if (key === 'game:door') return 'Дверь';
+  if (creativeNames.has(key)) return creativeNames.get(key);
   const id = Number(key.split(':')[1]);
   const sofas = world.models?.jammy?.sofaIds;
   if (sofas && id === sofas.chair) return 'Кресло';
@@ -456,6 +525,8 @@ function setHeldPart(part) {
 
 function clearHeld() {
   heldVersion++;
+  fromCreative = false;
+  heldCreativeItem = null;
   clipboard = null;
   heldSofa = null;
   sofaTurns = 0;
@@ -522,6 +593,8 @@ async function action(type, sneaking = false) {
     request.y += target.offset[1];
     request.z += target.offset[2];
     request.cell = clipboard;
+    if (fromCreative) request.creative = true;
+    if (heldCreativeItem) request.creativeItem = heldCreativeItem.key;
     if (heldSofa) {
       updatePlacement(target);
       if (!placement || placement.blocked) { notice(messages.occupied); return; }
@@ -534,6 +607,7 @@ async function action(type, sneaking = false) {
     if (!placement || placement.blocked) { notice(messages[placement ? 'occupied' : 'incompatible_part']); return; }
     const {x, y, z, part, against, orientation, boxes} = placement;
     Object.assign(request, {x, y, z, part, against, orientation});
+    if (heldCreativeItem) request.creativeItem = heldCreativeItem.key;
     pendingPlacement = {x, y, z, boxes};
   }
   if (type === 'place_voxel') {
@@ -559,6 +633,8 @@ async function action(type, sneaking = false) {
       return;
     }
     if (type === 'copy' && selectedVersion === heldVersion) {
+      fromCreative = false;
+      heldCreativeItem = null;
       clipboard = result.body.cell || cell;
       heldSofa = isJammyConnectableSeat(world.models?.jammy, clipboard) ? {object: target.cell?.object} : null;
       sofaTurns = 0;
@@ -566,6 +642,8 @@ async function action(type, sneaking = false) {
       notice('Скопировано · ' + labelFor(clipboard));
     }
     if (type === 'copy_part' && selectedVersion === heldVersion) {
+      fromCreative = false;
+      heldCreativeItem = null;
       clipboard = null;
       heldSofa = null;
       setHeldPart({...result.body.part, pattern:result.body.pattern});
@@ -619,7 +697,7 @@ function tick(now) {
   updatePlacement(selection);
   const selected = selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
-  const held = chiseling ? labelFor(chiselMaterial) : heldPart ? partLabel(heldPart) : labelFor(clipboard);
+  const held = chiseling ? labelFor(chiselMaterial) : heldCreativeItem?.name ?? (heldPart ? partLabel(heldPart) : labelFor(clipboard));
   const status = [selected, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
   const coordinates = `X ${position.x.toFixed(2)}  Y ${position.y.toFixed(2)}  Z ${position.z.toFixed(2)}`;
@@ -628,7 +706,7 @@ function tick(now) {
     social.updateClock(view.dayTick(now), view.worldTime.frozen);
     nextClockUpdate = now + 200;
   }
-  view.render(now, selection, playing && !social.isOpen(), placement, document.hasFocus());
+  view.render(now, selection, playing && !menuOpen(), placement, document.hasFocus());
   requestAnimationFrame(tick);
 }
 
@@ -653,6 +731,7 @@ function bindControls() {
         if (playing) {
           entered = true;
           presenceDirty = true;
+          creativeToggle.disabled = !creativeAvailable;
         }
       }).catch(error => {
         if (touchMode) setPlaying(false);
@@ -672,15 +751,21 @@ function bindControls() {
     }
   });
   document.addEventListener('pointerlockchange', () => {
-    if (!touchMode && !social.isOpen()) setPlaying(document.pointerLockElement === canvas);
+    if (!touchMode && !menuOpen()) setPlaying(document.pointerLockElement === canvas);
   });
   document.addEventListener('pointerlockerror', () => notice('Браузер заблокировал захват курсора'));
   document.addEventListener('mousemove', event => {
-    if (!touchMode && playing && !social.isOpen()) look(event.movementX, event.movementY);
+    if (!touchMode && playing && !menuOpen()) look(event.movementX, event.movementY);
   });
   document.addEventListener('keydown', event => {
+    if (creative.keydown(event) || creative.isOpen()) return;
     if (social.keydown(event, playing)) return;
     if (!playing) return;
+    if (event.code === 'KeyI' && !event.repeat && !creativeToggle.disabled) {
+      event.preventDefault();
+      creative.open();
+      return;
+    }
     if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.code)) event.preventDefault();
     keys.add(event.code);
     if (event.repeat) return;
@@ -695,7 +780,7 @@ function bindControls() {
   document.addEventListener('keyup', event => { keys.delete(event.code); social.keyup(event); });
   window.addEventListener('blur', () => { keys.clear(); social.blur(); });
   canvas.addEventListener('mousedown', event => {
-    if (!playing || touchMode || social.isOpen()) return;
+    if (!playing || touchMode || menuOpen()) return;
     if (event.button === 2) rightClick(event.shiftKey);
     if (event.button === 0) action('remove');
     if (event.button === 1) action('copy');
@@ -823,6 +908,7 @@ async function streamChunks(chunks, scenery) {
 async function start() {
   const [manifest, session] = await Promise.all([json('/generated/world/world.json'), post('session', {})]);
   if (!session.ok) throw new Error('Сеанс не создан');
+  creativeAvailable = session.body.creative;
   profile.initialize(session.body.profile);
   if (session.body.sounds) {
     audio.load().then(loaded => {

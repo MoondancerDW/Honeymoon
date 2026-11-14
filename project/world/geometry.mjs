@@ -1,6 +1,6 @@
 import {hasHatchRung, westCellarLadder} from './west-cellar.mjs';
 
-import {connectedTubeMesh, tubeCore} from './redpower-tubes.mjs';
+import {connectedTubeMesh, pipeCore, tubeCore} from './redpower-tubes.mjs';
 import {wirePanels, wireSelection} from './redpower-wires.mjs';
 import {shapedLampCollision} from './redpower-lamps.mjs';
 import {fenceCubes, paneOpaqueBlocks} from './block-geometry-properties.mjs';
@@ -8,9 +8,12 @@ import {isFullVoxels, voxelCollisionBoxes, voxelKey} from './voxel-chisel.mjs';
 import {chestCollision, chestShape} from './chest-models.mjs';
 import {campfireMesh} from './campfire-model.mjs';
 import {railShape} from './rail-models.mjs';
+import {creativeBlock} from './creative-blocks.mjs';
+import {carpentryModel} from './carpentry-model.mjs';
 
 export const ATLAS_GRID = 64;
 export const TILE_SIZE = 16;
+export const MAX_ATLAS_TILES = ATLAS_GRID * 128;
 export const FACES = Object.freeze([
   [-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1],
 ]);
@@ -69,7 +72,8 @@ const LIGHT = { emissive: true };
 const STAIRS = { 53: 4, 67: 16, 108: 7, 109: 54, 114: 224, 128: stoneSlab[1],
   134: 198, 135: 214, 136: 199, 3247: tiles.cloud + 36 };
 const isCottonStair = id => id >= 4035 && id <= 4050;
-const stairTiles = id => isCottonStair(id) ? wool[id - 4035] : STAIRS[id];
+const stairTiles = id => isCottonStair(id) ? wool[id - 4035] : STAIRS[id] ??
+  (id >= 2808 && id <= 2831 ? creativeBlock(id, 0)?.[0] : undefined);
 const TERRAIN = {
   1: 1, 3: 2, 4: 16, 7: 17, 12: 18, 13: 19, 14: 32, 15: 33, 16: 34,
   19: 48, 21: 160, 22: 144, 41: 23, 42: 22, 45: 7, 48: 36, 49: 37,
@@ -189,6 +193,7 @@ function sandstone(meta) {
 function stairs(id, meta, neighbors) {
   const inverted = Boolean(meta & 4);
   const faceTiles = stairTiles(id);
+  const options = id >= 2824 && id <= 2831 ? {mode:'blend'} : DEFAULT;
   const orientation = meta & 3;
   const direction = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]][orientation];
   const back = direction.map(value => -value);
@@ -201,7 +206,7 @@ function stairs(id, meta, neighbors) {
   };
   const highY = inverted ? 0 : 0.5;
   const baseY = inverted ? 0.5 : 0;
-  const result = [box([0, baseY, 0, 1, baseY + 0.5, 1], faceTiles)];
+  const result = [box([0, baseY, 0, 1, baseY + 0.5, 1], faceTiles, options)];
   const cornerFacing = (neighbor, sign) => {
     if (!qualifies(neighbor)) return null;
     const facing = unpack(neighbor)[1] & 3;
@@ -214,9 +219,9 @@ function stairs(id, meta, neighbors) {
   const halfBounds = [[.5, 0, 1, 1], [0, 0, .5, 1], [0, .5, 1, 1], [0, 0, 1, .5]];
   const step = (first, second) => {
     const [a, b, c, d] = halfBounds[first];
-    if (second === null) return box([a, highY, b, c, highY + .5, d], faceTiles);
+    if (second === null) return box([a, highY, b, c, highY + .5, d], faceTiles, options);
     const [x0, z0, x1, z1] = halfBounds[second];
-    return box([Math.max(a, x0), highY, Math.max(b, z0), Math.min(c, x1), highY + .5, Math.min(d, z1)], faceTiles);
+    return box([Math.max(a, x0), highY, Math.max(b, z0), Math.min(c, x1), highY + .5, Math.min(d, z1)], faceTiles, options);
   };
   result.push(step(orientation, outer));
   if (inner !== null) result.push(step(orientation ^ 1, inner));
@@ -245,7 +250,7 @@ function door(id, meta, neighbors) {
 }
 
 const horizontalFaces = [0, 1, 4, 5];
-const isPane = id => id === 101 || id === 102;
+const isPane = id => id === 101 || id === 102 || id === 2802 || id === 2803;
 const isFence = id => id === 85 || id === 113;
 const fenceTile = id => id === 113 ? 224 : 4;
 const wallTile = meta => meta === 1 ? 36 : 16;
@@ -313,8 +318,9 @@ function paneBounds(along, begin, end, low = .4375, high = .5625, y0 = 0, y1 = 1
   return along === 0 ? [begin, y0, low, end, y1, high] : [low, y0, begin, high, y1, end];
 }
 
-function pane(id, neighbors) {
-  const body = paneFace(id), edge = paneEdge(id);
+function pane(id, neighbors, meta = 0) {
+  const captured = id === 2802 || id === 2803 ? creativeBlock(id, meta)?.[0] : null;
+  const body = captured?.[4] ?? paneFace(id), edge = captured?.[3] ?? paneEdge(id);
   const arms = paneArms(paneLinks(id, neighbors));
   const result = [];
   const options = {mode: 'pane', solid: false};
@@ -758,7 +764,8 @@ export function chestMesh(cell, neighbors) {
 }
 
 export function sourceAtlasModel(cell) {
-  const [id] = unpack(cell);
+  const [id, meta] = unpack(cell);
+  if (id === 1526) return carpentryModel(meta);
   return id === 3000 || id === 3001 ? campfireMesh : null;
 }
 
@@ -783,7 +790,7 @@ export function signFor(cell) {
 
 export function redPowerTubeMesh(cell, neighbors) {
   const [id, meta] = unpack(cell);
-  if (id !== 750 || meta !== 8) return null;
+  if (id !== 750 || meta < 7 || meta > 11) return null;
   return [...coverBoxes(Array.isArray(cell?.parts) ? cell.parts : AIR, false), ...connectedTubeMesh(cell, neighbors)];
 }
 
@@ -803,7 +810,7 @@ function specialShape(id, meta, cell, neighbors) {
     const parts = Array.isArray(cell?.parts) ? cell.parts : AIR;
     let components = coverBoxes(parts, false);
     if (meta === 0) return Array.isArray(cell?.parts) ? components : uniform(planks[1]);
-    if (meta === 8) return [...components, tubeCore];
+    if (meta >= 7 && meta <= 11) return [...components, meta === 7 ? pipeCore : tubeCore];
     if (wireMetadata.has(meta) && Number.isInteger(data?.cons)) {
       const panels = wireSelection(cell, meta);
       // The original ray trace uses multipart bounds; only rendering extends a post to its neighbors.
@@ -954,6 +961,7 @@ function vanillaShape(id, meta, neighbors) {
     case 29:
     case 33:
     case 34: return uniform(faceMaterial(109, [2, 3, 4, 5, 0, 1][meta & 7] ?? 3, id === 29 ? 106 : 107));
+    case 36: return [box(CUBE, 107, {solid:false, approximation:'Moving piston without a saved payload'})];
     case 35: return uniform(wool[meta]);
     case 43:
     case 44:
@@ -1040,8 +1048,40 @@ function vanillaShape(id, meta, neighbors) {
       box([0, 0.3125, 0, 1, 1, 0.125], 154), box([0, 0.3125, 0.875, 1, 1, 1], 154),
       box([0, 0.3125, 0.125, 0.125, 1, 0.875], 154), box([0.875, 0.3125, 0.125, 1, 1, 0.875], 154),
     ];
+    case 119: return [box([0, 0, 0, 1, .75, 1], [-1, -1, -1, 37, -1, -1],
+      {emissive:true, solid:false, approximation:'Static End portal surface'})];
+    case 120: return [
+      box([0, 0, 0, 1, .8125, 1], topSides(159, 158, 175)),
+      ...(meta & 4 ? [box([.25, .8125, .25, .75, 1, .75], 174)] : []),
+    ];
+    case 122: {
+      // The original RenderBlocks dragon egg draws eight centered tiers, from its top down.
+      let top = 16;
+      return [[2,1], [3,1], [4,1], [5,2], [6,3], [7,5], [6,2], [3,1]].map(([radius, height]) => {
+        const bottom = top - height;
+        const tier = box([(8 - radius) / 16, bottom / 16, (8 - radius) / 16,
+          (8 + radius) / 16, top / 16, (8 + radius) / 16], 167);
+        top = bottom;
+        return tier;
+      });
+    }
     case 123:
     case 124: return uniform(id === 123 ? 211 : 212, id === 124 ? LIGHT : undefined);
+    case 127: {
+      const age = Math.min(meta >> 2, 2), radius = (4 + age * 2) / 32;
+      return [turnedBox([.5 - radius, (7 - age * 2) / 16, .75 - 2 * radius, .5 + radius, .75, .75],
+        [168, 169, 170][age], meta & 3, {mode:'cutout', solid:false, uv:'box'})];
+    }
+    case 131: return [
+      wallPlate([2,5,3,4][meta & 3], .375, .25, .6, .125, 4, GROUND_DECOR),
+      wallPlate([2,5,3,4][meta & 3], .1875, .375, .5625, .3125, 172, {mode:'cutout', solid:false, uv:'box'}),
+    ];
+    case 132: return [box([0, 0, .4875, 1, .0625, .5125], 173, GROUND_DECOR)];
+    case 138: return [
+      box([.125, .00625, .125, .875, .1875, .875], 37),
+      box(CUBE, 49, GLASS),
+      box([.1875, .1875, .1875, .8125, .875, .8125], 41),
+    ];
     case 140: return [
       box([0.3125, 0, 0.3125, 0.6875, 0.375, 0.6875], 186),
       ...(meta > 0 ? cross(meta === 2 ? 13 : 12, 0.81).map(part => ({ ...part, y0: 0.375 })) : []),
@@ -1051,12 +1091,39 @@ function vanillaShape(id, meta, neighbors) {
       turnedBox([0.25, 0.25, 0.1875, 0.75, 0.625, 0.8125], 215, meta & 1),
       turnedBox([0, 0.625, 0, 1, 1, 1], 215, meta & 1),
     ];
+    case 2802:
+    case 2803: return pane(id, neighbors, meta);
     default: return null;
   }
 }
 
+function registryShape(id, meta) {
+  const source = creativeBlock(id, meta);
+  if (!source) return null;
+  const [faces, render, bounds, flags, emission, tint, hint] = source;
+  const [opaque, normal, materialBlocks, liquid, tileEntity, blended] = [1, 2, 4, 8, 16, 32].map(bit => Boolean(flags & bit));
+  const color = tint === 0xffffff ? undefined : tint;
+  const material = {mode:blended ? 'blend' : opaque ? 'opaque' : 'cutout', tint:color, emissive:emission > 0,
+    solid:!liquid && (materialBlocks || normal || opaque)};
+  if (render === 1 || render === 6 || render === 19 || hint === 'sprite') {
+    return [box([.05, 0, .05, .95, 1, .95], faces[4], {...material, solid:false, mode:'cutout', kind:'cross', uv:'box'})];
+  }
+  if (render === 2) return torch(faces[4], meta, emission > 0);
+  if (hint === 'slab') {
+    const top = meta & 8 ? 1 : .5;
+    return [box([0, top - .5, 0, 1, top, 1], faces, material)];
+  }
+  if (render === 67) return [box(bounds, [-1, -1, -1, faces[3], -1, -1], {...material, solid:false})];
+  const exactBounds = bounds.every((value, i) => i < 3 || value > bounds[i - 3]) ? bounds : CUBE;
+  const extended = render !== 0 && render !== 31 && ![71, 73, 81, 82].includes(render);
+  const approximation = render < 0 || hint === 'model' || extended || tileEntity && !opaque
+    ? 'Legacy renderer approximated from registered bounds and face textures' : undefined;
+  return [box(exactBounds, faces, {...material, approximation})];
+}
+
 const simpleCache = new Map();
-const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 139, 750,
+const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 139, 750, 2802, 2803,
+  ...Array.from({length:24}, (_, i) => 2808 + i),
   ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
 const dynamic = new Set([...neighborDependent, 751, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
 const chiselMaterialShapes = new Map();
@@ -1072,10 +1139,29 @@ export function chiselMaterialShape(key) {
   const allowed = shape && !extra && shape.solid && !shape.kind && !shape.angle && !sourceAtlasModel(key)
     && (shape.approximation !== 'Unknown legacy block definition' || fullInRegistry)
     && shape.x0 === 0 && shape.y0 === 0 && shape.z0 === 0 && shape.x1 === 1 && shape.y1 === 1 && shape.z1 === 1
-    && shape.faces.every(tile => Number.isInteger(tile) && tile >= 0 && tile < ATLAS_GRID ** 2);
+    && shape.faces.every(tile => Number.isInteger(tile) && tile >= 0 && tile < MAX_ATLAS_TILES);
   const result = allowed ? shape : null;
   chiselMaterialShapes.set(key, result);
   return result;
+}
+
+export function creativeIcon(entry) {
+  const part = entry.part;
+  if (part) return {tile:covers[part.material] ?? tiles.unknown};
+  const key = entry.blockKey ?? entry.key;
+  const [id, meta] = unpack(key);
+  if (id === 768) return {tile:tiles.redPowerLighting + (entry.lit ? 32 : 16) + ((entry.data?.color ?? meta) & 15)};
+  if (id === 119) return {tile:37};
+  if (id >= 756 && id <= 759) return {tile:tiles.redPowerLighting + (id === 756 || id === 758 ? 32 : 16) + meta};
+  if (id === 219 || id === 220) return {tile:tiles.furniture + (id === 219 ? 1 : 0)};
+  if (id >= 213 && id <= 217) return {tile:tiles.armchair + (meta >> 2) * 64 + 1};
+  const shape = (id === 79 && meta > 0 ? registryShape(id, meta) : null) ?? vanillaShape(id, meta) ?? specialShape(id, meta, key);
+  const spec = creativeBlock(id, meta);
+  const piece = shape?.[0];
+  const face = piece?.kind === 'cross' ? 0 : [4, 5, 0, 1, 3, 2].find(f => (piece?.faces?.[f] ?? -1) >= 0) ?? 4;
+  return {tile:piece?.faces?.[face] ?? spec?.[0][face] ?? tiles.unknown,
+    top:piece?.faces?.[3] ?? spec?.[0][3], east:piece?.faces?.[1] ?? spec?.[0][1],
+    tint:piece?.tintFaces?.[face] ?? piece?.tint ?? spec?.[5]};
 }
 
 export function shapeDependsOnNeighbors(cell) {
@@ -1111,7 +1197,8 @@ export function shapeFor(cell, neighbors) {
   }
   const cacheable = !dynamic.has(id);
   if (cacheable && simpleCache.has(key)) return simpleCache.get(key);
-  const result = vanillaShape(id, meta, neighbors) ?? specialShape(id, meta, cell, neighbors)
+  const result = (id === 79 && meta > 0 ? registryShape(id, meta) : null) ?? vanillaShape(id, meta, neighbors) ??
+    specialShape(id, meta, cell, neighbors) ?? registryShape(id, meta)
     ?? uniform(tiles.unknown, { approximation: 'Unknown legacy block definition' });
   if (cacheable) simpleCache.set(key, result);
   return result;
@@ -1137,6 +1224,8 @@ export function selectionFor(cell, neighbors) {
   if (id === 139) return [box(wallBounds(barrierLinks(id, neighbors)), wallTile(meta))];
   if (isPane(id)) return [box(barrierBounds(paneLinks(id, neighbors), .4375, .5625, 1), paneFace(id))];
   if (id === 107) return [turnedBox([0, 0, .375, 1, 1, .625], 4, meta & 1)];
+  const source = creativeBlock(id, meta);
+  if (source && source[6] === 'sprite' && source[1] !== 79) return [box([.375, .15, .375, .625, .4, .625], source[0], GROUND_DECOR)];
   // The legacy stair ray trace uses the six octants of the ordinary step even at corners.
   if (stairTiles(id) !== undefined) return stairs(id, meta);
   return shapeFor(cell, neighbors);
@@ -1149,6 +1238,9 @@ export function collisionFor(cell, neighbors) {
   if (id === 765) return frameCollision;
   if (id === 768) return shapedLampCollision;
   if (id === 117) return brewingStandCollision;
+  if (id === 122) return [box([.0625, 0, .0625, .9375, 1, .9375], 167)];
+  if (id === 138) return [box(CUBE, 49)];
+  if (id === 1526) return [box(CUBE, creativeBlock(id, meta)[0])];
   if (id === 92) {
     const [cake] = shapeFor(cell);
     return [{...cake, y1: 7 / 16}];

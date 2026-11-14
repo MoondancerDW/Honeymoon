@@ -32,6 +32,9 @@ def build(output, node, node_license, generated):
                          and not path.name.endswith(".test.mjs"))
             for family in ("world", "textures", "models", "sounds"):
                 add_tree(archive, generated / family, f"generated/{family}")
+            catalog = generated / "creative" / "catalog.json"
+            if catalog.is_file():
+                archive.write(catalog, "generated/creative/catalog.json")
             three = PROJECT / "node_modules" / "three"
             for name in ("package.json", "LICENSE", "build/three.module.js", "build/three.core.js"):
                 archive.write(three / name, (Path("node_modules/three") / name).as_posix())

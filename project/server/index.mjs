@@ -8,6 +8,7 @@ import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { createChat } from './chat.mjs';
+import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
 import { MAX_PROFILE_BODY, profileChanges, publicProfile } from './presence-profile.mjs';
 import { openStore } from './store.mjs';
@@ -159,6 +160,7 @@ export function createHoneymoonServer({
   allowRemoval,
 } = {}) {
   const models = {};
+  const creative = readCreativeCatalog(generated, project);
   const sounds = statSync(join(generated, 'sounds', 'sounds.json'), {throwIfNoEntry: false})?.isFile() ?? false;
   for (const family of modelFamilies) {
     try {
@@ -173,7 +175,8 @@ export function createHoneymoonServer({
   const store = openStore(state);
   let game;
   try {
-    game = createGame(base, store, withExtractedModels(geometry, models), { clock, allowRemoval, models });
+    game = createGame(base, store, withExtractedModels(geometry, models),
+      { clock, allowRemoval, models, creativeBlocks:creative?.placeable, creativeItems:creative?.items });
   } catch (error) {
     store.close();
     throw error;
@@ -188,7 +191,7 @@ export function createHoneymoonServer({
   const serveWorld = serveWorldJson();
   const session = player => {
     const time = worldTime.snapshot();
-    return { ...game.session(player), modelFamilies: Object.keys(models), sounds, dayTick: time.tick, time,
+    return { ...game.session(player), modelFamilies: Object.keys(models), sounds, dayTick: time.tick, time, creative:Boolean(creative),
       profile: publicProfile(player, store.getProfile(player)) };
   };
 
@@ -332,6 +335,9 @@ export function createHoneymoonServer({
     }
 
     if (method !== 'GET' && method !== 'HEAD') throw new RequestError(405, 'method_not_allowed');
+    if (creative && path === '/generated/creative/catalog.json') {
+      return serveWorld(request, response, path, () => creative.catalog);
+    }
     const skin = path.match(/^\/skins\/([a-f0-9]{64})\.png$/);
     if (skin) {
       const png = store.getSkin(skin[1]);

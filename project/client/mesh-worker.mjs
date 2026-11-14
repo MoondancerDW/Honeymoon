@@ -16,6 +16,8 @@ const MIN = ['x0', 'y0', 'z0'];
 let cells = [];
 let compositions = {};
 let models = {};
+let atlasRows = ATLAS_GRID;
+let carpentryModel = false;
 const cache = new Map();
 
 function layer() {
@@ -24,8 +26,9 @@ function layer() {
 
 function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding = .25 / TILE_SIZE) {
   const start = out.positions.length / 3;
+  if (tile >= ATLAS_GRID * atlasRows) tile = geometry.tiles.unknown;
   const u0 = (tile % ATLAS_GRID) / ATLAS_GRID;
-  const v0 = 1 - Math.floor(tile / ATLAS_GRID) / ATLAS_GRID;
+  const v0 = 1 - Math.floor(tile / ATLAS_GRID) / atlasRows;
   const scale = 1 - 2 * padding;
   const r = Math.round((tint >> 16 & 255) * shade);
   const g = Math.round((tint >> 8 & 255) * shade);
@@ -34,12 +37,12 @@ function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding
     out.positions.push(...corners[i]);
     out.colors.push(r, g, b);
     out.lightLevels.push(light);
-    out.uvs.push(u0 + (padding + scale * uv[i][0]) / ATLAS_GRID, v0 - (padding + scale * uv[i][1]) / ATLAS_GRID);
+    out.uvs.push(u0 + (padding + scale * uv[i][0]) / ATLAS_GRID, v0 - (padding + scale * uv[i][1]) / atlasRows);
   }
   out.indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
 }
 
-function modelQuad(out, {positions, uv, emissive, tint = 0xffffff}, origin, light) {
+function modelQuad(out, {positions, uv, emissive, tint = 0xffffff}, origin, light, vScale = 1) {
   const start = out.positions.length / 3;
   const ax = positions[3] - positions[0], ay = positions[4] - positions[1], az = positions[5] - positions[2];
   const bx = positions[6] - positions[0], by = positions[7] - positions[1], bz = positions[8] - positions[2];
@@ -51,7 +54,7 @@ function modelQuad(out, {positions, uv, emissive, tint = 0xffffff}, origin, ligh
   const color = [tint >> 16 & 255, tint >> 8 & 255, tint & 255].map(channel => Math.round(channel * (emissive ? 1 : shade)));
   for (let i = 0; i < 4; i++) {
     out.positions.push(positions[i * 3] + origin[0], positions[i * 3 + 1] + origin[1], positions[i * 3 + 2] + origin[2]);
-    out.uvs.push(uv[i * 2], 1 - uv[i * 2 + 1]);
+    out.uvs.push(uv[i * 2], 1 - uv[i * 2 + 1] * vScale);
     out.colors.push(...color);
     out.lightLevels.push(emissive ? 256 : light);
   }
@@ -166,7 +169,7 @@ function makeShape(index, at, cell, neighbors, edited) {
   if (cacheable && cache.has(index)) return cache.get(index);
   const adjacent = (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE);
   const model = extractedModel(models, cell || key, adjacent);
-  const atlasModel = model ? null : geometry.sourceAtlasModel(key);
+  const atlasModel = model || key.startsWith('legacy:1526:') && !carpentryModel ? null : geometry.sourceAtlasModel(key);
   const boxes = model || atlasModel ? [] : geometry.standingSignMesh(key) ??
     geometry.redPowerTubeMesh(cell || key, adjacent) ?? geometry.redPowerWireMesh(cell || key, adjacent) ??
     geometry.chestMesh(cell || key, adjacent) ??
@@ -222,7 +225,7 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
         }
         const {boxes, model, atlasModel} = shape(at);
         if (atlasModel) {
-          for (const surface of atlasModel) modelQuad(layers.cutout, surface, origin, light[at]);
+          for (const surface of atlasModel) modelQuad(layers.cutout, surface, origin, light[at], ATLAS_GRID / atlasRows);
           continue;
         }
         if (model) {
@@ -350,6 +353,8 @@ self.onmessage = ({data}) => {
     return;
   }
   if (data.palette) cells = data.palette;
+  atlasRows = data.atlasRows ?? ATLAS_GRID;
+  carpentryModel = data.carpentryModel === true;
   const start = performance.now();
   try {
     const {layers, signs} = data.type === 'precise' ? precise(data) : coarse(data);

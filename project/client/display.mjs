@@ -180,6 +180,8 @@ export class Display {
     ]);
     this.connectedTextures = atlas?.connectedTextures === true;
     this.chiselConnectedTextures = atlas?.chiselConnectedTextures === true;
+    this.atlasRows = atlas?.rows ?? 64;
+    this.carpentryModel = atlas?.carpentryModel === true;
     const additional = await Promise.all(Object.keys(this.world.models || {}).map(async family => {
       const texture = await loader.loadAsync(`/generated/models/${family}.png`);
       return Object.entries(materialsFor(texture, 26 / 255)).map(([mode, material]) => [`${family}:${mode}`, material]);
@@ -691,7 +693,8 @@ export class Display {
       if (job.type === 'precise') {
         const halo = this.world.halo(job.cx, job.cy, job.cz);
         worker.postMessage({id: job.id, type: job.type, version: job.version, palette: this.world.palette,
-          connectedTextures: this.connectedTextures, chiselConnectedTextures: this.chiselConnectedTextures, ...halo},
+          atlasRows: this.atlasRows, connectedTextures: this.connectedTextures,
+          chiselConnectedTextures: this.chiselConnectedTextures, carpentryModel: this.carpentryModel, ...halo},
           [halo.indices.buffer, halo.light.buffer]);
       } else {
         const chunks = [];
@@ -708,7 +711,7 @@ export class Display {
           }
         }
         worker.postMessage({id: job.id, type: job.type, version: job.version,
-          chunks, stride: job.stride, origin: [job.cx * 16, 0, job.cz * 16]});
+          atlasRows: this.atlasRows, chunks, stride: job.stride, origin: [job.cx * 16, 0, job.cz * 16]});
       }
     }
   }
