@@ -9,7 +9,7 @@ import {loadBase} from '../server/base.mjs';
 import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
 
-const [generatedArg = 'generated', outputArg = 'work/city-performance/benchmark'] = process.argv.slice(2);
+const [generatedArg = 'generated', outputArg = 'work/city-performance/benchmark', ...selected] = process.argv.slice(2);
 const generated = resolve(generatedArg);
 const output = resolve(outputArg);
 const base = loadBase(join(generated, 'world'));
@@ -173,11 +173,13 @@ try {
     [1280,720,8,samples],
     [1920,1080,8,[samples[1],samples[2]]],
   ]) for (const sample of routes) {
+    if (selected.length && !selected.includes(`${sample.id}:${height}:${distance}`)) continue;
     const test = await measure(browser,cdp,sample,width,height,distance);
     report.cases.push(test);
     await writeFile(join(output,'benchmark.json'),JSON.stringify(report,null,2)+'\n');
     console.log(JSON.stringify(test));
   }
+  assert.ok(report.cases.length, 'No benchmark case matched');
   assert.deepEqual(errors, []);
 } catch (error) {
   report.failure = error.stack;
