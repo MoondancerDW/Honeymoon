@@ -319,6 +319,7 @@ self.onmessage = ({data}) => {
       out.colors = new Uint8Array(out.colors);
       out.lightLevels = new Uint16Array(out.lightLevels);
       out.indices = out.positions.length / 3 <= 65535 ? new Uint16Array(out.indices) : new Uint32Array(out.indices);
+      out.bounds = boundingSphere(out.positions);
       transfers.push(out.positions.buffer, out.uvs.buffer, out.colors.buffer, out.lightLevels.buffer, out.indices.buffer);
     }
     self.postMessage({id: data.id, version: data.version, layers, signs, elapsed: performance.now() - start}, transfers);
@@ -326,3 +327,16 @@ self.onmessage = ({data}) => {
     self.postMessage({id: data.id, version: data.version, error: error.stack || String(error)});
   }
 };
+
+function boundingSphere(positions) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < positions.length; i++) {
+    const axis = i % 3;
+    min[axis] = Math.min(min[axis], positions[i]);
+    max[axis] = Math.max(max[axis], positions[i]);
+  }
+  const center = min.map((value, axis) => (value + max[axis]) / 2);
+  const radius = Math.hypot(...max.map((value, axis) => value - center[axis]));
+  return {center, radius};
+}

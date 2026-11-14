@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export function transaction(db, run) {
   db.exec('BEGIN IMMEDIATE');
@@ -40,21 +40,48 @@ const initialSchema = `
 `;
 
 function migrate(db) {
-  const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (version > SCHEMA_VERSION) throw new Error(`Save schema ${version} requires a newer Honeymoon server.`);
-  if (version === SCHEMA_VERSION) return;
+  const readVersion = db.prepare('PRAGMA user_version');
+  if (readVersion.get().user_version === SCHEMA_VERSION) return;
   transaction(db, () => {
+    const version = readVersion.get().user_version;
+    if (version > SCHEMA_VERSION) throw new Error(`Save schema ${version} requires a newer Honeymoon server.`);
+    if (version === SCHEMA_VERSION) return;
     if (version === 0) db.exec(initialSchema);
-    db.exec(`
-      ALTER TABLE edits ADD COLUMN original TEXT;
-      ALTER TABLE edits ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0;
-      CREATE TABLE rebase_conflicts (
-        base_hash TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL,
-        previous_base TEXT, new_base TEXT, edit TEXT, reason TEXT NOT NULL,
-        PRIMARY KEY (base_hash,x,y,z)
-      ) STRICT;
-      PRAGMA user_version = 2;
-    `);
+    if (version < 2) {
+      db.exec(`
+        ALTER TABLE edits ADD COLUMN original TEXT;
+        ALTER TABLE edits ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE rebase_conflicts (
+          base_hash TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL,
+          previous_base TEXT, new_base TEXT, edit TEXT, reason TEXT NOT NULL,
+          PRIMARY KEY (base_hash,x,y,z)
+        ) STRICT;
+      `);
+    }
+    db.exec(`ALTER TABLE edits ADD COLUMN placed_by TEXT REFERENCES players(id);
+      WITH proven AS (
+        SELECT edits.x,edits.y,edits.z,MIN(receipts.player) AS owner
+        FROM receipts
+        JOIN edits ON edits.x=json_extract(receipts.input, '$.x')
+          AND edits.y=json_extract(receipts.input, '$.y')
+          AND edits.z=json_extract(receipts.input, '$.z')
+        WHERE receipts.status=200 AND json_extract(receipts.input, '$.type')='place'
+          AND edits.cell IS NOT NULL AND edits.quarantined=0
+          AND json_extract(receipts.output, '$.worldRevision')=edits.revision
+          AND EXISTS (
+            SELECT 1 FROM json_each(receipts.output, '$.changes') AS change
+            WHERE json_extract(change.value, '$.x')=edits.x
+              AND json_extract(change.value, '$.y')=edits.y
+              AND json_extract(change.value, '$.z')=edits.z
+              AND json_extract(change.value, '$.revision')=edits.revision
+              AND json_extract(change.value, '$.cell')=edits.cell
+          )
+        GROUP BY edits.x,edits.y,edits.z
+        HAVING count(DISTINCT receipts.player)=1
+      )
+      UPDATE edits SET placed_by=proven.owner FROM proven
+        WHERE edits.x=proven.x AND edits.y=proven.y AND edits.z=proven.z;
+      PRAGMA user_version = ${SCHEMA_VERSION};`);
   });
 }
 
@@ -84,11 +111,14 @@ export function openStore(filename) {
   const writeState = statement(`INSERT INTO module_state VALUES (?,?,?,?,?) ON CONFLICT(module,owner,key)
     DO UPDATE SET version=excluded.version,value=excluded.value`);
   const readEdit = statement('SELECT cell,object,revision FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
+  const readEditOwner = statement('SELECT placed_by FROM edits WHERE x=? AND y=? AND z=? AND cell IS NOT NULL AND quarantined=0');
   const listEdits = statement('SELECT x,y,z,cell,object,revision FROM edits WHERE quarantined=0 ORDER BY x,y,z');
-  const writeEdit = statement(`INSERT INTO edits(x,y,z,cell,object,revision,original,quarantined)
-    VALUES (?,?,?,?,?,?,?,0) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
-    object=excluded.object,revision=excluded.revision,quarantined=0`);
-  const allEdits = statement('SELECT x,y,z,cell,original FROM edits ORDER BY x,y,z');
+  const writeEdit = statement(`INSERT INTO edits(x,y,z,cell,object,revision,original,quarantined,placed_by)
+    VALUES (?,?,?,?,?,?,?,0,?) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
+    object=excluded.object,revision=excluded.revision,quarantined=0,
+    placed_by=CASE WHEN excluded.placed_by IS NOT NULL THEN excluded.placed_by
+      WHEN edits.quarantined=0 THEN edits.placed_by END`);
+  const allEdits = statement('SELECT x,y,z,cell,original,placed_by FROM edits ORDER BY x,y,z');
   const updateOriginal = statement('UPDATE edits SET original=?,quarantined=? WHERE x=? AND y=? AND z=?');
   const insertConflict = statement('INSERT OR REPLACE INTO rebase_conflicts VALUES (?,?,?,?,?,?,?,?)');
   const listConflicts = statement('SELECT * FROM rebase_conflicts WHERE base_hash=? ORDER BY x,y,z');
@@ -140,17 +170,20 @@ export function openStore(filename) {
     getEdit(x, y, z) {
       return unpackEdit(readEdit.get(x, y, z));
     },
+    getEditOwner(x, y, z) {
+      return readEditOwner.get(x, y, z)?.placed_by ?? null;
+    },
     edits() {
       return listEdits.all().map(unpackEdit);
     },
-    writeEdit({ x, y, z, cell, object, revision }, original) {
-      writeEdit.run(x, y, z, cell, object ? JSON.stringify(object) : null, revision, original);
+    writeEdit({ x, y, z, cell, object, revision }, original, placedBy = null) {
+      writeEdit.run(x, y, z, cell, object ? JSON.stringify(object) : null, revision, original, placedBy);
     },
     rebase(base, reserved, originalAt) {
       return transaction(db, () => {
         const previousHash = readMeta.get('base_hash')?.value;
         if (previousHash === base.hash) return listConflicts.all(base.hash);
-        for (const { x, y, z, cell, original } of allEdits.all()) {
+        for (const { x, y, z, cell, original, placed_by: owner } of allEdits.all()) {
           const current = originalAt(x, y, z);
           let reason;
           let quarantined = 0;
@@ -159,6 +192,9 @@ export function openStore(filename) {
             quarantined = 1;
           } else if (cell !== null && !base.catalog.has(cell)) {
             reason = 'missing_catalog_entry';
+            quarantined = 1;
+          } else if (owner && base.getCell(x, y, z).key !== 'air') {
+            reason = 'original_cell_changed';
             quarantined = 1;
           } else if (original !== null && current !== original) {
             reason = 'original_cell_changed';

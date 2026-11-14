@@ -101,10 +101,10 @@ try {
   const removal = await page.request.post(`${base}/api/action`, {data:{type:'remove', requestId:'desktop-block-breaking',
     x:selected.x, y:selected.y, z:selected.z, expectedRevision:0}});
   const response = await removal.json();
-  if (!stillPresent || removal.status() !== 403 || response.error !== 'block_breaking_disabled') {
-    throw new Error('Block breaking is enabled');
+  if (!stillPresent || removal.status() !== 403 || response.error !== 'block_not_owned') {
+    throw new Error('Original block is not protected');
   }
-  results.edits = {selected, copyWorks: true, blockBreakingDisabled: true};
+  results.edits = {selected, copyWorks: true, originalBlockProtected: true};
   await second.close();
 } catch (error) {
   results.failure = error.stack;

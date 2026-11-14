@@ -95,7 +95,7 @@ export class Movement {
     return true;
   }
 
-  update(position, dx, dz, jump, dt, {descend = false, rise = jump} = {}) {
+  update(position, dx, dz, jump, dt, {descend = false, rise = jump, recordStep} = {}) {
     this.medium = movementMedium(this.cellAt, position.x, position.y, position.z);
     if (!this.medium && jump && this.grounded) { this.fall = 6.8; this.grounded = false; }
     const n = Math.max(1, Math.ceil(dt / .016));
@@ -121,6 +121,7 @@ export class Movement {
         if (this.medium === 'ladder') this.fall = 2.4;
         if (this.medium === 'water') this.fall = 2.5;
       }
+      recordStep?.(position);
     }
   }
 

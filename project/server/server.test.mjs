@@ -24,8 +24,9 @@ function makeWorkspace() {
   return mkdtempSync(join(work, 'server-test-'));
 }
 
-function writeFixture(directory, { hash = 'original', reorder = false, block = 'legacy:1:0' } = {}) {
+function writeFixture(directory, { hash = 'original', reorder = false, block = 'legacy:1:0', buildCell = 'air' } = {}) {
   const palette = reorder ? ['air', 'legacy:4:0', 'legacy:1:0'] : ['air', 'legacy:1:0', 'legacy:4:0'];
+  palette.push('legacy:219:0');
   const manifest = {
     schemaVersion: 1, importVersion: 1, contentHash: hash,
     bounds: { minX: 0, maxX: 15, minY: 0, maxY: 15, minZ: 0, maxZ: 15 },
@@ -35,6 +36,7 @@ function writeFixture(directory, { hash = 'original', reorder = false, block = '
   for (let index = 0; index < 256; index++) section.writeUInt16LE(palette.indexOf('legacy:1:0'), index * 2);
   const index = 8 + 16 * 10 + 256;
   section.writeUInt16LE(palette.indexOf(block), index * 2);
+  section.writeUInt16LE(palette.indexOf(buildCell), (index + 1) * 2);
   const objects = [{
     key: 'tile:8:1:10', position: [8, 1, 10], type: 'Sign',
     data: { Text1: 'visible', privateField: 'secret' },
@@ -135,9 +137,9 @@ test('two guests edit one cell and receive the same durable changes after confli
   app = await start(base, state);
   const renewed = await request(app, '/api/session', { cookie: first.cookie, payload: {} });
   assert.equal(renewed.data.playerId, first.data.playerId);
-  const denied = await request(app, '/api/action', { cookie: first.cookie,
-    payload: command('remove', 'breaking-disabled', { x: 9, expectedRevision: placed.data.worldRevision }) });
-  assert.deepEqual({ status: denied.status, data: denied.data }, { status: 403, data: { error: 'block_breaking_disabled' } });
+  const denied = await request(app, '/api/action', { cookie: second.cookie,
+    payload: command('remove', 'breaking-denied', { x: 9, expectedRevision: placed.data.worldRevision }) });
+  assert.deepEqual({ status: denied.status, data: denied.data }, { status: 403, data: { error: 'block_not_owned' } });
   const saved = await request(app, '/api/world', { cookie: first.cookie });
   assert.deepEqual(saved.data.overrides.find(cell => cell.x === 8 && cell.y === 1 && cell.z === 10), winner.changes[0]);
   assert.deepEqual(saved.data.overrides.find(cell => cell.x === 9 && cell.y === 1 && cell.z === 10), placed.data.changes[0]);
@@ -164,6 +166,88 @@ test('two guests edit one cell and receive the same durable changes after confli
   } finally {
     savedCopy.close();
   }
+
+  const mine = command('remove', 'breaking-own', { x: 9, expectedRevision: placed.data.worldRevision });
+  const removed = await request(app, '/api/action', { cookie: first.cookie, payload: mine });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.data.changes[0], { x: 9, y: 1, z: 10, cell: null, object: null, revision: 3 });
+  assert.deepEqual(await request(app, '/api/action', { cookie: first.cookie, payload: mine }), removed);
+  const newBuild = await request(app, '/api/action', { cookie: second.cookie, payload: {
+    ...put, requestId: 'place-second', expectedRevision: removed.data.worldRevision,
+  } });
+  assert.equal(newBuild.status, 200);
+  const replaced = { ...mine, requestId: 'breaking-other', expectedRevision: newBuild.data.worldRevision };
+  assert.equal((await request(app, '/api/action', { cookie: first.cookie, payload: replaced })).data.error, 'block_not_owned');
+  assert.equal((await request(app, '/api/action', { cookie: second.cookie, payload: replaced })).status, 200);
+});
+
+test('block ownership survives changes to a placed lamp and protects imported and unattributed cells', async t => {
+  const directory = makeWorkspace();
+  const base = writeFixture(join(directory, 'world'));
+  const state = join(directory, stateFile);
+  let app = await start(base, state);
+  t.after(async () => {
+    await app.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const { cookie } = await request(app, '/api/session', { payload: {} });
+  const action = (type, id, fields) => request(app, '/api/action', { cookie, payload: command(type, id, fields) });
+  const original = await action('remove', 'remove-original');
+  assert.deepEqual({ status: original.status, data: original.data }, { status: 403, data: { error: 'block_not_owned' } });
+  const lamp = { x: 9, against: { x: 9, y: 0, z: 10 }, cell: 'legacy:219:0' };
+  const placed = await action('place', 'place-owned-lamp', lamp);
+  assert.equal(placed.status, 200);
+  const turned = await action('interact', 'switch-owned-lamp', { x: 9, expectedRevision: placed.data.worldRevision });
+  assert.equal(turned.data.changes[0].cell, 'legacy:220:0');
+  assert.equal((await action('remove', 'remove-owned-lamp', { x: 9, expectedRevision: turned.data.worldRevision })).status, 200);
+
+  const unknown = await action('place', 'place-no-proof', { ...lamp, expectedRevision: turned.data.worldRevision + 1 });
+  const proven = await action('place', 'place-proven', { ...lamp, z: 9, against: { x: 9, y: 0, z: 9 } });
+  const unconfirmed = await action('place', 'place-failed-proof', { ...lamp, x: 7, z: 10, against: { x: 7, y: 0, z: 10 } });
+  const changed = await action('place', 'place-wrong-revision', { ...lamp, x: 8, z: 7, against: { x: 8, y: 0, z: 7 } });
+  for (const result of [unknown, proven, unconfirmed, changed]) assert.equal(result.status, 200);
+  await app.close();
+  const legacy = new DatabaseSync(state);
+  legacy.exec('ALTER TABLE edits DROP COLUMN placed_by; PRAGMA user_version=2');
+  legacy.exec(`DELETE FROM receipts WHERE id='place-no-proof';
+    UPDATE receipts SET status=409 WHERE id='place-failed-proof';
+    UPDATE receipts SET output=json_set(output, '$.changes[0].revision', 0) WHERE id='place-wrong-revision';`);
+  legacy.close();
+  app = await start(base, state);
+  for (const [suffix, result] of [['no-receipt', unknown], ['unsuccessful', unconfirmed], ['wrong-revision', changed]]) {
+    const { x, y, z, revision: expectedRevision } = result.data.changes[0];
+    const denied = await action('remove', 'remove-' + suffix, { x, y, z, expectedRevision });
+    assert.deepEqual({ status: denied.status, data: denied.data }, { status: 403, data: { error: 'block_not_owned' } });
+  }
+  assert.equal((await action('remove', 'remove-proven', { x: 9, z: 9, expectedRevision: proven.data.worldRevision })).status, 200);
+});
+
+test('an imported block wins over an owned placement when rebasing the map', async t => {
+  for (const removed of [false, true]) await t.test(removed ? 'removed placement' : 'current placement', async t => {
+    const directory = makeWorkspace();
+    const base = writeFixture(join(directory, 'world'));
+    const state = join(directory, stateFile);
+    let app = await start(base, state);
+    t.after(async () => {
+      await app.close();
+      rmSync(directory, { recursive: true, force: true });
+    });
+    const { cookie } = await request(app, '/api/session', { payload: {} });
+    const placed = await request(app, '/api/action', { cookie,
+      payload: command('place', 'place-occupied-base', { x: 9, cell: 'legacy:1:0', against: { x: 9, y: 0, z: 10 } }) });
+    assert.equal(placed.status, 200);
+    if (removed) {
+      const payload = command('remove', 'remove-before-rebase', { x: 9, expectedRevision: placed.data.worldRevision });
+      assert.equal((await request(app, '/api/action', { cookie, payload })).status, 200);
+    }
+    await app.close();
+    const changed = writeFixture(join(directory, 'world'), { hash: 'build-cell-original', buildCell: 'legacy:4:0' });
+    app = await start(changed, state);
+    const snapshot = (await request(app, '/api/world', { cookie })).data;
+    assert.equal(snapshot.overrides.some(({ x, y, z }) => x === 9 && y === 1 && z === 10), false);
+    const denied = await request(app, '/api/action', { cookie, payload: command('remove', 'remove-rebased', { x: 9 }) });
+    assert.equal(denied.data.error, 'block_not_owned');
+  });
 });
 
 test('switch and zone survive process death after commit, save upgrade and base catalog reorder', { timeout: 30000 }, async t => {
@@ -239,7 +323,7 @@ test('switch and zone survive process death after commit, save upgrade and base 
   await app.close();
 
   const old = new DatabaseSync(state);
-  old.exec('ALTER TABLE edits DROP COLUMN quarantined; ALTER TABLE edits DROP COLUMN original; DROP TABLE rebase_conflicts; PRAGMA user_version=1');
+  old.exec('ALTER TABLE edits DROP COLUMN placed_by; ALTER TABLE edits DROP COLUMN quarantined; ALTER TABLE edits DROP COLUMN original; DROP TABLE rebase_conflicts; PRAGMA user_version=1');
   old.close();
   app = await start(base, state);
   let snapshot = (await request(app, '/api/world', { cookie })).data;

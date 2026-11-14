@@ -1,8 +1,9 @@
 import {Display} from './display.mjs';
 import {Movement, EYE, pick} from './movement.mjs';
-import {World, chunkKey, json} from './world-data.mjs';
+import {World, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {biblioWeaponCase, blockState, jammyAppliance, jammyUseSound} from '../world/block-interactions.mjs';
+import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -17,8 +18,11 @@ const heading = {yaw: 0, pitch: -.045};
 const handControls = new Set([25,64,69,77,84,93,94,96,107,143,219,220]);
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
-let playing = false, jump = false, lastFrame = 0, lastSync = 0, lastPosition = '', timer;
-let sync = Promise.resolve(), acting = false, syncing = false;
+const positionInterval = 130;
+const positionMetrics = {requests: 0, corrections: 0, errors: 0};
+const positionTrail = [];
+let playing = false, jump = false, lastFrame = 0, nextPositionSync = 0, timer;
+let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
 const audio = new WorldAudio();
@@ -42,13 +46,14 @@ const messages = {
   reserved: 'Это часть контрольной механики', nothing_to_copy: 'Сначала скопируйте блок',
   empty_cell: 'В ячейке нет блока', cannot_interact: 'С этим объектом нельзя взаимодействовать',
   movement_blocked: 'Позиция скорректирована сервером', outside_reach: 'Цель вне досягаемости',
+  block_not_owned: 'Можно ломать только свои блоки',
   outside_playable_area: 'Граница района', protected_cell: 'Это часть контрольной механики',
   no_interaction: 'С этим объектом нельзя взаимодействовать'
 };
 
-async function post(path, payload) {
+async function post(path, payload, signal) {
   const response = await fetch('/api/' + path, {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload), signal
   });
   const body = await response.json();
   return {ok: response.ok, body};
@@ -122,26 +127,75 @@ function setPlaying(active) {
   }
 }
 
-function syncPosition(force = false) {
-  if (force) return sync.then(() => syncPosition());
-  if (syncing) return sync;
-  const payload = {...position};
-  const address = [payload.x, payload.y, payload.z].map(n => n.toFixed(4)).join(',');
-  if (address === lastPosition) return Promise.resolve();
-  lastPosition = address;
-  syncing = true;
-  sync = sync.catch(() => {}).then(async () => {
-    const {ok, body} = await post('position', payload);
-    if (!ok && body.position) {
-      Object.assign(position, body.position);
-      lastPosition = '';
-      movement.fall = 0;
+const positionTuple = ({x, y, z}) => [x, y, z];
+
+function recordPosition(feet) {
+  const sample = positionTuple(feet);
+  const previous = positionTrail.at(-1) ?? confirmedPosition;
+  if (sample.some((value, axis) => value !== previous[axis])) positionTrail.push(sample);
+}
+
+function setAuthoritativePosition(feet) {
+  Object.assign(position, feet);
+  confirmedPosition = positionTuple(feet);
+  positionTrail.length = 0;
+  pendingPosition = null;
+  movement.fall = 0;
+  movement.grounded = false;
+}
+
+function positionPacket() {
+  const trail = [];
+  let distance = 0;
+  let from = confirmedPosition;
+  // Keep a delayed batch inside the server's wall-clock movement budget.
+  for (const step of positionTrail) {
+    distance += Math.hypot(step[0] - from[0], Math.max(0, step[1] - from[1]), step[2] - from[2]);
+    if (trail.length && (trail.length >= POSITION_TRAIL_LIMIT || distance > 1.05)) break;
+    trail.push(step);
+    from = step;
+  }
+  const [x, y, z] = from;
+  return {x, y, z, from: confirmedPosition, trail,
+    requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join('')};
+}
+
+function syncPosition() {
+  if (sync || !positionTrail.length || performance.now() < nextPositionSync) return sync;
+  const payload = pendingPosition ??= positionPacket();
+  nextPositionSync = performance.now() + positionInterval;
+  positionMetrics.requests++;
+  sync = post('position', payload, AbortSignal.timeout(3000)).then(({ok, body}) => {
+    if (ok) {
+      confirmedPosition = positionTuple(body.position);
+      positionTrail.splice(0, payload.trail.length);
+      pendingPosition = null;
+    } else if (body.position) {
+      positionMetrics.corrections++;
+      setAuthoritativePosition(body.position);
+    } else {
+      throw new Error(body.error || 'Position sync failed');
     }
+    retryCount = 0;
     effects(body);
   }).catch(() => {
-    lastPosition = '';
-  }).finally(() => { syncing = false; });
+    positionMetrics.errors++;
+    retryCount++;
+    nextPositionSync = performance.now() + Math.min(2000, positionInterval * retryCount);
+  }).finally(() => { sync = null; });
   return sync;
+}
+
+async function flushPosition() {
+  const lastStep = positionTrail.at(-1);
+  while (lastStep && positionTrail.includes(lastStep)) {
+    const before = positionMetrics.errors;
+    if (!sync && performance.now() < nextPositionSync) {
+      await new Promise(resolve => setTimeout(resolve, nextPositionSync - performance.now()));
+    }
+    await syncPosition();
+    if (positionMetrics.errors !== before) throw new Error('Position sync failed');
+  }
 }
 
 const getKey = cell => typeof cell === 'string' ? cell : cell?.key;
@@ -156,7 +210,7 @@ const labelFor = key => {
 };
 
 async function action(type, sneaking = false) {
-  if (!selection || acting || !playing) return;
+  if (!selection || acting || resetting || !playing) return;
   const target = selection;
   const cell = getKey(target.cell);
   const request = {requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join(''), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
@@ -176,7 +230,7 @@ async function action(type, sneaking = false) {
   const started = performance.now();
   acting = true;
   try {
-    await syncPosition(true);
+    await flushPosition();
     let result;
     try { result = await post('action', request); }
     catch { result = await post('action', request); }
@@ -208,17 +262,16 @@ function tick(now) {
     const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + stick.x;
     const speed = (keys.has('ShiftLeft') ? 5.1 : 3.8) / Math.max(1, Math.hypot(forward, strafe));
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
-    movement.update(position, (-sin * forward + cos * strafe) * speed,
-      (-cos * forward - sin * strafe) * speed, jump, dt,
-      {rise: jump || keys.has('Space'), descend: keys.has('ShiftLeft') || keys.has('ShiftRight')});
+    if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
+      movement.update(position, (-sin * forward + cos * strafe) * speed,
+        (-cos * forward - sin * strafe) * speed, jump, dt,
+        {rise: jump || keys.has('Space'), descend: keys.has('ShiftLeft') || keys.has('ShiftRight'), recordStep: recordPosition});
+    }
     audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw,
       climbing:movement.medium === 'ladder', swimming:movement.medium === 'water'});
     jump = false;
-    if (now - lastSync >= 130 && !acting) {
-      lastSync = now;
-      syncPosition();
-    }
   }
+  if (!resetting && now >= nextPositionSync && !acting) syncPosition();
   updateCamera();
   if (playing) {
     const cp = Math.cos(heading.pitch);
@@ -228,7 +281,7 @@ function tick(now) {
   const selected = labelFor(getKey(selection?.cell));
   element('selected').textContent = [selected, clipboard && 'В руке · ' + labelFor(clipboard)].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
   element('coords').textContent = [position.x, position.y, position.z].map(Math.floor).join('  ·  ');
-  view.render(now, selection);
+  view.render(now, selection, playing);
   requestAnimationFrame(tick);
 }
 
@@ -267,7 +320,7 @@ function bindControls() {
     const [id, meta] = blockState(key);
     const interactive = key === 'game:switch' || handControls.has(id) || jammyAppliance(id, meta) || jammyUseSound(id, meta)
       || (event.shiftKey && biblioWeaponCase(id));
-    const command = {1:'copy', 2:interactive ? 'interact' : 'place'}[event.button];
+    const command = {0:'remove', 1:'copy', 2:interactive ? 'interact' : 'place'}[event.button];
     if (command) action(command, event.shiftKey);
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
@@ -304,7 +357,7 @@ function bindControls() {
     stick.x = stick.z = 0;
     nub.style.transform = '';
   });
-  for (const [id, command] of [['touch-place','place'], ['touch-copy','copy'], ['touch-use','interact']]) {
+  for (const [id, command] of [['touch-place','place'], ['touch-copy','copy'], ['touch-use','interact'], ['touch-remove','remove']]) {
     element(id).addEventListener('click', () => action(command));
   }
   element('jump').addEventListener('pointerdown', () => { jump = true; });
@@ -336,40 +389,51 @@ function bindControls() {
     showMusic(enabled);
   });
   element('reset').addEventListener('click', async () => {
-    await sync;
-    const {ok, body} = await post('respawn', {});
-    if (!ok) { notice(messages[body.error] || body.error); return; }
-    Object.assign(position, body.position);
-    lastPosition = '';
-    movement.fall = 0;
+    if (resetting || acting) return;
+    resetting = true;
+    try {
+      await sync;
+      const {ok, body} = await post('respawn', {});
+      if (ok) setAuthoritativePosition(body.position);
+      else notice(messages[body.error] || body.error);
+    } catch {
+      notice('Связь с сервером прервалась');
+    } finally {
+      resetting = false;
+    }
   });
 }
 
-async function loadChunks(chunks) {
-  const remaining = chunks.slice().sort(([x, z], [xx, zz]) =>
-    Math.hypot(x * 16 + 8 - position.x, z * 16 + 8 - position.z) -
-    Math.hypot(xx * 16 + 8 - position.x, zz * 16 + 8 - position.z));
-  const nearest = remaining.slice(0, 9);
-  const near = new Set(nearest.map(([x, z]) => chunkKey(x, z)));
-  const centerY = Math.floor(position.y / 16);
-  const spawnSections = nearest.flatMap(([x,z]) => [centerY - 1, centerY, centerY + 1].map(y => [x,y,z]));
-  function enableWhenReady() {
-    const waiting = spawnSections.some(([x,y,z]) => world.chunks.get(chunkKey(x,z))?.sections.has(y) &&
-      !view.groups.has([x,y,z].join(',')));
-    if (waiting) { requestAnimationFrame(enableWhenReady); return; }
-    metrics.playable = performance.now() - metrics.started;
-    button.disabled = false;
-    loading.textContent = 'Район загружен';
-  }
-  await Promise.all(Array.from({length: 6}, async () => {
-    while (remaining.length) {
-      const [x, z] = remaining.shift();
-      const data = await json('/generated/world/chunks/' + x + '.' + z + '.json');
-      view.addChunk(world.addChunk(data));
-      metrics.chunksLoaded++;
-      if (near.delete(chunkKey(x, z)) && near.size === 0) requestAnimationFrame(enableWhenReady);
+function distanceToChunk([x, z]) {
+  return Math.max(Math.abs(x - Math.floor(position.x / 16)), Math.abs(z - Math.floor(position.z / 16)));
+}
+
+async function addChunk([x, z], visualOnly = false) {
+  const chunk = await json(`/generated/world/chunks/${x}.${z}.json`);
+  view.addChunk(world.addChunk(chunk, visualOnly));
+  if (visualOnly) metrics.visualChunksLoaded++;
+  else metrics.chunksLoaded++;
+}
+
+async function streamChunks(chunks, scenery) {
+  const remaining = [...chunks.map(chunk => ({chunk, visualOnly:false})),
+    ...scenery.map(chunk => ({chunk, visualOnly:true}))];
+  const priority = ({chunk, visualOnly}) => distanceToChunk(chunk) + (visualOnly ? 4 : 0);
+  while (remaining.length) {
+    let best = 0;
+    for (let i = 1; i < remaining.length; i++) {
+      if (priority(remaining[i]) < priority(remaining[best])) best = i;
     }
-  }));
+    const next = remaining[best];
+    await view.waitForStreamSlot(!next.visualOnly && distanceToChunk(next.chunk) <= 2);
+    try {
+      await addChunk(next.chunk, next.visualOnly);
+      remaining.splice(best, 1);
+    } catch (error) {
+      console.error(error);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
 }
 
 async function start() {
@@ -387,6 +451,7 @@ async function start() {
   const p = session.body.position;
   const [x, y, z] = session.body.spawn || manifest.spawn;
   position = p ? {...p} : {x, y, z};
+  confirmedPosition = positionTuple(position);
   movement = new Movement(world);
   view = new Display(surface, world, session.body.dayTick);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
@@ -396,11 +461,13 @@ async function start() {
   for (const option of distance.options) option.disabled = !available.has(Number(option.value));
   if (!available.has(Number(distance.value))) distance.value = '4';
   await Promise.all([view.loadTextures(), refresh()]);
+  await view.prepareGraphics();
   bindControls();
   stream();
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, audio:audio.stats(),
+      movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
     target: () => selection && {...selection},
@@ -410,21 +477,19 @@ async function start() {
     },
     getCell: (x, y, z) => world.cellAt(x, y, z),
   });
-  await loadChunks(manifest.chunks);
-  const scenery = (manifest.visualChunks || []).slice().sort(([x,z], [xx,zz]) =>
-    Math.hypot(x * 16 + 8 - position.x, z * 16 + 8 - position.z) -
-    Math.hypot(xx * 16 + 8 - position.x, zz * 16 + 8 - position.z));
-  await Promise.all([
-    view.setDistance(Number(distance.value)),
-    ...Array.from({length: 4}, async () => {
-      while (scenery.length) {
-        const [x,z] = scenery.shift();
-        const chunk = await json('/generated/world/chunks/' + x + '.' + z + '.json');
-        view.addChunk(world.addChunk(chunk, true));
-        metrics.visualChunksLoaded++;
-      }
-    }),
-  ]);
+  const near = manifest.chunks.filter(chunk => distanceToChunk(chunk) <= 1);
+  const buffered = manifest.chunks.filter(chunk => distanceToChunk(chunk) <= 2);
+  const startup = [...buffered].sort((a, b) => distanceToChunk(a) - distanceToChunk(b));
+  await Promise.all(Array.from({length: 4}, async () => {
+    while (startup.length) await addChunk(startup.shift());
+  }));
+  loading.textContent = 'Подготавливаем графику…';
+  await view.whenReady(near);
+  metrics.playable = performance.now() - metrics.started;
+  loading.textContent = 'Можно войти в мир';
+  button.disabled = false;
+  view.setDistance(Number(distance.value)).catch(console.error);
+  streamChunks(manifest.chunks.filter(chunk => !buffered.includes(chunk)), manifest.visualChunks ?? []).catch(console.error);
 }
 
 start().catch(error => {

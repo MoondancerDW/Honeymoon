@@ -55,9 +55,9 @@ try {
   const removal = await page.request.post(`${origin}/api/action`, {data: {type: 'remove', requestId: 'cellar-no-breaking',
     ...westCellarHatch, expectedRevision: 0}});
   assert.equal(removal.status(), 403);
-  assert.deepEqual(await removal.json(), {error: 'block_breaking_disabled'});
+  assert.deepEqual(await removal.json(), {error: 'block_not_owned'});
   assert.deepEqual(errors, []);
-  const result = {browser: browser.version(), spawn, position, requests: positionRequests, breakingDisabled: true, errors};
+  const result = {browser: browser.version(), spawn, position, requests: positionRequests, originalBlockProtected: true, errors};
   await writeFile(join(output, 'result.json'), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify({browser: result.browser, position, requests: positionRequests.length}));
 } finally {

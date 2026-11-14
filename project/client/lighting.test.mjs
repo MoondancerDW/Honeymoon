@@ -14,6 +14,25 @@ test('preserves independent sky and block lighting from the imported section', (
   assert.equal(light[344], 0x1e);
 });
 
+test('mesh halos retain a diagonal neighbor object, packed light and a cell override', () => {
+  const world = new World({palette:['air', 'legacy:1:0', 'legacy:2:0']});
+  const indices = Buffer.alloc(8192);
+  indices.writeUInt16LE(1, 2 * (15 + 15 * 16));
+  const object = {position:[-17, 64, -17], type:'Sign'};
+  world.addChunk({x:-2, z:-2, objects:[object], sections:[{y:4, indices:indices.toString('base64'),
+    skyLight:Buffer.alloc(2048, 0xab).toString('base64'), blockLight:Buffer.alloc(2048, 0xcd).toString('base64')}]});
+  const index = 18 ** 2;
+  const halo = () => world.halo(-1, 4, -1);
+  assert.equal(halo().indices[index], 1);
+  assert.equal(halo().light[index], 0xac);
+  assert.deepEqual(halo().objects, [[index, object]]);
+  world.setOverride({x:-17, y:64, z:-17, cell:'legacy:2:0', object:null, revision:1});
+  world.blockLightOverrides.set('-17,64,-17', 3);
+  assert.equal(halo().indices[index], 2);
+  assert.equal(halo().light[index], 0xa3);
+  assert.deepEqual(halo().objects, []);
+});
+
 test('legacy lighting keeps shaded interiors and the warm block-light curve', () => {
   assert.deepEqual(legacyLight(0x00), [14,14,14]);
   assert.deepEqual(legacyLight(0x08), [93,74,51]);

@@ -8,6 +8,7 @@ export class Display {
     this.world = world;
     this.container = container;
     this.scene = new THREE.Scene();
+    this.scene.matrixWorldAutoUpdate = false;
     this.scene.background = new THREE.Color('#86acfa');
     this.scene.fog = new THREE.Fog('#95aad5', 70, 175);
     this.sky = createSky();
@@ -31,6 +32,16 @@ export class Display {
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.uploadScene = new THREE.Scene();
+    this.uploadScene.fog = this.scene.fog;
+    this.uploads = [];
+    this.nextBackgroundUpload = 0;
+    this.lastBackgroundUpload = 0;
+    this.viewDirection = new THREE.Vector3();
+    this.lastViewDirection = new THREE.Vector3();
+    this.expectedChunks = new Set([...world.manifest.chunks, ...(world.manifest.visualChunks ?? [])]
+      .map(([x, z]) => chunkKey(x, z)));
+    this.installedVersions = new Map();
     container.append(this.renderer.domElement);
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
@@ -39,6 +50,7 @@ export class Display {
     this.versions = new Map();
     this.ready = [];
     this.active = new Map();
+    this.workerFailure = null;
     this.workers = Array.from({length: Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 4) - 1))}, () => {
       const worker = new Worker('/mesh-worker.mjs', {type: 'module'});
       worker.onmessage = ({data}) => {
@@ -47,7 +59,7 @@ export class Display {
       };
       worker.onerror = event => {
         this.active.delete(worker);
-        this.onError?.(new Error(event.message));
+        this.fail(new Error(event.message));
       };
       worker.postMessage({type: 'init', palette: world.palette, compositions: world.manifest.compositions || {}, models: world.models});
       return worker;
@@ -106,6 +118,78 @@ export class Display {
     } catch {
       this.paint = null;
     }
+  }
+
+  async prepareGraphics() {
+    const warmup = new THREE.Scene();
+    warmup.fog = this.scene.fog;
+    const camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(12).fill(255), 3, true));
+    geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(new Uint16Array(4).fill(240), 1));
+    const line = this.outline.clone();
+    line.visible = true;
+    line.position.z = -2;
+    warmup.add(line, this.sky.clone());
+    const textures = new Set([this.lightmap, this.paint]);
+    for (const material of Object.values(this.materials)) {
+      textures.add(material.map);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.z = -2;
+      warmup.add(mesh);
+    }
+    const sign = this.signMesh({x:0, y:0, z:-2, rotation:0, width:1, height:1, lines:['']});
+    warmup.add(sign);
+    // Keep a reference to each program variant until this renderer is gone.
+    this.shaderSamples = [sign.material];
+    if (this.paint) {
+      const material = this.paintingMaterial(this.paint);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.z = -2;
+      warmup.add(mesh);
+      this.shaderSamples.push(material);
+    }
+    try {
+      await this.renderer.compileAsync(warmup, camera);
+      for (const texture of textures) if (texture) this.renderer.initTexture(texture);
+      // Complete Three's first-use reflection on the same framebuffer as play.
+      this.renderer.setScissor(0, 0, 1, 1);
+      this.renderer.setScissorTest(true);
+      this.renderer.render(warmup, camera);
+    } finally {
+      this.renderer.setScissorTest(false);
+      geometry.dispose();
+      sign.geometry.dispose();
+      sign.material.map.dispose();
+    }
+  }
+
+  get pendingWork() {
+    return this.pending.size + this.active.size + this.ready.length + this.uploads.length;
+  }
+
+  fail(error) {
+    this.workerFailure ??= error;
+    this.onError?.(error);
+  }
+
+  async whenReady(chunks) {
+    this.startupChunks = chunks && new Set(chunks.map(([cx, cz]) => chunkKey(cx, cz)));
+    const waiting = () => {
+      if (!chunks) return this.pendingWork > 0;
+      return chunks.some(([cx, cz]) => {
+        const chunk = this.world.chunks.get(chunkKey(cx, cz));
+        return !chunk || [...chunk.sections.keys()].some(cy => {
+          const id = sectionKey(cx, cy, cz);
+          return this.installedVersions.get(id) !== this.versions.get(id);
+        });
+      });
+    };
+    while (!this.workerFailure && waiting()) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    }
+    this.startupChunks = null;
+    if (this.workerFailure) throw this.workerFailure;
   }
 
   useLightmap(material) {
@@ -250,6 +334,12 @@ export class Display {
     }
   }
 
+  paintingMaterial(map) {
+    const material = new THREE.MeshBasicMaterial({map, vertexColors:true, side:THREE.DoubleSide});
+    this.useLightmap(material);
+    return material;
+  }
+
   addEntity(entity, visualOnly) {
     if (!this.paint || entity.type !== 'Painting') return;
     const art = paintings[entity.data.Motive];
@@ -260,8 +350,7 @@ export class Display {
     tex.repeat.set(w / 256, h / 256);
     tex.offset.set(u / 256, 1 - (v + h) / 256);
     tex.needsUpdate = true;
-    const material = new THREE.MeshBasicMaterial({map:tex, vertexColors:true, side:THREE.DoubleSide});
-    this.useLightmap(material);
+    const material = this.paintingMaterial(tex);
     const geometry = new THREE.PlaneGeometry(w / 16, h / 16);
     const position = entity.position.map(Math.floor);
     const block = this.world.lightAt(...position);
@@ -273,7 +362,7 @@ export class Display {
     this.paintingLights.get(id).push({mesh, position});
     mesh.position.set(...entity.position);
     mesh.rotation.y = [0, Math.PI / 2, Math.PI, -Math.PI / 2][dir & 3];
-    (visualOnly ? this.visualEntities : this.scene).add(mesh);
+    this.uploads.push({meshes:[mesh], object:mesh, parent:visualOnly ? this.visualEntities : this.scene});
   }
 
   signMesh(sign) {
@@ -297,29 +386,16 @@ export class Display {
   }
 
   accept(result) {
-    if (result.error) { this.onError?.(new Error(result.error)); return; }
+    if (result.error) { this.fail(new Error(result.error)); return; }
     if (this.versions.get(result.id) !== result.version) return;
     const lod = result.id.startsWith('lod:');
     const coords = lod ? result.id.split(':')[2].split(',').map(Number) : result.id.split(',').map(Number);
-    const previous = this.groups.get(result.id);
-    if (previous) {
-      this.scene.remove(previous);
-      for (const mesh of previous.children) {
-        mesh.geometry.dispose();
-        if (mesh.userData.sign) {
-          mesh.material.map.dispose();
-          mesh.material.dispose();
-        }
-      }
-    }
     const group = new THREE.Group();
     if (lod) {
       group.position.set(coords[0] * 64, 0, coords[1] * 64);
-      group.visible = Number(result.id.split(':')[1]) <= this.requestedDistance;
     } else {
       group.position.set(...coords.map(value => value * 16));
       group.userData.visualOnly = this.world.chunks.get(chunkKey(coords[0], coords[2]))?.visualOnly === true;
-      if (group.userData.visualOnly) group.visible = this.requestedDistance > 4;
     }
     for (const [mode, data] of Object.entries(result.layers)) {
       const geometry = new THREE.BufferGeometry();
@@ -328,7 +404,8 @@ export class Display {
       geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3, true));
       geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(data.lightLevels, 1));
       geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
-      geometry.computeBoundingSphere();
+      const {center, radius} = data.bounds;
+      geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(...center), radius);
       group.add(new THREE.Mesh(geometry, this.materials[mode]));
     }
     for (const sign of result.signs) {
@@ -336,37 +413,143 @@ export class Display {
       mesh.userData.sign = true;
       group.add(mesh);
     }
-    this.scene.add(group);
-    this.groups.set(result.id, group);
-    const edit = this.visibleEdits.get(result.id);
+    this.uploads.push({meshes:group.children.slice(), object:group, parent:this.scene,
+      result:{id:result.id, version:result.version, elapsed:result.elapsed}});
+  }
+
+  discardGroup(group) {
+    group.removeFromParent();
+    for (const mesh of group.children) {
+      mesh.geometry.dispose();
+      if (mesh.userData.sign) {
+        mesh.material.map.dispose();
+        mesh.material.dispose();
+      }
+    }
+  }
+
+  install({object, parent, result}) {
+    parent.add(object);
+    object.traverse(node => {
+      node.updateMatrix();
+      node.matrixAutoUpdate = false;
+    });
+    object.updateMatrixWorld(true);
+    if (!result) return;
+    const {id, elapsed} = result;
+    const previous = this.groups.get(id);
+    if (previous) this.discardGroup(previous);
+    object.visible = id.startsWith('lod:') ? Number(id.split(':')[1]) <= this.requestedDistance
+      : !object.userData.visualOnly || this.requestedDistance > 4;
+    this.groups.set(id, object);
+    this.installedVersions.set(id, result.version);
+    const edit = this.visibleEdits.get(id);
     if (edit) {
       this.lastEditRender = {revision: edit.revision, ms: performance.now() - edit.received};
-      this.visibleEdits.delete(result.id);
+      this.visibleEdits.delete(id);
     }
-    this.meshTimes.push(result.elapsed);
+    this.meshTimes.push(elapsed);
     if (this.meshTimes.length > 2500) this.meshTimes.shift();
   }
 
-  dispatch() {
+  upload(deadline, byteLimit = 1.5 * 1024 ** 2) {
+    if (!this.uploads.length) return;
+    const finished = [];
+    const staged = [];
+    let bytes = 0, count = 0;
+    try {
+      while (this.uploads.length && count < 30 && performance.now() < deadline) {
+        const job = this.uploads[0];
+        if (job.result && this.versions.get(job.result.id) !== job.result.version) {
+          this.discardGroup(job.object);
+          this.uploads.shift();
+          continue;
+        }
+        const mesh = job.meshes[0];
+        if (!mesh) { finished.push(this.uploads.shift()); continue; }
+        const data = mesh.geometry;
+        const size = Object.values(data.attributes).reduce((sum, attr) => sum + attr.array.byteLength, data.index?.array.byteLength || 0);
+        if (count && bytes + size > byteLimit) break;
+        const staging = new THREE.Mesh(data, mesh.material);
+        staging.frustumCulled = false;
+        staged.push({data, ...data.drawRange});
+        data.setDrawRange(0, 0);
+        this.uploadScene.add(staging);
+        if (mesh.userData.sign || !job.result) this.renderer.initTexture(mesh.material.map);
+        job.meshes.shift();
+        bytes += size;
+        count++;
+        if (!job.meshes.length) finished.push(this.uploads.shift());
+      }
+      if (count) {
+        // A zero-length draw initializes both vertex and index buffers, with the
+        // same shader/VAO as the live mesh, before a camera turn can encounter it.
+        this.renderer.autoClear = false;
+        this.renderer.setScissor(0, 0, 1, 1);
+        this.renderer.setScissorTest(true);
+        this.renderer.render(this.uploadScene, this.camera);
+      }
+    } catch (error) {
+      this.fail(error);
+      return;
+    } finally {
+      this.renderer.autoClear = true;
+      this.renderer.setScissorTest(false);
+      this.uploadScene.clear();
+      for (const {data, start, count} of staged) data.setDrawRange(start, count);
+    }
+    for (const job of finished) this.install(job);
+  }
+
+  neighborsLoaded({cx, cz}) {
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const key = chunkKey(cx + dx, cz + dz);
+      if (this.expectedChunks.has(key) && !this.world.chunks.has(key)) return false;
+    }
+    return true;
+  }
+
+  async waitForStreamSlot(near) {
+    const budget = near ? 40 : 16;
+    while (!this.workerFailure) {
+      let ready = this.active.size + this.ready.length + this.uploads.length;
+      for (const job of this.pending.values()) {
+        if (job.type !== 'precise' || this.neighborsLoaded(job)) ready++;
+        if (ready >= budget) break;
+      }
+      // A queue waiting for neighbor data can only progress if fetching resumes.
+      if (ready < budget && (ready === 0 || near || performance.now() >= this.nextBackgroundUpload)) break;
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    if (this.workerFailure) throw this.workerFailure;
+  }
+
+  dispatch(deadline, workerLimit = this.workers.length) {
     if (!this.pending.size) return;
     const direction = this.camera.getWorldDirection(new THREE.Vector3());
     const eye = this.camera.position;
-    function score(job) {
+    const score = job => {
       const scale = job.type === 'precise' ? 8 : 32;
       const x = job.cx * 16 + scale - eye.x;
       const y = job.type === 'precise' ? job.cy * 16 + 8 - eye.y : 0;
       const z = job.cz * 16 + scale - eye.z;
       const distance = Math.hypot(x, y, z);
       const visible = x * direction.x + y * direction.y + z * direction.z > 0;
-      return distance * (visible ? .8 : 1.2) + (job.type === 'coarse' ? 260 : job.visualOnly ? 100 : 0) - (job.edit ? 500 : 0);
-    }
+      const startup = this.startupChunks?.has(chunkKey(job.cx, job.cz)) && job.type === 'precise';
+      return distance * (visible ? .8 : 1.2) + (job.type === 'coarse' ? 260 : job.visualOnly ? 100 : 0) - (job.edit || startup ? 500 : 0);
+    };
     for (const worker of this.workers) {
-      if (this.active.has(worker) || !this.pending.size || this.ready.length > 5) continue;
+      if (this.active.size >= workerLimit || performance.now() >= deadline || this.ready.length > 5 || this.uploads.length > 32) break;
+      if (this.active.has(worker) || !this.pending.size) continue;
       let job, priority = Infinity;
       for (const candidate of this.pending.values()) {
         const next = score(candidate);
-        if (next < priority) { job = candidate; priority = next; }
+        if (next < priority && (candidate.type !== 'precise' || this.neighborsLoaded(candidate))) {
+          job = candidate;
+          priority = next;
+        }
       }
+      if (!job) return;
       this.pending.delete(job.id);
       this.active.set(worker, job.id);
       if (job.type === 'precise') {
@@ -394,22 +577,39 @@ export class Display {
     }
   }
 
-  render(now, selection) {
+  render(now, selection, playing = false) {
     if (now >= (this.nextSkyUpdate ?? 0)) {
       this.updateSky(this.cycleTime ?? this.firstDayTick + Math.max(0, Date.now() - this.dayStarted) / 50);
       this.nextSkyUpdate = now + 200;
     }
-    this.frameTimes.push(now - this.lastFrame);
+    const interval = now - this.lastFrame;
+    this.frameTimes.push(interval);
     if (this.frameTimes.length > 10000) this.frameTimes.shift();
     this.lastFrame = now;
-    if (this.materials) {
-      const start = performance.now();
-      while (this.ready.length && performance.now() - start < 4) this.accept(this.ready.shift());
-      this.dispatch();
+    this.camera.getWorldDirection(this.viewDirection);
+    const turning = playing && this.lastViewDirection.dot(this.viewDirection) < .82;
+    if (turning) this.nextBackgroundUpload = now + 80;
+    this.lastViewDirection.copy(this.viewDirection);
+    if (playing && interval > 36) this.nextBackgroundUpload = Math.max(this.nextBackgroundUpload, now + 44);
+    const edit = this.visibleEdits.size > 0;
+    const stream = !playing || edit || now >= this.nextBackgroundUpload || !turning && now - this.lastBackgroundUpload >= 140;
+    if (this.materials && !this.workerFailure && stream) {
+      const deadline = performance.now() + (playing ? 2 : 4);
+      while (this.ready.length && this.uploads.length < 32 && performance.now() < deadline) {
+        this.accept(this.ready.shift());
+        if (playing) break;
+      }
+      this.upload(deadline, (playing ? .55 : 1.5) * 1024 ** 2);
+      this.dispatch(deadline, playing ? 2 : this.workers.length);
+      this.lastBackgroundUpload = now;
     }
     this.outline.visible = Boolean(selection);
-    if (selection) this.outline.position.set(selection.x + .5, selection.y + .5, selection.z + .5);
+    if (selection) {
+      this.outline.position.set(selection.x + .5, selection.y + .5, selection.z + .5);
+      this.outline.updateMatrixWorld();
+    }
     this.sky.position.copy(this.camera.position);
+    this.sky.updateMatrixWorld();
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -429,7 +629,7 @@ export class Display {
     }
     return {calls: render.calls, triangles: render.triangles, geometries: memory.geometries, textures: memory.textures,
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles,
-      pending: this.pending.size + this.active.size + this.ready.length,
+      pending: this.pendingWork,
       loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
   }
 }

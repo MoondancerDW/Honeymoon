@@ -3,6 +3,7 @@ import { displayObject, cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
+import { POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
 
 const actions = new Set(['place', 'remove', 'copy', 'interact']);
 const axes = ['x', 'y', 'z'];
@@ -16,6 +17,13 @@ function point(input, integers = false) {
   if (!input || axes.some(axis => !valid(input[axis]))) throw new RequestError(400, 'invalid_coordinates');
   return { x: input.x, y: input.y, z: input.z };
 }
+
+function trailPoint(input) {
+  if (!Array.isArray(input) || input.length !== 3) throw new RequestError(400, 'invalid_position_trail');
+  return point({ x: input[0], y: input[1], z: input[2] });
+}
+
+const samePoint = (left, right) => axes.every(axis => left[axis] === right[axis]);
 
 function normalizeAction(body) {
   if (typeof body.requestId !== 'string' || !REQUEST_ID.test(body.requestId)) throw new RequestError(400, 'invalid_request_id');
@@ -113,12 +121,14 @@ export function createGame(base, store, geometry, {
     };
   }
 
-  function writePlan(module, plan) {
+  function writePlan(module, plan, placement) {
     const revision = plan.cells?.length ? store.nextRevision() : store.worldRevision();
     const changes = (plan.cells ?? []).map(cell => ({ ...cell, revision }));
     for (const change of changes) {
       const { x, y, z } = change;
-      if (!module.reserved?.(x, y, z)) store.writeEdit(change, originalAt(x, y, z));
+      if (module.reserved?.(x, y, z)) continue;
+      const owner = placement?.key === cellAddress(x, y, z) && change.cell !== null ? placement.player : null;
+      store.writeEdit(change, originalAt(x, y, z), owner);
     }
     for (const entry of plan.state ?? []) {
       const value = entry.useRevision ? { ...entry.value, revision } : entry.value;
@@ -134,12 +144,13 @@ export function createGame(base, store, geometry, {
   function writeCell(player, current, cell, object) {
     const { x, y, z } = current;
     const change = { x, y, z, cell, object };
+    const placement = cell === null ? undefined : { key: cellAddress(x, y, z), player };
     const effects = cell === null ? [] : [{type: 'sound', sound: 'block.place', cell, position: [x, y, z]}];
     for (const module of mechanics) {
       const plan = module.prepareBlockChange?.(moduleContext(module, player, {change}));
-      if (plan) return writePlan(module, {...plan, effects: [...effects, ...plan.effects]});
+      if (plan) return writePlan(module, {...plan, effects: [...effects, ...plan.effects]}, placement);
     }
-    return writePlan({}, {cells: [change], effects});
+    return writePlan({}, {cells: [change], effects}, placement);
   }
 
   function placementAnchor(player, input) {
@@ -165,6 +176,7 @@ export function createGame(base, store, geometry, {
       if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
       if (!base.catalog.has(input.cell) || input.cell === 'air') throw new RequestError(400, 'unknown_cell_type');
       if (current.cell !== null) throw new RequestError(409, 'occupied');
+      if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
       if (!placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
       const copied = store.getClipboard(player);
       const object = copied?.cell === input.cell && copied.object
@@ -175,7 +187,13 @@ export function createGame(base, store, geometry, {
       return writeCell(player, current, input.cell, object);
     }
 
+    if (type === 'remove' && reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
     if (current.cell === null) throw new RequestError(409, 'empty_cell');
+    if (type === 'remove' && !allowRemoval) {
+      if (store.getEditOwner(x, y, z) !== player || base.getCell(x, y, z).key !== 'air') {
+        throw new RequestError(403, 'block_not_owned');
+      }
+    }
     if (!physical.visible(playerAt(player), x, y, z, input.hit)) throw new RequestError(403, 'outside_reach');
     if (type === 'interact') {
       for (const module of mechanics) {
@@ -184,8 +202,8 @@ export function createGame(base, store, geometry, {
       }
       throw new RequestError(409, 'no_interaction');
     }
-    if (reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
     if (type === 'copy') {
+      if (reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
       const object = current.object?.type === 'WestCellarHatch' ? null : displayObject(current.object);
       store.putClipboard(player, { cell: current.cell, object });
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
@@ -195,7 +213,6 @@ export function createGame(base, store, geometry, {
 
   function action(player, body) {
     const input = normalizeAction(body);
-    if (input.type === 'remove' && !allowRemoval) throw new RequestError(403, 'block_breaking_disabled');
     const encoded = JSON.stringify(input);
     const { requestId } = body;
     const result = store.atomic(() => {
@@ -232,16 +249,44 @@ export function createGame(base, store, geometry, {
     const old = positions.get(player);
     const elapsed = Math.min(0.65, (now - (old?.updated ?? now - 100)) / 1000);
     const budget = Math.min(1.5, (old?.budget ?? 1) + elapsed * RUN_SPEED);
-    const horizontalDistance = Math.hypot(target.x - previous.x, target.z - previous.z);
-    const verticalDistance = target.y - previous.y;
-    const distance = Math.hypot(horizontalDistance, Math.max(verticalDistance, 0));
     const bounds = base.manifest.bounds;
-    if (target.x - PLAYER.halfWidth < bounds.minX || target.x + PLAYER.halfWidth > bounds.maxX + 1
-      || target.z - PLAYER.halfWidth < bounds.minZ || target.z + PLAYER.halfWidth > bounds.maxZ + 1
-      || target.y < bounds.minY || target.y + PLAYER.height > bounds.maxY + 1
-      || distance > budget + MOVEMENT_GRACE || verticalDistance < -6 || !physical.movementAllowed(previous, target)) {
+    const hasTrail = body.trail !== undefined || body.from !== undefined;
+    const inBounds = ({ x, y, z }) => x - PLAYER.halfWidth >= bounds.minX && x + PLAYER.halfWidth <= bounds.maxX + 1
+      && z - PLAYER.halfWidth >= bounds.minZ && z + PLAYER.halfWidth <= bounds.maxZ + 1
+      && y >= bounds.minY && y + PLAYER.height <= bounds.maxY + 1;
+    const reject = () => {
       throw new RequestError(409, 'movement_blocked', { position: previous });
+    };
+    let steps = [target];
+    let requestId;
+    if (hasTrail) {
+      if (!Array.isArray(body.trail) || body.trail.length < 1 || body.trail.length > POSITION_TRAIL_LIMIT) {
+        throw new RequestError(400, 'invalid_position_trail');
+      }
+      requestId = body.requestId;
+      if (typeof requestId !== 'string' || !REQUEST_ID.test(requestId)) throw new RequestError(400, 'invalid_request_id');
+      const from = trailPoint(body.from);
+      steps = body.trail.map(trailPoint);
+      if (!samePoint(steps.at(-1), target)) throw new RequestError(400, 'invalid_position_trail');
+      // A response can be lost after the server has already applied the batch.
+      if (old?.requestId === requestId) {
+        if (!samePoint(previous, target)) reject();
+        return { position: previous, effects: [], changes: [], worldRevision: store.worldRevision() };
+      }
+      if (!samePoint(previous, from)) reject();
     }
+
+    let distance = 0, drop = 0, from = previous;
+    for (const step of steps) {
+      const planar = Math.hypot(step.x - from.x, step.z - from.z);
+      const vertical = step.y - from.y;
+      if (!inBounds(step) || hasTrail && (planar > .12 || Math.abs(vertical) > .55)) reject();
+      distance += Math.hypot(planar, Math.max(vertical, 0));
+      drop += Math.max(-vertical, 0);
+      if (distance > budget + MOVEMENT_GRACE || drop > 6) reject();
+      from = step;
+    }
+    if (!(hasTrail ? physical.movementTrailAllowed(previous, steps) : physical.movementAllowed(previous, target))) reject();
 
     const results = store.atomic(() => {
       const entries = [];
@@ -254,7 +299,7 @@ export function createGame(base, store, geometry, {
     const effects = results.flatMap(result => result.effects);
     const changes = results.flatMap(result => result.changes);
     if (changes.length) refreshMechanicCells();
-    positions.set(player, { position: target, updated: now, budget: budget - distance });
+    positions.set(player, { position: target, updated: now, budget: budget - distance, requestId });
     return { position: target, effects, changes, worldRevision: store.worldRevision() };
   }
 
