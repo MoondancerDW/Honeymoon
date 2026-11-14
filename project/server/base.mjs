@@ -82,9 +82,17 @@ export function displayObject(object) {
 
 function displayEntity(entity) {
   const type = entity.type ?? entity.data?.id;
-  if (type !== 'Painting') return { key: entity.key, position: entity.position, type, data: {} };
-  const { Motive, Dir, Direction, TileX, TileY, TileZ } = entity.data ?? {};
-  return { key: entity.key, position: entity.position, type, data: { Motive, Dir, Direction, TileX, TileY, TileZ } };
+  const data = {};
+  if (type === 'Painting' || type === 'ItemFrame') {
+    const { Motive, Dir, Direction, TileX, TileY, TileZ, ItemRotation, Item } = entity.data ?? {};
+    Object.assign(data, {Dir, Direction, TileX, TileY, TileZ});
+    if (type === 'Painting') data.Motive = Motive;
+    else {
+      data.ItemRotation = ItemRotation;
+      if (Number.isInteger(Item?.id)) data.Item = {id: Item.id, Damage: Number.isInteger(Item.Damage) ? Item.Damage : 0};
+    }
+  }
+  return { key: entity.key, position: entity.position, type, data };
 }
 
 export function loadBase(directory) {

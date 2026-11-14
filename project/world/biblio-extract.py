@@ -1,11 +1,13 @@
 """Port Minecraft 1.4.7 BiblioCraft ModelRenderer meshes and source textures."""
 
 import argparse
+from base64 import b64decode
 from contextlib import ExitStack
 import json
 from math import cos, pi, sin
 from pathlib import Path
 import re
+from subprocess import run
 
 from PIL import Image, ImageChops
 
@@ -14,6 +16,7 @@ from textures import DEFAULT_SOURCE, TextureAtlas
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_OUTPUT = HERE.parent / 'generated' / 'models'
+DEFAULT_WORLD_DATA = HERE.parent / 'generated' / 'world'
 MODEL_BOXES = HERE / 'biblio-model-boxes.json'
 ITEM_TEXTURES = HERE / 'biblio-item-textures.json'
 MODELS = ('ArmorStand', 'Bookcase', 'GenericShelf', 'Label', 'PotionShelf', 'ToolRack',
@@ -237,8 +240,8 @@ def build_models(raw, atlas):
 
 
 def texture_dependency(resource):
-    prefixes = {'pam/': 'pam', 'assets/Lilium.Items/': 'lilium',
-                'mods/mocreatures/': 'mocreatures', 'eloraam/': 'redpower'}
+    prefixes = {'pam/': 'pam', 'assets/Lilium.Items/': 'lilium', 'MLB/': 'cloud',
+                'mods/mocreatures/': 'mocreatures', 'eloraam/world/': 'mechanical', 'eloraam/': 'redpower'}
     return next((archive for prefix, archive in prefixes.items() if resource.startswith(prefix)), 'vanilla')
 
 
@@ -262,11 +265,13 @@ def build_item_textures(raw, atlas):
 
     for key, (resource, passes, *block) in raw.items():
         if block and block[0][0] == 0:
-            _, texture, faces = block[0]
+            _, texture, faces, *shape = block[0]
             face_images = [tile(texture, index) for index in faces]
             if all(face_images):
                 result[key] = {'faces': [atlas.sprite(f'{texture}:{index}', image)
                                          for index, image in zip(faces, face_images)]}
+                if shape:
+                    result[key]['cover'] = shape[0] == 'cover'
             continue
         image = None
         for index, tint in passes:
@@ -309,7 +314,38 @@ def build_armor(atlas):
     return armor
 
 
-def build(source, output, vanilla_jar=None):
+def framed_map_ids(world_data):
+    manifest = world_data / 'world.json'
+    if not manifest.is_file():
+        return set()
+    world = json.loads(manifest.read_text(encoding='utf-8'))
+    ids = set()
+    for x, z in (*world['chunks'], *world.get('visualChunks', [])):
+        chunk = json.loads((world_data / 'chunks' / f'{x}.{z}.json').read_text(encoding='utf-8'))
+        for entity in chunk.get('entities', []):
+            if entity['type'] == 'ItemFrame':
+                item = entity.get('data', {}).get('Item', {})
+                if item.get('id') == 358 and isinstance(item.get('Damage'), int) and item['Damage'] >= 0:
+                    ids.add(item['Damage'])
+    return ids
+
+
+def build_framed_maps(world, world_data, atlas, items, map_ids):
+    if not (world / 'data').is_dir():
+        return
+    ids = set(map_ids) | framed_map_ids(world_data)
+    if not ids:
+        return
+    maps = run(['node', str(HERE / 'item-frame-maps.mjs'), str(world), *map(str, sorted(ids))],
+               capture_output=True, check=True, text=True, encoding='utf-8')
+    parchment = atlas.textures.resolve('misc/mapbg.png', 'vanilla')
+    for map_id, rgba in json.loads(maps.stdout).items():
+        image = parchment.resize((142, 142), Image.Resampling.NEAREST)
+        image.alpha_composite(Image.frombytes('RGBA', (128, 128), b64decode(rgba)), (7, 7))
+        items[f'358:{map_id}'] = {'uv': atlas.sprite(f'map:{map_id}', image), 'map': True}
+
+
+def build(source, output, vanilla_jar=None, world=None, world_data=DEFAULT_WORLD_DATA, map_ids=()):
     with ExitStack() as stack:
         textures = TextureAtlas(source, stack, vanilla_jar)
         textures.archive_paths.update({name: source / path for name, path in EXTRA_ARCHIVES.items()})
@@ -318,10 +354,11 @@ def build(source, output, vanilla_jar=None):
         models = build_models(json.loads(MODEL_BOXES.read_text(encoding='utf-8')), atlas)
         items = build_item_textures(json.loads(ITEM_TEXTURES.read_text(encoding='utf-8')), atlas)
         armor = build_armor(atlas)
+        build_framed_maps(world or source / 'saves' / 'equestria', world_data, atlas, items, map_ids)
         output.mkdir(parents=True, exist_ok=True)
         atlas.image.save(output / 'biblio.png', optimize=True)
         (output / 'biblio.json').write_text(json.dumps({
-            'schemaVersion': 1, 'models': models, 'items': items, 'armor': armor, 'resources': textures.resources,
+            'schemaVersion': 2, 'models': models, 'items': items, 'armor': armor, 'resources': textures.resources,
         }, separators=(',', ':')) + '\n', encoding='utf-8')
     return len(models)
 
@@ -331,6 +368,11 @@ if __name__ == '__main__':
     parser.add_argument('--source', type=Path, default=DEFAULT_SOURCE)
     parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument('--vanilla-jar', type=Path)
+    parser.add_argument('--world', type=Path, help='Read filled item maps from this legacy save')
+    parser.add_argument('--world-data', type=Path, default=DEFAULT_WORLD_DATA,
+                        help='Find mounted maps in this generated world manifest and chunks')
+    parser.add_argument('--map-id', type=int, action='append', default=[],
+                        help='Include an additional source map even when no generated world is present')
     parser.add_argument('--refresh-boxes', type=Path, metavar='CFR_OUTPUT',
                         help='Refresh the checked-in ModelRenderer specification from decompiled BiblioCraft.zip')
     args = parser.parse_args()
@@ -343,4 +385,5 @@ if __name__ == '__main__':
             lines.append('  }}' + (',' if index + 1 < len(boxes) else ''))
         lines.append('}')
         MODEL_BOXES.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    print(f'Extracted {build(args.source, args.output, args.vanilla_jar)} BiblioCraft variants to {args.output}')
+    count = build(args.source, args.output, args.vanilla_jar, args.world, args.world_data, args.map_id)
+    print(f'Extracted {count} BiblioCraft variants to {args.output}')

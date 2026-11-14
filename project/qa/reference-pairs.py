@@ -49,6 +49,16 @@ TITLES = {
     "cake-branch": "Точка обзора над тортом",
     "rp-insulated-wall": "Внутренний угол провода RedPower",
     "rp-insulated-outer-corner-west": "Внешний угол провода RedPower",
+    "chest-storeroom": "Кладовая с двойными сундуками",
+    "chest-single": "Одиночный сундук",
+    "chest-double": "Двойной сундук",
+    "oak-fence": "Деревянная ограда",
+    "glass-panes": "Стеклянные панели в зале",
+    "firefly-jar": "Светлячки Twilight Forest",
+    "sofa-corner": "Угловая секция дивана",
+    "interior-1902-01-01": "Фасад у границы игрового района",
+    "interior-2784-01-01": "Беседка у границы района",
+    "interior-665-01-01": "Рамка с яблоком",
 }
 BACKGROUND = "#151e22"
 MUTED = "#bcc7ca"

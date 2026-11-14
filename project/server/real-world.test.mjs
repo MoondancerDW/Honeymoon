@@ -15,6 +15,22 @@ import { openStore } from './store.mjs';
 
 const directory = fileURLToPath(new URL('../generated/world/', import.meta.url));
 
+test('mounted item frames expose their visual state without the original NBT payload', {
+  skip: !existsSync(join(directory, 'world.json')) ? 'Run the Anvil import to verify item frames' : false,
+}, () => {
+  const base = loadBase(directory);
+  const frames = base.manifest.chunks.flatMap(([x, z]) => base.publicChunk(x, z).entities
+    .filter(entity => entity.type === 'ItemFrame'));
+  assert.equal(frames.length, base.manifest.counts.entities.ItemFrame);
+  assert.ok(frames.some(frame => frame.data.Item?.id === 260));
+  for (const frame of frames) {
+    assert.equal(frame.position.length, 3);
+    assert.ok([0, 1, 2, 3].includes(frame.data.Dir ?? frame.data.Direction));
+    assert.ok(!Object.hasOwn(frame.data, 'UUIDMost'));
+    if (frame.data.Item) assert.deepEqual(Object.keys(frame.data.Item), ['id', 'Damage']);
+  }
+});
+
 test('west cellar rung is public and works with an older saved hatch state', {
   skip: !existsSync(join(directory, 'world.json')) ? 'Run the Anvil import to verify the west cellar' : false,
 }, () => {

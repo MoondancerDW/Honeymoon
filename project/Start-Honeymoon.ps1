@@ -60,6 +60,9 @@ try {
         if ($current -and $family -eq 'jammy') {
             $current = (Get-Content -Raw -LiteralPath $modelJson | ConvertFrom-Json).schemaVersion -eq 4
         }
+        if ($current -and $family -eq 'biblio') {
+            $current = (Get-Content -Raw -LiteralPath $modelJson | ConvertFrom-Json).schemaVersion -eq 2
+        }
         if ((Test-Path -LiteralPath $modelInputs[$family].Source) -and
             (!$current -or !(Test-Path -LiteralPath "generated/models/$family.png"))) {
             & $pythonPath -B $modelInputs[$family].Script

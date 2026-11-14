@@ -2,6 +2,7 @@ import * as THREE from '/vendor/three/three.module.js';
 import {chunkKey, sectionKey, json} from './world-data.mjs';
 import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
 import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
+import {itemFrameModel} from '../world/item-frames.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -56,6 +57,18 @@ function drawModelPreview(object, {x, y, z, surfaces}) {
   object.updateMatrixWorld();
 }
 
+function quadGeometry(quads, light, shade) {
+  const geometry = new THREE.BufferGeometry();
+  const vertices = quads.length * 4;
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(quads.flatMap(quad => quad.positions), 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(quads.flatMap(quad =>
+    quad.uv.map((value, index) => index & 1 ? 1 - value : value)), 2));
+  geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(new Uint16Array(vertices).fill(light), 1));
+  geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(3 * vertices).fill(shade), 3, true));
+  geometry.setIndex(quads.flatMap((_, i) => [0, 1, 2, 0, 2, 3].map(vertex => 4 * i + vertex)));
+  return geometry;
+}
+
 export class Display {
   constructor(container, world, dayTick = 6000) {
     this.world = world;
@@ -80,7 +93,7 @@ export class Display {
     this.visualEntities = new THREE.Group();
     this.visualEntities.visible = false;
     this.scene.add(this.visualEntities);
-    this.paintingLights = new Map();
+    this.entityLights = new Map();
     this.camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
@@ -334,7 +347,7 @@ export class Display {
   remeshLighting(sections) {
     for (const section of sections) {
       this.schedule(...section.split(',').map(Number));
-      for (const {mesh, position} of this.paintingLights.get(section) ?? []) {
+      for (const {mesh, position} of this.entityLights.get(section) ?? []) {
         const light = mesh.geometry.attributes.legacyLightLevel;
         light.array.fill(this.world.lightAt(...position));
         light.needsUpdate = true;
@@ -417,6 +430,10 @@ export class Display {
   }
 
   addEntity(entity, visualOnly) {
+    if (entity.type === 'ItemFrame') {
+      this.addItemFrame(entity, visualOnly);
+      return;
+    }
     if (!this.paint || entity.type !== 'Painting') return;
     const art = paintings[entity.data.Motive];
     const dir = entity.data.Dir ?? entity.data.Direction;
@@ -433,12 +450,35 @@ export class Display {
     geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(new Uint16Array(4).fill(block), 1));
     geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(12).fill(255), 3, true));
     const mesh = new THREE.Mesh(geometry, material);
-    const id = sectionKey(...position.map(value => value >> 4));
-    if (!this.paintingLights.has(id)) this.paintingLights.set(id, []);
-    this.paintingLights.get(id).push({mesh, position});
+    this.trackEntityLight(mesh, position);
     mesh.position.set(...entity.position);
     mesh.rotation.y = [0, Math.PI / 2, Math.PI, -Math.PI / 2][dir & 3];
     this.uploads.push({meshes:[mesh], object:mesh, parent:visualOnly ? this.visualEntities : this.scene});
+  }
+
+  addItemFrame(entity, visualOnly) {
+    const model = itemFrameModel(entity, this.world.models.biblio?.items);
+    if (!model) return;
+    const group = new THREE.Group();
+    group.position.set(...model.center);
+    group.rotation.y = model.rotationY;
+    const position = entity.position.map(Math.floor);
+    const light = this.world.lightAt(...position);
+    for (const [quads, material, shade] of [[model.frame, this.materials.opaque, 186], [model.item, this.materials['biblio:cutout'], 255]]) {
+      if (!quads?.length || !material) continue;
+      const mesh = new THREE.Mesh(quadGeometry(quads, light, shade), material);
+      group.add(mesh);
+      this.trackEntityLight(mesh, position);
+    }
+    if (group.children.length) {
+      this.uploads.push({meshes: [...group.children], object: group, parent: visualOnly ? this.visualEntities : this.scene});
+    }
+  }
+
+  trackEntityLight(mesh, position) {
+    const id = sectionKey(...position.map(value => value >> 4));
+    if (!this.entityLights.has(id)) this.entityLights.set(id, []);
+    this.entityLights.get(id).push({mesh, position});
   }
 
   signMesh(sign) {
