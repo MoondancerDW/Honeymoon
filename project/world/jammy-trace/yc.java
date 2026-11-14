@@ -4,11 +4,19 @@ public class yc implements ym {
     int blockId;
 
     public int h(int x, int y, int z) {
+        requireOrigin(x, y, z);
         return metadata;
     }
 
     public int a(int x, int y, int z) {
+        requireOrigin(x, y, z);
         return blockId;
+    }
+
+    private static void requireOrigin(int x, int y, int z) {
+        if (x != 0 || y != 0 || z != 0) {
+            throw new UnsupportedOperationException("Neighbor state needs a world fixture at " + x + "," + y + "," + z);
+        }
     }
 
     public any q(int x, int y, int z) { throw unsupported(); }

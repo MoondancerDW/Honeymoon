@@ -103,6 +103,13 @@ test('Reimports all 64 real chunks reproducibly with exact negative-coordinate s
       assert.ok(x < -6 || x >= 6 || z < -6 || z >= 6);
       for (const { indices } of levels) assert.equal(Buffer.from(indices, 'base64').length, 128);
     }
+    const surroundings = importWorld({out: join(temporary, 'surroundings'), radius: 4, terrainRadius: 16, visualRadius: 9});
+    assert.equal(surroundings.contentHash, core.contentHash);
+    assert.ok(surroundings.visualChunks.some(([x, z]) => x === -9 && z === 0));
+    assert.equal(surroundings.terrain[0].chunks, 0);
+    assert.equal(surroundings.terrain[1].innerRadius, 9);
+    const outer = JSON.parse(readFileSync(join(temporary, 'surroundings', 'terrain-16.json')));
+    assert.ok(outer.chunks.every(({ x, z }) => x < -9 || x >= 9 || z < -9 || z >= 9));
     assert.throws(() => importWorld({ out: source }), /Output must be separate/);
     writeFileSync(join(out, 'unrelated.txt'), 'keep');
     assert.throws(() => importWorld({ out }), /unrelated directory/);

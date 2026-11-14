@@ -4,7 +4,11 @@ import {connectedTubeMesh, tubeCore} from './redpower-tubes.mjs';
 import {wirePanels, wireSelection} from './redpower-wires.mjs';
 import {shapedLampCollision} from './redpower-lamps.mjs';
 import {staticEmission} from './block-light-properties.mjs';
-import {voxelCollisionBoxes, voxelKey} from './voxel-chisel.mjs';
+import {fenceCubes, paneOpaqueBlocks} from './block-geometry-properties.mjs';
+import {isFullVoxels, voxelCollisionBoxes, voxelKey} from './voxel-chisel.mjs';
+import {chestCollision, chestShape} from './chest-models.mjs';
+import {campfireMesh} from './campfire-model.mjs';
+import {railShape} from './rail-models.mjs';
 
 export const ATLAS_GRID = 64;
 export const TILE_SIZE = 16;
@@ -16,7 +20,7 @@ export const tiles = Object.freeze({
   terrain: 0, redPowerWorld: 256, redPowerMachine: 512, redPowerLighting: 768,
   cloud: 1024, flowers: 1280, cotton: 1536, redPowerWire: 1792,
   redPowerControl: 2048, redPowerLogic: 2304, armchair: 2560,
-  bookcase: 2816, furniture: 3072, water: 3200, lava: 3201, chest: 3202,
+  bookcase: 2816, furniture: 3072, water: 3200, lava: 3201,
   unknown: 3203, white: 3204, sign: 3205,
 });
 
@@ -64,20 +68,25 @@ const GLASS = { mode: 'cutout' };
 const GROUND_DECOR = { solid: false };
 const LIGHT = { emissive: true };
 const STAIRS = { 53: 4, 67: 16, 108: 7, 109: 54, 114: 224, 128: stoneSlab[1],
-  134: 198, 135: 214, 136: 199, 4039: wool[4] };
+  134: 198, 135: 214, 136: 199, 3247: tiles.cloud + 36 };
+const isCottonStair = id => id >= 4035 && id <= 4050;
+const stairTiles = id => isCottonStair(id) ? wool[id - 4035] : STAIRS[id];
 const TERRAIN = {
   1: 1, 3: 2, 4: 16, 7: 17, 12: 18, 13: 19, 14: 32, 15: 33, 16: 34,
   19: 48, 21: 160, 22: 144, 41: 23, 42: 22, 45: 7, 48: 36, 49: 37,
   52: 65, 56: 50, 57: 24, 73: 51, 74: 51, 80: 66, 82: 72, 87: 103,
   103: 136, 110: topSides(77, 78, 2), 112: 224, 121: 175, 129: 171,
-  133: 25, 1527: 164,
+  133: 25, 1527: 164, 3217: 1, 3230: tiles.cloud + 17, 3903: 3792,
 };
 const plants = { 6: 15, 30: 11, 31: 39, 32: 55, 37: 13, 38: 12, 39: 29, 40: 28,
   51: 31, 59: 88, 83: 73, 104: 111, 105: 111, 115: 226, 141: 200, 142: 200 };
-const fruitTiles = {3989: 3267, 4031: 3286, 3983: 3289, 3977: 3292, 4084: 3295};
+const fruitTiles = {3989: 3267, 4031: 3286, 3983: 3289, 3977: 3292, 4084: 3295, 3965: 3735, 3986: 3738};
 const cropStorageTiles = {3823:3604, 3827:3605, 3829:3606, 3835:3607, 3838:3608, 3941:3609,
-  3961:3610, 3976:3611, 4023:3612, 4025:3613, 4033:3614, 4073:3615, 4077:3616};
-const wildCropTiles = {3902:3633, 3927:3634, 3930:3635, 3933:3636, 3942:3637, 4030:3638, 4068:3639, 4089:3640};
+  3961:3610, 3976:3611, 4023:3612, 4025:3613, 4033:3614, 4073:3615, 4077:3616, 3803:3732, 3982:3733,
+  3998:3793};
+const wildCropTiles = {3902:3633, 3927:3634, 3930:3635, 3933:3636, 3942:3637, 4030:3638, 4068:3639, 4089:3640, 3936:3734};
+const fireflyJarCollision = box([3 / 16, 0, 3 / 16, 13 / 16, 1, 13 / 16], 3742);
+const campfireCollision = box([0, 0, 0, 1, 0.25, 1], 3812);
 
 function cross(tile, height = 1, tint, inset = 0.1) {
   return [box([inset, 0, inset, 1 - inset, height, 1 - inset], tile, {
@@ -107,6 +116,20 @@ function rotateFaces(faceTiles, quarterTurns) {
   const perimeter = [0, 5, 1, 4];
   for (let i = 0; i < 4; i++) result[perimeter[(i + quarterTurns) & 3]] = faceTiles[perimeter[i]];
   return result;
+}
+
+function bed(meta, bottom = 0) {
+  const head = Boolean(meta & 8);
+  const direction = meta & 3;
+  const turns = (2 - direction) & 3;
+  const faces = head ? [151, 151, 4, 135, 152, -1] : [150, 150, 4, 134, -1, 149];
+  return [box([0, bottom, 0, 1, 9 / 16, 1], rotateFaces(faces, turns),
+    { bedFacing: direction, mirrorFaces: rotateFaces([true, false, false, false, false, false], turns) })];
+}
+
+export function bedMesh(cell) {
+  const [id, meta] = unpack(cell);
+  return id === 26 ? bed(meta, 3 / 16) : null;
 }
 
 function turnedBox(bounds, faceTiles, quarterTurns, options) {
@@ -141,7 +164,7 @@ function sandstone(meta) {
 
 function stairs(id, meta, neighbors) {
   const inverted = Boolean(meta & 4);
-  const faceTiles = STAIRS[id];
+  const faceTiles = stairTiles(id);
   const orientation = meta & 3;
   const direction = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]][orientation];
   const back = direction.map(value => -value);
@@ -149,40 +172,30 @@ function stairs(id, meta, neighbors) {
   const backNeighbor = neighbors?.(...back);
   const qualifies = other => {
     const [neighborId, neighborMeta] = unpack(other);
-    return STAIRS[neighborId] !== undefined && (neighborMeta & 4) === (meta & 4)
+    return stairTiles(neighborId) !== undefined && (neighborMeta & 4) === (meta & 4)
       && Boolean(neighborMeta & 2) !== Boolean(orientation & 2);
   };
   const highY = inverted ? 0 : 0.5;
   const baseY = inverted ? 0.5 : 0;
   const result = [box([0, baseY, 0, 1, baseY + 0.5, 1], faceTiles)];
-  const highIn = (facing, x, z) => [x >= 0.5, x < 0.5, z >= 0.5, z < 0.5][facing];
   const cornerFacing = (neighbor, sign) => {
     if (!qualifies(neighbor)) return null;
     const facing = unpack(neighbor)[1] & 3;
     const side = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]][facing];
     const [sideId, sideMeta] = unpack(neighbors?.(...side.map(value => value * sign)));
-    return STAIRS[sideId] !== undefined && sideMeta === meta ? null : facing;
+    return stairTiles(sideId) !== undefined && sideMeta === meta ? null : facing;
   };
   const outer = cornerFacing(frontNeighbor, -1);
   const inner = outer === null ? cornerFacing(backNeighbor, 1) : null;
-  if (outer === null && inner === null) {
-    const top = [
-      [0.5, highY, 0, 1, highY + 0.5, 1],
-      [0, highY, 0, 0.5, highY + 0.5, 1],
-      [0, highY, 0.5, 1, highY + 0.5, 1],
-      [0, highY, 0, 1, highY + 0.5, 0.5],
-    ][orientation];
-    result.push(box(top, faceTiles));
-    return result;
-  }
-  for (const x of [0, 0.5]) {
-    for (const z of [0, 0.5]) {
-      const near = highIn(orientation, x, z);
-      if ((near && (outer === null || highIn(outer, x, z))) || (inner !== null && highIn(inner, x, z))) {
-        result.push(box([x, highY, z, x + 0.5, highY + 0.5, z + 0.5], faceTiles));
-      }
-    }
-  }
+  const halfBounds = [[.5, 0, 1, 1], [0, 0, .5, 1], [0, .5, 1, 1], [0, 0, 1, .5]];
+  const step = (first, second) => {
+    const [a, b, c, d] = halfBounds[first];
+    if (second === null) return box([a, highY, b, c, highY + .5, d], faceTiles);
+    const [x0, z0, x1, z1] = halfBounds[second];
+    return box([Math.max(a, x0), highY, Math.max(b, z0), Math.min(c, x1), highY + .5, Math.min(d, z1)], faceTiles);
+  };
+  result.push(step(orientation, outer));
+  if (inner !== null) result.push(step(orientation ^ 1, inner));
   return result;
 }
 
@@ -207,34 +220,129 @@ function door(id, meta, neighbors) {
   return [box(rotateBounds([0, 0, 0, 0.1875, 1, 1], -edge), faces, { mode: 'cutout', mirrorFaces })];
 }
 
-function fence(id, meta, neighbors, pane = false) {
-  const paneTile = id === 102 ? 49 : 85;
-  const wall = id === 139;
-  const tile = pane ? paneTile : id === 113 ? 224 : wall ? (meta ? 36 : 16) : 4;
-  const options = pane && id === 102 ? GLASS : pane ? { mode: 'cutout' } : DEFAULT;
-  const links = fenceLinks(id, neighbors, pane);
-  if (pane) {
-    const arms = links.some(Boolean) ? links : [true, true, true, true];
-    const result = [];
-    if (arms[0] || arms[1]) result.push(box([arms[0] ? 0 : 0.4375, 0, 0.4375, arms[1] ? 1 : 0.5625, 1, 0.5625], tile, options));
-    if (arms[2] || arms[3]) result.push(box([0.4375, 0, arms[2] ? 0 : 0.4375, 0.5625, 1, arms[3] ? 1 : 0.5625], tile, options));
-    return result;
-  }
-  const [x0, x1, z0, z1] = links;
-  const width = wall ? 0.25 : 0.125;
-  const result = [box([0.5 - width, 0, 0.5 - width, 0.5 + width, 1, 0.5 + width], tile)];
-  for (const [bottom, top] of wall ? [[0, 0.8125]] : [[0.375, 0.5625], [0.75, 0.9375]]) {
-    if (x0 || x1) result.push(box([x0 ? 0 : 0.5 - width, bottom, 0.5 - width / 2, x1 ? 1 : 0.5 + width, top, 0.5 + width / 2], tile));
-    if (z0 || z1) result.push(box([0.5 - width / 2, bottom, z0 ? 0 : 0.5 - width, 0.5 + width / 2, top, z1 ? 1 : 0.5 + width], tile));
+const horizontalFaces = [0, 1, 4, 5];
+const isPane = id => id === 101 || id === 102;
+const isFence = id => id === 85 || id === 113;
+const fenceTile = id => id === 113 ? 224 : 4;
+const wallTile = meta => meta === 1 ? 36 : 16;
+const paneFace = id => id === 102 ? 49 : 85;
+const paneEdge = id => id === 102 ? 148 : 85;
+const fullCarving = cell => keyOf(cell) === voxelKey && isFullVoxels(cell?.voxels);
+
+function barrierLinks(id, neighbors) {
+  const pane = isPane(id);
+  return horizontalFaces.map(face => {
+    const cell = neighbors?.(...FACES[face]);
+    const [other] = unpack(cell);
+    return other === id || fullCarving(cell) || (pane
+      ? other === 20 || paneOpaqueBlocks.has(other)
+      : other === 107 || fenceCubes.has(other));
+  });
+}
+
+function barrierBounds([west, east, north, south], low, high, height) {
+  return [west ? 0 : low, 0, north ? 0 : low, east ? 1 : high, height, south ? 1 : high];
+}
+
+function fence(id, neighbors) {
+  const links = barrierLinks(id, neighbors);
+  const tile = fenceTile(id);
+  const result = [box([.375, 0, .375, .625, 1, .625], tile)];
+  const [west, east, north, south] = links;
+  for (const [y0, y1] of [[.375, .5625], [.75, .9375]]) {
+    if (west || east) result.push(box([west ? 0 : .375, y0, .4375, east ? 1 : .625, y1, .5625], tile));
+    if (north || south) result.push(box([.4375, y0, north ? 0 : .375, .5625, y1, south ? 1 : .625], tile));
   }
   return result;
 }
 
-function fenceLinks(id, neighbors, pane) {
-  return [0, 1, 4, 5].map(face => {
-    const [near] = unpack(neighbors?.(...FACES[face]));
-    return near === id || (pane && [20, 101, 102].includes(near)) || [1, 2, 3, 4, 5, 7, 12, 17, 24, 35, 45, 48, 98, 107, 112, 125].includes(near);
-  });
+function straightWall([west, east, north, south]) {
+  return west && east && !north && !south || north && south && !west && !east;
+}
+
+function wall(meta, neighbors) {
+  const links = barrierLinks(139, neighbors);
+  const tile = wallTile(meta);
+  if (straightWall(links) && keyOf(neighbors?.(0, 1, 0)) === 'air') {
+    return [box(barrierBounds(links, .3125, .6875, .8125), tile)];
+  }
+  const result = [box([.25, 0, .25, .75, 1, .75], tile)];
+  const bounds = [[0, 0, .3125, .25, .8125, .6875], [.75, 0, .3125, 1, .8125, .6875],
+    [.3125, 0, 0, .6875, .8125, .25], [.3125, 0, .75, .6875, .8125, 1]];
+  for (const [index, linked] of links.entries()) {
+    if (linked) result.push(box(bounds[index], tile));
+  }
+  return result;
+}
+
+function paneLinks(id, neighbors) {
+  const links = barrierLinks(id, neighbors);
+  return links.some(Boolean) ? links : [true, true, true, true];
+}
+
+function paneArms(links) {
+  const [west, east, north, south] = links;
+  return [[west ? 0 : .5, east ? 1 : .5], [north ? 0 : .5, south ? 1 : .5]];
+}
+
+function paneBounds(along, begin, end, low = .4375, high = .5625, y0 = 0, y1 = 1) {
+  return along === 0 ? [begin, y0, low, end, y1, high] : [low, y0, begin, high, y1, end];
+}
+
+function pane(id, neighbors) {
+  const body = paneFace(id), edge = paneEdge(id);
+  const arms = paneArms(paneLinks(id, neighbors));
+  const result = [];
+  const options = {mode: 'pane', solid: false};
+  for (const [axis, [begin, end]] of arms.entries()) {
+    if (begin === end) continue;
+    const faces = axis === 0 ? [-1, -1, -1, -1, body, body] : [body, body, -1, -1, -1, -1];
+    result.push(box(paneBounds(axis, begin, end, .5, .5), faces, {...options, paneBody: true}));
+    if ((begin || end < 1) && arms[1 - axis][0] === arms[1 - axis][1]) {
+      const endFaces = axis === 0 ? [edge, edge, -1, -1, -1, -1] : [-1, -1, -1, -1, edge, edge];
+      result.push(box(paneBounds(axis, .5, .5), endFaces, options));
+    }
+    for (const y of [0, 1]) {
+      const dy = y ? 1 : -1;
+      const neighbor = neighbors?.(0, dy, 0);
+      const [aboveOrBelow] = unpack(neighbor);
+      const stripFaces = [-1, -1, edge, edge, -1, -1];
+      const stripOptions = axis === 0 ? {...options, paneCrosswiseUV: true} : options;
+      const height = axis === 0 ? y + dy * .01 : y;
+      if (aboveOrBelow !== id && !paneOpaqueBlocks.has(aboveOrBelow) && !fullCarving(neighbor)) {
+        result.push(box(paneBounds(axis, begin, end, .4375, .5625, height, height), stripFaces, stripOptions));
+        continue;
+      }
+      for (const [sign, from, to] of [[-1, begin, .5], [1, .5, end]]) {
+        const [dx, dz] = axis === 0 ? [sign, 0] : [0, sign];
+        if (from < to && keyOf(neighbors?.(dx, dy, dz)) === 'air') {
+          result.push(box(paneBounds(axis, from, to, .4375, .5625, height, height), stripFaces, stripOptions));
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function fenceGate(meta, neighbors) {
+  const facing = meta & 3;
+  const [dx, dz] = facing & 1 ? [0, 1] : [1, 0];
+  const inWall = unpack(neighbors?.(dx, 0, dz))[0] === 139 && unpack(neighbors?.(-dx, 0, -dz))[0] === 139;
+  const sink = inWall ? .1875 : 0;
+  const parts = [[0, .3125, .4375, .125, 1, .5625], [.875, .3125, .4375, 1, 1, .5625]];
+  if (meta & 4) {
+    for (const x of [0, .875]) {
+      parts.push([x, .375, .5625, x + .125, .5625, .8125], [x, .75, .5625, x + .125, .9375, .8125],
+        [x, .375, .8125, x + .125, .9375, .9375]);
+    }
+  } else {
+    parts.push([.375, .375, .4375, .625, .9375, .5625]);
+    for (const x of [.125, .625]) {
+      parts.push([x, .375, .4375, x + .25, .5625, .5625], [x, .75, .4375, x + .25, .9375, .5625]);
+    }
+  }
+  return parts.map(([x0, y0, z0, x1, y1, z1]) => turnedBox(
+    [x0, y0 - sink, z0, x1, y1 - sink, z1], 4, -facing, GROUND_DECOR));
 }
 
 function vine(meta) {
@@ -616,6 +724,16 @@ export function standingSignMesh(cell) {
     box([11 / 24, 0, 11 / 24, 13 / 24, 7 / 12, 13 / 24], [3309, 3310, 3311, 3312, 3313, 3314], options)];
 }
 
+export function chestMesh(cell, neighbors) {
+  const [id, meta] = unpack(cell);
+  return id === 54 || id === 130 ? chestShape(id, meta, cell, neighbors, box) : null;
+}
+
+export function sourceAtlasModel(cell) {
+  const [id] = unpack(cell);
+  return id === 3000 || id === 3001 ? campfireMesh : null;
+}
+
 export function signFor(cell) {
   const [id, meta] = unpack(cell);
   if (id !== 63 && id !== 68) return null;
@@ -676,6 +794,17 @@ function specialShape(id, meta, cell, neighbors) {
     const faces = bufferFaces[rotation].map(tile => tiles.redPowerMachine + tile);
     return [box(CUBE, faces, { redPowerUv: bufferUvFlags[rotation] })];
   }
+  if (id === 751 && (meta === 0 || meta === 1 || meta === 4)) {
+    const active = Number(data?.ps > 0);
+    const front = [4, 1, 5, 0][data?.rot & 3];
+    const turns = [0, 5, 3, 6][data?.rot & 3];
+    const base = meta === 0 ? 3794 : tiles.redPowerMachine;
+    const [side, bottom, top, panel] = meta === 0 ? [0, 3, 3, 1]
+      : meta === 1 ? [80, 84, 83, 81] : [160, 84, 163, 161];
+    const faces = faceMaterial(topSides(base + side, base + top, base + bottom), front, base + panel + active);
+    return [box(CUBE, faces, {redPowerUv: [0, 0, turns, turns, 0, 0]})];
+  }
+  if (id === 754) return uniform(tiles.redPowerWorld + 80 + meta);
   if ([756, 757, 758, 759].includes(id)) {
     const on = id === 756 || id === 758;
     const options = on ? LIGHT : DEFAULT;
@@ -705,10 +834,15 @@ function specialShape(id, meta, cell, neighbors) {
     const tile = tiles.cloud + 36 + (meta >= 1 && meta <= 4 ? meta - 1 : 0);
     return [box([0, 0, 0, 1, height, 1], tile)];
   }
+  if (id === 2168) return [
+    box([3 / 16, 0, 3 / 16, 13 / 16, 14 / 16, 13 / 16], topSides(3742, 3741), {mode: 'cutout'}),
+    box([4 / 16, 12 / 16, 4 / 16, 12 / 16, 1, 12 / 16], 3743),
+  ];
+  if (id === 3000 || id === 3001) return [campfireCollision];
   if (id === 4000) return cross(tiles.flowers + 16 + (meta > 13 ? 0 : meta));
-  if (id === 4053) {
+  if (id === 3248 || id >= 4051 && id <= 4066) {
     const bottom = meta & 8 ? 0.5 : 0;
-    return [box([0, bottom, 0, 1, bottom + 0.5, 1], wool[2])];
+    return [box([0, bottom, 0, 1, bottom + 0.5, 1], id === 3248 ? tiles.cloud + 32 : wool[id - 4051])];
   }
   if (id === 4067) return [box([0, 0, 0, 1, 0.125, 1], wool[meta])];
   if (cropStorageTiles[id] !== undefined) return uniform(cropStorageTiles[id]);
@@ -753,7 +887,7 @@ function specialShape(id, meta, cell, neighbors) {
 
 function vanillaShape(id, meta, neighbors) {
   if (id >= 3909 && id <= 3924) return torch(3270 + id - 3909, meta, true);
-  if (STAIRS[id] !== undefined) return stairs(id, meta, neighbors);
+  if (stairTiles(id) !== undefined) return stairs(id, meta, neighbors);
   if (TERRAIN[id] !== undefined) return uniform(TERRAIN[id]);
   if (plants[id] !== undefined) {
     const tile = id === 31 ? [55, 39, 56][meta] ?? 39 : id === 59 ? 88 + (meta & 7)
@@ -782,12 +916,10 @@ function vanillaShape(id, meta, neighbors) {
       id === 23 ? 46 : id === 62 ? 61 : 44), id === 62 ? LIGHT : undefined);
     case 24: return uniform(sandstone(meta));
     case 25: return uniform(topSides(74, 75));
-    case 26: return [turnedBox([0, 0, 0, 1, 0.5625, 1], topSides(151, meta & 8 ? 135 : 134, 4), meta & 3)];
+    case 26: return bed(meta);
     case 27:
     case 28:
-    case 66: return [box([0, 0.015625, 0, 1, 0.0390625, 1],
-      id === 66 ? ((meta & 7) >= 6 ? 112 : 128) : id === 27 ? (meta & 8 ? 163 : 179) : 195,
-      { mode: 'cutout', solid: false, rotation: (meta & 1) * Math.PI / 2, approximation: 'Flat rail geometry' })];
+    case 66: return [railShape(id, meta)];
     case 29:
     case 33:
     case 34: return uniform(faceMaterial(109, [2, 3, 4, 5, 0, 1][meta & 7] ?? 3, id === 29 ? 106 : 107));
@@ -809,9 +941,7 @@ function vanillaShape(id, meta, neighbors) {
       return torch(tile, meta, id !== 75);
     }
     case 54:
-    case 130: return [turnedBox([0.0625, 0, 0.0625, 0.9375, 0.875, 0.9375],
-      [tiles.chest + 4, tiles.chest + 4, tiles.chest + 4, tiles.chest + 5, tiles.chest + 4, tiles.chest + 6],
-      ({ 2: 2, 3: 0, 4: 3, 5: 1 })[meta] ?? 0, { uv: 'box' })];
+    case 130: return [box(chestCollision(id, neighbors), 3660 + Number(id === 130) * 18)];
     case 55: return [box([0, 0.0125, 0, 1, 0.025, 1], 164, { mode: 'cutout', solid: false })];
     case 58: return uniform(topSides(59, 43, 4));
     case 60: return [box([0, 0, 0, 1, 0.9375, 1], topSides(2, meta > 0 ? 86 : 87))];
@@ -844,8 +974,8 @@ function vanillaShape(id, meta, neighbors) {
     case 81: return [box([0.0625, 0, 0.0625, 0.9375, 1, 0.9375], topSides(70, 69, 71))];
     case 84: return uniform(topSides(74, 75));
     case 85:
-    case 113:
-    case 139: return fence(id, meta, neighbors);
+    case 113: return fence(id, neighbors);
+    case 139: return wall(meta, neighbors);
     case 86:
     case 91: return uniform(rotateFaces([118, 118, 102, 102, 118, id === 91 ? 120 : 119], meta & 3), id === 91 ? LIGHT : undefined);
     case 88: return [box([0, 0, 0, 1, 0.875, 1], 104)];
@@ -864,23 +994,9 @@ function vanillaShape(id, meta, neighbors) {
     case 99:
     case 100: return uniform(id === 99 ? 142 : 141);
     case 101:
-    case 102: return fence(id, meta, neighbors, true);
+    case 102: return pane(id, neighbors);
     case 106: return vine(meta);
-    case 107: {
-      const parts = [[0,0.3125,0.375,0.125,1,0.625], [0.875,0.3125,0.375,1,1,0.625]];
-      if (meta & 4) {
-        const [z0,z1] = meta & 2 ? [0.125,0.5] : [0.5,0.875];
-        for (const x of [0.125,0.75]) {
-          parts.push([x,0.375,z0,x + 0.125,0.5,z1], [x,0.75,z0,x + 0.125,0.875,z1]);
-          const tail = (meta & 2 ? z0 : z1 - 0.125);
-          parts.push([x,0.5,tail,x + 0.125,0.75,tail + 0.125]);
-        }
-      } else {
-        parts.push([0.125,0.375,0.4375,0.875,0.5,0.5625], [0.125,0.75,0.4375,0.875,0.875,0.5625]);
-        for (const x of [0.375,0.5]) parts.push([x,0.5,0.4375,x + 0.125,0.75,0.5625]);
-      }
-      return parts.map(bounds => turnedBox(bounds, 4, meta & 1, GROUND_DECOR));
-    }
+    case 107: return fenceGate(meta, neighbors);
     case 111: return [box([0.0625, 0, 0.0625, 0.9375, 0.015625, 0.9375], 76,
       { mode: 'cutout', solid: false, tint: WARM_LEAVES })];
     case 116: return [box([0, 0, 0, 1, 0.75, 1], topSides(182, 166, 37))];
@@ -909,8 +1025,8 @@ function vanillaShape(id, meta, neighbors) {
 }
 
 const simpleCache = new Map();
-const neighborDependent = new Set([8, 9, 53, 64, 67, 71, 85, 101, 102, 108, 109, 113, 114, 128, 134,
-  135, 136, 139, 750, 4039]);
+const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 139, 750,
+  ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
 const dynamic = new Set([...neighborDependent, 751, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
 // Static building materials with no model data or active block behavior.
 const chiselMaterialIds = new Set([1, 2, 3, 4, 5, 14, 15, 16, 17, 21, 22, 24, 35, 41, 42, 43,
@@ -937,6 +1053,11 @@ export function shapeDependsOnNeighbors(cell) {
   return neighborDependent.has(id) && (id !== 750 || meta !== 0);
 }
 
+export function neighborCollisionShapeDependsOn(cell) {
+  const [id, meta] = unpack(cell);
+  return id === 54 || id === 64 || id === 71 || isFence(id) || isPane(id) || id === 139 ||
+    stairTiles(id) !== undefined || id === 750 && meta !== 0 && meta !== 8 && !wireMetadata.has(meta);
+}
 
 export function shapeFor(cell, neighbors) {
   const key = keyOf(cell);
@@ -966,9 +1087,27 @@ const brewingStandCollision = [box([0, 0, 0, 1, 0.125, 1], 157),
 const wireMetadata = new Set([1, 2, 3, 5]);
 const wirePostCollision = box(jacketBounds, tiles.redPowerWire + 1);
 const solidCache = new WeakMap();
+
+function wallBounds(links, top) {
+  if (straightWall(links)) return barrierBounds(links, .3125, .6875, top ?? .8125);
+  return barrierBounds(links, .25, .75, top ?? 1);
+}
+
+export function selectionFor(cell, neighbors) {
+  const [id, meta] = unpack(cell);
+  if (isFence(id)) return [box(barrierBounds(barrierLinks(id, neighbors), .375, .625, 1), fenceTile(id))];
+  if (id === 139) return [box(wallBounds(barrierLinks(id, neighbors)), wallTile(meta))];
+  if (isPane(id)) return [box(barrierBounds(paneLinks(id, neighbors), .4375, .5625, 1), paneFace(id))];
+  if (id === 107) return [turnedBox([0, 0, .375, 1, 1, .625], 4, meta & 1)];
+  // The legacy stair ray trace uses the six octants of the ordinary step even at corners.
+  if (stairTiles(id) !== undefined) return stairs(id, meta);
+  return shapeFor(cell, neighbors);
+}
+
 export function collisionFor(cell, neighbors) {
   if (keyOf(cell) === voxelKey) return voxelCollisionBoxes(cell.voxels);
   const [id, meta] = unpack(cell);
+  if (id === 2168) return [fireflyJarCollision];
   if (id === 765) return frameCollision;
   if (id === 768) return shapedLampCollision;
   if (id === 117) return brewingStandCollision;
@@ -976,9 +1115,14 @@ export function collisionFor(cell, neighbors) {
     const [cake] = shapeFor(cell);
     return [{...cake, y1: 7 / 16}];
   }
-  if (id === 85 || id === 113) {
-    const [west,east,north,south] = fenceLinks(id, neighbors, false);
-    return [box([west ? 0 : .375, 0, north ? 0 : .375, east ? 1 : .625, 1.5, south ? 1 : .625], id === 85 ? 4 : 224)];
+  if (isFence(id)) return [box(barrierBounds(barrierLinks(id, neighbors), .375, .625, 1.5), fenceTile(id))];
+  if (id === 139) return [box(wallBounds(barrierLinks(id, neighbors), 1.5), wallTile(meta))];
+  if (isPane(id)) {
+    const result = [];
+    for (const [axis, [begin, end]] of paneArms(paneLinks(id, neighbors)).entries()) {
+      if (begin < end) result.push(box(paneBounds(axis, begin, end), paneFace(id)));
+    }
+    return result;
   }
   if (id === 107) return meta & 4 ? AIR : [turnedBox([0,0,0.375,1,1.5,0.625], 4, meta & 1)];
   if (id === 750 && wireMetadata.has(meta)) {

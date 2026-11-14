@@ -33,6 +33,7 @@ export const staticEmission = Object.freeze({
   "758": 15,
   "1527": 1,
   "2162": 11,
+  "2168": 8,
   "2248": 7,
   "2793": 15,
   "2833": 3,

@@ -35,16 +35,21 @@ public class BlockRegistry {
     }
     Field blockMaterial = block.getField("cB"), blockSound = block.getField("cz");
     Method blockName = block.getMethod("a");
+    Method normalRender = block.getMethod("b"), opaqueMaterial = material.getMethod("k");
+    Object pumpkinMaterial = material.getField("A").get(null);
     Method step = sound.getMethod("e"), place = sound.getMethod("b"), volume = sound.getMethod("c"), pitch = sound.getMethod("d");
     try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(Paths.get(output), StandardCharsets.UTF_8))) {
-      out.println("id\tname\topacity\temission\tmaterial\topaque\tstep\tplace\tvolume\tpitch\tclass");
+      out.println("id\tname\topacity\temission\tmaterial\topaque\tstep\tplace\tvolume\tpitch\tclass\tfenceCube");
       for (int id = 1; id < blocks.length; id++) {
         Object value = blocks[id];
         if (value == null) continue;
         Object audio = blockSound.get(value);
-        out.printf(java.util.Locale.ROOT, "%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s%n",
-          id, blockName.invoke(value), opacity[id], emission[id], materials.get(blockMaterial.get(value)),
-          opaque[id], step.invoke(audio), place.invoke(audio), volume.invoke(audio), pitch.invoke(audio), value.getClass().getName());
+        Object substance = blockMaterial.get(value);
+        boolean fenceCube = substance != null && substance != pumpkinMaterial
+          && (Boolean) opaqueMaterial.invoke(substance) && (Boolean) normalRender.invoke(value);
+        out.printf(java.util.Locale.ROOT, "%d\t%s\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%n",
+          id, blockName.invoke(value), opacity[id], emission[id], materials.get(substance),
+          opaque[id], step.invoke(audio), place.invoke(audio), volume.invoke(audio), pitch.invoke(audio), value.getClass().getName(), fenceCube);
       }
     }
     System.out.println("[honeymoon] Writing RedPower cover sound mappings");

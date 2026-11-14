@@ -32,6 +32,30 @@ function drawPart(object, {x, y, z, boxes}, vertices, padding = 0) {
   object.updateMatrixWorld();
 }
 
+function drawModelPreview(object, {x, y, z, surfaces}) {
+  const vertices = [0, 1, 2, 0, 2, 3];
+  let position = object.geometry.attributes.position;
+  const count = surfaces.length * vertices.length;
+  if (position.count < count) {
+    const previous = object.geometry;
+    object.geometry = new THREE.BufferGeometry();
+    position = new THREE.BufferAttribute(new Float32Array(count * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    object.geometry.setAttribute('position', position);
+    previous.dispose();
+  }
+  let vertex = 0;
+  for (const {positions} of surfaces) {
+    for (const corner of vertices) {
+      const index = corner * 3;
+      position.setXYZ(vertex++, positions[index], positions[index + 1], positions[index + 2]);
+    }
+  }
+  position.needsUpdate = true;
+  object.geometry.setDrawRange(0, vertex);
+  object.position.set(x, y, z);
+  object.updateMatrixWorld();
+}
+
 export class Display {
   constructor(container, world, dayTick = 6000) {
     this.world = world;
@@ -145,6 +169,8 @@ export class Display {
       return Object.entries(materialsFor(texture, 26 / 255)).map(([mode, material]) => [`${family}:${mode}`, material]);
     }));
     this.materials = {...materialsFor(map), ...Object.fromEntries(additional.flat())};
+    this.materials.pane = new THREE.MeshBasicMaterial({map, vertexColors: true, alphaTest: .47});
+    this.useLightmap(this.materials.pane);
     if (this.world.models?.redpower) {
       const glow = new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:.3,
         blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide});
@@ -334,7 +360,14 @@ export class Display {
       for (let yy = (y - 1) >> 4; yy <= (y + 1) >> 4; yy++) {
         for (let xx = (x - 1) >> 4; xx <= (x + 1) >> 4; xx++) {
           const axes = Number(xx !== cx) + Number(yy !== cy) + Number(zz !== cz);
-          if (axes === 1 || (axes > 1 && this.chiselConnectedTextures)) this.schedule(xx, yy, zz, edit);
+          if (axes === 1 || axes > 1 && this.chiselConnectedTextures) {
+            this.schedule(xx, yy, zz, edit);
+          } else if (axes === 2 && yy !== cy) {
+            // Pane strips inspect horizontal neighbors one level above and below.
+            const cell = this.world.cellAt(x + Math.sign(xx - cx), y + Math.sign(yy - cy), z + Math.sign(zz - cz));
+            const key = typeof cell === 'string' ? cell : cell?.key;
+            if (/^legacy:10[12]:/.test(key ?? '')) this.schedule(xx, yy, zz, edit);
+          }
         }
       }
     }
@@ -661,7 +694,8 @@ export class Display {
     }
     this.partPreview.visible = Boolean(placement);
     if (placement && this.drawnPlacement !== placement) {
-      drawPart(this.partPreview, placement, boxTriangles);
+      if (placement.surfaces) drawModelPreview(this.partPreview, placement);
+      else drawPart(this.partPreview, placement, boxTriangles);
       this.drawnPlacement = placement;
     }
     if (placement && this.previewBlocked !== placement.blocked) {

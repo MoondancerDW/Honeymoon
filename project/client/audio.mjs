@@ -62,8 +62,8 @@ function support(world, position) {
       for (let xx = x - 1; xx <= x + 1; xx++) {
         const cell = world.cellAt(xx, y, zz);
         if (!cell) continue;
-        const boxes = extractedModel(world.models, cell)?.collision ?? collisionFor(cell,
-          (dx, dy, dz) => world.cellAt(xx + dx, y + dy, zz + dz));
+        const adjacent = (dx, dy, dz) => world.cellAt(xx + dx, y + dy, zz + dz);
+        const boxes = extractedModel(world.models, cell, adjacent)?.collision ?? collisionFor(cell, adjacent);
         for (const box of boxes) {
           const top = y + box.y1;
           if (top > position.y + .0125 || top <= height || top < position.y - .125 ||

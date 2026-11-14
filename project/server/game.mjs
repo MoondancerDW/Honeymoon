@@ -12,6 +12,7 @@ const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
 const actions = new Set(['place', 'remove', 'copy', 'interact', ...partActions, ...voxelActions]);
 const axes = ['x', 'y', 'z'];
+const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 const MOVEMENT_GRACE = 0.24;
 const RUN_SPEED = 9;
 const MAX_ACTIVE_IDLE_MS = 30000;
@@ -49,6 +50,10 @@ function normalizeAction(body) {
   if (body.type === 'place') {
     if (typeof body.cell !== 'string' || body.cell.length > 128) throw new RequestError(400, 'invalid_cell');
     input.cell = body.cell;
+    if (body.turns !== undefined) {
+      if (!Number.isInteger(body.turns) || body.turns < 0 || body.turns > 3) throw new RequestError(400, 'invalid_heading');
+      if (body.turns) input.turns = body.turns;
+    }
     if (body.against !== undefined) input.against = point(body.against, true);
   }
   if (partActions.has(body.type)) {
@@ -180,8 +185,24 @@ export function createGame(base, store, geometry, {
     };
   }
 
+  function checkAdjacentCollisions(player, {x, y, z}, next) {
+    if (!geometry.neighborCollisionShapeDependsOn) return;
+    const active = activePositions(player);
+    for (const [dx, dy, dz] of faceOffsets) {
+      const [ax, ay, az] = [x + dx, y + dy, z + dz];
+      const adjacent = cellView(getCurrent(ax, ay, az));
+      if (!geometry.neighborCollisionShapeDependsOn(adjacent)) continue;
+      const plannedNeighbor = (nx, ny, nz) => dx + nx === 0 && dy + ny === 0 && dz + nz === 0 ? next : undefined;
+      if (active.some(position => physical.overlaps(position, ax, ay, az, adjacent, plannedNeighbor)
+          && !physical.overlaps(position, ax, ay, az, adjacent))) {
+        throw new RequestError(409, 'occupied');
+      }
+    }
+  }
+
   function writeCell(player, current, cell, object) {
     const { x, y, z } = current;
+    checkAdjacentCollisions(player, current, {key: cell ?? 'air', object, parts: base.manifest.compositions?.[cell]?.parts});
     const change = { x, y, z, cell, object };
     const placement = cell === null ? undefined : { key: cellAddress(x, y, z), player };
     const effects = cell === null ? [] : [{type: 'sound', sound: 'block.place', cell, position: [x, y, z]}];
@@ -282,6 +303,7 @@ export function createGame(base, store, geometry, {
 
   function writeVoxels(player, current, voxels, material) {
     const {x, y, z} = current;
+    checkAdjacentCollisions(player, current, {key: voxels ? voxelKey : 'air', voxels});
     const change = {x, y, z, cell: voxels ? voxelKey : null, object: null, ...(voxels && {voxels})};
     const placement = voxels ? {key: cellAddress(x, y, z), player} : undefined;
     const effects = material ? [{type: 'sound', sound: 'block.place', cell: voxelKey,
@@ -348,6 +370,7 @@ export function createGame(base, store, geometry, {
       if (!base.catalog.has(input.cell) || input.cell === 'air' || input.cell === voxelKey) {
         throw new RequestError(400, 'unknown_cell_type');
       }
+      if (input.turns && !geometry.isSofa?.(input.cell)) throw new RequestError(400, 'invalid_heading');
       if (!allowRemoval && (input.cell === microblockKey ||
           isMicroblockCell({key: input.cell, parts: base.manifest.compositions?.[input.cell]?.parts}))) {
         throw new RequestError(409, 'part_required');
@@ -356,9 +379,10 @@ export function createGame(base, store, geometry, {
       if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
       if (!placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
       const copied = store.getClipboard(player);
-      const object = copied?.cell === input.cell && copied.object
-        ? { ...copied.object, position: [x, y, z], key: `tile:${x}:${y}:${z}` }
-        : null;
+      const copiedObject = copied?.cell === input.cell ? copied.object : null;
+      const object = geometry.placementObject
+        ? geometry.placementObject(input.cell, copiedObject, [x, y, z], input.turns)
+        : copiedObject ? { ...copiedObject, position: [x, y, z], key: `tile:${x}:${y}:${z}` } : null;
       const parts = base.manifest.compositions?.[input.cell]?.parts;
       if (playerOverlaps(x, y, z, {key: input.cell, object, parts}, player)) throw new RequestError(409, 'occupied');
       return writeCell(player, current, input.cell, object);

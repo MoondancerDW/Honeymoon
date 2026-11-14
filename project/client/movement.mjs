@@ -1,4 +1,4 @@
-import {collisionFor, shapeFor} from '../world/geometry.mjs';
+import * as geometry from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {movementMedium} from '../world/block-movement.mjs';
 import {PLAYER} from '../world/player-body.mjs';
@@ -6,6 +6,7 @@ import {intersectSelection} from '../world/selection.mjs';
 import {isChiselMaterial, voxelAtHit, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 
 const {halfWidth: HALF, height: HEIGHT, eye: EYE} = PLAYER;
+const {collisionFor} = geometry;
 export {HEIGHT, EYE};
 const EPSILON = .00001;
 export function overlapsPlacement(position, placement) {
@@ -37,8 +38,9 @@ export class Movement {
           if (!this.world.hasChunk(xx, zz) && xx >= Math.floor(x - HALF) && xx <= Math.floor(x + HALF) && zz >= Math.floor(z - HALF) && zz <= Math.floor(z + HALF)) return true;
           const cell = this.world.cellAt(xx, yy, zz);
           if (!cell) continue;
-          const boxes = extractedModel(this.world.models, cell)?.collision
-            ?? collisionFor(cell, (dx, dy, dz) => this.world.cellAt(xx + dx, yy + dy, zz + dz));
+          const neighbors = (dx, dy, dz) => this.world.cellAt(xx + dx, yy + dy, zz + dz);
+          const boxes = extractedModel(this.world.models, cell, neighbors)?.collision
+            ?? collisionFor(cell, neighbors);
           for (const box of boxes) {
             if (x + HALF > xx + box.x0 + EPSILON && x - HALF < xx + box.x1 - EPSILON &&
                 y + HEIGHT > yy + box.y0 + EPSILON && y < yy + box.y1 - EPSILON &&
@@ -168,8 +170,9 @@ export function pick(world, origin, direction, chiseling = false) {
       for (let x = min[0] - 1; x <= max[0] + 1; x++) {
         const cell = world.cellAt(x, y, z);
         if (!cell) continue;
-        const boxes = extractedModel(world.models, cell)?.selection
-          ?? shapeFor(cell, (dx, dy, dz) => world.cellAt(x + dx, y + dy, z + dz));
+        const neighbors = (dx, dy, dz) => world.cellAt(x + dx, y + dy, z + dz);
+        const boxes = extractedModel(world.models, cell, neighbors)?.selection
+          ?? (geometry.selectionFor ?? geometry.shapeFor)(cell, neighbors);
         for (const box of boxes) {
           const result = intersectSelection(origin, direction, box, x, y, z);
           if (!result || (best && result.length >= best.length)) continue;

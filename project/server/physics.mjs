@@ -35,6 +35,7 @@ function rayBox(origin, delta, minima, maxima, open = false) {
 }
 
 export function physics(base, geometry, getCell) {
+  const selection = geometry.selectionFor ? 'selectionFor' : 'shapeFor';
   function boxesAt(kind, x, y, z, override, plannedNeighbor) {
     const cell = typeof override === 'string' ? { key: override, parts: base.manifest.compositions?.[override]?.parts }
       : override ?? getCell(x, y, z);
@@ -123,7 +124,7 @@ export function physics(base, geometry, getCell) {
       for (let z = min[2] - 1; z <= max[2] + 1; z++) {
         for (let x = min[0] - 1; x <= max[0] + 1; x++) {
           if (rayBox(origin, delta, [x - 0.125, y, z - 0.125], [x + 1.125, y + 1.5, z + 1.125]) > closest) continue;
-          for (const box of boxesAt('shapeFor', x, y, z)) {
+          for (const box of boxesAt(selection, x, y, z)) {
             const distance = rayBox(origin, delta, [x + box.x0, y + box.y0, z + box.z0], [x + box.x1, y + box.y1, z + box.z1]);
             if (distance >= closest) continue;
             closest = distance;
@@ -139,7 +140,7 @@ export function physics(base, geometry, getCell) {
     const origin = [position.x, position.y + PLAYER.eye, position.z];
     const targets = [];
     if (hit) targets.push([hit.x, hit.y, hit.z]);
-    for (const box of boxesAt('shapeFor', x, y, z)) {
+    for (const box of boxesAt(selection, x, y, z)) {
       targets.push([x + (box.x0 + box.x1) / 2, y + (box.y0 + box.y1) / 2, z + (box.z0 + box.z1) / 2]);
     }
     return targets.some(target => {
@@ -169,7 +170,7 @@ export function physics(base, geometry, getCell) {
     for (let yy = min[1] - 1; yy <= max[1]; yy++) {
       for (let zz = min[2] - 1; zz <= max[2] + 1; zz++) {
         for (let xx = min[0] - 1; xx <= max[0] + 1; xx++) {
-          for (const box of boxesAt('shapeFor', xx, yy, zz)) {
+          for (const box of boxesAt(selection, xx, yy, zz)) {
             const result = intersectSelection(origin, direction, box, xx, yy, zz, range + tolerance);
             if (!result || (closest && result.length >= closest.length)) continue;
             closest = {x: xx, y: yy, z: zz, partSlot: box.partSlot, face: result.offset, length: result.length};

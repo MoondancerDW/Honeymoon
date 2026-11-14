@@ -32,6 +32,9 @@ public final class ReferenceCapture {
     private static final Map<String, int[]> openedDoors = new LinkedHashMap<String, int[]>();
     private static final double[] PLAYER_EDGES = {-.31, .31};
     private static long settleMs = 1800;
+    private static boolean spatialCapture;
+    private static double[] lastCameraPosition;
+    private static long poseSettle;
     private static boolean serverWalk;
     private static Object serverPlayer, serverWorld;
     private static volatile double[] pendingTeleport;
@@ -51,7 +54,7 @@ public final class ReferenceCapture {
 
     public static void premain(String options, Instrumentation inst) throws Exception {
         javax.imageio.ImageIO.setUseCache(false);
-        String[] values = options.split(",", 5);
+        String[] values = options.split(",", 6);
         poses = Files.readAllLines(Paths.get(values[0]), StandardCharsets.UTF_8);
         output = new File(values[1]);
         Files.createDirectories(output.toPath().resolve("screenshots"));
@@ -62,6 +65,7 @@ public final class ReferenceCapture {
         }
         if (values.length > 3) settleMs = Long.parseLong(values[3]);
         serverWalk = values.length > 4 && "server".equals(values[4]);
+        spatialCapture = values.length > 5 && "spatial".equals(values[5]);
         inst.addTransformer(new ClassFileTransformer() {
             @Override public byte[] transform(ClassLoader loader, String name, Class<?> type,
                     ProtectionDomain domain, byte[] bytes) {
@@ -217,6 +221,13 @@ public final class ReferenceCapture {
             float yaw = Float.parseFloat(pose[4]);
             float pitch = Float.parseFloat(pose[5]);
             if (since == 0) {
+                poseSettle = settleMs;
+                if (spatialCapture) {
+                    double distance = lastCameraPosition == null ? Double.POSITIVE_INFINITY :
+                            Math.max(Math.abs(x - lastCameraPosition[0]), Math.abs(z - lastCameraPosition[1]));
+                    poseSettle = Math.max(settleMs, distance > 48 ? 2800 : distance > 12 ? 720 : 0);
+                    lastCameraPosition = new double[] {x, z};
+                }
                 if (pose.length == 9) pendingInteraction = new int[] {Integer.parseInt(pose[6]), Integer.parseInt(pose[7]), Integer.parseInt(pose[8])};
                 pendingTeleport = new double[] {x, y, z};
             }
@@ -412,9 +423,10 @@ public final class ReferenceCapture {
 
     public static void after(Object mc) {
         if (poses == null) { forward("after", mc); return; }
-        if (failed || since == 0 || index >= poses.size() || System.currentTimeMillis() - since < settleMs) return;
+        if (failed || since == 0 || index >= poses.size() || System.currentTimeMillis() - since < poseSettle) return;
         try {
             if (pendingTeleport != null || pendingInteraction != null || world.get(mc) == null || screen.get(mc) != null) return;
+            if (spatialCapture && !loaded(world.get(mc), lastCameraPosition[0], lastCameraPosition[1])) return;
             String name = poses.get(index).trim().split("\\s+")[0] + ".png";
             System.out.println("[reference] " + screenshot.invoke(null, output, name, width.getInt(mc), height.getInt(mc)));
             index++;

@@ -16,6 +16,8 @@ GRID = 64
 TILE = 16
 CONNECTED_TEXTURE_START = 3328
 CHISEL_CTM_START = 3584
+CHEST_START = 3660
+OPEN_CHEST_START = 3744
 
 # Keep the source atlas's own tile indices. The base IDs mirror geometry.mjs.
 ATLAS_SOURCES = (
@@ -35,11 +37,14 @@ ARCHIVES = {
     "pack": "texturepacks/My-Little-Ponyach-147f.zip",
     "vanilla": "minecraft.jar",
     "mechanical": "mods/RedPowerMechanical-2.0pr6.zip",
+    "redpower-core": "mods/RedPowerCore-2.0pr6.zip",
     "digital": "mods/RedPowerDigital-2.0pr6.zip",
     "cloud": "mods/MLB-CORE_147.zip",
+    "campfire": "mods/CampfireMod_2.4_for_1.4.7.zip",
     "pam": "mods/Pam's HarvestCraft.zip",
     "chisel": "mods/ChiselRetro_beta0.9_mc1.4.7.zip",
     "mocreatures": "mods/DrZharks MoCreatures Mod v4.7.0.zip",
+    "twilight": "mods/twilightforest-1.15.4.jar",
     "jammy": "mods/1.4.7_Jammy_Furniture_Mod_V4.1.zip",
     "biblio": "mods/BiblioCraft.zip",
 }
@@ -118,6 +123,10 @@ class TextureAtlas:
             for col in range(16):
                 self.paste(index + row * 16 + col, image.crop((col * w, row * h, (col + 1) * w, (row + 1) * h)))
 
+    def legacy_crop(self, index, image, rect, size):
+        """Crop a source model rectangle at the resource pack's actual resolution."""
+        self.paste(index, legacy_patch(image, rect, size))
+
     def jammy(self, name):
         name = f"jammy_{name}.png"
         return self.resolve(f"jammy780/furniture/textures/{name}", "jammy", (f"mods/jammy780/textures/{name}",))
@@ -151,6 +160,16 @@ def get_patch(image, area):
         if sample.getbbox():
             return sample
     return Image.new("RGBA", (TILE, TILE), (116, 93, 71, 255))
+
+
+def legacy_patch(image, rect, size):
+    left, top, right, bottom = rect
+    w, h = size
+    bounds = (left * image.width // w, top * image.height // h,
+              right * image.width // w, bottom * image.height // h)
+    if not (0 <= bounds[0] < bounds[2] <= image.width and 0 <= bounds[1] < bounds[3] <= image.height):
+        raise ValueError(f"Invalid source rectangle {rect} for {image.size} at logical size {size}")
+    return image.crop(bounds)
 
 
 def add_armchairs(atlas):
@@ -226,6 +245,8 @@ def add_harvestcraft_tiles(atlas):
     ranges.append((3617, "vanillastorage", 0, 16))
     ranges += [(3633 + offset, name, 2, 1) for offset, name in enumerate(wild)]
     ranges += [(3641 + row * 4, "sink", row * 16, 4) for row in range(3)]
+    ranges.extend(((3732, "coffee", 48, 1), (3733, "mango", 48, 1), (3734, "kiwi", 2, 1)))
+    ranges.extend(((3792, "salt", 0, 1), (3793, "salt", 48, 1)))
     images = {}
     for start, name, first, count in ranges:
         if name not in images:
@@ -289,8 +310,62 @@ def add_standing_sign(atlas):
         front = (depth, side_y, depth + width, side_y + height)
         back = (2 * depth + width, side_y, 2 * depth + 2 * width, side_y + height)
         for face, rect in enumerate((left, right, top, bottom, back, front)):
-            tile = image.crop(rect)
+            tile = legacy_patch(image, rect, (64, 32))
             atlas.paste(first + face, tile.transpose(Image.Transpose.FLIP_TOP_BOTTOM) if face not in (2, 3) else tile)
+
+
+def add_chests(atlas):
+    # ModelChest (awq) and ModelLargeChest (awx). The renderer flips Y and Z.
+    # Split the large model in texture space so each half fits in one voxel.
+    sources = (("chest", 14, None), ("enderchest", 14, None),
+               ("largechest", 30, 0), ("largechest", 30, 1))
+    # A 90-degree hinge moves the front to the top, the top to the back, etc.
+    # Align the image axes of each moved face to the mesh worker's UV axes.
+    open_faces = ((0, Image.Transpose.ROTATE_90), (1, Image.Transpose.ROTATE_270),
+                  (5, Image.Transpose.FLIP_TOP_BOTTOM), (4, Image.Transpose.ROTATE_180),
+                  (2, Image.Transpose.FLIP_LEFT_RIGHT), (3, None))
+    images = {}
+    for variant, (name, width, half) in enumerate(sources):
+        if name not in images:
+            images[name] = atlas.resolve(f"item/{name}.png", "vanilla")
+        size = (128 if half is not None else 64, 64)
+        for part, (y, w, h, d) in enumerate(((19, width, 10, 14), (0, width, 5, 14), (0, 2, 4, 1))):
+            rectangles = model_faces(0, y, w, h, d)
+            for face, source_face in enumerate((1, 0, 3, 2, 5, 4)):
+                left, top, right, bottom = rectangles[source_face]
+                if half is not None:
+                    if face == 1 - half:
+                        continue
+                    if face >= 2:
+                        middle = (left + right) // 2
+                        if half ^ (face == 4):
+                            left = middle
+                        else:
+                            right = middle
+                # The source draws the base over the lid's lower pixel where
+                # their side faces overlap with the lid closed.
+                if part:
+                    opened, transpose = open_faces[face]
+                    tile = legacy_patch(images[name], (left, top, right, bottom), size)
+                    if transpose is not None:
+                        tile = tile.transpose(transpose)
+                    atlas.paste(OPEN_CHEST_START + variant * 12 + (part - 1) * 6 + opened, tile)
+                if part == 1 and face not in (2, 3):
+                    bottom -= 1
+                index = CHEST_START + variant * 18 + part * 6 + face
+                atlas.legacy_crop(index, images[name], (left, top, right, bottom), size)
+
+
+def add_campfire(atlas):
+    image = atlas.resolve("CampfireMod/CampfireBlock.png", "campfire")
+    # The ash skirt's UV extends one pixel past the old GL_REPEAT sheet.
+    wrapped = Image.new("RGBA", (image.width, 2 * image.height))
+    wrapped.paste(image, (0, 0))
+    wrapped.paste(image, (0, image.height))
+    # ModelCampfire uses three ModelBox textures for the sticks, ash, and stones.
+    for part, dims in enumerate(((0, 0, 1, 16, 1), (0, 20, 12, 1, 12), (16, 0, 2, 4, 14))):
+        for face, rect in enumerate(model_faces(*dims)):
+            atlas.legacy_crop(3798 + part * 6 + face, wrapped, rect, (64, 64))
 
 
 def build(source, output, vanilla_jar=None):
@@ -298,9 +373,17 @@ def build(source, output, vanilla_jar=None):
         atlas = TextureAtlas(source, resources, vanilla_jar)
         for index, resource, dependency in ATLAS_SOURCES:
             atlas.grid(index, atlas.resolve(resource, dependency))
+        alloy_furnace = atlas.resolve("eloraam/base/base1.png", "redpower-core")
+        for offset in range(4):
+            atlas.legacy_crop(3794 + offset, alloy_furnace, (offset, 1, offset + 1, 2), (16, 16))
+        add_campfire(atlas)
         add_fruit_crops(atlas, 3264, ("cinnamon", "vanillabean"))
         add_fruit_crops(atlas, 3286, ("apple", "olive", "lime", "lemon"))
+        add_fruit_crops(atlas, 3735, ("papaya", "pomergranate"))
         add_harvestcraft_tiles(atlas)
+        twilight = atlas.resolve("twilightforest/terrain.png", "twilight")
+        for offset, tile in enumerate((7, 8, 9)):
+            atlas.legacy_crop(3741 + offset, twilight, (tile, 0, tile + 1, 1), (16, 16))
         candles = atlas.resolve("pam/harvestcraft/pamhccandle.png", "pam")
         cw, ch = candles.width // 16, candles.height // 16
         for color in range(16):
@@ -317,13 +400,11 @@ def build(source, output, vanilla_jar=None):
         # The original OptiFine profile uses the pack terrain tiles instead of
         # generated water. Its still tile 205 and flow tile 206 are identical.
         # misc/water.png is the first-person overlay used underwater.
-        atlas.paste(3200, terrain.crop((13 * 16, 12 * 16, 14 * 16, 13 * 16)))
+        atlas.legacy_crop(3200, terrain, (13, 12, 14, 13), (16, 16))
         # Old Minecraft animates liquids procedurally. Keep the stored lava
         # source tile as the static frame, if the pack provides one.
-        atlas.paste(3201, terrain.crop((13 * 16, 14 * 16, 14 * 16, 15 * 16)))
-        chest = atlas.resolve("item/chest.png", "vanilla")
-        for offset, rect in ((4, (0, 14, 14, 33)), (5, (14, 0, 28, 14)), (6, (14, 14, 28, 33))):
-            atlas.paste(3202 + offset, chest.crop(rect))
+        atlas.legacy_crop(3201, terrain, (13, 14, 14, 15), (16, 16))
+        add_chests(atlas)
         fallback = Image.new("RGBA", (TILE, TILE), (120, 96, 130, 255))
         draw = ImageDraw.Draw(fallback)
         draw.rectangle((0, 0, 7, 7), fill=(171, 145, 179, 255))
@@ -332,13 +413,13 @@ def build(source, output, vanilla_jar=None):
         chisel_connected_textures = add_chisel(atlas, fallback)
         add_mocreatures_tiles(atlas, fallback)
         atlas.paste(3204, Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255)))
-        atlas.paste(3205, terrain.crop((4 * 16, 0, 5 * 16, 16)))
+        atlas.legacy_crop(3205, terrain, (4, 0, 5, 1), (16, 16))
         add_standing_sign(atlas)
         output.mkdir(parents=True, exist_ok=True)
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
-            "schemaVersion": 7, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
+            "schemaVersion": 8, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
             "connectedTextures": connected_textures, "chiselConnectedTextures": chisel_connected_textures,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return len(atlas.resources)

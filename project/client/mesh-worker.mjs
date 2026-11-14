@@ -106,7 +106,12 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
       uv.push(flags & 4 ? [vertical, horizontal] : [horizontal, vertical]);
     } else {
       const textureY = axis === 1 ? vertical : 1 - vertical;
-      uv.push([horizontal, textureY]);
+      let u = horizontal, v = textureY;
+      if (box.paneCrosswiseUV) [u, v] = [v, 1 - u];
+      if (face === 3 && box.bedFacing !== undefined) {
+        [u, v] = [[v, u], [1 - u, v], [1 - v, 1 - u], [u, 1 - v]][box.bedFacing];
+      }
+      uv.push([u, v]);
       if (quarter >= 0) {
         // Subdivide a full cube face in texture order, preserving the vertex winding.
         const quarterU = ((quarter & 1) + horizontal) / 2;
@@ -157,12 +162,15 @@ function makeShape(index, at, cell, neighbors, edited) {
   const connected = geometry.shapeDependsOnNeighbors(key);
   const cacheable = !connected && !cell?.object && !edited;
   if (cacheable && cache.has(index)) return cache.get(index);
-  const model = extractedModel(models, cell || key);
   const adjacent = (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE);
-  const boxes = model ? [] : geometry.standingSignMesh(key) ??
+  const model = extractedModel(models, cell || key, adjacent);
+  const atlasModel = model ? null : geometry.sourceAtlasModel(key);
+  const boxes = model || atlasModel ? [] : geometry.standingSignMesh(key) ??
     geometry.redPowerTubeMesh(cell || key, adjacent) ?? geometry.redPowerWireMesh(cell || key, adjacent) ??
+    geometry.chestMesh(cell || key, adjacent) ??
+    geometry.bedMesh(key) ??
     shapeFor(cell || key, adjacent);
-  const shape = {boxes, model, full: boxes.find(fullCube)};
+  const shape = {boxes, model, atlasModel, full: boxes.find(fullCube)};
   if (cacheable) cache.set(index, shape);
   return shape;
 }
@@ -209,7 +217,11 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
           }
           continue;
         }
-        const {boxes, model} = shape(at);
+        const {boxes, model, atlasModel} = shape(at);
+        if (atlasModel) {
+          for (const surface of atlasModel) modelQuad(layers.cutout, surface, origin, light[at]);
+          continue;
+        }
         if (model) {
           const shade = light[at];
           for (const surface of model.surfaces) {
@@ -231,7 +243,14 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
           if (sign) signs.push({...sign, x: x + sign.x, y: y + sign.y, z: z + sign.z});
         }
         for (const box of boxes) {
-          const out = layers[box.mode] || layers.opaque;
+          const pane = box.mode === 'pane';
+          const out = pane ? layers.pane ??= layer() : layers[box.mode] || layers.opaque;
+          if (box.kind === 'rail') {
+            const corners = box.corners.map(([dx, dy, dz]) => [x + dx, y + dy, z + dz]);
+            quad(out, corners, box.faces[0], box.uv, light[at]);
+            quad(out, corners.toReversed(), box.faces[0], box.uv.toReversed(), light[at]);
+            continue;
+          }
           if (box.kind === 'cross') {
             const shade = light[at];
             const a = x + box.x0, b = x + box.x1, c = y + box.y0, d = y + box.y1;
@@ -241,8 +260,14 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             continue;
           }
           for (let f = 0; f < 6; f++) {
+            if (box.faces[f] === -1) continue;
             const axis = f >> 1;
             const adjacent = at + FACES[f][axis] * STRIDE[axis];
+            if (pane) {
+              const tile = ctm && box.paneBody ? paneTexture(f, neighbors) : box.faces[f];
+              faceQuad(out, box, f, origin, light[at], tile);
+              continue;
+            }
             const onEdge = box.angle === undefined && !box.redPowerOffset && (f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0);
             if (water && (onEdge || f === 3) && waterKey(cells[indices[adjacent]])) continue;
             if (onEdge) {
@@ -258,7 +283,9 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             } else if (!onEdge && neighborLit) {
               packed = neighborLight(light, at, x + 1, y + 1, z + 1);
             }
-            const brightness = box.emissive ? 256 : box.redPowerLocalShade ? light[at] : packed;
+            const lightOffset = box.chestLightOffset;
+            const brightness = box.emissive ? 256 : box.redPowerLocalShade || box.chestLightOffset
+              ? light[at + (lightOffset ? lightOffset[0] + lightOffset[2] * SIDE : 0)] : packed;
             const shade = box.emissive ? 1 : box.redPowerLocalShade?.[f] ?? FACE_SHADE[f] * (cover ? coverShade(light[adjacent]) : 1);
             if (chisel) {
               const tiles = chiselFantasyQuarters(f, neighbors);
@@ -269,10 +296,6 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             }
             let tile = box.faces[f];
             if (glass) tile = glassTexture(f, neighbors, Number(blockKey.slice(10))) ?? tile;
-            else if (ctm && axis !== 1) {
-              const alongX = box.x1 - box.x0 > box.z1 - box.z0;
-              if (axis === (alongX ? 2 : 0)) tile = paneTexture(f, neighbors) ?? tile;
-            }
             faceQuad(out, box, f, origin, brightness, tile, shade);
           }
         }

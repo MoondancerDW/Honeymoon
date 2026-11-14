@@ -25,6 +25,8 @@ TRACE = Path(__file__).with_name('jammy-trace')
 ATLAS_WIDTH = 1024
 GUTTER = 2
 BOX_FIELDS = ('x0', 'y0', 'z0', 'x1', 'y1', 'z1')
+SOFA_CONFIG = {'chair': 'arm_chair', 'left': 'sofa_left', 'right': 'sofa_right',
+               'center': 'sofa_center', 'corner': 'sofa_corner'}
 
 
 def java_bin(name, java_home):
@@ -85,7 +87,9 @@ def capture(source, java_home):
             raise ValueError(f'Unexpected output from Java model capture: {line!r}')
     if len(models) != 16 * len(block_ids) or any(not model['surfaces'] for model in models.values()):
         raise ValueError('Incomplete Jammy model capture')
-    return models
+    ids = dict(block_ids)
+    sofa_ids = {role: int(ids[name]) for role, name in SOFA_CONFIG.items()}
+    return models, sofa_ids
 
 
 def parsed_numbers(string, expected):
@@ -168,7 +172,7 @@ def pack_atlas(images):
 
 
 def generate(source, output, java_home):
-    models = capture(source, java_home)
+    models, sofa_ids = capture(source, java_home)
     images = extract_textures(source, models)
     atlas, entries = pack_atlas(images)
     for surface in all_surfaces(models):
@@ -182,7 +186,8 @@ def generate(source, output, java_home):
 
     output.mkdir(parents=True, exist_ok=True)
     atlas.save(output / 'jammy.png')
-    catalog = {'schemaVersion': 3, 'atlas': {'width': atlas.width, 'height': atlas.height, 'textures': entries}, 'models': models}
+    catalog = {'schemaVersion': 4, 'atlas': {'width': atlas.width, 'height': atlas.height, 'textures': entries},
+               'sofaIds': sofa_ids, 'models': models}
     (output / 'jammy.json').write_text(json.dumps(catalog, separators=(',', ':')) + '\n', encoding='utf-8')
     faces = sum(1 for _ in all_surfaces(models))
     print(f'Jammy: {len(models)} states, {faces} quads, {len(images)} textures, atlas {atlas.width}x{atlas.height}')

@@ -3,6 +3,8 @@ import {Movement, EYE, overlapsPlacement, pick} from './movement.mjs';
 import {World, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {biblioWeaponCase, blockState, jammyAppliance, jammyUseSound} from '../world/block-interactions.mjs';
+import {extractedModel, placementModelObject} from '../world/extracted-models.mjs';
+import {isJammySofa} from '../world/jammy-sofas.mjs';
 import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 import {microblockPlacement} from '../world/microblocks.mjs';
 import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, voxelPlacementAtHit, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
@@ -23,10 +25,11 @@ const touchChisel = element('touch-chisel');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const heading = {yaw: 0, pitch: -.045};
-const handControls = new Set([25,64,69,77,84,93,94,96,107,143,219,220]);
+const handControls = new Set([25,54,64,69,77,84,93,94,96,107,130,143,219,220]);
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
 let heldPart = null, partRotation = 0, placement = null, placementKey = '';
+let heldSofa = null, sofaTurns = 0;
 let chiseling = false, chiselMaterial = null;
 let selectionInputs, selectionRevision = 0;
 const positionInterval = 130;
@@ -237,6 +240,9 @@ const labelFor = key => {
   if (key === 'game:switch') return 'Переключатель';
   if (key === 'game:door') return 'Дверь';
   const id = Number(key.split(':')[1]);
+  const sofas = world.models?.jammy?.sofaIds;
+  if (sofas && id === sofas.chair) return 'Кресло';
+  if (sofas && (id === sofas.left || id === sofas.right || id === sofas.center || id === sofas.corner)) return 'Секция дивана';
   return world.manifest.legacyRegistry?.[id]?.name || ({1:'Камень',2:'Дёрн',3:'Земля',4:'Булыжник',
     5:'Доски',17:'Бревно',20:'Стекло',35:'Шерсть',44:'Плита',63:'Табличка',68:'Табличка'})[id] ||
     (key.startsWith('cover:') ? 'Микроблоки' : 'Блок ' + id);
@@ -250,9 +256,24 @@ function partLabel({slot, shape}) {
 }
 
 function updatePlacement(target) {
-  if (!(chiseling ? chiselMaterial && target?.voxel !== undefined : heldPart && target)) {
+  if (!(chiseling ? chiselMaterial && target?.voxel !== undefined : (heldPart || heldSofa) && target)) {
     placement = null;
     placementKey = '';
+    return;
+  }
+  if (!chiseling && heldSofa) {
+    const [dx, dy, dz] = target.offset;
+    const x = target.x + dx, y = target.y + dy, z = target.z + dz;
+    const key = `sofa,${x},${y},${z},${sofaTurns},${selectionRevision},${metrics.chunksLoaded}`;
+    if (key !== placementKey) {
+      placementKey = key;
+      const object = placementModelObject(world.models, clipboard, heldSofa.object, [x, y, z], sofaTurns);
+      const model = extractedModel(world.models, {key: clipboard, object},
+        (ox, oy, oz) => world.cellAt(x + ox, y + oy, z + oz));
+      placement = model && {x, y, z, boxes: model.collision, surfaces: model.surfaces,
+        unavailable: !world.hasChunk(x, z) || world.cellAt(x, y, z)};
+    }
+    if (placement) placement.blocked = Boolean(placement.unavailable) || overlapsPlacement(position, placement);
     return;
   }
   const {x, y, z, hit, partSlot, offset: [dx, dy, dz]} = target;
@@ -292,15 +313,24 @@ function previewVoxel(target) {
 }
 
 function cyclePlacement() {
-  if (heldPart && !chiseling) partRotation++;
+  if (chiseling || acting) return;
+  if (heldPart) partRotation++;
+  if (heldSofa) sofaTurns = (sofaTurns + 1) & 3;
+}
+
+function updatePlacementHints() {
+  microHint.hidden = !(heldPart || heldSofa) || chiseling;
+  touchRotate.hidden = microHint.hidden;
+  touchRotate.setAttribute('aria-label', heldSofa ? 'Повернуть секцию дивана' : 'Сменить позицию детали');
+  microHint.textContent = heldSofa ? 'ПКМ — поставить секцию дивана · R — повернуть' :
+    'ПКМ — поставить деталь · R — выбрать позицию · E — действие';
 }
 
 function setHeldPart(part) {
   heldPart = part;
   partRotation = 0;
   placementKey = '';
-  microHint.hidden = !part || chiseling;
-  touchRotate.hidden = !part || chiseling;
+  updatePlacementHints();
 }
 
 function toggleChisel() {
@@ -309,8 +339,7 @@ function toggleChisel() {
   placementKey = '';
   placement = null;
   chiselHint.hidden = !chiseling;
-  microHint.hidden = !heldPart || chiseling;
-  touchRotate.hidden = !heldPart || chiseling;
+  updatePlacementHints();
   touchChisel.setAttribute('aria-pressed', String(chiseling));
 }
 
@@ -333,7 +362,7 @@ async function action(type, sneaking = false) {
   if (!selection || acting || resetting || !playing) return;
   const target = selection;
   const cell = getKey(target.cell);
-  let pendingVoxel;
+  let pendingPlacement;
   if (chiseling && type !== 'interact') {
     if (target.voxel === undefined) { notice(messages.invalid_material); return; }
     if (type === 'place' && !chiselMaterial) { notice('Сначала скопируйте материал клавишей Q'); return; }
@@ -357,6 +386,12 @@ async function action(type, sneaking = false) {
     request.y += target.offset[1];
     request.z += target.offset[2];
     request.cell = clipboard;
+    if (heldSofa) {
+      updatePlacement(target);
+      if (!placement || placement.blocked) { notice(messages.occupied); return; }
+      request.turns = sofaTurns;
+      pendingPlacement = placement;
+    }
   }
   if (type === 'place_part') {
     updatePlacement(target);
@@ -369,15 +404,15 @@ async function action(type, sneaking = false) {
     if (!placement || placement.blocked) { notice(messages[placement?.unavailable ?? 'occupied']); return; }
     const {x,y,z,voxel,against,boxes} = placement;
     Object.assign(request, {x,y,z,voxel,against,material:chiselMaterial});
-    pendingVoxel = {x,y,z,boxes};
+    pendingPlacement = {x,y,z,boxes};
   }
   request.expectedRevision = world.revisionAt(request.x, request.y, request.z);
   const started = performance.now();
   acting = true;
   try {
-    if (pendingVoxel) movement.pendingPlacement = pendingVoxel;
+    if (pendingPlacement) movement.pendingPlacement = pendingPlacement;
     if (!await flushPosition()) { notice(messages.movement_blocked); return; }
-    if (pendingVoxel && overlapsPlacement(position, pendingVoxel)) { notice(messages.occupied); return; }
+    if (pendingPlacement && overlapsPlacement(position, pendingPlacement)) { notice(messages.occupied); return; }
     let result;
     try { result = await post('action', request); }
     catch { result = await post('action', request); }
@@ -388,12 +423,15 @@ async function action(type, sneaking = false) {
     }
     if (type === 'copy') {
       clipboard = result.body.cell || cell;
+      heldSofa = isJammySofa(world.models?.jammy, clipboard) ? {object: target.cell?.object} : null;
+      sofaTurns = 0;
       setHeldPart(null);
       notice('Скопировано · ' + labelFor(clipboard));
     }
     if (type === 'copy_part') {
-      setHeldPart(result.body.part);
       clipboard = null;
+      heldSofa = null;
+      setHeldPart(result.body.part);
       notice('Скопировано · ' + partLabel(heldPart));
     }
     if (type === 'copy_voxel') {
@@ -408,7 +446,7 @@ async function action(type, sneaking = false) {
     notice('Связь с сервером прервалась');
     console.error(error);
   } finally {
-    if (pendingVoxel) movement.pendingPlacement = null;
+    if (pendingPlacement) movement.pendingPlacement = null;
     acting = false;
   }
 }
@@ -487,7 +525,7 @@ function bindControls() {
     const [id, meta] = blockState(key);
     const interactive = key === 'game:switch' || handControls.has(id) || jammyAppliance(id, meta) || jammyUseSound(id, meta)
       || (event.shiftKey && biblioWeaponCase(id));
-    const use = interactive && (!chiseling && !heldPart || event.shiftKey);
+    const use = interactive && (!chiseling && !heldPart && !heldSofa || event.shiftKey);
     const command = {0:'remove', 1:'copy', 2:use ? 'interact' : 'place'}[event.button];
     if (command) action(command, event.shiftKey);
   });
@@ -632,6 +670,7 @@ async function start() {
   const available = new Set([4, ...(manifest.terrain || []).map(ring => ring.radius)]);
   const distance = element('distance');
   for (const option of distance.options) option.disabled = !available.has(Number(option.value));
+  if (manifest.visualRadius > 8 && available.has(16)) distance.value = '16';
   if (!available.has(Number(distance.value))) distance.value = '4';
   await Promise.all([view.loadTextures(), refresh()]);
   await view.prepareGraphics();

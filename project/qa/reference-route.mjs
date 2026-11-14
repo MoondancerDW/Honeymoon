@@ -133,7 +133,7 @@ export async function browserPhotos(base, output, exerciseDoor, { checkPoints = 
     await page.goto(origin);
     await page.waitForFunction(count => globalThis.honeymoon?.stats().chunksLoaded === count,
       base.manifest.chunks.length,{timeout:90_000});
-    await page.evaluate(() => honeymoon.setDistance(8));
+    await page.evaluate(distance => honeymoon.setDistance(distance), base.manifest.visualRadius > 8 ? 16 : 8);
     const visualChunks = base.manifest.visualChunks?.length ?? 0;
     await page.waitForFunction(expected => {
       const stats = honeymoon.stats();

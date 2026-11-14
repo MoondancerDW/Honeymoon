@@ -116,13 +116,13 @@ export function writeTerrainRings(output, maxRadius, loadChunk, detailRadius) {
 
     const file = `terrain-${radius}.json`;
     const path = join(output, file);
-    const ring = { schemaVersion: 1, step: STEP, innerRadius, radius, palette, chunks, missingChunks };
+    const ring = { schemaVersion: 1, step: STEP, innerRadius: Math.min(innerRadius, radius), radius, palette, chunks, missingChunks };
     writeFileSync(path, `${JSON.stringify(ring)}\n`);
     summary.push({
-      file, radius, innerRadius, chunks: chunks.length, missing: missingChunks.length, occupiedCells,
+      file, radius, innerRadius: ring.innerRadius, chunks: chunks.length, missing: missingChunks.length, occupiedCells,
       coverPatternsThroughRadius: compositions.size, bytes: statSync(path).size,
     });
-    innerRadius = radius;
+    innerRadius = Math.max(innerRadius, radius);
   }
   return summary;
 }

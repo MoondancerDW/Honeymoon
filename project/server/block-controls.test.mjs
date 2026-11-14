@@ -31,6 +31,34 @@ function command(requestId, [x, y, z], expectedRevision = 0) {
   return {type: 'interact', requestId, x, y, z, expectedRevision};
 }
 
+test('a double chest opens both halves, preserves inventory and respects an obstructed lid', t => {
+  const left = [4, 1, 6], right = [5, 1, 6], blocked = [7, 1, 6];
+  const base = fixture([[...left, 54, 2], [...right, 54, 2], [...blocked, 54, 2], [7, 2, 6, 1, 0]]);
+  const originalCell = base.getCell;
+  const contents = [{id: 264, Count: 1, Slot: 0}];
+  base.getCell = (x, y, z) => {
+    const cell = originalCell(x, y, z);
+    if (cell.key === 'legacy:54:2') cell.object = {type: 'Chest', key: `tile:${x}:${y}:${z}`,
+      position: [x, y, z], data: {Items: contents}};
+    return cell;
+  };
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const game = gameFor(base, store, () => 0);
+  const player = store.createPlayer().id;
+  game.session(player);
+  const opened = game.action(player, command('open-double-chest', right));
+  assert.equal(opened.status, 200);
+  assert.equal(opened.output.effects[0].sound, 'chest.open');
+  assert.deepEqual(opened.output.changes.map(cell => cell.object.data), [{open:true}, {open:true}]);
+  assert.deepEqual(store.getEdit(...left).object.data.Items, contents);
+  const closed = game.action(player, command('close-double-chest', left, opened.output.worldRevision));
+  assert.deepEqual(closed.output.changes.map(cell => cell.object.data), [{open:false}, {open:false}]);
+  assert.equal(game.action(player, command('blocked-chest', blocked)).output.error, 'occupied');
+  assert.equal(game.action(player, {...command('break-chest', right, closed.output.worldRevision), type: 'remove'}).output.error,
+    'block_not_owned');
+});
+
 test('native Jammy radio and toilet actions emit sound without changing map cells', t => {
   const base = fixture([[4, 1, 6, 203, 7], [6, 1, 6, 207, 12], [5, 1, 7, 203, 3]]);
   const store = openStore(':memory:');

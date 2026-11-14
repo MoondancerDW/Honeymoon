@@ -326,14 +326,15 @@ function checkExistingOutput(out) {
 }
 
 export function importWorld({ world = DEFAULT_SOURCE, out = DEFAULT_OUTPUT, radius = DEFAULT_RADIUS,
-  terrainRadius = 0, visualRadius = terrainRadius > 0 && radius < DEFAULT_VISUAL_RADIUS ? DEFAULT_VISUAL_RADIUS : 0 } = {}) {
+  terrainRadius = 0, visualRadius = terrainRadius > 8 ? Math.max(radius + 2, DEFAULT_VISUAL_RADIUS) :
+    terrainRadius > 0 && radius < DEFAULT_VISUAL_RADIUS ? DEFAULT_VISUAL_RADIUS : 0 } = {}) {
   if (!Number.isInteger(radius) || radius < 1 || radius > 16) throw new Error('Detailed radius must be 1 to 16 chunks');
   if (!terrainRadii.includes(terrainRadius) || (terrainRadius > 0 && radius > 8)) {
     throw new Error('Terrain radius must be 0, 8, 16 or 32, with detailed radius at most 8 when terrain is enabled');
   }
   if (!Number.isInteger(visualRadius) ||
-      (visualRadius !== 0 && (visualRadius <= radius || visualRadius > 16 || (terrainRadius && visualRadius > 8)))) {
-    throw new Error('Visual radius must be 0 or greater than the detailed radius, up to 16 chunks (8 with coarse terrain)');
+      (visualRadius !== 0 && (visualRadius <= radius || visualRadius > 16 || (terrainRadius && visualRadius > terrainRadius)))) {
+    throw new Error('Visual radius must be 0 or greater than the detailed radius and within the 16-chunk and terrain bounds');
   }
   world = realpathSync(resolve(world));
   out = resolve(out);

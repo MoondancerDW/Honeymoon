@@ -1,6 +1,7 @@
 import { cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { biblioWeaponCase, blockKey, blockState, buttonDuration, jammyAppliance, jammyLamp, jammyUseSound, manualHatch, pressurePlate } from '../world/block-interactions.mjs';
+import { paneOpaqueBlocks } from '../world/block-geometry-properties.mjs';
 import { PLAYER } from './physics.mjs';
 import { affectedCircuit, redstone, wireLevels } from './redstone.mjs';
 import { musicBlocks, noteSound } from './music-blocks.mjs';
@@ -182,6 +183,30 @@ function applianceAction(cell, name) {
   };
 }
 
+const chestNeighbors = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+const isChest = id => id === 54 || id === 130;
+
+function chestAction(current, getCell) {
+  const [id] = blockState(current);
+  const {x, y, z} = current;
+  const neighbor = id === 54
+    ? chestNeighbors.map(([dx, dz]) => getCell(x + dx, y, z + dz)).find(cell => blockState(cell)[0] === id)
+    : undefined;
+  const chests = neighbor ? [current, neighbor] : [current];
+  const open = !chests.some(cell => cell.object?.data?.open);
+  if (open && chests.some(cell => paneOpaqueBlocks.has(blockState(getCell(cell.x, y + 1, cell.z))[0]))) {
+    throw new RequestError(409, 'occupied');
+  }
+  const cells = chests.map(cell => {
+    const position = pointOf(cell);
+    const object = cell.object ?? {type: id === 54 ? 'Chest' : 'EnderChest', position, key: `tile:${position.join(':')}`};
+    return {...cell, object: {...object, data: {...object.data, open}}};
+  });
+  const position = pointOf(current).map((axis, i) => .5 + (axis + (neighbor ? pointOf(neighbor)[i] : axis)) / 2);
+  return {cells, effects: [{type: 'appliance', open, message: open ? 'Сундук открыт' : 'Сундук закрыт',
+    sound: open ? 'chest.open' : 'chest.close', volume: .5, position}]};
+}
+
 function weaponCaseAction(cell, playerPosition) {
   if (cell.object?.type !== 'WeaponCaseTile') return null;
   const data = cell.object.data ?? {};
@@ -330,6 +355,7 @@ function makeControls(base, geometry) {
     prepareInteraction(context) {
       const {current: cell, playerOverlaps, playerPosition} = context;
       const [id, meta] = blockState(cell);
+      if (isChest(id)) return chestAction(cell, context.getCell);
       if (biblioWeaponCase(id)) return context.input?.sneaking ? weaponCaseAction(cell, playerPosition) : null;
       const appliance = jammyAppliance(id, meta);
       if (appliance) return applianceAction(cell, appliance);
