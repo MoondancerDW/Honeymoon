@@ -15,6 +15,7 @@
     <header class="top">
       <div class="brand"><strong>Honeymoon</strong><span>Equestria</span></div>
       <div class="tools">
+        <span id="player-name" hidden></span>
         <label class="distance" for="distance">Горизонт
           <select id="distance">
             <option value="4">4 чанка</option><option value="8" selected>8 чанков</option>
@@ -30,6 +31,16 @@
       <div class="panel">
         <h1>Honeymoon</h1>
         <p id="loading" role="status">Загружаем район Equestria…</p>
+        <div class="profile">
+          <label for="nickname">Ник</label>
+          <input id="nickname" type="text" autocomplete="nickname" spellcheck="false" disabled>
+          <div class="skin-option">
+            <label class="skin-picker" for="pony-skin">Выбрать скин пони</label>
+            <input id="pony-skin" type="file" accept="image/png,.png" disabled>
+            <button id="clear-skin" type="button" hidden>Сбросить</button>
+          </div>
+          <span id="skin-status" class="skin-status" role="status">PNG 64×32, 64×64, 128×64 или 256×128</span>
+        </div>
         <button id="play" type="button" disabled>Войти в мир</button>
         <small id="entry-help">WASD — ходьба · Пробел — прыжок · F — полёт · V — резец · Esc — пауза</small>
       </div>

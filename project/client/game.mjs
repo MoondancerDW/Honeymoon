@@ -2,6 +2,7 @@ import {Display} from './display.mjs';
 import {Movement, EYE, overlapsPlacement, pick} from './movement.mjs';
 import {World, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
+import {PlayerProfile} from './player-profile.mjs';
 import {biblioWeaponCase, blockState, jammyAppliance, jammyUseSound} from '../world/block-interactions.mjs';
 import {extractedModel, placementModelObject} from '../world/extracted-models.mjs';
 import {isJammySofa} from '../world/jammy-sofas.mjs';
@@ -40,7 +41,11 @@ let flying = false;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
+let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
+let horizontalSpeed = 0;
 const audio = new WorldAudio();
+const profile = new PlayerProfile({nickname:element('nickname'), skin:element('pony-skin'), status:element('skin-status'),
+  clear:element('clear-skin'), label:element('player-name')}, notice);
 
 if (touchMode) {
   game.classList.add('touch');
@@ -71,7 +76,11 @@ const messages = {
   invalid_material: 'Этот материал не подходит для резца',
   voxel_material_limit: 'В кубе уже слишком много разных материалов',
   outside_playable_area: 'Граница района', protected_cell: 'Это часть контрольной механики',
-  no_interaction: 'С этим объектом нельзя взаимодействовать'
+  no_interaction: 'С этим объектом нельзя взаимодействовать',
+  invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
+  invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
+  invalid_skin_size: 'Размер PNG должен быть 64×32, 64×64, 128×64 или 256×128',
+  skin_too_large: 'Размер скина превышает 192 КБ'
 };
 
 async function post(path, payload, signal) {
@@ -112,7 +121,10 @@ async function refresh() {
 }
 
 function stream() {
-  feed = new EventSource('/api/events?since=' + worldRevision);
+  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1');
+  feed.addEventListener('open', () => { presenceDirty = true; });
+  feed.addEventListener('presence', event => view.players.replace(JSON.parse(event.data).players));
+  feed.addEventListener('presence-motion', event => view.players.update(JSON.parse(event.data).players));
   feed.addEventListener('commit', event => {
     const data = JSON.parse(event.data);
     changes(data.changes, data.worldRevision);
@@ -123,6 +135,27 @@ function stream() {
     const {contentHash} = JSON.parse(event.data);
     if (contentHash && contentHash !== world.manifest.contentHash) location.reload();
   });
+}
+
+function playerPose() {
+  const motion = !playing ? 'idle' : flying ? 'fly' : movement.medium === 'water' ? 'swim' :
+    !movement.grounded && !movement.medium ? 'air' : horizontalSpeed > .15 ? 'walk' : 'idle';
+  return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
+    seq:Math.round(performance.timeOrigin + performance.now())};
+}
+
+function sendPresence(now) {
+  if (!entered || presenceRequest || now < nextPresence || feed?.readyState !== EventSource.OPEN) return;
+  const pose = playerPose();
+  const changed = !lastSentPose || pose.motion !== lastSentPose.motion ||
+    Math.abs(pose.yaw - lastSentPose.yaw) > .03 || Math.abs(pose.pitch - lastSentPose.pitch) > .03;
+  if (!presenceDirty && !changed) return;
+  nextPresence = now + positionInterval;
+  presenceDirty = false;
+  presenceRequest = post('presence', pose, AbortSignal.timeout(3000)).then(({ok}) => {
+    if (ok && (!lastSentPose || pose.seq >= lastSentPose.seq)) lastSentPose = pose;
+    else presenceDirty = true;
+  }).catch(() => { presenceDirty = true; }).finally(() => { presenceRequest = null; });
 }
 
 function updateCamera() {
@@ -140,6 +173,10 @@ function look(dx, dy, sensitivity = .0023) {
 
 function setPlaying(active) {
   playing = active;
+  if (active && !entered && !button.disabled) {
+    entered = true;
+    presenceDirty = true;
+  }
   audio.setPlaying(active);
   game.classList.toggle('playing', active);
   entry.hidden = active;
@@ -189,7 +226,7 @@ function positionPacket(lastStep) {
     if (step === lastStep) break;
   }
   const [x, y, z] = from;
-  return {x, y, z, from: confirmedPosition, trail,
+  return {x, y, z, from: confirmedPosition, trail, ...(entered && {pose:playerPose()}),
     requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join('')};
 }
 
@@ -203,6 +240,7 @@ function syncPosition(lastStep) {
       confirmedPosition = positionTuple(body.position);
       positionTrail.splice(0, payload.trail.length);
       pendingPosition = null;
+      if (payload.pose && (!lastSentPose || payload.pose.seq >= lastSentPose.seq)) lastSentPose = payload.pose;
     } else if (body.position) {
       positionMetrics.corrections++;
       setAuthoritativePosition(body.position);
@@ -455,6 +493,7 @@ function tick(now) {
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
   lastFrame = now;
   if (playing) {
+    const startX = position.x, startZ = position.z;
     const forward = Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) - stick.z;
     const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + stick.x;
     const descending = keys.has('ShiftLeft') || keys.has('ShiftRight');
@@ -468,12 +507,15 @@ function tick(now) {
       else movement.update(position, dx, dz, jump, dt,
         {rise: jump || keys.has('Space'), descend: descending, recordStep: recordPosition});
     }
+    horizontalSpeed = dt > 0 ? Math.hypot(position.x - startX, position.z - startZ) / dt : 0;
     audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw,
       climbing:movement.medium === 'ladder', swimming:movement.medium === 'water'});
     jump = false;
   }
   if (!resetting && now >= nextPositionSync && !acting) syncPosition();
+  if (!sync || presenceDirty) sendPresence(now);
   updateCamera();
+  view.players.frame(now, dt);
   updateSelection();
   updatePlacement(selection);
   const selected = selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
@@ -490,6 +532,33 @@ function tick(now) {
 function bindControls() {
   const canvas = view.renderer.domElement;
   button.addEventListener('click', () => {
+    let pending;
+    try {
+      pending = profile.changes();
+    } catch (error) {
+      notice(error.message);
+      return;
+    }
+    if (Object.keys(pending).length) {
+      if (button.disabled) return;
+      button.disabled = true;
+      profile.nickname.disabled = profile.skin.disabled = profile.clear.disabled = true;
+      post('profile', pending, AbortSignal.timeout(5000)).then(({ok, body}) => {
+        if (!ok) throw new Error(messages[body.error] || 'Не удалось сохранить профиль');
+        profile.saved(body, pending);
+        if (playing) {
+          entered = true;
+          presenceDirty = true;
+        }
+      }).catch(error => {
+        if (touchMode) setPlaying(false);
+        else if (document.pointerLockElement === canvas) document.exitPointerLock();
+        notice(error.message);
+      }).finally(() => {
+        button.disabled = false;
+        profile.nickname.disabled = profile.skin.disabled = profile.clear.disabled = false;
+      });
+    }
     audio.enable();
     if (touchMode) setPlaying(true);
     else {
@@ -605,6 +674,7 @@ function bindControls() {
       if (ok) {
         setAuthoritativePosition(body.position);
         setFlight(false);
+        presenceDirty = true;
       }
       else notice(messages[body.error] || body.error);
     } catch {
@@ -650,6 +720,7 @@ async function streamChunks(chunks, scenery) {
 async function start() {
   const [manifest, session] = await Promise.all([json('/generated/world/world.json'), post('session', {})]);
   if (!session.ok) throw new Error('Сеанс не создан');
+  profile.initialize(session.body.profile);
   if (session.body.sounds) {
     audio.load().then(loaded => {
       element('audio-toggle').hidden = !loaded;
@@ -689,6 +760,7 @@ async function start() {
       return view.setDistance(distance);
     },
     getCell: (x, y, z) => world.cellAt(x, y, z),
+    players: () => view.players.inspect(),
   });
   const near = manifest.chunks.filter(chunk => distanceToChunk(chunk) <= 1);
   const buffered = manifest.chunks.filter(chunk => distanceToChunk(chunk) <= 2);

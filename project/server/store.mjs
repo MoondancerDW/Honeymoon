@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 export function transaction(db, run) {
   db.exec('BEGIN IMMEDIATE');
@@ -82,7 +82,15 @@ function migrate(db) {
       UPDATE edits SET placed_by=proven.owner FROM proven
         WHERE edits.x=proven.x AND edits.y=proven.y AND edits.z=proven.z;`);
     if (version < 4) db.exec('ALTER TABLE edits ADD COLUMN micro_parts TEXT;');
-    db.exec(`ALTER TABLE edits ADD COLUMN voxels TEXT; PRAGMA user_version = ${SCHEMA_VERSION};`);
+    if (version < 5) db.exec('ALTER TABLE edits ADD COLUMN voxels TEXT;');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS player_profiles (
+        player TEXT PRIMARY KEY REFERENCES players(id),
+        nickname TEXT, skin_hash TEXT, skin_png BLOB
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS profiles_by_skin_hash ON player_profiles(skin_hash) WHERE skin_hash IS NOT NULL;
+      PRAGMA user_version = ${SCHEMA_VERSION};
+    `);
   });
 }
 
@@ -104,6 +112,12 @@ export function openStore(filename) {
   const writeMeta = statement('INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
   const findPlayer = statement('SELECT id FROM players WHERE token_hash=?');
   const addPlayer = statement('INSERT INTO players(id,token_hash) VALUES (?,?)');
+  const readProfile = statement('SELECT nickname,skin_hash AS skinHash FROM player_profiles WHERE player=?');
+  const writeNickname = statement(`INSERT INTO player_profiles(player,nickname) VALUES (?,?)
+    ON CONFLICT(player) DO UPDATE SET nickname=excluded.nickname`);
+  const writeSkin = statement(`INSERT INTO player_profiles(player,skin_hash,skin_png) VALUES (?,?,?)
+    ON CONFLICT(player) DO UPDATE SET skin_hash=excluded.skin_hash,skin_png=excluded.skin_png`);
+  const readSkin = statement('SELECT skin_png AS png FROM player_profiles WHERE skin_hash=? LIMIT 1');
   const readClipboard = statement('SELECT clipboard FROM players WHERE id=?');
   const writeClipboard = statement('UPDATE players SET clipboard=? WHERE id=?');
   const readReceipt = statement('SELECT input,status,output FROM receipts WHERE player=? AND id=?');
@@ -177,6 +191,18 @@ export function openStore(filename) {
     playerFromToken(token) {
       if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
       return findPlayer.get(tokenHash(token))?.id ?? null;
+    },
+    getProfile(player) {
+      return readProfile.get(player);
+    },
+    updateProfile(player, { nickname, skin }) {
+      transaction(db, () => {
+        if (nickname !== undefined) writeNickname.run(player, nickname);
+        if (skin !== undefined) writeSkin.run(player, skin?.hash ?? null, skin?.png ?? null);
+      });
+    },
+    getSkin(hash) {
+      return readSkin.get(hash)?.png ?? null;
     },
     getClipboard(player) {
       const stored = readClipboard.get(player).clipboard;

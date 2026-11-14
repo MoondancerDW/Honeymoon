@@ -7,6 +7,8 @@ import { gzipSync } from 'node:zlib';
 import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
+import { createPresence, readPose } from './presence.mjs';
+import { MAX_PROFILE_BODY, profileChanges, publicProfile } from './presence-profile.mjs';
 import { openStore } from './store.mjs';
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
 
@@ -81,16 +83,16 @@ function serveWorldJson() {
   };
 }
 
-async function readBody(request) {
+async function readBody(request, limit = MAX_BODY) {
   if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') {
     throw new RequestError(415, 'expected_json');
   }
-  if (Number(request.headers['content-length']) > MAX_BODY) throw new RequestError(413, 'body_too_large');
+  if (Number(request.headers['content-length']) > limit) throw new RequestError(413, 'body_too_large');
   let size = 0;
   const chunks = [];
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new RequestError(413, 'body_too_large');
+    if (size > limit) throw new RequestError(413, 'body_too_large');
     chunks.push(chunk);
   }
   try {
@@ -175,10 +177,12 @@ export function createHoneymoonServer({
     throw error;
   }
   const streams = new Set();
+  const presence = createPresence({ store, send: writeEvent });
   const serveWorld = serveWorldJson();
   const dayStarted = Date.now();
   const session = player => ({ ...game.session(player), modelFamilies: Object.keys(models), sounds,
-    dayTick: (6000 + (Date.now() - dayStarted) / 50) % 24000 });
+    dayTick: (6000 + (Date.now() - dayStarted) / 50) % 24000,
+    profile: publicProfile(player, store.getProfile(player)) });
 
   function writeEvent(response, name, event, revision) {
     const id = revision === undefined ? '' : `id: ${revision}\n`;
@@ -208,7 +212,7 @@ export function createHoneymoonServer({
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     if (path.startsWith('/api/')) {
-      if (method === 'POST') requireSameOrigin(request, secure, allowedOrigin);
+      if (method === 'POST' || method === 'DELETE') requireSameOrigin(request, secure, allowedOrigin);
       const player = store.playerFromToken(tokenFrom(request));
       if (path === '/api/session' && method === 'POST') {
         await readBody(request);
@@ -218,15 +222,42 @@ export function createHoneymoonServer({
         return json(response, 200, session(newPlayer.id), { 'Set-Cookie': cookie });
       }
       if (!player) throw new RequestError(401, 'session_required');
+      if (path === '/api/profile' && method === 'POST') {
+        const updates = await profileChanges(await readBody(request, MAX_PROFILE_BODY));
+        const saved = store.getProfile(player);
+        if (updates.nickname === saved?.nickname) delete updates.nickname;
+        if (updates.skin !== undefined && (updates.skin?.hash ?? null) === (saved?.skinHash ?? null)) delete updates.skin;
+        const different = updates.nickname !== undefined || updates.skin !== undefined;
+        if (different) store.updateProfile(player, updates);
+        const profile = publicProfile(player, different ? store.getProfile(player) : saved);
+        if (different) presence.profile(player, profile);
+        return json(response, 200, profile);
+      }
+      if (path === '/api/presence') {
+        if (method === 'POST') {
+          const pose = readPose(await readBody(request));
+          presence.join(player, game.session(player).position, pose);
+          return json(response, 200, {ok: true});
+        }
+        if (method === 'DELETE') {
+          presence.leave(player);
+          return json(response, 200, {ok: true});
+        }
+      }
       if (path === '/api/world' && method === 'GET') return json(response, 200, game.snapshot(player));
       if (path === '/api/position' && method === 'POST') {
-        const result = game.position(player, await readBody(request));
+        const body = await readBody(request);
+        const pose = body.pose === undefined ? undefined : readPose(body.pose);
+        const result = game.position(player, body);
+        presence.update(player, result.position, pose);
         if (result.changes.length || result.effects.length) broadcast(player, result);
         return json(response, 200, result);
       }
       if (path === '/api/respawn' && method === 'POST') {
         await readBody(request);
-        return json(response, 200, game.respawn(player));
+        const result = game.respawn(player);
+        presence.update(player, result.position);
+        return json(response, 200, result);
       }
       if (path === '/api/action' && method === 'POST') {
         const result = game.action(player, await readBody(request));
@@ -239,6 +270,7 @@ export function createHoneymoonServer({
       }
       if (path === '/api/events' && method === 'GET') {
         if (streams.size >= MAX_STREAMS) throw new RequestError(503, 'stream_limit');
+        const presenceEntry = url.searchParams.get('presence') === '1' && presence.prepare(player);
         response.writeHead(200, {
           'Content-Type': 'text/event-stream; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
@@ -246,18 +278,31 @@ export function createHoneymoonServer({
         });
         const stream = { player, response };
         streams.add(stream);
-      game.touch(player);
-        response.on('close', () => streams.delete(stream));
+        game.touch(player);
+        response.on('close', () => {
+          streams.delete(stream);
+          presence.disconnect(stream);
+        });
         const cursor = request.headers['last-event-id'] ?? url.searchParams.get('since');
         const revision = game.worldRevision();
         const kind = cursor !== null && Number(cursor) !== revision ? 'reset' : 'ready';
         writeEvent(response, kind, { worldRevision: revision, contentHash: game.contentHash }, revision);
+        if (presenceEntry) presence.connect(stream, presenceEntry);
         return;
       }
       throw new RequestError(404, 'not_found');
     }
 
     if (method !== 'GET' && method !== 'HEAD') throw new RequestError(405, 'method_not_allowed');
+    const skin = path.match(/^\/skins\/([a-f0-9]{64})\.png$/);
+    if (skin) {
+      const png = store.getSkin(skin[1]);
+      if (!png) throw new RequestError(404, 'not_found');
+      response.writeHead(200, { 'Content-Type': MIME['.png'], 'Content-Length': png.length,
+        'Cache-Control': 'public, max-age=31536000, immutable' });
+      response.end(method === 'HEAD' ? undefined : png);
+      return;
+    }
     if (path === '/generated/world/world.json') {
       return serveWorld(request, response, path, () => base.manifest);
     }
@@ -292,6 +337,8 @@ export function createHoneymoonServer({
     }
   }, 15000);
   heartbeat.unref();
+  const presenceTicks = setInterval(() => presence.flush(), 100);
+  presenceTicks.unref();
   const blockTicks = setInterval(() => {
     try {
       const result = game.advance();
@@ -307,6 +354,7 @@ export function createHoneymoonServer({
     game,
     async close() {
       clearInterval(heartbeat);
+      clearInterval(presenceTicks);
       clearInterval(blockTicks);
       for (const { response } of streams) response.end();
       await new Promise((success, fail) => {
