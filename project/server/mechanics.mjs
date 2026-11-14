@@ -1,6 +1,6 @@
 import { cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
-import { blockKey, blockState, buttonDuration, jammyAppliance, jammyLamp, manualHatch, pressurePlate } from '../world/block-interactions.mjs';
+import { biblioWeaponCase, blockKey, blockState, buttonDuration, jammyAppliance, jammyLamp, jammyUseSound, manualHatch, pressurePlate } from '../world/block-interactions.mjs';
 import { PLAYER } from './physics.mjs';
 import { affectedCircuit, redstone, wireLevels } from './redstone.mjs';
 import { musicBlocks, noteSound } from './music-blocks.mjs';
@@ -182,6 +182,18 @@ function applianceAction(cell, name) {
   };
 }
 
+function weaponCaseAction(cell, playerPosition) {
+  if (cell.object?.type !== 'WeaponCaseTile') return null;
+  const data = cell.object.data ?? {};
+  const open = !data.LidOpen;
+  // The legacy block plays the lid sound at the player who opens it.
+  const position = [playerPosition.x - .5, playerPosition.y - .5, playerPosition.z - .5];
+  return {
+    cells: [{...cell, object: {...cell.object, data: {...data, LidOpen: open}}}],
+    effects: [{type: 'sound', sound: `jds.bibliocraft.sound.case${open ? 'open' : 'close'}`, position, volume: 1, pitch: 1}],
+  };
+}
+
 function makeControls(base, geometry) {
   function plan(context) {
     const {getCell, now} = context;
@@ -318,8 +330,11 @@ function makeControls(base, geometry) {
     prepareInteraction(context) {
       const {current: cell, playerOverlaps, playerPosition} = context;
       const [id, meta] = blockState(cell);
+      if (biblioWeaponCase(id)) return context.input?.sneaking ? weaponCaseAction(cell, playerPosition) : null;
       const appliance = jammyAppliance(id, meta);
       if (appliance) return applianceAction(cell, appliance);
+      const sound = jammyUseSound(id, meta);
+      if (sound) return {effects: [{type: 'sound', sound, position: pointOf(cell), volume: 1, pitch: 1}]};
       if (jammyLamp(id)) return {cells: [metaChanged(cell, id === 219 ? 220 : 219, meta)]};
       if (id === 93 || id === 94) return {cells: [metaChanged(cell, id, (meta + 4) & 15)]};
       if (manualHatch(id)) {

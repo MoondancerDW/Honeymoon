@@ -26,6 +26,21 @@ TITLES = {
     "redpower-lamp": "Фонарь RedPower и стойка",
     "aerial-town-north": "Квартал с высоты, вид с севера",
     "aerial-town-east": "Квартал с высоты, вид с востока",
+    "underground-entrance": "Вход в подземный проход",
+    "underground-stairs": "Ступени подземного прохода",
+    "underground-ladder": "Лестница в нижний зал",
+    "underground-hall-east": "Подземный зал, вид на восток",
+    "underground-hall-north": "Подземный зал, вид на север",
+    "underground-hall-south": "Подземный зал, вид на юг",
+    "underground-exit-platform": "Выход из подземного прохода",
+    "attic-roof-approach": "Подход к чердаку с соседней крыши",
+    "attic-roof-ridge": "Конёк крыши на подходе к чердаку",
+    "attic-entry": "Дверь с крыши на чердак",
+    "attic-interior-east": "Чердак, вид на восток",
+    "attic-interior-west": "Чердак, вид на запад",
+    "west-cellar-hatch-up": "Открытый люк западного подвала",
+    "attic-hatch-up": "Открытый люк под чердаком",
+    "upper-attic": "Чердак с выставленной камерой",
 }
 BACKGROUND = "#151e22"
 MUTED = "#bcc7ca"

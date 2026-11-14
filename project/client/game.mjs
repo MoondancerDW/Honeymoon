@@ -2,7 +2,7 @@ import {Display} from './display.mjs';
 import {Movement, EYE, pick} from './movement.mjs';
 import {World, chunkKey, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
-import {blockState, jammyAppliance} from '../world/block-interactions.mjs';
+import {biblioWeaponCase, blockState, jammyAppliance, jammyUseSound} from '../world/block-interactions.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -155,12 +155,15 @@ const labelFor = key => {
     (key.startsWith('cover:') ? 'Микроблоки' : 'Блок ' + id);
 };
 
-async function action(type) {
+async function action(type, sneaking = false) {
   if (!selection || acting || !playing) return;
   const target = selection;
   const cell = getKey(target.cell);
   const request = {requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join(''), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
-  if (type === 'interact') request.yaw = heading.yaw;
+  if (type === 'interact') {
+    request.yaw = heading.yaw;
+    if (sneaking) request.sneaking = true;
+  }
   if (type === 'place') {
     if (!clipboard) { notice(messages.nothing_to_copy); return; }
     request.against = {x: target.x, y: target.y, z: target.z};
@@ -254,7 +257,7 @@ function bindControls() {
     if (event.repeat) return;
     if (event.code === 'Space') jump = true;
     if (event.code === 'KeyQ') action('copy');
-    if (event.code === 'KeyE') action('interact');
+    if (event.code === 'KeyE') action('interact', event.shiftKey);
   });
   document.addEventListener('keyup', event => keys.delete(event.code));
   window.addEventListener('blur', () => keys.clear());
@@ -262,9 +265,10 @@ function bindControls() {
     if (!playing || touchMode) return;
     const key = getKey(selection?.cell);
     const [id, meta] = blockState(key);
-    const interactive = key === 'game:switch' || handControls.has(id) || jammyAppliance(id, meta);
+    const interactive = key === 'game:switch' || handControls.has(id) || jammyAppliance(id, meta) || jammyUseSound(id, meta)
+      || (event.shiftKey && biblioWeaponCase(id));
     const command = {1:'copy', 2:interactive ? 'interact' : 'place'}[event.button];
-    if (command) action(command);
+    if (command) action(command, event.shiftKey);
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
 

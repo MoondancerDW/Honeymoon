@@ -14,6 +14,8 @@ SOURCE = HERE.parents[1] / "sources" / "Honeymoon"
 OUTPUT = HERE.parent / "generated" / "sounds"
 BLOCKS = HERE / "block-sound-types.json"
 CHISEL = "mods/ChiselRetro_beta0.9_mc1.4.7.zip"
+JAMMY = "mods/1.4.7_Jammy_Furniture_Mod_V4.1.zip"
+BIBLIO = "mods/BiblioCraft.zip"
 ALIASES = {
     "door.open": "random.door_open", "door.close": "random.door_close",
     "click": "random.click", "click.on": "random.click", "click.off": "random.click",
@@ -82,11 +84,14 @@ def extract(source, output, block_types):
     sounds = {}
     provenance = {}
 
-    def add(event, contents, origin):
-        if not contents.startswith(b"OggS"):
+    def add(event, contents, origin, extension="ogg"):
+        if extension == "wav":
+            if not contents.startswith(b"RIFF") or contents[8:12] != b"WAVE":
+                raise ValueError(f"Invalid WAV audio in {origin}")
+        elif not contents.startswith(b"OggS"):
             raise ValueError(f"Invalid Ogg audio in {origin}")
         digest = sha256(contents).hexdigest()
-        filename = f"{digest[:24]}.ogg"
+        filename = f"{digest[:24]}.{extension}"
         file = output / filename
         if not file.exists() or file.read_bytes() != contents:
             file.write_bytes(contents)
@@ -118,6 +123,18 @@ def extract(source, output, block_types):
     for path in music:
         add("music.overworld", path.read_bytes(), path.relative_to(source).as_posix())
 
+    jammy = source / JAMMY
+    if jammy.is_file():
+        with ZipFile(jammy) as archive:
+            for event in ("radio", "toilet"):
+                name = f"jammy780/furniture/sounds/{event}.wav"
+                add(f"jfm.{event}", archive.read(name), f"{JAMMY}!/{name}", "wav")
+    biblio = source / BIBLIO
+    if biblio.is_file():
+        with ZipFile(biblio) as archive:
+            for event in ("caseopen", "caseclose"):
+                name = f"jds/bibliocraft/sound/{event}.ogg"
+                add(f"jds.bibliocraft.sound.{event}", archive.read(name), f"{BIBLIO}!/{name}")
     chisel = source / CHISEL
     if chisel.is_file():
         with ZipFile(chisel) as archive:
@@ -129,13 +146,13 @@ def extract(source, output, block_types):
         if legacy in sounds:
             sounds[event] = sounds[legacy]
 
-    manifest = {"version": 1, **{key: block_types[key] for key in ("profiles", "blocks", "covers")},
+    manifest = {"version": 3, **{key: block_types[key] for key in ("profiles", "blocks", "covers")},
                 "sounds": sounds, "sources": provenance}
     # Preserve samples referenced by a previously-served catalog until its clients reload.
     temporary = output / "sounds.tmp"
     temporary.write_text(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
     temporary.replace(output / "sounds.json")
-    print(f"{len(provenance)} Ogg files, {len(sounds)} events, {len(block_types['blocks'])} block sound profiles: {output}")
+    print(f"{len(provenance)} sound files, {len(sounds)} events, {len(block_types['blocks'])} block sound profiles: {output}")
 
 
 def main():

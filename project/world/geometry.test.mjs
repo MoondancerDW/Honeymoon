@@ -2,11 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { displayObject } from '../server/base.mjs';
-import { ATLAS_GRID, collisionFor, shapeFor, signFor, tiles } from './geometry.mjs';
+import { ATLAS_GRID, collisionFor, shapeFor, signFor, standingSignMesh, tiles } from './geometry.mjs';
 
 const aabb = box => [box.x0, box.y0, box.z0, box.x1, box.y1, box.z1];
 const inside = (box, [x, y, z]) => x > box.x0 && x < box.x1
   && y > box.y0 && y < box.y1 && z > box.z0 && z < box.z1;
+
+test('standing sign board and text share the original sixteen-way heading', () => {
+  const sign = 'legacy:63:6';
+  const [board, post] = standingSignMesh(sign);
+  assert.equal(board.angle, -3 * Math.PI / 4);
+  assert.equal(signFor(sign).rotation, board.angle);
+  assert.equal(board.y0, 7 / 12);
+  assert.equal(board.y1, 13 / 12);
+  assert.equal(post.y1, board.y0);
+  assert.deepEqual(aabb(shapeFor(sign)[0]), [.25, 0, .25, .75, 1, .75]);
+  assert.deepEqual(collisionFor(sign), []);
+});
 
 test('slabs and the four stair headings use their legacy metadata', () => {
   assert.deepEqual(aabb(shapeFor('legacy:44:0')[0]), [0, 0, 0, 1, 0.5, 1]);
@@ -110,6 +122,32 @@ test('HarvestCraft cinnamon is a solid trunk and vanilla bean remains a crossed 
   assert.deepEqual(shapeFor('legacy:3968:7')[0].faces, Array(6).fill(3266));
   assert.equal(shapeFor('legacy:3989:7')[0].kind, 'cross');
   assert.deepEqual(collisionFor('legacy:3989:7'), []);
+});
+
+test('HarvestCraft fruit uses the original growth textures and leaves clear passage', () => {
+  for (const [id, tile] of [[4031, 3286], [3983, 3289], [3977, 3292], [4084, 3295]]) {
+    for (const [meta, stage] of [[0, 0], [3, 0], [4, 1], [6, 1], [7, 2], [8, 2], [9, 0]]) {
+      const key = `legacy:${id}:${meta}`;
+      const [part] = shapeFor(key);
+      assert.equal(part.kind, 'cross');
+      assert.equal(part.faces[0], tile + stage);
+      assert.equal(part.x0, 0.05);
+      assert.equal(part.y1, 1);
+      assert.equal(part.tint, undefined);
+      assert.deepEqual(collisionFor(key), []);
+    }
+  }
+  assert.deepEqual(aabb(collisionFor('legacy:4053:0')[0]), [0, 0, 0, 1, 0.5, 1]);
+  assert.deepEqual(aabb(collisionFor('legacy:4053:8')[0]), [0, 0.5, 0, 1, 1, 1]);
+  assert.equal(shapeFor('legacy:4053:0')[0].faces[0], 194);
+});
+
+test('Chisel fixtures use the selected source tiles and keep full cube collision', () => {
+  for (const [key, faces] of [['legacy:2779:7', Array(6).fill(3298)],
+    ['legacy:2835:13', Array(6).fill(3299)], ['legacy:2804:12', [3300, 3300, 3302, 3301, 3300, 3300]]]) {
+    assert.deepEqual(shapeFor(key)[0].faces, faces);
+    assert.deepEqual(aabb(collisionFor(key)[0]), [0, 0, 0, 1, 1, 1]);
+  }
 });
 
 test('read source chair, bookshelf and Russian sign across negative chunk coordinates', t => {

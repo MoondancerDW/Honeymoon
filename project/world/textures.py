@@ -37,6 +37,7 @@ ARCHIVES = {
     "digital": "mods/RedPowerDigital-2.0pr6.zip",
     "cloud": "mods/MLB-CORE_147.zip",
     "pam": "mods/Pam's HarvestCraft.zip",
+    "chisel": "mods/ChiselRetro_beta0.9_mc1.4.7.zip",
     "jammy": "mods/1.4.7_Jammy_Furniture_Mod_V4.1.zip",
     "biblio": "mods/BiblioCraft.zip",
 }
@@ -206,16 +207,47 @@ def add_furniture(atlas):
         atlas.paste(3072 + index, patch.crop(opaque) if opaque else patch)
 
 
+def add_fruit_crops(atlas, start, names):
+    for offset, crop in enumerate(names):
+        texture = atlas.resolve(f"pam/harvestcraft/pamhc{crop}.png", "pam")
+        width, height = texture.width // 16, texture.height // 16
+        for stage in range(3):
+            rect = (stage * width, 0, (stage + 1) * width, height)
+            atlas.paste(start + offset * 3 + stage, texture.crop(rect))
+
+
+def add_chisel(atlas, fallback):
+    paths = ("planks-birch/blinds", "fft/block", "gold/terrain-gold-space-side",
+             "gold/terrain-gold-space-top", "gold/terrain-gold-space-bottom")
+    for offset, path in enumerate(paths):
+        tile = atlas.resolve(f"assets/chisel/textures/blocks/{path}.png", "chisel", required=False)
+        atlas.paste(3298 + offset, fallback if tile is None else tile)
+
+
+def add_standing_sign(atlas):
+    image = atlas.resolve("item/sign.png", "vanilla")
+    for first, y, width, height in ((3303, 0, 24, 12), (3309, 14, 2, 14)):
+        depth = 2
+        # The sign model flips its Y/Z axes, exchanging top/bottom and front/back.
+        top = (depth, y, depth + width, y + depth)
+        bottom = (depth + width, y, depth + 2 * width, y + depth)
+        side_y = y + depth
+        left = (0, side_y, depth, side_y + height)
+        right = (depth + width, side_y, 2 * depth + width, side_y + height)
+        front = (depth, side_y, depth + width, side_y + height)
+        back = (2 * depth + width, side_y, 2 * depth + 2 * width, side_y + height)
+        for face, rect in enumerate((left, right, top, bottom, back, front)):
+            tile = image.crop(rect)
+            atlas.paste(first + face, tile.transpose(Image.Transpose.FLIP_TOP_BOTTOM) if face not in (2, 3) else tile)
+
+
 def build(source, output, vanilla_jar=None):
     with ExitStack() as resources:
         atlas = TextureAtlas(source, resources, vanilla_jar)
         for index, resource, dependency in ATLAS_SOURCES:
             atlas.grid(index, atlas.resolve(resource, dependency))
-        for offset, crop in enumerate(("cinnamon", "vanillabean")):
-            texture = atlas.resolve(f"pam/harvestcraft/pamhc{crop}.png", "pam")
-            width, height = texture.width // 16, texture.height // 16
-            for stage in range(3):
-                atlas.paste(3264 + offset * 3 + stage, texture.crop((stage * width, 0, (stage + 1) * width, height)))
+        add_fruit_crops(atlas, 3264, ("cinnamon", "vanillabean"))
+        add_fruit_crops(atlas, 3286, ("apple", "olive", "lime", "lemon"))
         candles = atlas.resolve("pam/harvestcraft/pamhccandle.png", "pam")
         cw, ch = candles.width // 16, candles.height // 16
         for color in range(16):
@@ -244,13 +276,15 @@ def build(source, output, vanilla_jar=None):
         draw.rectangle((0, 0, 7, 7), fill=(171, 145, 179, 255))
         draw.rectangle((8, 8, 15, 15), fill=(171, 145, 179, 255))
         atlas.paste(3203, fallback)
+        add_chisel(atlas, fallback)
         atlas.paste(3204, Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255)))
         atlas.paste(3205, terrain.crop((4 * 16, 0, 5 * 16, 16)))
+        add_standing_sign(atlas)
         output.mkdir(parents=True, exist_ok=True)
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
-            "schemaVersion": 4, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
+            "schemaVersion": 6, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
             "connectedTextures": connected_textures,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return len(atlas.resources)

@@ -66,9 +66,10 @@ const TERRAIN = {
 };
 const plants = { 6: 15, 30: 11, 31: 39, 32: 55, 37: 13, 38: 12, 39: 29, 40: 28,
   51: 31, 59: 88, 83: 73, 104: 111, 105: 111, 115: 226, 141: 200, 142: 200 };
+const fruitTiles = {3989: 3267, 4031: 3286, 3983: 3289, 3977: 3292, 4084: 3295};
 
-function cross(tile, height = 1, tint) {
-  return [box([0.1, 0, 0.1, 0.9, height, 0.9], tile, {
+function cross(tile, height = 1, tint, inset = 0.1) {
+  return [box([inset, 0, inset, 1 - inset, height, 1 - inset], tile, {
     kind: 'cross', mode: 'cutout', solid: false, tint, uv: 'box',
   })];
 }
@@ -467,7 +468,6 @@ const bufferUvFlags = [
 
 const APPROX_FURNITURE = 'Simplified Jammy Furniture model';
 const APPROX_BIBLIO = 'Simplified BiblioCraft model';
-const APPROX_SIGN = 'Standing sign collision and panel bounds are axis-aligned';
 const armchairPieces = [
   [-8, 19, -8, 16, 3, 16], [-8, 5, 6, 16, 14, 2],
   [6, 13, -8, 2, 6, 14], [6, 11, -8, 3, 3, 14],
@@ -584,13 +584,16 @@ function furniture(id, meta) {
 
 function signGeometry(meta, wall) {
   if (wall) return [wallPlate(meta, 1, 0.28125, 0.78125, 0.125, tiles.sign, { solid: false, uv: 'box' })];
-  const turn = Math.round(meta / 4);
-  return [
-    turnedBox([0, 0.49, 0.46875, 1, 0.98, 0.53125], tiles.sign, turn, {
-      solid: false, uv: 'box', approximation: meta % 4 ? APPROX_SIGN : undefined,
-    }),
-    box([0.46875, 0, 0.46875, 0.53125, 0.49, 0.53125], 4, GROUND_DECOR),
-  ];
+  return [box([.25, 0, .25, .75, 1, .75], tiles.sign, GROUND_DECOR)];
+}
+
+// axh: 24 × 12 × 2 board and 2 × 14 × 2 post, at the sign renderer's 2/3 scale.
+export function standingSignMesh(cell) {
+  const [id, meta] = unpack(cell);
+  if (id !== 63) return null;
+  const options = {solid: false, uv: 'box', angle: -meta * Math.PI / 8};
+  return [box([0, 7 / 12, 11 / 24, 1, 13 / 12, 13 / 24], [3303, 3304, 3305, 3306, 3307, 3308], options),
+    box([11 / 24, 0, 11 / 24, 13 / 24, 7 / 12, 13 / 24], [3309, 3310, 3311, 3312, 3313, 3314], options)];
 }
 
 export function signFor(cell) {
@@ -601,8 +604,8 @@ export function signFor(cell) {
   if (id === 63) {
     const rotation = -(meta / 8) * Math.PI;
     return {
-      lines, x: 0.5 + Math.sin(rotation) * 0.034, y: 0.735, z: 0.5 + Math.cos(rotation) * 0.034,
-      width: 0.9375, height: 0.43, rotation,
+      lines, x: 0.5 + Math.sin(rotation) * (0.07 * 2 / 3), y: 0.85,
+      z: 0.5 + Math.cos(rotation) * (0.07 * 2 / 3), width: 0.9375, height: 0.49, rotation,
     };
   }
   const rotation = ({ 2: 2, 3: 0, 4: 3, 5: 1 }[meta] ?? 0) * Math.PI / 2;
@@ -666,17 +669,24 @@ function specialShape(id, meta, cell, neighbors) {
     return [box([0, 0, 0, 1, height, 1], tile)];
   }
   if (id === 4000) return cross(tiles.flowers + 16 + (meta > 13 ? 0 : meta));
+  if (id === 4053) {
+    const bottom = meta & 8 ? 0.5 : 0;
+    return [box([0, bottom, 0, 1, bottom + 0.5, 1], wool[2])];
+  }
   if (id === 4067) return [box([0, 0, 0, 1, 0.125, 1], wool[meta])];
   if ([3823, 3827, 3829, 3835, 3838, 3902, 3927, 3930, 3933, 3941, 3942, 3961, 3976,
     3999, 4023, 4025, 4030, 4033, 4068, 4073, 4077, 4089].includes(id)) {
     const type = id === 3902 ? 29 : id === 4068 ? tiles.cotton + 32 : tiles.flowers + 16 + id % 14;
     return cross(type, 0.62).map(part => ({ ...part, approximation: 'Related plant texture for a rare HarvestCraft crop' }));
   }
-  if (id === 3968 || id === 3989) {
+  if (id === 3968 || fruitTiles[id] !== undefined) {
     const stage = meta >= 7 && meta <= 8 ? 2 : meta >= 4 && meta <= 6 ? 1 : 0;
-    // HarvestCraft cinnamon renders and collides as a trunk. Vanilla bean is a crossed plant.
-    return id === 3968 ? uniform(3264 + stage) : cross(3267 + stage);
+    // HarvestCraft cinnamon is solid. The hanging fruit use the original crossed squares.
+    return id === 3968 ? uniform(3264 + stage) : cross(fruitTiles[id] + stage, 1, undefined, 0.05);
   }
+  if (id === 2779 && meta === 7) return uniform(3298);
+  if (id === 2835 && meta === 13) return uniform(3299);
+  if (id === 2804 && meta === 12) return uniform(topSides(3300, 3301, 3302));
   if (id === 3943) return [box([0.0625, 0, 0.0625, 0.9375, 0.875, 0.9375], 4, {
     approximation: 'Simplified HarvestCraft sink barrel',
   })];

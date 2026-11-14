@@ -94,7 +94,13 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
     } else {
       uv.push([horizontal, axis === 1 ? vertical : 1 - vertical]);
     }
-    corners.push(point.map((value, i) => value + origin[i]));
+    if (box.angle) {
+      const [x, y, z] = [point[0] - .5, point[1], point[2] - .5];
+      const sin = Math.sin(box.angle), cos = Math.cos(box.angle);
+      corners.push([origin[0] + .5 + x * cos + z * sin, origin[1] + y, origin[2] + .5 + z * cos - x * sin]);
+    } else {
+      corners.push(point.map((value, i) => value + origin[i]));
+    }
   }
   quad(out, corners, tile, uv, brightness, box.tintFaces?.[face] ?? box.tint, shade);
 }
@@ -129,7 +135,8 @@ function makeShape(index, at, cell, neighbors) {
   const connected = geometry.shapeDependsOnNeighbors(key);
   if (!connected && !cell?.object && cache.has(index)) return cache.get(index);
   const model = extractedModel(models, cell || key);
-  const boxes = model ? [] : shapeFor(cell || key, (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE));
+  const boxes = model ? [] : geometry.standingSignMesh(key) ??
+    shapeFor(cell || key, (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE));
   const shape = {boxes, model, full: boxes.find(fullCube)};
   if (!connected && !cell?.object) cache.set(index, shape);
   return shape;
@@ -191,7 +198,7 @@ function precise({indices, light, objects, connectedTextures}) {
           for (let f = 0; f < 6; f++) {
             const axis = f >> 1;
             const adjacent = at + FACES[f][axis] * STRIDE[axis];
-            const onEdge = f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0;
+            const onEdge = box.angle === undefined && (f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0);
             if (water && (onEdge || f === 3) && waterKey(cells[indices[adjacent]])) continue;
             if (onEdge) {
               const neighbor = shape(adjacent)?.full;

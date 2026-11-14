@@ -27,6 +27,9 @@ node legacy/verify-inputs.mjs atlas
 Полный набор браузерных моделей также использует `minecraft.jar` и
 `mods/RedPowerDigital-2.0pr6.zip`. Для извлечения звука используются
 локальные `resources/`, `audiotori/` и, при наличии, архив Chisel.
+В `mods/matmos_packaged.zip` этого комплекта есть код MAtmos r21.
+Папки `matmos/expansions_r12/` и настройки звуковых расширений в комплекте
+отсутствуют. Пещерные звуки браузер берёт из активного пакета Audiotori.
 
 Для отдельной тестовой установки начните с Java 8, официальной версии
 [Minecraft 1.4.7](https://launcher.mojang.com/v1/objects/53ed4b9d5c358ecfff2d8b846b4427b888287028/client.jar)

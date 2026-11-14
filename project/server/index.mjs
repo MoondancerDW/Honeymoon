@@ -27,6 +27,7 @@ const MIME = {
   '.bin': 'application/octet-stream',
   '.svg': 'image/svg+xml',
   '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
 };
 
 function json(response, status, payload, headers = {}) {
@@ -136,7 +137,7 @@ function staticPath(path, project, generated) {
   if (atlas) return join(generated, 'textures', atlas[1]);
   const model = path.match(/^\/generated\/models\/([a-z]+)\.(json|png)$/);
   if (model && modelFamilies.includes(model[1])) return join(generated, 'models', `${model[1]}.${model[2]}`);
-  const sound = path.match(/^\/generated\/sounds\/([a-z0-9][a-z0-9-]*\.(?:ogg|json))$/);
+  const sound = path.match(/^\/generated\/sounds\/(sounds\.json|[a-f0-9]{24}\.(?:ogg|wav))$/);
   if (sound) return join(generated, 'sounds', sound[1]);
   return null;
 }

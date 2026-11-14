@@ -27,6 +27,10 @@ function normalizeAction(body) {
     if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
     input.yaw = body.yaw % (2 * Math.PI);
   }
+  if (body.type === 'interact' && body.sneaking !== undefined) {
+    if (typeof body.sneaking !== 'boolean') throw new RequestError(400, 'invalid_modifier');
+    if (body.sneaking) input.sneaking = true;
+  }
   if (body.type === 'place') {
     if (typeof body.cell !== 'string' || body.cell.length > 128) throw new RequestError(400, 'invalid_cell');
     input.cell = body.cell;

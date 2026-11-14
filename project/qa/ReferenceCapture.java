@@ -46,6 +46,7 @@ public final class ReferenceCapture {
     private static Field previousYaw, previousPitch, offset, speedX, speedY, speedZ;
     private static Method setClientTime, setRain, setMetadata, getChunk, blockMetadata;
     private static volatile Method move;
+    private static Method travel, onLadder;
     private static Field boundingBox, minY, px, pz, grounded, stepHeight, stepOffset;
 
     public static void premain(String options, Instrumentation inst) throws Exception {
@@ -156,6 +157,9 @@ public final class ReferenceCapture {
         stepHeight = entity.getField("X");
         stepOffset = entity.getField("W");
         move = entity.getMethod("d", double.class, double.class, double.class);
+        Class<?> living = Class.forName("md", false, loader);
+        travel = living.getMethod("e", float.class, float.class);
+        onLadder = living.getMethod("g_");
     }
 
     public static void before(Object mc) {
@@ -205,6 +209,7 @@ public final class ReferenceCapture {
                 if (!serverWalk) replay(currentWorld, localPlayer, now);
                 return;
             }
+            if (index >= poses.size()) return;
             String[] pose = poses.get(index).trim().split("\\s+");
             double x = Double.parseDouble(pose[1]);
             double y = Double.parseDouble(pose[2]);
@@ -306,6 +311,11 @@ public final class ReferenceCapture {
                 continue;
             }
             boolean loaded = loaded(currentWorld, x, z);
+            if ("c".equals(fields[0])) {
+                if (!serverWalk || !loaded) throw new IllegalStateException("Climb probe requires a loaded server chunk");
+                probeClimb(localPlayer, x, y, z, Float.parseFloat(fields[4]), Double.parseDouble(fields[5]));
+                continue;
+            }
             if (!serverWalk && !loaded && chunkRequested == 0) {
                 pendingTeleport = new double[] {x, y, z};
                 chunkRequested = now;
@@ -365,6 +375,24 @@ public final class ReferenceCapture {
             System.out.println("[reference] Native movement " + totals);
             walk = null;
         }
+    }
+
+    private static void probeClimb(Object player, double x, double y, double z, float yaw, double upward) throws Exception {
+        stepOffset.setFloat(player, 0);
+        stepHeight.setFloat(player, .5f);
+        place.invoke(player, x, y, z, yaw, 0.0f);
+        speedX.setDouble(player, 0);
+        speedY.setDouble(player, upward);
+        speedZ.setDouble(player, 0);
+        grounded.setBoolean(player, false);
+        boolean beganOnLadder = (Boolean) onLadder.invoke(player);
+        double maxY = y;
+        for (int tick = 0; tick < 46; tick++) {
+            travel.invoke(player, 0.0f, .98f);
+            maxY = Math.max(maxY, minY.getDouble(boundingBox.get(player)));
+        }
+        System.out.printf(java.util.Locale.ROOT, "[climb-probe] %.3f %.3f %.3f %.0f %s %.6f %.6f %.6f %.6f%n",
+                x, y, z, yaw, beganOnLadder, maxY, px.getDouble(player), minY.getDouble(boundingBox.get(player)), pz.getDouble(player));
     }
 
     private static void applyDoor(Object currentWorld, int[] door) throws Exception {

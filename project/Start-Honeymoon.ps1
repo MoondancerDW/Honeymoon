@@ -44,7 +44,7 @@ try {
     $atlasVersion = if (Test-Path -LiteralPath $atlasMetadata) {
         (Get-Content -Raw -LiteralPath $atlasMetadata | ConvertFrom-Json).schemaVersion
     }
-    if ($atlasVersion -ne 4 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
+    if ($atlasVersion -ne 6 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
         & $pythonPath -B world/textures.py
         if ($LASTEXITCODE) { throw 'Texture extraction failed. Install Pillow from world/requirements.txt.' }
     }
@@ -65,7 +65,11 @@ try {
             if ($LASTEXITCODE) { throw "Model extraction failed for $family." }
         }
     }
-    if (!(Test-Path -LiteralPath 'generated/sounds/sounds.json') -and (Test-Path -LiteralPath '../sources/Honeymoon/resources')) {
+    $soundManifest = 'generated/sounds/sounds.json'
+    $soundVersion = if (Test-Path -LiteralPath $soundManifest) {
+        (Get-Content -Raw -LiteralPath $soundManifest | ConvertFrom-Json).version
+    }
+    if ($soundVersion -lt 3 -and (Test-Path -LiteralPath '../sources/Honeymoon/resources')) {
         & $pythonPath -B world/sounds.py
         if ($LASTEXITCODE) { throw 'Sound extraction failed.' }
     }

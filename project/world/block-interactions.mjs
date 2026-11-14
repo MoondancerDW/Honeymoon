@@ -12,6 +12,13 @@ export const buttonDuration = id => id === 77 ? 1000 : id === 143 ? 1500 : 0;
 export const pressurePlate = id => id === 70 || id === 72;
 export const manualHatch = id => id === 96 || id === 107;
 export const jammyLamp = id => id === 219 || id === 220;
+export const biblioWeaponCase = id => id === 2255;
+
+export function jammyUseSound(id, meta) {
+  if (id === 203 && meta >= 4 && meta < 8) return 'jfm.radio';
+  if (id === 207 && meta >= 12 && meta < 16) return 'jfm.toilet';
+  return null;
+}
 
 export function jammyAppliance(id, meta) {
   if (id === 205 && meta < 8) return meta < 4 ? 'Холодильник' : 'Морозильник';

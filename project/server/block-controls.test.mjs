@@ -31,6 +31,55 @@ function command(requestId, [x, y, z], expectedRevision = 0) {
   return {type: 'interact', requestId, x, y, z, expectedRevision};
 }
 
+test('native Jammy radio and toilet actions emit sound without changing map cells', t => {
+  const base = fixture([[4, 1, 6, 203, 7], [6, 1, 6, 207, 12], [5, 1, 7, 203, 3]]);
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const game = gameFor(base, store, () => 0);
+  const player = store.createPlayer().id;
+  game.session(player);
+  for (const [sound, position] of [['jfm.radio', [4, 1, 6]], ['jfm.toilet', [6, 1, 6]]]) {
+    const use = game.action(player, command(sound.replace('.', '-'), position));
+    assert.equal(use.status, 200, JSON.stringify(use.output));
+    assert.deepEqual(use.output.effects, [{type: 'sound', sound, position, volume: 1, pitch: 1}]);
+    assert.deepEqual(use.output.changes, []);
+  }
+  assert.equal(game.action(player, command('radio-chair', [5, 1, 7])).output.error, 'no_interaction');
+});
+
+test('shift-use toggles a BiblioCraft weapon case without editing or exposing inventory', t => {
+  const position = [5, 1, 6];
+  const base = fixture([[...position, 2255, 0]]);
+  const originalCell = base.getCell;
+  const inventory = [{id: 267, Slot: 0, Count: 1, tag: {privateValue: 'kept'}}];
+  base.getCell = (x, y, z) => {
+    const cell = originalCell(x, y, z);
+    if (cell.key === 'legacy:2255:0') cell.object = {type:'WeaponCaseTile', key:'tile:5:1:6', position,
+      data:{caseAngle: 0, LidOpen: 0, CaseInventory:inventory}};
+    return cell;
+  };
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const game = gameFor(base, store, () => 0);
+  const player = store.createPlayer().id;
+  game.session(player);
+  assert.equal(game.action(player, command('case-normal-use', position)).output.error, 'no_interaction');
+  assert.throws(() => game.action(player, {...command('case-bad-modifier', position), sneaking:'true'}), /invalid_modifier/);
+  const opened = game.action(player, {...command('case-open-sneaking', position), sneaking:true});
+  assert.equal(opened.status, 200, JSON.stringify(opened.output));
+  assert.deepEqual(opened.output.effects, [{type:'sound',sound:'jds.bibliocraft.sound.caseopen',
+    position:[5, .5, 4], volume:1, pitch:1}]);
+  assert.equal(opened.output.changes[0].cell, 'legacy:2255:0');
+  assert.equal(opened.output.changes[0].object.data.LidOpen, true);
+  assert.deepEqual(opened.output.changes[0].object.data.CaseInventory, [{id:267,Slot:0,Damage:0}]);
+  assert.deepEqual(store.getEdit(...position).object.data.CaseInventory, inventory);
+  const closed = game.action(player, {...command('case-close-sneaking', position, 1), sneaking:true});
+  assert.equal(closed.status, 200, JSON.stringify(closed.output));
+  assert.equal(closed.output.changes[0].object.data.LidOpen, false);
+  assert.equal(closed.output.effects[0].sound, 'jds.bibliocraft.sound.caseclose');
+  assert.deepEqual(store.getEdit(...position).object.data.CaseInventory, inventory);
+});
+
 test('pressed wooden button opens both iron door halves and survives a restart until timed release', t => {
   const base = fixture([[5, 1, 6, 71, 1], [5, 2, 6, 71, 8], [6, 2, 6, 143, 3]]);
   const store = openStore(':memory:');

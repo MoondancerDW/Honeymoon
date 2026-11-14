@@ -5,7 +5,9 @@ const ASSETS = '/generated/sounds/';
 const STEP_DISTANCE = 1 / .6;
 const SFX_VOLUME = .12676056;
 const MUSIC_INTERVAL = 600;
-const SOUND_FILE = /^[a-f0-9]{24}\.ogg$/;
+const CAVE_MOOD = 'ambient.cave.cave';
+const TICK_SECONDS = .05;
+const SOUND_FILE = /^[a-f0-9]{24}\.(?:ogg|wav)$/;
 const DEFAULT_PROFILE = ['step.stone', 'dig.stone', 1, 1];
 const effectDefaults = {
   'door.open': {pitch: .9, spread: .1}, 'door.close': {pitch: .9, spread: .1},
@@ -25,6 +27,28 @@ const pick = choices => choices?.[Math.floor(Math.random() * choices.length)];
 export function blockSoundProfile(catalog, cell, material) {
   const id = catalog?.covers[material] ?? blockId(cell);
   return catalog?.profiles[catalog.blocks[id]] ?? DEFAULT_PROFILE;
+}
+
+export function caveMoodSource(world, player, random = Math.random) {
+  const radius = 8;
+  const minChunkX = Math.floor((player.x - radius) / 16);
+  const maxChunkX = Math.floor((player.x + radius) / 16);
+  const minChunkZ = Math.floor((player.z - radius) / 16);
+  const maxChunkZ = Math.floor((player.z + radius) / 16);
+  // Minecraft 1.4.7 samples one block between Y=0 and Y=127 per active chunk.
+  for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+    for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+      if (!world.hasChunk(chunkX * 16, chunkZ * 16)) continue;
+      const x = chunkX * 16 + Math.floor(random() * 16);
+      const z = chunkZ * 16 + Math.floor(random() * 16);
+      const y = Math.floor(random() * 128);
+      const distance = (x + .5 - player.x) ** 2 + (y + .5 - player.y) ** 2 + (z + .5 - player.z) ** 2;
+      if (distance <= 4 || distance > radius ** 2 || world.cellAt(x, y, z)) continue;
+      const light = world.lightAt(x, y, z);
+      if (!(light >> 4) && (light & 15) <= Math.floor(random() * 8)) return [x, y, z];
+    }
+  }
+  return null;
 }
 
 function support(world, position) {
@@ -68,6 +92,7 @@ export class WorldAudio {
   #listener;
   #right = [1, 0];
   #nextAmbience = 0;
+  #nextCave;
   #previous;
   #moved = 0;
   #airborne = 0;
@@ -81,7 +106,7 @@ export class WorldAudio {
     this.#loadPromise ??= fetch(`${ASSETS}sounds.json`).then(async response => {
       if (!response.ok) return false;
       const {version, profiles, blocks, covers, sounds} = await response.json();
-      if (version !== 1 || !Array.isArray(profiles) || !blocks || !covers || !sounds) return false;
+      if (![1, 2, 3].includes(version) || !Array.isArray(profiles) || !blocks || !covers || !sounds) return false;
       this.#catalog = {profiles, blocks, covers, sounds};
       return true;
     }).catch(() => false);
@@ -231,6 +256,7 @@ export class WorldAudio {
     if (this.#context?.state === 'running') {
       this.#playMusic();
       this.#ambience(world, position);
+      this.#caveMood(world);
     }
     for (const {player, position: sourcePosition} of this.#records.values()) {
       player.volume = this.#muted ? 0 : this.#volume * Math.max(0, 1 - this.#distance(sourcePosition) / 64);
@@ -293,6 +319,18 @@ export class WorldAudio {
       const volume = sound === 'liquid.water' ? .75 + Math.random() * .25 : .3;
       void this.play(sound, source.position, {volume, pitch: .9 + Math.random() * .15});
     }
+  }
+
+  #caveMood(world) {
+    if (!this.#catalog.sounds[CAVE_MOOD]) return;
+    const now = this.#context.currentTime;
+    this.#nextCave ??= now + Math.floor(Math.random() * 12000) * TICK_SECONDS;
+    if (now < this.#nextCave) return;
+    this.#nextCave = now + TICK_SECONDS;
+    const source = caveMoodSource(world, this.#listener);
+    if (!source) return;
+    this.#nextCave = now + (6000 + Math.floor(Math.random() * 12000)) * TICK_SECONDS;
+    void this.play(CAVE_MOOD, source, {volume: .7, pitch: .8 + Math.random() * .2});
   }
 
   #playMusic() {
