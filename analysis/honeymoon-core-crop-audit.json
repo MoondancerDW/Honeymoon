@@ -1,0 +1,1763 @@
+{
+  "bounds": [
+    -64,
+    63,
+    -64,
+    63
+  ],
+  "distinct_ids": 143,
+  "distinct_variants": 416,
+  "groups": [
+    [
+      "Minecraft",
+      2817910
+    ],
+    [
+      "RedPowerBase",
+      21406
+    ],
+    [
+      "RedPowerMachine",
+      884
+    ],
+    [
+      "PamWeeeFlowers",
+      689
+    ],
+    [
+      "MineLittleBrony:Clouds",
+      650
+    ],
+    [
+      "jammyfurniture",
+      424
+    ],
+    [
+      "RedPowerLighting",
+      302
+    ],
+    [
+      "BiblioCraft",
+      193
+    ],
+    [
+      "PamHCCotton",
+      67
+    ],
+    [
+      "unknown",
+      15
+    ],
+    [
+      "RedPowerWorld",
+      14
+    ],
+    [
+      "RedPowerLogic",
+      13
+    ],
+    [
+      "RedPowerControl",
+      13
+    ],
+    [
+      "PamHCTurnip",
+      8
+    ],
+    [
+      "CustomNpcs",
+      6
+    ],
+    [
+      "PamHCVanillastorage",
+      4
+    ],
+    [
+      "PamHCCinnamon",
+      3
+    ],
+    [
+      "PamHCVanillabean",
+      3
+    ],
+    [
+      "PamHCCandle",
+      3
+    ],
+    [
+      "RedPowerCompat",
+      2
+    ],
+    [
+      "PamHCSink",
+      2
+    ],
+    [
+      "Chisel",
+      1
+    ],
+    [
+      "PamHCAsparagus",
+      1
+    ],
+    [
+      "PamHCCelery",
+      1
+    ],
+    [
+      "PamHCTea",
+      1
+    ],
+    [
+      "PamHCRice",
+      1
+    ],
+    [
+      "PamHCOnion",
+      1
+    ],
+    [
+      "PamHCApple",
+      1
+    ],
+    [
+      "PamHCSpiceleaf",
+      1
+    ],
+    [
+      "PamHCGarlic",
+      1
+    ],
+    [
+      "PamHCBanana",
+      1
+    ],
+    [
+      "PamHCPeach",
+      1
+    ],
+    [
+      "PamHCLettuce",
+      1
+    ],
+    [
+      "PamHCCucumber",
+      1
+    ]
+  ],
+  "mod_ids": [
+    {
+      "id": 750,
+      "count": 21406,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.base.ItemMicro",
+        "ForcedName": "micro",
+        "ModId": "RedPowerBase",
+        "ItemId": 750,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 765,
+      "count": 814,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.core.ItemExtended",
+        "ForcedName": "frame",
+        "ModId": "RedPowerMachine",
+        "ItemId": 765,
+        "ordinal": 2
+      }
+    },
+    {
+      "id": 4000,
+      "count": 689,
+      "registry": {
+        "ItemType": "pamsmods.common.weeeflowers.ItemPamFlower",
+        "ModId": "PamWeeeFlowers",
+        "ItemId": 4000,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3246,
+      "count": 650,
+      "registry": {
+        "ItemType": "teotoo.minelittlebrony.cloud.item.blocks.ItemBlockCloud",
+        "ForcedName": "mlb_clouds",
+        "ModId": "MineLittleBrony:Clouds",
+        "ItemId": 3246,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 219,
+      "count": 125,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemLightsOn",
+        "ModId": "jammyfurniture",
+        "ItemId": 219,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 758,
+      "count": 124,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.lighting.ItemLamp",
+        "ForcedName": "ilampon",
+        "ModId": "RedPowerLighting",
+        "ItemId": 758,
+        "ordinal": 1
+      }
+    },
+    {
+      "id": 756,
+      "count": 72,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.lighting.BlockLamp",
+        "ForcedName": "lampon",
+        "ModId": "RedPowerLighting",
+        "ItemId": 756,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 757,
+      "count": 66,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.lighting.ItemLamp",
+        "ForcedName": "lampoff",
+        "ModId": "RedPowerLighting",
+        "ItemId": 757,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 201,
+      "count": 56,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemWoodBlocksTwo",
+        "ModId": "jammyfurniture",
+        "ItemId": 201,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 2250,
+      "count": 55,
+      "registry": {
+        "ItemType": "jds.bibliocraft.blocks.BlockItemBookcaseMaster",
+        "ForcedName": "Bibliotheca",
+        "ModId": "BiblioCraft",
+        "ItemId": 2250,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 200,
+      "count": 55,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemWoodBlocksOne",
+        "ModId": "jammyfurniture",
+        "ItemId": 200,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 2255,
+      "count": 52,
+      "registry": {
+        "ItemType": "jds.bibliocraft.blocks.BlockItemWeaponCaseMaster",
+        "ForcedName": "BiblioCase",
+        "ModId": "BiblioCraft",
+        "ItemId": 2255,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 4067,
+      "count": 50,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.cotton.ItemPamColoredClothThin",
+        "ModId": "PamHCCotton",
+        "ItemId": 4067,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 220,
+      "count": 43,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemLightsOn",
+        "ModId": "jammyfurniture",
+        "ItemId": 220,
+        "ordinal": 1
+      }
+    },
+    {
+      "id": 763,
+      "count": 43,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.core.ItemExtended",
+        "ForcedName": "machine",
+        "ModId": "RedPowerMachine",
+        "ItemId": 763,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 768,
+      "count": 40,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.lighting.ItemShapedLamp",
+        "ForcedName": "shlamp",
+        "ModId": "RedPowerLighting",
+        "ItemId": 768,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 203,
+      "count": 33,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemWoodBlocksThree",
+        "ModId": "jammyfurniture",
+        "ItemId": 203,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 211,
+      "count": 29,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemMobHeadsThree",
+        "ModId": "jammyfurniture",
+        "ItemId": 211,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 2249,
+      "count": 28,
+      "registry": {
+        "ItemType": "jds.bibliocraft.blocks.BlockArmorStand",
+        "ForcedName": "Armor Stand",
+        "ModId": "BiblioCraft",
+        "ItemId": 2249,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 764,
+      "count": 27,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.machine.ItemMachinePanel",
+        "ForcedName": "machinePanel",
+        "ModId": "RedPowerMachine",
+        "ItemId": 764,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 205,
+      "count": 26,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemIronBlocksOne",
+        "ModId": "jammyfurniture",
+        "ItemId": 205,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 2254,
+      "count": 22,
+      "registry": {
+        "ItemType": "jds.bibliocraft.blocks.BlockItemGenericShelfMaster",
+        "ForcedName": "BiblioShelf",
+        "ModId": "BiblioCraft",
+        "ItemId": 2254,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 4039,
+      "count": 17,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.cotton.BlockPamColoredClothStairs",
+        "ModId": "PamHCCotton",
+        "ItemId": 4039,
+        "ordinal": 4
+      }
+    },
+    {
+      "id": 2252,
+      "count": 17,
+      "registry": {
+        "ItemType": "jds.bibliocraft.blocks.BlockItemPotionShelfMaster",
+        "ForcedName": "BiblioPotionShelf",
+        "ModId": "BiblioCraft",
+        "ItemId": 2252,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 753,
+      "count": 13,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.logic.ItemLogic",
+        "ForcedName": "logic",
+        "ModId": "RedPowerLogic",
+        "ItemId": 753,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 2253,
+      "count": 12,
+      "registry": {
+        "ItemType": "jds.bibliocraft.blocks.BlockItemWeaponRackMaster",
+        "ForcedName": "BiblioRack",
+        "ModId": "BiblioCraft",
+        "ItemId": 2253,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 213,
+      "count": 12,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemArmChair",
+        "ModId": "jammyfurniture",
+        "ItemId": 213,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 242,
+      "count": 12,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.world.ItemCustomOre",
+        "ForcedName": "ores",
+        "ModId": "RedPowerWorld",
+        "ItemId": 242,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 214,
+      "count": 10,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemSofaLeft",
+        "ModId": "jammyfurniture",
+        "ItemId": 214,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 207,
+      "count": 10,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemCeramicBlocksOne",
+        "ModId": "jammyfurniture",
+        "ItemId": 207,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 218,
+      "count": 9,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemMiscOne",
+        "ModId": "jammyfurniture",
+        "ItemId": 218,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3823,
+      "count": 8,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.turnip.ItemPamTurnipStorage",
+        "ModId": "PamHCTurnip",
+        "ItemId": 3823,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 215,
+      "count": 7,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemSofaRight",
+        "ModId": "jammyfurniture",
+        "ItemId": 215,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 2248,
+      "count": 7,
+      "registry": {
+        "ItemType": "jds.bibliocraft.blocks.BlockItemWritingDesk",
+        "ForcedName": "BiblioDesk",
+        "ModId": "BiblioCraft",
+        "ItemId": 2248,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 2240,
+      "count": 7,
+      "registry": null
+    },
+    {
+      "id": 761,
+      "count": 7,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.core.ItemExtended",
+        "ForcedName": "peripheral",
+        "ModId": "RedPowerControl",
+        "ItemId": 761,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 1527,
+      "count": 6,
+      "registry": {
+        "ItemType": "noppes.npcs.items.BlockBlood",
+        "ModId": "CustomNpcs",
+        "ItemId": 1527,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 216,
+      "count": 5,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemSofaCenter",
+        "ModId": "jammyfurniture",
+        "ItemId": 216,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3999,
+      "count": 4,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.vanillastorage.ItemPamVanillaStorage",
+        "ModId": "PamHCVanillastorage",
+        "ItemId": 3999,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 760,
+      "count": 4,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.control.ItemBackplane",
+        "ForcedName": "backplane",
+        "ModId": "RedPowerControl",
+        "ItemId": 760,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3968,
+      "count": 3,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.cinnamon.ItemPamCinnamon",
+        "ModId": "PamHCCinnamon",
+        "ItemId": 3968,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 217,
+      "count": 3,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemSofaCorner",
+        "ModId": "jammyfurniture",
+        "ItemId": 217,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3989,
+      "count": 3,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.vanillabean.ItemPamVanillabean",
+        "ModId": "PamHCVanillabean",
+        "ItemId": 3989,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 767,
+      "count": 2,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.compat.ItemMachineCompat",
+        "ForcedName": "compat",
+        "ModId": "RedPowerCompat",
+        "ItemId": 767,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 762,
+      "count": 2,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.core.ItemExtended",
+        "ForcedName": "peripheralFlat",
+        "ModId": "RedPowerControl",
+        "ItemId": 762,
+        "ordinal": 1
+      }
+    },
+    {
+      "id": 3943,
+      "count": 2,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.sink.ItemPamSinkBarrel",
+        "ModId": "PamHCSink",
+        "ItemId": 3943,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 241,
+      "count": 2,
+      "registry": {
+        "ItemType": "com.eloraam.redpower.world.ItemCustomFlower",
+        "ForcedName": "plants",
+        "ModId": "RedPowerWorld",
+        "ItemId": 241,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 209,
+      "count": 1,
+      "registry": {
+        "ItemType": "net.minecraft.jammy780.furniture.item.jfm_ItemMobHeadsOne",
+        "ModId": "jammyfurniture",
+        "ItemId": 209,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 4068,
+      "count": 1,
+      "registry": null
+    },
+    {
+      "id": 3902,
+      "count": 1,
+      "registry": null
+    },
+    {
+      "id": 3933,
+      "count": 1,
+      "registry": null
+    },
+    {
+      "id": 4030,
+      "count": 1,
+      "registry": null
+    },
+    {
+      "id": 3942,
+      "count": 1,
+      "registry": null
+    },
+    {
+      "id": 3835,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.asparagus.ItemPamAsparagusStorage",
+        "ModId": "PamHCAsparagus",
+        "ItemId": 3835,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3829,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.celery.ItemPamCeleryStorage",
+        "ModId": "PamHCCelery",
+        "ItemId": 3829,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3838,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.tea.ItemPamTeaStorage",
+        "ModId": "PamHCTea",
+        "ItemId": 3838,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 4077,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.rice.ItemPamRiceStorage",
+        "ModId": "PamHCRice",
+        "ItemId": 4077,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 4025,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.onion.ItemPamOnionStorage",
+        "ModId": "PamHCOnion",
+        "ItemId": 4025,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 4033,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.apple.ItemPamAppleStorage",
+        "ModId": "PamHCApple",
+        "ItemId": 4033,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3941,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.spiceleaf.ItemPamSpiceleafStorage",
+        "ModId": "PamHCSpiceleaf",
+        "ItemId": 3941,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3827,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.garlic.ItemPamGarlicStorage",
+        "ModId": "PamHCGarlic",
+        "ItemId": 3827,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3961,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.banana.ItemPamBananaStorage",
+        "ModId": "PamHCBanana",
+        "ItemId": 3961,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3976,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.peach.ItemPamPeachStorage",
+        "ModId": "PamHCPeach",
+        "ItemId": 3976,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 4023,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.lettuce.ItemPamLettuceStorage",
+        "ModId": "PamHCLettuce",
+        "ItemId": 4023,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 4073,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.cucumber.ItemPamCucumberStorage",
+        "ModId": "PamHCCucumber",
+        "ItemId": 4073,
+        "ordinal": 0
+      }
+    },
+    {
+      "id": 3922,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.candle.BlockPamCandleDeco",
+        "ModId": "PamHCCandle",
+        "ItemId": 3922,
+        "ordinal": 13
+      }
+    },
+    {
+      "id": 3919,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.candle.BlockPamCandleDeco",
+        "ModId": "PamHCCandle",
+        "ItemId": 3919,
+        "ordinal": 10
+      }
+    },
+    {
+      "id": 3927,
+      "count": 1,
+      "registry": null
+    },
+    {
+      "id": 3930,
+      "count": 1,
+      "registry": null
+    },
+    {
+      "id": 4089,
+      "count": 1,
+      "registry": null
+    },
+    {
+      "id": 3920,
+      "count": 1,
+      "registry": {
+        "ItemType": "pamsmods.common.harvestcraft.candle.BlockPamCandleDeco",
+        "ModId": "PamHCCandle",
+        "ItemId": 3920,
+        "ordinal": 11
+      }
+    }
+  ],
+  "tiles": [
+    [
+      "Covers",
+      21023
+    ],
+    [
+      "RPFrame",
+      814
+    ],
+    [
+      "TileEntityLightsOn",
+      168
+    ],
+    [
+      "Sign",
+      161
+    ],
+    [
+      "Redwire",
+      159
+    ],
+    [
+      "RPTube",
+      124
+    ],
+    [
+      "Chest",
+      75
+    ],
+    [
+      "RedCable",
+      60
+    ],
+    [
+      "TileEntityWoodBlocksTwo",
+      56
+    ],
+    [
+      "BookcaseTile",
+      55
+    ],
+    [
+      "TileEntityWoodBlocks",
+      55
+    ],
+    [
+      "WeaponCaseTile",
+      52
+    ],
+    [
+      "RPShLamp",
+      40
+    ],
+    [
+      "TileEntityWoodBlocksThree",
+      33
+    ],
+    [
+      "TileEntityMobHeadsThree",
+      29
+    ],
+    [
+      "TileEntityIronBlocksOne",
+      26
+    ],
+    [
+      "GenericShelfTile",
+      22
+    ],
+    [
+      "RPBatBox",
+      22
+    ],
+    [
+      "RPSolar",
+      21
+    ],
+    [
+      "RPMotor",
+      18
+    ],
+    [
+      "RPConRibbon",
+      18
+    ],
+    [
+      "PotionShelfTile",
+      17
+    ],
+    [
+      "Bluewire",
+      16
+    ],
+    [
+      "ArmorStandTile",
+      14
+    ],
+    [
+      "ToolRackTile",
+      12
+    ],
+    [
+      "TileEntityArmChair",
+      12
+    ],
+    [
+      "TileEntitySofaLeft",
+      10
+    ],
+    [
+      "TileEntityCeramicBlocksOne",
+      10
+    ],
+    [
+      "RPLgSmp",
+      9
+    ],
+    [
+      "TileEntityMiscOne",
+      9
+    ],
+    [
+      "TileEntitySofaRight",
+      7
+    ],
+    [
+      "WritingDeskTile",
+      7
+    ],
+    [
+      "InsRedwire",
+      6
+    ],
+    [
+      "TileEntitySofaCenter",
+      5
+    ],
+    [
+      "RecordPlayer",
+      4
+    ],
+    [
+      "RPXfmr",
+      4
+    ],
+    [
+      "RPConRAM",
+      4
+    ],
+    [
+      "RPConCPU",
+      3
+    ],
+    [
+      "TileEntitySofaCorner",
+      3
+    ],
+    [
+      "RPLgStor",
+      2
+    ],
+    [
+      "RPLgPtr",
+      2
+    ],
+    [
+      "RPConDisp",
+      2
+    ],
+    [
+      "RPConIOX",
+      2
+    ],
+    [
+      "RPBTEngine",
+      2
+    ],
+    [
+      "RPPump",
+      2
+    ],
+    [
+      "RPRelay",
+      2
+    ],
+    [
+      "RPConDDrv",
+      2
+    ],
+    [
+      "Furnace",
+      2
+    ],
+    [
+      "Cauldron",
+      1
+    ],
+    [
+      "RPThermo",
+      1
+    ],
+    [
+      "TileEntityMobHeadsOne",
+      1
+    ]
+  ],
+  "entities": [
+    [
+      "Painting",
+      13
+    ],
+    [
+      "Chicken",
+      7
+    ],
+    [
+      "Item",
+      4
+    ],
+    [
+      "Pig",
+      2
+    ],
+    [
+      "npchumanmale",
+      2
+    ],
+    [
+      "Wolf",
+      1
+    ],
+    [
+      "npcpony",
+      1
+    ]
+  ],
+  "examples": {
+    "Covers": {
+      "x": -64,
+      "y": 66,
+      "z": -56
+    },
+    "WeaponCaseTile": {
+      "x": -49,
+      "y": 71,
+      "z": -58
+    },
+    "TileEntityMobHeadsThree": {
+      "x": -50,
+      "y": 57,
+      "z": -49
+    },
+    "Sign": {
+      "x": -54,
+      "y": 70,
+      "z": -49
+    },
+    "GenericShelfTile": {
+      "x": -49,
+      "y": 67,
+      "z": -55
+    },
+    "ToolRackTile": {
+      "x": -49,
+      "y": 67,
+      "z": -58
+    },
+    "TileEntityLightsOn": {
+      "x": -51,
+      "y": 73,
+      "z": -50
+    },
+    "TileEntitySofaRight": {
+      "x": -59,
+      "y": 65,
+      "z": -52
+    },
+    "TileEntitySofaCenter": {
+      "x": -59,
+      "y": 65,
+      "z": -53
+    },
+    "TileEntitySofaLeft": {
+      "x": -59,
+      "y": 65,
+      "z": -54
+    },
+    "TileEntityWoodBlocksThree": {
+      "x": -62,
+      "y": 65,
+      "z": -49
+    },
+    "ArmorStandTile": {
+      "x": -61,
+      "y": 74,
+      "z": -55
+    },
+    "Cauldron": {
+      "x": -60,
+      "y": 70,
+      "z": -54
+    },
+    "BookcaseTile": {
+      "x": -59,
+      "y": 76,
+      "z": -50
+    },
+    "RPLgStor": {
+      "x": -49,
+      "y": 45,
+      "z": -61
+    },
+    "Redwire": {
+      "x": -49,
+      "y": 45,
+      "z": -60
+    },
+    "WritingDeskTile": {
+      "x": -59,
+      "y": 74,
+      "z": -52
+    },
+    "RPLgPtr": {
+      "x": -50,
+      "y": 45,
+      "z": -61
+    },
+    "RPLgSmp": {
+      "x": -50,
+      "y": 45,
+      "z": -62
+    },
+    "TileEntityWoodBlocks": {
+      "x": -33,
+      "y": 71,
+      "z": -57
+    },
+    "RPShLamp": {
+      "x": -34,
+      "y": 57,
+      "z": -53
+    },
+    "Bluewire": {
+      "x": -42,
+      "y": 46,
+      "z": -56
+    },
+    "TileEntityWoodBlocksTwo": {
+      "x": -36,
+      "y": 65,
+      "z": -64
+    },
+    "RPThermo": {
+      "x": -42,
+      "y": 45,
+      "z": -55
+    },
+    "RPFrame": {
+      "x": -34,
+      "y": 58,
+      "z": -57
+    },
+    "TileEntityCeramicBlocksOne": {
+      "x": -36,
+      "y": 66,
+      "z": -55
+    },
+    "Chest": {
+      "x": -37,
+      "y": 69,
+      "z": -57
+    },
+    "RPMotor": {
+      "x": -45,
+      "y": 47,
+      "z": -56
+    },
+    "TileEntityArmChair": {
+      "x": -34,
+      "y": 65,
+      "z": -61
+    },
+    "RPBatBox": {
+      "x": -43,
+      "y": 46,
+      "z": -55
+    },
+    "RecordPlayer": {
+      "x": -29,
+      "y": 65,
+      "z": -59
+    },
+    "TileEntityIronBlocksOne": {
+      "x": -51,
+      "y": 57,
+      "z": -40
+    },
+    "TileEntityMobHeadsOne": {
+      "x": -51,
+      "y": 59,
+      "z": -44
+    },
+    "RPConDisp": {
+      "x": -10,
+      "y": 140,
+      "z": -33
+    },
+    "RPConCPU": {
+      "x": -10,
+      "y": 140,
+      "z": -34
+    },
+    "RedCable": {
+      "x": -7,
+      "y": 140,
+      "z": -35
+    },
+    "RPXfmr": {
+      "x": -6,
+      "y": 140,
+      "z": -34
+    },
+    "RPConIOX": {
+      "x": -10,
+      "y": 141,
+      "z": -33
+    },
+    "RPBTEngine": {
+      "x": -8,
+      "y": 139,
+      "z": -35
+    },
+    "RPPump": {
+      "x": -7,
+      "y": 139,
+      "z": -4
+    },
+    "TileEntitySofaCorner": {
+      "x": -8,
+      "y": 72,
+      "z": -2
+    },
+    "RPTube": {
+      "x": -58,
+      "y": 45,
+      "z": 10
+    },
+    "TileEntityMiscOne": {
+      "x": -28,
+      "y": 54,
+      "z": 10
+    },
+    "RPRelay": {
+      "x": -48,
+      "y": 45,
+      "z": 19
+    },
+    "RPConDDrv": {
+      "x": -21,
+      "y": 49,
+      "z": 29
+    },
+    "RPSolar": {
+      "x": -25,
+      "y": 61,
+      "z": 18
+    },
+    "InsRedwire": {
+      "x": -27,
+      "y": 55,
+      "z": 23
+    },
+    "RPConRAM": {
+      "x": -27,
+      "y": 55,
+      "z": 26
+    },
+    "RPConRibbon": {
+      "x": -28,
+      "y": 56,
+      "z": 26
+    },
+    "PotionShelfTile": {
+      "x": -64,
+      "y": 66,
+      "z": 56
+    },
+    "Furnace": {
+      "x": -64,
+      "y": 65,
+      "z": 56
+    }
+  },
+  "covers_distinct": 4575,
+  "cover_parts": [
+    [
+      1,
+      12072
+    ],
+    [
+      2,
+      4565
+    ],
+    [
+      3,
+      1987
+    ],
+    [
+      4,
+      1325
+    ],
+    [
+      5,
+      477
+    ],
+    [
+      6,
+      354
+    ],
+    [
+      8,
+      130
+    ],
+    [
+      7,
+      96
+    ],
+    [
+      9,
+      8
+    ],
+    [
+      10,
+      6
+    ],
+    [
+      12,
+      2
+    ],
+    [
+      11,
+      1
+    ]
+  ],
+  "cover_pair_byte0": [
+    [
+      28,
+      6409
+    ],
+    [
+      32,
+      3774
+    ],
+    [
+      26,
+      2839
+    ],
+    [
+      46,
+      2458
+    ],
+    [
+      29,
+      2432
+    ],
+    [
+      36,
+      2066
+    ],
+    [
+      47,
+      1959
+    ],
+    [
+      3,
+      1848
+    ],
+    [
+      11,
+      1441
+    ],
+    [
+      1,
+      1412
+    ],
+    [
+      35,
+      1194
+    ],
+    [
+      43,
+      1187
+    ],
+    [
+      40,
+      907
+    ],
+    [
+      42,
+      803
+    ],
+    [
+      33,
+      744
+    ],
+    [
+      12,
+      695
+    ],
+    [
+      17,
+      628
+    ],
+    [
+      41,
+      606
+    ],
+    [
+      49,
+      498
+    ],
+    [
+      66,
+      459
+    ],
+    [
+      48,
+      456
+    ],
+    [
+      68,
+      455
+    ],
+    [
+      7,
+      431
+    ],
+    [
+      30,
+      387
+    ],
+    [
+      18,
+      351
+    ],
+    [
+      2,
+      324
+    ],
+    [
+      45,
+      284
+    ],
+    [
+      38,
+      283
+    ],
+    [
+      23,
+      243
+    ],
+    [
+      34,
+      214
+    ],
+    [
+      13,
+      187
+    ],
+    [
+      21,
+      143
+    ],
+    [
+      44,
+      141
+    ],
+    [
+      37,
+      110
+    ],
+    [
+      16,
+      85
+    ],
+    [
+      20,
+      78
+    ],
+    [
+      27,
+      70
+    ],
+    [
+      56,
+      49
+    ],
+    [
+      5,
+      48
+    ],
+    [
+      10,
+      32
+    ],
+    [
+      58,
+      26
+    ],
+    [
+      19,
+      19
+    ],
+    [
+      39,
+      17
+    ],
+    [
+      67,
+      15
+    ],
+    [
+      31,
+      11
+    ],
+    [
+      64,
+      10
+    ],
+    [
+      50,
+      6
+    ],
+    [
+      24,
+      4
+    ],
+    [
+      22,
+      4
+    ],
+    [
+      25,
+      3
+    ],
+    [
+      54,
+      2
+    ],
+    [
+      0,
+      2
+    ],
+    [
+      53,
+      2
+    ]
+  ],
+  "cover_pair_byte1": [
+    [
+      0,
+      15020
+    ],
+    [
+      2,
+      13560
+    ],
+    [
+      1,
+      9625
+    ],
+    [
+      3,
+      200
+    ],
+    [
+      6,
+      191
+    ],
+    [
+      4,
+      174
+    ],
+    [
+      9,
+      33
+    ],
+    [
+      7,
+      23
+    ],
+    [
+      8,
+      14
+    ],
+    [
+      5,
+      11
+    ]
+  ],
+  "relevant_textures": [
+    "ctm.png",
+    "eloraam/base/advbench.png",
+    "eloraam/base/afurnacegui.png",
+    "eloraam/base/baggui.png",
+    "eloraam/base/base1.png",
+    "eloraam/base/idgui.png",
+    "eloraam/base/items1.png",
+    "eloraam/base/rpbanner.png",
+    "eloraam/compat/compat1.png",
+    "eloraam/control/control1.png",
+    "eloraam/control/cpugui.png",
+    "eloraam/control/displaygui.png",
+    "eloraam/control/idgui.png",
+    "eloraam/lighting/lighting1.png",
+    "eloraam/logic/array1.png",
+    "eloraam/logic/countergui.png",
+    "eloraam/logic/logic1.png",
+    "eloraam/logic/logic1_old.png",
+    "eloraam/logic/logic2.png",
+    "eloraam/logic/sensor1.png",
+    "eloraam/logic/timersgui.png",
+    "eloraam/machine/assembler.png",
+    "eloraam/machine/assembler2.png",
+    "eloraam/machine/batbox.png",
+    "eloraam/machine/btafurnace.png",
+    "eloraam/machine/btfurnace.png",
+    "eloraam/machine/buffer.png",
+    "eloraam/machine/charging.png",
+    "eloraam/machine/filter.png",
+    "eloraam/machine/filter9.png",
+    "eloraam/machine/itemdet.png",
+    "eloraam/machine/machine1.png",
+    "eloraam/machine/machine2.png",
+    "eloraam/machine/manager.png",
+    "eloraam/machine/regulator.png",
+    "eloraam/machine/retriever.png",
+    "eloraam/machine/sortmachine.png",
+    "eloraam/machine/vawt.png",
+    "eloraam/machine/windgui.png",
+    "eloraam/wiring/redpower1.png",
+    "eloraam/world/world1.png",
+    "eloraam/world/worlditems1.png",
+    "misc/beacon.png",
+    "misc/beam.png",
+    "misc/dial.png",
+    "misc/explosion.png",
+    "misc/foliagecolor.png",
+    "misc/footprint.png",
+    "misc/glint.png",
+    "misc/grasscolor.png",
+    "misc/mapbg.png",
+    "misc/mapicons.png",
+    "misc/particlefield.png",
+    "misc/pumpkinblur.png",
+    "misc/shadow.png",
+    "misc/tunnel.png",
+    "misc/vignette.png",
+    "misc/water.png",
+    "misc/watercolor.png",
+    "mods/jammy780/gui/jammy_bathroomcupboard.png",
+    "mods/jammy780/gui/jammy_clockmiddle.png",
+    "mods/jammy780/gui/jammy_cooker.png",
+    "mods/jammy780/gui/jammy_kitchencupboard.png",
+    "mods/jammy780/gui/jammy_rubbishbin.png",
+    "mods/jammy780/gui/jammy_washingmachine.png",
+    "mods/jammy780/items/jammy_items.png",
+    "mods/jammy780/textures/jammy_armchair.png",
+    "mods/jammy780/textures/jammy_bathroomcupboard.png",
+    "mods/jammy780/textures/jammy_blinds.png",
+    "mods/jammy780/textures/jammy_chair.png",
+    "mods/jammy780/textures/jammy_chickenhead.png",
+    "mods/jammy780/textures/jammy_chimney.png",
+    "mods/jammy780/textures/jammy_clockbase.png",
+    "mods/jammy780/textures/jammy_clockmiddle.png",
+    "mods/jammy780/textures/jammy_clocktop.png",
+    "mods/jammy780/textures/jammy_clocktop2.png",
+    "mods/jammy780/textures/jammy_coffeetable.png",
+    "mods/jammy780/textures/jammy_cooker.png",
+    "mods/jammy780/textures/jammy_cowhead.png",
+    "mods/jammy780/textures/jammy_creeperhead.png",
+    "mods/jammy780/textures/jammy_enderdragonhead.png",
+    "mods/jammy780/textures/jammy_flowergiantred.png",
+    "mods/jammy780/textures/jammy_flowergiantyel.png",
+    "mods/jammy780/textures/jammy_flowerstraightred.png",
+    "mods/jammy780/textures/jammy_flowerstraightyel.png",
+    "mods/jammy780/textures/jammy_freezer.png",
+    "mods/jammy780/textures/jammy_fridge.png",
+    "mods/jammy780/textures/jammy_fridgefreezer.png",
+    "mods/jammy780/textures/jammy_guttercorner.png",
+    "mods/jammy780/textures/jammy_guttercornerpipe.png",
+    "mods/jammy780/textures/jammy_gutterpipe.png",
+    "mods/jammy780/textures/jammy_gutterstraight.png",
+    "mods/jammy780/textures/jammy_kitchencupboard.png",
+    "mods/jammy780/textures/jammy_kitchencupboardnotop.png",
+    "mods/jammy780/textures/jammy_kitchenside.png",
+    "mods/jammy780/textures/jammy_kitchensink.png",
+    "mods/jammy780/textures/jammy_lamp.png",
+    "mods/jammy780/textures/jammy_lightbulb.png",
+    "mods/jammy780/textures/jammy_mantlepiece.png",
+    "mods/jammy780/textures/jammy_pighead.png",
+    "mods/jammy780/textures/jammy_plantpot.png",
+    "mods/jammy780/textures/jammy_roofing.png",
+    "mods/jammy780/textures/jammy_rubbishbin.png",
+    "mods/jammy780/textures/jammy_sheephead.png",
+    "mods/jammy780/textures/jammy_sink.png",
+    "mods/jammy780/textures/jammy_skeletonhead.png",
+    "mods/jammy780/textures/jammy_sofacenter.png",
+    "mods/jammy780/textures/jammy_sofacorner.png",
+    "mods/jammy780/textures/jammy_sofasides.png",
+    "mods/jammy780/textures/jammy_spiderhead.png",
+    "mods/jammy780/textures/jammy_stevehead.png",
+    "mods/jammy780/textures/jammy_table.png",
+    "mods/jammy780/textures/jammy_tablelamp.png",
+    "mods/jammy780/textures/jammy_toilet.png",
+    "mods/jammy780/textures/jammy_tv.png",
+    "mods/jammy780/textures/jammy_washingmachine.png",
+    "mods/jammy780/textures/jammy_windowbox.png",
+    "mods/jammy780/textures/jammy_wolfhead.png",
+    "mods/jammy780/textures/jammy_zombiehead.png",
+    "terrain.png",
+    "terrain/moon.png",
+    "terrain/moon_phases.png",
+    "terrain/sun.png"
+  ]
+}

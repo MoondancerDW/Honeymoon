@@ -1,0 +1,16 @@
+{
+  "centered_192": {
+    "chunks": 144,
+    "covers": 50190,
+    "signs": 301,
+    "bookcases": 178,
+    "seats": 171
+  },
+  "centered_128": {
+    "chunks": 64,
+    "covers": 21023,
+    "signs": 161,
+    "bookcases": 55,
+    "seats": 37
+  }
+}

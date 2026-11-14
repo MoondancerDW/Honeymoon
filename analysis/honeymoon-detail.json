@@ -1,0 +1,189 @@
+{
+  "registry_records": 1682,
+  "registry_sample": [
+    {
+      "ItemType": "aml",
+      "ModId": "Minecraft",
+      "ItemId": 1,
+      "ordinal": 0
+    },
+    {
+      "ItemType": "akj",
+      "ModId": "Minecraft",
+      "ItemId": 2,
+      "ordinal": 0
+    }
+  ],
+  "registry_selected": [
+    {
+      "ItemType": "com.eloraam.redpower.base.ItemMicro",
+      "ForcedName": "micro",
+      "ModId": "RedPowerBase",
+      "ItemId": 750,
+      "ordinal": 0
+    },
+    {
+      "ItemType": "twilightforest.item.ItemBlockTFMeta",
+      "ForcedName": "tile.TFHedge",
+      "ModId": "TwilightForest",
+      "ItemId": 2166,
+      "ForcedModId": "TwilightForest",
+      "ordinal": 4
+    },
+    {
+      "ItemType": "jds.bibliocraft.blocks.BlockItemBookcaseMaster",
+      "ForcedName": "Bibliotheca",
+      "ModId": "BiblioCraft",
+      "ItemId": 2250,
+      "ordinal": 0
+    },
+    {
+      "ItemType": "teotoo.minelittlebrony.cloud.item.blocks.ItemBlockCloud",
+      "ForcedName": "mlb_clouds",
+      "ModId": "MineLittleBrony:Clouds",
+      "ItemId": 3246,
+      "ordinal": 0
+    },
+    {
+      "ItemType": "pamsmods.common.weeeflowers.ItemPamFlower",
+      "ModId": "PamWeeeFlowers",
+      "ItemId": 4000,
+      "ordinal": 0
+    }
+  ],
+  "cover_positions_by_height": [
+    [
+      68,
+      29902
+    ],
+    [
+      69,
+      24832
+    ],
+    [
+      65,
+      23467
+    ],
+    [
+      70,
+      22188
+    ],
+    [
+      66,
+      19713
+    ],
+    [
+      67,
+      18700
+    ],
+    [
+      72,
+      18698
+    ],
+    [
+      71,
+      17495
+    ],
+    [
+      73,
+      16908
+    ],
+    [
+      74,
+      13152
+    ],
+    [
+      75,
+      11093
+    ],
+    [
+      76,
+      9511
+    ]
+  ],
+  "chunks_with_covers": 725,
+  "cover_shape_counts": [
+    [
+      2,
+      25970
+    ],
+    [
+      8,
+      11706
+    ],
+    [
+      4,
+      11697
+    ],
+    [
+      16,
+      11287
+    ],
+    [
+      32,
+      10860
+    ],
+    [
+      131072,
+      8068
+    ],
+    [
+      65536,
+      7705
+    ],
+    [
+      32768,
+      6618
+    ],
+    [
+      16384,
+      6497
+    ],
+    [
+      1,
+      5629
+    ]
+  ],
+  "cover_payload_lengths": [
+    [
+      2,
+      148149
+    ],
+    [
+      4,
+      72508
+    ],
+    [
+      6,
+      29049
+    ],
+    [
+      8,
+      18941
+    ],
+    [
+      10,
+      5387
+    ],
+    [
+      12,
+      3257
+    ],
+    [
+      14,
+      1168
+    ],
+    [
+      16,
+      1009
+    ],
+    [
+      18,
+      86
+    ],
+    [
+      20,
+      32
+    ]
+  ]
+}
