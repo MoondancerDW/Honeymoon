@@ -94,13 +94,15 @@ async function walkOnServer(page, origin, tick) {
   return {start:start.position, end:end.position, revision:end.worldRevision};
 }
 
-async function browserPhotos(base, output, exerciseDoor) {
+export async function browserPhotos(base, output, exerciseDoor, { checkPoints = poses, generated } = {}) {
   const gameFile = await readFile(join(project,'client/game.mjs'),'utf8');
   const marker = 'globalThis.honeymoon = Object.freeze({';
   assert.ok(gameFile.includes(marker), 'Cannot install screenshot-only camera control');
   const cameraControl = [
     marker,
     'referencePose: ({feet,yaw,pitch}) => {',
+    '  view.cycleTime = 6000;',
+    '  view.updateSky(6000);',
     '  Object.assign(position, {x:feet[0], y:feet[1], z:feet[2]});',
     '  heading.yaw = yaw; heading.pitch = pitch;',
     '  updateCamera();',
@@ -108,7 +110,9 @@ async function browserPhotos(base, output, exerciseDoor) {
   ].join('\n');
   const photoGame = gameFile.replace(marker,cameraControl);
   let time = 0;
-  const app = createHoneymoonServer({base,state:':memory:',geometry,clock:() => time});
+  const cameraFeet = checkPoints.find(pose => pose.activate)?.feet;
+  const photoBase = cameraFeet ? {...base, manifest:{...base.manifest, spawn:cameraFeet}} : base;
+  const app = createHoneymoonServer({base:photoBase,generated,state:':memory:',geometry,clock:() => time});
   let browser;
   try {
     app.server.listen(0,'127.0.0.1');
@@ -127,8 +131,8 @@ async function browserPhotos(base, output, exerciseDoor) {
     });
     const origin = 'http://127.0.0.1:' + app.server.address().port;
     await page.goto(origin);
-    await page.waitForFunction(() => globalThis.honeymoon?.stats().chunksLoaded === 64,
-      null,{timeout:90_000});
+    await page.waitForFunction(count => globalThis.honeymoon?.stats().chunksLoaded === count,
+      base.manifest.chunks.length,{timeout:90_000});
     await page.evaluate(() => honeymoon.setDistance(8));
     const visualChunks = base.manifest.visualChunks?.length ?? 0;
     await page.waitForFunction(expected => {
@@ -137,11 +141,24 @@ async function browserPhotos(base, output, exerciseDoor) {
     },visualChunks,{timeout:90_000});
     await page.addStyleTag({content:'#game > :not(#scene) {display:none !important;}'});
     let serverWalk;
-    for (const pose of poses) {
+    const revisions = new Map();
+    for (const pose of checkPoints) {
       if (exerciseDoor && pose.id === '06-armchair') {
         serverWalk = await walkOnServer(page, origin, () => {time += 125;});
         await page.waitForFunction(revision => honeymoon.stats().revision >= revision && honeymoon.stats().pending === 0,
           serverWalk.revision,{timeout:30_000});
+      }
+      if (pose.activate) {
+        const session = await page.request.post(`${origin}/api/session`, {data:{}});
+        assert.ok(session.ok());
+        const [x,y,z] = pose.activate;
+        const actual = await page.request.post(`${origin}/api/action`, {data:{type:'interact',requestId:`photo-${pose.id}`,x,y,z,
+          expectedRevision:revisions.get(pose.activate.join(',')) ?? 0}});
+        const outcome = await actual.json();
+        assert.equal(actual.status(), 200, `Photo interaction ${pose.id} failed: ${JSON.stringify(outcome)}`);
+        for (const change of outcome.changes) revisions.set([change.x,change.y,change.z].join(','), change.revision);
+        await page.waitForFunction(revision => honeymoon.stats().revision >= revision && honeymoon.stats().pending === 0,
+          outcome.worldRevision,{timeout:30_000});
       }
       await page.evaluate(({feet,yaw,pitch}) => {
         honeymoon.referencePose({feet,yaw,pitch});

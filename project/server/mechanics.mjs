@@ -1,11 +1,16 @@
 import { cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
+import { blockKey, blockState, buttonDuration, jammyAppliance, jammyLamp, manualHatch, pressurePlate } from '../world/block-interactions.mjs';
+import { PLAYER } from './physics.mjs';
+import { affectedCircuit, redstone, wireLevels } from './redstone.mjs';
+import { musicBlocks, noteSound } from './music-blocks.mjs';
 
 const DIAGNOSTIC = 'diagnostic';
 const WORLD = 'world';
 const SWITCH = 'game:switch';
 const DOOR = 'game:door';
-const WOOD_DOOR = /^legacy:64:(\d+)$/;
+const CONTROL_TASKS = 'pending';
+const CLICK_VOLUME = .3;
 
 function layoutNearSpawn(base, geometry) {
   const [sx, sy, sz] = base.manifest.spawn.map(Math.floor);
@@ -87,7 +92,7 @@ function makeDiagnostics(base, store, geometry) {
       return {
         cells: cells({ open, revision: 0 }),
         state: [{ owner: WORLD, key: 'door', value: { open }, useRevision: true }],
-        effects: [{ type: 'door', open, message: open ? 'Дверь открыта' : 'Дверь закрыта' }],
+        effects: [doorEffect(open, layout.door[0])],
       };
     },
     prepareEntry({ player, position }) {
@@ -102,42 +107,294 @@ function makeDiagnostics(base, store, geometry) {
   };
 }
 
-function woodDoorMeta(cell) {
-  const match = WOOD_DOOR.exec(cell);
-  return match ? Number(match[1]) : -1;
+function doorEffect(open, position) {
+  return {type: 'door', open, message: open ? 'Дверь открыта' : 'Дверь закрыта',
+    sound: open ? 'door.open' : 'door.close', position};
+}
+
+const pointOf = cell => [cell.x, cell.y, cell.z];
+const metaChanged = (cell, id, meta) => ({...cell, cell: blockKey(id, meta)});
+const at = point => cellAddress(...point);
+
+function clickEffect(cell, active) {
+  return {type: 'control', sound: active ? 'click.on' : 'click.off', position: pointOf(cell),
+    pitch: active ? .6 : .5, volume: CLICK_VOLUME};
+}
+
+function doorCells(current, getCell, playerOverlaps, desired) {
+  const [id, meta] = blockState(current);
+  if (id !== 64 && id !== 71) return null;
+  const {x, y, z} = current;
+  const lower = meta & 8 ? getCell(x, y - 1, z) : current;
+  const upper = meta & 8 ? current : getCell(x, y + 1, z);
+  const [lowerId, lowerMeta] = blockState(lower);
+  const [upperId, upperMeta] = blockState(upper);
+  if (lowerId !== id || upperId !== id || lowerMeta >= 8 || upperMeta < 8 || upperMeta > 15) return null;
+  const open = desired ?? !Boolean(lowerMeta & 4);
+  if (open === Boolean(lowerMeta & 4)) return null;
+  const nextLower = metaChanged(lower, id, lowerMeta ^ 4);
+  const plannedUpper = (dx, dy, dz) => dx === 0 && dy === 1 && dz === 0 ? upper.cell : undefined;
+  const plannedLower = (dx, dy, dz) => dx === 0 && dy === -1 && dz === 0 ? nextLower.cell : undefined;
+  if (playerOverlaps(x, lower.y, z, nextLower.cell, plannedUpper)
+    || playerOverlaps(x, upper.y, z, upper.cell, plannedLower)) return {blocked: true};
+  return {cells: [nextLower, upper], effects: [doorEffect(open, pointOf(lower))]};
 }
 
 const woodDoors = {
   id: 'wood-doors',
   version: 1,
-  prepareInteraction({ x, y, z, current, getCell, playerOverlaps }) {
-    const meta = woodDoorMeta(current.cell);
-    if (meta < 0 || meta > 15) return null;
-
-    const upperSelected = Boolean(meta & 8);
-    const lower = upperSelected ? getCell(x, y - 1, z) : current;
-    const upper = upperSelected ? current : getCell(x, y + 1, z);
-    const lowerMeta = woodDoorMeta(lower.cell);
-    const upperMeta = woodDoorMeta(upper.cell);
-    if (lowerMeta < 0 || lowerMeta >= 8 || upperMeta < 8 || upperMeta > 15) return null;
-
-    const nextMeta = lowerMeta ^ 4;
-    const nextLower = { ...lower, cell: `legacy:64:${nextMeta}` };
-    const plannedUpper = (dx, dy, dz) => dx === 0 && dy === 1 && dz === 0 ? upper.cell : undefined;
-    const plannedLower = (dx, dy, dz) => dx === 0 && dy === -1 && dz === 0 ? nextLower.cell : undefined;
-    if (playerOverlaps(x, lower.y, z, nextLower.cell, plannedUpper)
-      || playerOverlaps(x, upper.y, z, upper.cell, plannedLower)) {
-      throw new RequestError(409, 'occupied');
-    }
-    // The upper metadata stays the same, but its shape follows the lower half's open bit.
-    const open = Boolean(nextMeta & 4);
-    return {
-      cells: [nextLower, upper],
-      effects: [{ type: 'door', open, message: open ? 'Дверь открыта' : 'Дверь закрыта' }],
-    };
+  prepareInteraction({current, getCell, playerOverlaps}) {
+    if (blockState(current)[0] !== 64) return null;
+    const result = doorCells(current, getCell, playerOverlaps);
+    if (result?.blocked) throw new RequestError(409, 'occupied');
+    return result;
   },
 };
 
+function hatchCell(current, id, meta, open, playerOverlaps, playerPosition, yaw) {
+  if (open === Boolean(meta & 4)) return null;
+  let nextMeta = meta ^ 4;
+  if (id === 107 && open && playerPosition) {
+    // Minecraft compares the player's facing to the gate direction when opening by hand.
+    const dx = current.x + .5 - playerPosition.x, dz = current.z + .5 - playerPosition.z;
+    const facing = Math.round((yaw === undefined ? Math.atan2(-dx, dz) : Math.PI - yaw) / (Math.PI / 2)) & 3;
+    if ((meta & 3) === (facing ^ 2)) nextMeta = facing | 4;
+  }
+  const change = metaChanged(current, id, nextMeta);
+  if (playerOverlaps(current.x, current.y, current.z, change.cell)) return {blocked: true};
+  const message = id === 96 ? (open ? 'Люк открыт' : 'Люк закрыт') : (open ? 'Калитка открыта' : 'Калитка закрыта');
+  return {cells: [change], effects: [{...doorEffect(open, pointOf(current)), message}]};
+}
+
+function plateOccupied(players, x, y, z) {
+  return players.some(player => player.x + PLAYER.halfWidth > x + .125 && player.x - PLAYER.halfWidth < x + .875
+    && player.z + PLAYER.halfWidth > z + .125 && player.z - PLAYER.halfWidth < z + .875 && player.y >= y && player.y < y + .25);
+}
+
+function applianceAction(cell, name) {
+  if (!cell.object) return null;
+  const data = cell.object.data ?? {};
+  const open = !data.open;
+  return {
+    cells: [{...cell, object: {...cell.object, data: {...data, open}}}],
+    effects: [{type: 'appliance', open, message: name + (open ? ' · открыто' : ' · закрыто'),
+      sound: open ? 'chest.open' : 'chest.close', volume: .5, position: pointOf(cell)}],
+  };
+}
+
+function makeControls(base, geometry) {
+  function plan(context) {
+    const {getCell, now} = context;
+    const tasks = {...context.readState(WORLD, CONTROL_TASKS)?.value};
+    const updates = new Map(), effects = [];
+    let dirty = false;
+    const get = (x, y, z) => updates.get(cellAddress(x, y, z)) ?? getCell(x, y, z);
+    const put = cell => { if (base.inBounds(cell.x, cell.y, cell.z)) updates.set(at(pointOf(cell)), cell); };
+    function schedule(point, id, delay) {
+      const key = at(point);
+      if (tasks[key]?.id === id) return;
+      tasks[key] = {id, at: now + delay};
+      dirty = true;
+    }
+    function clear(key) {
+      if (!Object.hasOwn(tasks, key)) return;
+      delete tasks[key];
+      dirty = true;
+    }
+    function finish() {
+      return {
+        cells: [...updates.values()], effects,
+        state: dirty ? [{owner: WORLD, key: CONTROL_TASKS, value: tasks}] : [],
+      };
+    }
+    return {get, put, effects, tasks, schedule, clear, finish};
+  }
+
+  function updatePower(context, current, sources, due = new Set()) {
+    const prior = redstone(context.getCell, geometry, base.manifest.compositions);
+    const lookup = redstone(current.get, geometry, base.manifest.compositions);
+    const observed = new Set();
+    let pending = sources;
+    while (pending.length) {
+      const {wires, receivers} = affectedCircuit(pending, lookup);
+      const levels = wireLevels(wires, lookup);
+      for (const [key, point] of wires) {
+        const cell = current.get(...point);
+        const [, meta] = blockState(cell);
+        const next = levels.get(key) ?? 0;
+        if (next !== meta) current.put(metaChanged(cell, 55, next));
+      }
+      pending = [];
+      for (const [key, point] of receivers) {
+        if (!due.has(key) || observed.has(key)) continue;
+        const cell = current.get(...point);
+        const [id, meta] = blockState(cell);
+        if (id !== 75 && id !== 76 && id !== 93 && id !== 94) continue;
+        observed.add(key);
+        const repeater = id === 93 || id === 94;
+        if (repeater && lookup.repeaterLocked(point, meta)) continue;
+        const on = id === 76 || id === 94;
+        const powered = repeater ? lookup.repeaterInput(point, meta) : !lookup.torchPowered(point, meta);
+        if (on !== powered) {
+          current.put(metaChanged(cell, repeater ? (powered ? 94 : 93) : (powered ? 76 : 75), meta));
+          pending.push(point);
+        }
+      }
+      if (pending.length) {
+        pending = [...sources, ...pending];
+        continue;
+      }
+      for (const [key, point] of receivers) {
+        const cell = current.get(...point);
+        const [id, meta] = blockState(cell);
+        const torch = id === 75 || id === 76, repeater = id === 93 || id === 94;
+        if (torch || repeater) {
+          if (repeater && lookup.repeaterLocked(point, meta)) {
+            current.clear(key);
+            continue;
+          }
+          const powered = repeater ? lookup.repeaterInput(point, meta) : !lookup.torchPowered(point, meta);
+          if (powered === (id === 76 || id === 94)) current.clear(key);
+          else current.schedule(point, id, repeater ? 100 * ((meta >> 2) + 1) : 100);
+          continue;
+        }
+        const side = cell.object?.data?.rot;
+        const sides = id === 768 && Number.isInteger(side) && side >= 0 && side < 6 ? [side] : undefined;
+        function inputPower(circuit) {
+          return circuit.powered(point, true, sides) ||
+            ((id === 64 || id === 71) && circuit.powered([cell.x, cell.y + 1, cell.z]));
+        }
+        const powered = inputPower(lookup);
+        if (id === 25) {
+          if (powered && !inputPower(prior)) {
+            const effect = noteSound(current.get, ...point, cell.object?.data?.note ?? 0);
+            if (effect) current.effects.push(effect);
+          }
+          continue;
+        }
+        if ((id === 64 || id === 71 || manualHatch(id)) && !due.has(key) && powered === inputPower(prior)) continue;
+        applyReceiver(context, current, cell, id, meta, powered, due.has(key));
+      }
+    }
+  }
+
+  function applyReceiver(context, current, cell, id, meta, powered, due) {
+    const point = pointOf(cell);
+    if (id === 64 || id === 71 || manualHatch(id)) {
+      const result = manualHatch(id) ? hatchCell(cell, id, meta, powered, context.playerOverlaps)
+        : doorCells(cell, current.get, context.playerOverlaps, powered);
+      if (result?.blocked) current.schedule(point, id, 100);
+      else if (result) {
+        result.cells.forEach(current.put);
+        current.effects.push(...result.effects);
+      }
+    } else if (id === 768 && cell.object) {
+      const flags = cell.object.data?.ps ?? 0;
+      const ps = flags & ~1 | Number(powered);
+      if (ps !== flags) current.put({...cell, object: {...cell.object, data: {...cell.object.data, ps}}});
+    } else if (id >= 756 && id <= 759) {
+      const nextId = id < 758 ? (powered ? 756 : 757) : (powered ? 759 : 758);
+      if (nextId !== id) current.put(metaChanged(cell, nextId, meta));
+    } else if (id === 123 || id === 124) {
+      if ((id === 124) === powered) current.clear(at(point));
+      else if (id === 124 && !due) current.schedule(point, id, 200);
+      else current.put(metaChanged(cell, powered ? 124 : 123, meta));
+    }
+  }
+
+  function triggerPlate(current, cell, id, powered) {
+    const [, meta] = blockState(cell);
+    if (Boolean(meta) !== powered) {
+      current.put(metaChanged(cell, id, Number(powered)));
+      current.effects.push(clickEffect(cell, powered));
+    }
+    if (powered) current.schedule(pointOf(cell), id, 1000);
+    return Boolean(meta) !== powered;
+  }
+
+  return {
+    id: 'block-controls',
+    version: 1,
+    prepareInteraction(context) {
+      const {current: cell, playerOverlaps, playerPosition} = context;
+      const [id, meta] = blockState(cell);
+      const appliance = jammyAppliance(id, meta);
+      if (appliance) return applianceAction(cell, appliance);
+      if (jammyLamp(id)) return {cells: [metaChanged(cell, id === 219 ? 220 : 219, meta)]};
+      if (id === 93 || id === 94) return {cells: [metaChanged(cell, id, (meta + 4) & 15)]};
+      if (manualHatch(id)) {
+        const result = hatchCell(cell, id, meta, !Boolean(meta & 4), playerOverlaps, playerPosition, context.input?.yaw);
+        if (result?.blocked) throw new RequestError(409, 'occupied');
+        return result;
+      }
+      const duration = buttonDuration(id);
+      if (id !== 69 && !duration) return null;
+      if (duration && (meta & 8)) return {};
+      const current = plan(context);
+      const point = pointOf(cell);
+      current.put(metaChanged(cell, id, meta ^ 8));
+      current.effects.push(clickEffect(cell, !(meta & 8)));
+      if (duration) current.schedule(point, id, duration);
+      updatePower(context, current, [point]);
+      return current.finish();
+    },
+    prepareEntry(context) {
+      const {position, getCell, activePositions} = context;
+      const plates = [];
+      const y = Math.floor(position.y);
+      for (let x = Math.floor(position.x - PLAYER.halfWidth); x <= Math.floor(position.x + PLAYER.halfWidth); x++) {
+        for (let z = Math.floor(position.z - PLAYER.halfWidth); z <= Math.floor(position.z + PLAYER.halfWidth); z++) {
+          const cell = getCell(x, y, z);
+          const [id, meta] = blockState(cell);
+          if (pressurePlate(id) && !meta && plateOccupied(activePositions, x, y, z)) plates.push([cell, id]);
+        }
+      }
+      if (!plates.length) return null;
+      const current = plan(context);
+      for (const [cell, id] of plates) triggerPlate(current, cell, id, true);
+      updatePower(context, current, plates.map(([cell]) => pointOf(cell)));
+      return current.finish();
+    },
+    prepareBlockChange(context) {
+      const {change} = context;
+      const point = pointOf(change), [id, meta] = blockState(change);
+      const current = plan(context);
+      current.put(change);
+      if (buttonDuration(id) && (meta & 8)) current.schedule(point, id, buttonDuration(id));
+      if (pressurePlate(id) && meta) current.schedule(point, id, 1000);
+      updatePower(context, current, [point]);
+      return current.finish();
+    },
+    prepareTick(context) {
+      const current = plan(context);
+      const entries = Object.entries(current.tasks).filter(([, task]) => task.at <= context.now);
+      if (!entries.length) return null;
+      const sources = [], due = new Set();
+      for (const [key, task] of entries) {
+        current.clear(key);
+        const point = key.split(',').map(Number);
+        const cell = current.get(...point);
+        const [id, meta] = blockState(cell);
+        if (task.id !== id) continue;
+        if (buttonDuration(id)) {
+          if (meta & 8) {
+            current.put(metaChanged(cell, id, meta & 7));
+            current.effects.push(clickEffect(cell, false));
+            sources.push(point);
+          }
+        } else if (pressurePlate(id)) {
+          if (triggerPlate(current, cell, id, plateOccupied(context.activePositions, ...point))) sources.push(point);
+        } else {
+          due.add(key);
+          sources.push(point);
+        }
+      }
+      updatePower(context, current, sources, due);
+      return current.finish();
+    },
+  };
+}
+
 export function registerMechanics(base, store, geometry) {
-  return [makeDiagnostics(base, store, geometry), woodDoors];
+  return [makeDiagnostics(base, store, geometry), woodDoors, makeControls(base, geometry), musicBlocks];
 }

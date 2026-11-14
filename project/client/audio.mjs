@@ -1,0 +1,339 @@
+import {collisionFor} from '../world/geometry.mjs';
+import {extractedModel} from '../world/extracted-models.mjs';
+
+const ASSETS = '/generated/sounds/';
+const STEP_DISTANCE = 1 / .6;
+const SFX_VOLUME = .12676056;
+const MUSIC_INTERVAL = 600;
+const SOUND_FILE = /^[a-f0-9]{24}\.ogg$/;
+const DEFAULT_PROFILE = ['step.stone', 'dig.stone', 1, 1];
+const effectDefaults = {
+  'door.open': {pitch: .9, spread: .1}, 'door.close': {pitch: .9, spread: .1},
+  'click.on': {pitch: .6, volume: .3}, 'click.off': {pitch: .5, volume: .3},
+  'chest.open': {pitch: .9, spread: .1, volume: .5}, 'chest.close': {pitch: .9, spread: .1, volume: .5},
+};
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const keyOf = cell => typeof cell === 'string' ? cell : cell?.key;
+const blockId = cell => {
+  const key = keyOf(cell);
+  if (key?.startsWith('legacy:') || key?.startsWith('cover:')) return Number.parseInt(key.slice(key.indexOf(':') + 1), 10);
+  return 0;
+};
+const pick = choices => choices?.[Math.floor(Math.random() * choices.length)];
+
+export function blockSoundProfile(catalog, cell, material) {
+  const id = catalog?.covers[material] ?? blockId(cell);
+  return catalog?.profiles[catalog.blocks[id]] ?? DEFAULT_PROFILE;
+}
+
+function support(world, position) {
+  const x = Math.floor(position.x), z = Math.floor(position.z);
+  const startY = Math.floor(position.y + .001);
+  let closest;
+  let height = -Infinity;
+  for (let y = startY; y >= startY - 2; y--) {
+    for (let zz = z - 1; zz <= z + 1; zz++) {
+      for (let xx = x - 1; xx <= x + 1; xx++) {
+        const cell = world.cellAt(xx, y, zz);
+        if (!cell) continue;
+        const boxes = extractedModel(world.models, cell)?.collision ?? collisionFor(cell,
+          (dx, dy, dz) => world.cellAt(xx + dx, y + dy, zz + dz));
+        for (const box of boxes) {
+          const top = y + box.y1;
+          if (top > position.y + .0125 || top <= height || top < position.y - .125 ||
+              position.x + .29 <= xx + box.x0 || position.x - .29 >= xx + box.x1 ||
+              position.z + .29 <= zz + box.z0 || position.z - .29 >= zz + box.z1) continue;
+          height = top;
+          closest = {cell, material: box.material};
+        }
+      }
+    }
+  }
+  const layer = world.cellAt(x, startY, z);
+  return blockId(layer) === 78 ? {cell: layer} : closest;
+}
+
+export class WorldAudio {
+  #catalog;
+  #loadPromise;
+  #context;
+  #master;
+  #volume = SFX_VOLUME;
+  #musicVolume = 0;
+  #muted = false;
+  #playing = false;
+  #buffers = new Map();
+  #voices = new Set();
+  #listener;
+  #right = [1, 0];
+  #nextAmbience = 0;
+  #previous;
+  #moved = 0;
+  #airborne = 0;
+  #music;
+  #nextMusic = 0;
+  #records = new Map();
+  #requested = 0;
+  #played = 0;
+
+  load() {
+    this.#loadPromise ??= fetch(`${ASSETS}sounds.json`).then(async response => {
+      if (!response.ok) return false;
+      const {version, profiles, blocks, covers, sounds} = await response.json();
+      if (version !== 1 || !Array.isArray(profiles) || !blocks || !covers || !sounds) return false;
+      this.#catalog = {profiles, blocks, covers, sounds};
+      return true;
+    }).catch(() => false);
+    return this.#loadPromise;
+  }
+
+  enable() {
+    const AudioContextType = globalThis.AudioContext ?? globalThis.webkitAudioContext;
+    if (!AudioContextType || !this.#loadPromise) return;
+    try {
+      if (!this.#context) {
+        this.#context = new AudioContextType();
+        this.#master = this.#context.createGain();
+        this.#master.connect(this.#context.destination);
+        this.#updateGain();
+      }
+      this.#context.resume().catch(() => {});
+    } catch {
+      this.#context = undefined;
+    }
+  }
+
+  setPlaying(active) {
+    this.#playing = Boolean(active);
+    this.#previous = undefined;
+    this.#moved = 0;
+    this.#airborne = 0;
+    if (!active) this.#music?.pause();
+    if (active && this.#music && this.#musicVolume) this.#music.play().catch(() => {});
+    for (const {player} of this.#records.values()) {
+      if (active) player.play().catch(() => {});
+      else player.pause();
+    }
+    this.#updateGain();
+  }
+
+  setMuted(muted) {
+    this.#muted = Boolean(muted);
+    this.#updateGain();
+    if (this.#music) this.#music.muted = this.#muted;
+  }
+
+  setVolume(volume) {
+    if (!Number.isFinite(volume)) return;
+    this.#volume = clamp(volume, 0, 1);
+    this.#updateGain();
+  }
+
+  setMusicVolume(volume) {
+    if (!Number.isFinite(volume)) return;
+    const enabled = this.#musicVolume > 0;
+    this.#musicVolume = clamp(volume, 0, 1);
+    if (!enabled && this.#musicVolume) this.#nextMusic = -1;
+    if (!this.#music) return;
+    this.#music.volume = this.#musicVolume;
+    if (!this.#musicVolume) this.#music.pause();
+    else if (this.#playing) this.#music.play().catch(() => {});
+  }
+
+  #updateGain() {
+    if (this.#master) this.#master.gain.value = this.#playing && !this.#muted ? this.#volume : 0;
+  }
+
+  #distance(position) {
+    if (!this.#listener || !position) return 0;
+    const {x, y, z} = this.#listener;
+    return Math.hypot(position[0] + .5 - x, position[1] + .5 - y, position[2] + .5 - z);
+  }
+
+  #buffer(file) {
+    if (!this.#buffers.has(file)) {
+      const buffer = fetch(ASSETS + file).then(response => {
+        if (!response.ok) throw new Error('Original sound asset missing');
+        return response.arrayBuffer();
+      }).then(bytes => this.#context.decodeAudioData(bytes)).catch(() => {
+        this.#buffers.delete(file);
+        return null;
+      });
+      this.#buffers.set(file, buffer);
+    }
+    return this.#buffers.get(file);
+  }
+
+  async play(id, position, options = {}) {
+    if (!this.#playing || this.#muted || this.#context?.state !== 'running') return false;
+    const file = pick(this.#catalog?.sounds[id]);
+    if (!SOUND_FILE.test(file ?? '')) return false;
+    const defaults = effectDefaults[id] ?? {};
+    const volume = Number.isFinite(options.volume) ? options.volume : defaults.volume ?? 1;
+    const speed = Number.isFinite(options.pitch) ? options.pitch : (defaults.pitch ?? 1) + Math.random() * (defaults.spread ?? 0);
+    const range = 16 * Math.max(1, volume);
+    if (this.#distance(position) >= range || volume <= 0) return false;
+    this.#requested++;
+    const buffer = await this.#buffer(file);
+    if (!buffer || !this.#playing || this.#muted || this.#voices.size >= 24) return false;
+    const gain = this.#context.createGain();
+    const distance = this.#distance(position);
+    gain.gain.value = Math.min(1, volume) * Math.max(0, 1 - distance / range);
+    const source = this.#context.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = clamp(speed, .25, 4);
+    source.connect(gain);
+    let pan;
+    if (position && this.#listener && this.#context.createStereoPanner) {
+      const dx = position[0] + .5 - this.#listener.x, dz = position[2] + .5 - this.#listener.z;
+      pan = this.#context.createStereoPanner();
+      pan.pan.value = clamp((dx * this.#right[0] + dz * this.#right[1]) / Math.max(2, distance), -1, 1);
+      gain.connect(pan).connect(this.#master);
+    } else gain.connect(this.#master);
+    this.#voices.add(source);
+    source.onended = () => {
+      this.#voices.delete(source);
+      source.disconnect();
+      gain.disconnect();
+      pan?.disconnect();
+    };
+    source.start();
+    this.#played++;
+    return true;
+  }
+
+  effects(effects = [], world) {
+    for (const effect of effects) {
+      if (!effect.sound) continue;
+      if (effect.sound === 'block.place') {
+        this.placed(world, effect);
+      } else if (effect.sound.startsWith('record.')) {
+        this.#record(effect.sound, effect.position);
+      } else {
+        void this.play(effect.sound, effect.position, effect);
+      }
+    }
+  }
+
+  placed(world, {cell, position}) {
+    if (!Array.isArray(position)) return;
+    const placed = world?.cellAt(...position) ?? cell;
+    const material = placed?.parts?.[0]?.material;
+    const [, event, volume, pitch] = blockSoundProfile(this.#catalog, placed, material);
+    void this.play(event, position, {volume: (volume + 1) / 2, pitch: pitch * .8});
+  }
+
+  frame(world, position, {grounded = false, swimming = false, climbing = false, yaw = 0} = {}) {
+    if (!this.#playing || !this.#catalog) return;
+    this.#listener = {x: position.x, y: position.y + 1.62, z: position.z};
+    this.#right = [Math.cos(yaw), -Math.sin(yaw)];
+    if (this.#context?.state === 'running') {
+      this.#playMusic();
+      this.#ambience(world, position);
+    }
+    for (const {player, position: sourcePosition} of this.#records.values()) {
+      player.volume = this.#muted ? 0 : this.#volume * Math.max(0, 1 - this.#distance(sourcePosition) / 64);
+    }
+    const previous = this.#previous;
+    this.#previous = {...position, grounded, swimming};
+    if (!previous) return;
+    const dx = position.x - previous.x, dy = position.y - previous.y, dz = position.z - previous.z;
+    const distance = Math.hypot(dx, climbing || swimming ? dy : 0, dz);
+    // An authoritative correction or respawn must not count as travelled distance.
+    if (Math.hypot(dx, dy, dz) > 1.25) {
+      this.#moved = 0;
+      this.#airborne = 0;
+      return;
+    }
+    if (!grounded && dy < 0) this.#airborne -= dy;
+    if (swimming && !previous.swimming) void this.play('liquid.splash', undefined, {volume: .4});
+    if (grounded || swimming || climbing) {
+      this.#moved += distance;
+      if (this.#moved >= STEP_DISTANCE || (grounded && !previous.grounded && this.#airborne > .65)) {
+        this.#moved %= STEP_DISTANCE;
+        if (swimming) {
+          void this.play('liquid.swim', undefined, {volume: .2, pitch: .8 + Math.random() * .4});
+        } else {
+          const surface = climbing ? {cell: 'legacy:65:0'} : support(world, position);
+          if (surface) {
+            const [event, , volume, pitch] = blockSoundProfile(this.#catalog, surface.cell, surface.material);
+            void this.play(event, undefined, {volume: volume * .15, pitch});
+          }
+        }
+      }
+      this.#airborne = 0;
+    }
+  }
+
+  #ambience(world, position) {
+    if (this.#muted || this.#context.currentTime < this.#nextAmbience) return;
+    this.#nextAmbience = this.#context.currentTime + 1.5 + Math.random() * 2;
+    const cx = Math.floor(position.x), cy = Math.floor(position.y + 1.62), cz = Math.floor(position.z);
+    const nearest = new Map();
+    for (let y = cy - 4; y <= cy + 4; y++) {
+      for (let z = cz - 8; z <= cz + 8; z++) {
+        for (let x = cx - 8; x <= cx + 8; x++) {
+          const distance = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2;
+          if (distance > 64) continue;
+          const cell = world.cellAt(x, y, z);
+          const id = blockId(cell);
+          let sound;
+          if ((id === 8 || id === 9) && /:[1-7]$/.test(keyOf(cell))) sound = 'liquid.water';
+          else if (id === 10 || id === 11) sound = 'liquid.lava';
+          else if (id === 51 || id === 3000) sound = 'fire.fire';
+          else if (id === 90) sound = 'portal.portal';
+          if (sound && distance < (nearest.get(sound)?.distance ?? Infinity)) {
+            nearest.set(sound, {position: [x, y, z], distance});
+          }
+        }
+      }
+    }
+    for (const [sound, source] of nearest) {
+      const volume = sound === 'liquid.water' ? .75 + Math.random() * .25 : .3;
+      void this.play(sound, source.position, {volume, pitch: .9 + Math.random() * .15});
+    }
+  }
+
+  #playMusic() {
+    if (!this.#musicVolume || this.#muted || this.#music || !globalThis.Audio) return;
+    const now = this.#context?.currentTime ?? 0;
+    this.#nextMusic ||= now + Math.random() * MUSIC_INTERVAL;
+    if (now < this.#nextMusic || [...this.#records.values()].some(({player}) => !player.ended)) return;
+    const file = pick(this.#catalog.sounds['music.overworld']);
+    if (!SOUND_FILE.test(file ?? '')) return;
+    const player = new Audio(ASSETS + file);
+    this.#music = player;
+    player.volume = this.#musicVolume;
+    const finish = () => {
+      this.#music = undefined;
+      this.#nextMusic = this.#context.currentTime + (1 + Math.random()) * MUSIC_INTERVAL;
+    };
+    player.onended = finish;
+    player.play().catch(finish);
+  }
+
+  #record(event, position) {
+    if (!Array.isArray(position)) return;
+    const key = position.join(',');
+    this.#records.get(key)?.player.pause();
+    this.#records.delete(key);
+    const file = pick(this.#catalog?.sounds[event]);
+    if (!this.#playing || this.#distance(position) >= 64 || !globalThis.Audio || !SOUND_FILE.test(file ?? '')) return;
+    const player = new Audio(ASSETS + file);
+    this.#records.set(key, {player, position});
+    player.volume = this.#muted ? 0 : this.#volume * Math.max(0, 1 - this.#distance(position) / 64);
+    const finish = () => { if (this.#records.get(key)?.player === player) this.#records.delete(key); };
+    player.onended = finish;
+    this.#music?.pause();
+    this.#music = undefined;
+    this.#nextMusic = (this.#context?.currentTime ?? 0) + MUSIC_INTERVAL;
+    player.play().catch(finish);
+  }
+
+  stats() {
+    return {loaded: Boolean(this.#catalog), state: this.#context?.state ?? 'disabled', muted: this.#muted,
+      requested: this.#requested, played: this.#played,
+      musicPlaying: Boolean(this.#music && !this.#music.paused && !this.#music.ended)};
+  }
+}

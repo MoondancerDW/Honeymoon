@@ -1,16 +1,45 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { relatedBlockStates } from '../world/block-interactions.mjs';
 
 const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
 const MAX_CACHED_CHUNKS = 80;
 const safeTileFields = new Set([
   'Text1', 'Text2', 'Text3', 'Text4', 'rotation', 'Rotation', 'direction', 'Direction',
   'orientation', 'Orientation', 'rot', 'Rot', 'facing', 'Facing', 'color', 'Color',
-  'Colour', 'colour', 'type', 'Type', 'style', 'Style', 'open', 'Open', 'active', 'Active',
+  'Colour', 'colour', 'type', 'Type', 'style', 'Style', 'open', 'Open', 'active', 'Active', 'sid',
   'bookcaseAngle', 'filledBottomSlots', 'filledTopSlots', 'deskAngle', 'hasWrittenBook',
-  'leftBookStack', 'rightBookStack', 'genericShelfAngle', 'potionshelfAngle', 'caseAngle', 'rackAngle', 'ps',
+  'leftBookStack', 'rightBookStack', 'genericShelfAngle', 'potionshelfAngle', 'caseAngle', 'rackAngle',
+  'labelAngle', 'LidOpen', 'ps', 'cons',
 ]);
+const jacketTiles = new Set(['Redwire', 'RedCable', 'Bluewire']);
+
+const visibleItems = {
+  ArmorStandTile: ['StandInventory', 4],
+  GenericShelfTile: ['ShelfInventory', 4],
+  PotionShelfTile: ['PotionInventory', 12],
+  ToolRackTile: ['RackInventory', 4],
+  WeaponCaseTile: ['CaseInventory', 1],
+  WoodLabelTile: ['LabelInventory', 3],
+};
+
+function displayItems(inventory, slots, armor) {
+  if (!Array.isArray(inventory)) return [];
+  const result = [];
+  for (const item of inventory) {
+    const {id, Damage = 0, Slot} = item ?? {};
+    if (!Number.isInteger(id) || id <= 0 || id > 32767 || !Number.isInteger(Damage) ||
+        !Number.isInteger(Slot) || Slot < 0 || Slot >= slots) continue;
+    const data = {id, Damage, Slot};
+    const color = item.tag?.display?.color;
+    if (armor && Number.isInteger(color) && color >= 0 && color <= 0xffffff) {
+      data.tag = {display: {color}};
+    }
+    result.push(data);
+  }
+  return result;
+}
 
 export function cellAddress(x, y, z) {
   return `${x},${y},${z}`;
@@ -23,6 +52,21 @@ export function displayObject(object) {
     if (safeTileFields.has(key) && ['string', 'number', 'boolean'].includes(typeof value)) {
       data[key] = value;
     }
+  }
+  if (Object.hasOwn(visibleItems, object.type)) {
+    const [field, slots] = visibleItems[object.type];
+    data[field] = displayItems(object.data?.[field], slots, object.type === 'ArmorStandTile');
+  }
+  if (jacketTiles.has(object.type)) {
+    if (Number.isInteger(object.data?.post)) data.post = object.data.post & 255;
+    if (Number.isInteger(object.data?.pwr)) data.pwr = object.data.pwr & 255;
+  }
+  if (object.type === 'Music' && Number.isInteger(object.data?.note)) {
+    data.note = Math.min(24, Math.max(0, object.data.note));
+  }
+  if (object.type === 'RecordPlayer') {
+    const recordId = object.data?.RecordItem?.id ?? object.data?.Record;
+    if (Number.isInteger(recordId) && recordId >= 2256 && recordId <= 2267) data.Record = recordId;
   }
   return { key: object.key, position: object.position, type: object.type, data };
 }
@@ -48,8 +92,7 @@ export function loadBase(directory) {
   const corePalette = manifest.palette.slice(0, manifest.corePaletteSize ?? manifest.palette.length);
   const catalog = new Set(corePalette);
   for (const key of corePalette) {
-    const lowerDoor = /^legacy:64:([0-7])$/.exec(key);
-    if (lowerDoor) catalog.add(`legacy:64:${Number(lowerDoor[1]) ^ 4}`);
+    for (const variant of relatedBlockStates(key)) catalog.add(variant);
   }
 
   function inBounds(x, y, z) {

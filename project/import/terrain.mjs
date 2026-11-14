@@ -5,7 +5,6 @@ import { sectionBlocks } from './nbt.mjs';
 const STEP = 4;
 const LEVEL_CELLS = 64;
 const MIN_OCCUPANCY = 3;
-const DETAIL_RADIUS = 4;
 const RING_RADII = [8, 16, 32];
 const COVER_MATERIAL_BASE = 65536;
 const FINE_DECORATION = new Set([
@@ -82,10 +81,9 @@ function scanCompositions(level, compositions) {
   return materials;
 }
 
-export function writeTerrainRings(output, maxRadius, loadChunk, visualRadius = 0) {
+export function writeTerrainRings(output, maxRadius, loadChunk, detailRadius) {
   const compositions = new Set();
   const summary = [];
-  const detailRadius = Math.max(DETAIL_RADIUS, visualRadius);
   let innerRadius = detailRadius;
   for (const radius of RING_RADII) {
     if (radius > maxRadius) break;

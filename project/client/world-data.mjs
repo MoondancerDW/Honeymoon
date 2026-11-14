@@ -1,3 +1,5 @@
+import {lightChanged, updateBlockLight} from './block-light.mjs';
+
 export const chunkKey = (x, z) => x + ',' + z;
 export const sectionKey = (x, y, z) => x + ',' + y + ',' + z;
 export const cellKey = sectionKey;
@@ -29,6 +31,8 @@ export class World {
     this.chunks = new Map();
     this.objects = new Map();
     this.overrides = new Map();
+    this.blockLightOverrides = new Map();
+    this.pendingLights = new Map();
   }
 
   addChunk(chunk, visualOnly = false) {
@@ -55,6 +59,10 @@ export class World {
     const previous = this.overrides.get(position);
     if (previous && previous.revision >= change.revision) return false;
     const key = change.cell || 'air';
+    const {x, y, z} = change;
+    if (this.chunks.has(chunkKey(x >> 4, z >> 4)) && lightChanged(this.lightCell(x, y, z), {key, object: change.object})) {
+      if (!this.pendingLights.has(position)) this.pendingLights.set(position, [x, y, z, this.lightAt(x, y, z) & 15]);
+    }
     this.overrides.set(position, {...change, index: this.addPalette(key)});
     return true;
   }
@@ -76,11 +84,8 @@ export class World {
 
   cellAt(x, y, z) {
     if (!this.hasChunk(x, z)) return null;
-    const key = this.palette[this.indexAt(x, y, z)] || 'air';
+    const {key, object} = this.lightCell(x, y, z);
     if (key === 'air') return null;
-    const position = cellKey(x, y, z);
-    const override = this.overrides.get(position);
-    const object = override ? override.object : this.objects.get(position);
     const composition = this.manifest.compositions?.[key];
     if (!composition && !object) return key;
     return {key, ...composition, object};
@@ -88,6 +93,39 @@ export class World {
 
   revisionAt(x, y, z) {
     return this.overrides.get(cellKey(x, y, z))?.revision || 0;
+  }
+
+  lightAt(x, y, z) {
+    const original = this.baseLightAt(x, y, z);
+    if (!this.blockLightOverrides.size) return original;
+    const block = this.blockLightOverrides.get(cellKey(x, y, z));
+    return block === undefined ? original : (original & 240) | block;
+  }
+
+  baseLightAt(x, y, z) {
+    return packedLight(this.section(x, y, z), blockIndex(x, y, z));
+  }
+
+  lightCell(x, y, z, base = false) {
+    const position = cellKey(x, y, z);
+    const override = base ? null : this.overrides.get(position);
+    const index = override?.index ?? this.section(x, y, z)?.indices[blockIndex(x, y, z)] ?? 0;
+    return {key: this.palette[index], object: override ? override.object : this.objects.get(position)};
+  }
+
+  updateLighting(chunk) {
+    if (chunk) {
+      for (const [position, {x, y, z}] of this.overrides) {
+        if (Math.abs((x >> 4) - chunk.x) > 1 || Math.abs((z >> 4) - chunk.z) > 1 || !this.chunks.has(chunkKey(x >> 4, z >> 4))) continue;
+        if (lightChanged(this.lightCell(x, y, z, true), this.lightCell(x, y, z))) {
+          this.pendingLights.set(position, [x, y, z, this.lightAt(x, y, z) & 15]);
+        }
+      }
+    }
+    const dirty = new Set();
+    for (const changed of this.pendingLights.values()) for (const section of updateBlockLight(this, ...changed)) dirty.add(section);
+    this.pendingLights.clear();
+    return dirty;
   }
 
   halo(cx, cy, cz) {
@@ -106,10 +144,9 @@ export class World {
           const section = this.section(x, y, z);
           const index = blockIndex(x, y, z);
           indices[i] = override?.index ?? section?.indices[index] ?? 0;
-          const shift = (index & 1) * 4;
-          const sky = section?.sky ? (section.sky[index >> 1] >> shift) & 15 : 15;
-          const block = section?.block ? (section.block[index >> 1] >> shift) & 15 : 0;
-          light[i] = (sky << 4) | block;
+          const original = packedLight(section, index);
+          const block = this.blockLightOverrides.get(key);
+          light[i] = block === undefined ? original : (original & 240) | block;
           const object = override ? override.object : this.objects.get(key);
           if (object && indices[i]) objects.push([i, object]);
         }
@@ -117,4 +154,11 @@ export class World {
     }
     return {indices, light, objects};
   }
+}
+
+function packedLight(section, index) {
+  const shift = (index & 1) * 4;
+  const sky = section?.sky ? (section.sky[index >> 1] >> shift) & 15 : 15;
+  const block = section?.block ? (section.block[index >> 1] >> shift) & 15 : 0;
+  return (sky << 4) | block;
 }

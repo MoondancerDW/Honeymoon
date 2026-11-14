@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as geometry from '../world/geometry.mjs';
+import { extractedModel, modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
 import { displayObject, loadBase } from './base.mjs';
 import { createHoneymoonServer } from './index.mjs';
 import { physics } from './physics.mjs';
@@ -75,10 +76,10 @@ function availableCases(base) {
   return candidates;
 }
 
-function findStand(base, target, original) {
+function findStand(base, target, original, physicalGeometry) {
   const [x, y, z] = target;
-  const before = physics(base, geometry, (a, b, c) => at(base, a, b, c));
-  const after = physics(base, geometry, (a, b, c) => a === x && b === y && c === z ? null : at(base, a, b, c));
+  const before = physics(base, physicalGeometry, (a, b, c) => at(base, a, b, c));
+  const after = physics(base, physicalGeometry, (a, b, c) => a === x && b === y && c === z ? null : at(base, a, b, c));
   const anchors = directions.map(([dx, dy, dz]) => [x + dx, y + dy, z + dz])
     .filter(position => at(base, ...position).key !== 'air');
   if (!anchors.length) return null;
@@ -91,7 +92,7 @@ function findStand(base, target, original) {
         for (const dy of [0, -1, 1, -2, 2, -3, 3]) {
           const gy = y + dy - 1;
           if (!base.inBounds(sx, gy + 1, sz)) continue;
-          const floor = geometry.collisionFor(at(base, x + dx, gy, z + dz),
+          const floor = physicalGeometry.collisionFor(at(base, x + dx, gy, z + dz),
             (nx, ny, nz) => at(base, x + dx + nx, gy + ny, z + dz + nz));
           const tops = new Set(floor.filter(box => box.x0 < 0.5 && box.x1 > 0.5 && box.z0 < 0.5 && box.z1 > 0.5).map(box => gy + box.y1));
           for (const sy of tops) {
@@ -107,20 +108,29 @@ function findStand(base, target, original) {
   return null;
 }
 
-async function checkActions(base, candidate, target, { stand, anchor }) {
+async function checkActions(base, candidate, target, { stand, anchor }, catalogs) {
   const [x, y, z] = target;
   const [ax, ay, az] = anchor;
   const original = at(base, x, y, z);
   const neighbors = (dx, dy, dz) => at(base, x + dx, y + dy, z + dz);
-  const shape = geometry.shapeFor(original, neighbors);
-  const collision = geometry.collisionFor(original, neighbors);
-  assert.ok(candidate.expect(shape, collision), 'shape or collision expectation');
-  for (const part of shape) {
-    const visibleTiles = part.faces.filter(index => index >= 0);
-    assert.ok(visibleTiles.length && visibleTiles.every(index => Number.isInteger(index) && index < geometry.ATLAS_GRID ** 2), 'atlas tile indices');
+  const model = extractedModel(catalogs, original);
+  if (model) {
+    assert.ok(model.surfaces.length && model.selection.length, 'model geometry and selection');
+    for (const { positions, uv } of model.surfaces) {
+      assert.ok(positions.length === 12 && positions.every(Number.isFinite), 'model quad positions');
+      assert.ok(uv.length === 8 && uv.every(value => value >= 0 && value <= 1), 'model atlas coordinates');
+    }
+  } else {
+    const shape = geometry.shapeFor(original, neighbors);
+    const collision = geometry.collisionFor(original, neighbors);
+    assert.ok(candidate.expect(shape, collision), 'shape or collision expectation');
+    for (const part of shape) {
+      const visibleTiles = part.faces.filter(index => index >= 0);
+      assert.ok(visibleTiles.length && visibleTiles.every(index => Number.isInteger(index) && index < geometry.ATLAS_GRID ** 2), 'atlas tile indices');
+    }
   }
   const scenario = { ...base, manifest: { ...base.manifest, spawn: [stand.x, stand.y, stand.z] } };
-  const app = createHoneymoonServer({ base: scenario, geometry, state: ':memory:' });
+  const app = createHoneymoonServer({ base: scenario, geometry, state: ':memory:', allowRemoval: true });
   try {
     app.server.listen(0, '127.0.0.1');
     await once(app.server, 'listening');
@@ -164,6 +174,14 @@ test('copy, remove and restore actual Honeymoon block families through HTTP', {
     t.skip('This matrix requires the complete 64-chunk district');
     return;
   }
+  const catalogs = {};
+  for (const family of modelFamilies) {
+    const file = join(directory, '..', 'models', `${family}.json`);
+    if (existsSync(file) && existsSync(join(directory, '..', 'models', `${family}.png`))) {
+      catalogs[family] = JSON.parse(readFileSync(file, 'utf8'));
+    }
+  }
+  const physicalGeometry = withExtractedModels(geometry, catalogs);
   const available = availableCases(base);
   for (const candidate of cases) {
     await t.test(candidate.name, async t => {
@@ -171,9 +189,9 @@ test('copy, remove and restore actual Honeymoon block families through HTTP', {
         const original = at(base, ...target);
         const [, id, meta] = original.key.split(':');
         if (!candidate.match({ id: Number(id), meta: Number(meta), ...original })) continue;
-        const setup = findStand(base, target, original);
+        const setup = findStand(base, target, original, physicalGeometry);
         if (!setup) continue;
-        t.diagnostic(await checkActions(base, candidate, target, setup));
+        t.diagnostic(await checkActions(base, candidate, target, setup, catalogs));
         return;
       }
       assert.fail(`No visible, safely editable cell found for ${candidate.name}`);

@@ -31,21 +31,43 @@ try {
     }
     $worldPath = 'generated\world\world.json'
     $importRequired = !(Test-Path -LiteralPath $worldPath)
-    if (!$importRequired -and $TerrainRadius) {
+    if (!$importRequired) {
         $world = Get-Content -Raw -LiteralPath $worldPath | ConvertFrom-Json
-        $importRequired = $TerrainRadius -notin $world.terrain.radius -or !$world.visualChunks
+        $importRequired = $world.bounds.minX -ne -128 -or
+            ($TerrainRadius -and $TerrainRadius -notin $world.terrain.radius)
     }
     if ($importRequired) {
-        & $nodePath import/anvil.mjs --terrain-radius $TerrainRadius
+        & $nodePath import/anvil.mjs --radius 8 --terrain-radius "$TerrainRadius"
         if ($LASTEXITCODE) { throw 'World import failed.' }
     }
     $atlasMetadata = 'generated\textures\atlas.json'
     $atlasVersion = if (Test-Path -LiteralPath $atlasMetadata) {
         (Get-Content -Raw -LiteralPath $atlasMetadata | ConvertFrom-Json).schemaVersion
     }
-    if ($atlasVersion -ne 2 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
+    if ($atlasVersion -ne 4 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
         & $pythonPath -B world/textures.py
         if ($LASTEXITCODE) { throw 'Texture extraction failed. Install Pillow from world/requirements.txt.' }
+    }
+    $modelInputs = @{
+        biblio = @{ Script = 'world/biblio-extract.py'; Source = '../sources/Honeymoon/mods/BiblioCraft.zip' }
+        jammy = @{ Script = 'world/jammy-models.py'; Source = '../sources/Honeymoon/minecraft.jar' }
+        redpower = @{ Script = 'world/redpower-lamps.py'; Source = '../sources/Honeymoon/mods/RedPowerDigital-2.0pr6.zip' }
+    }
+    foreach ($family in $modelInputs.Keys) {
+        $modelJson = "generated/models/$family.json"
+        $current = Test-Path -LiteralPath $modelJson
+        if ($current -and $family -eq 'jammy') {
+            $current = (Get-Content -Raw -LiteralPath $modelJson | ConvertFrom-Json).schemaVersion -eq 2
+        }
+        if ((Test-Path -LiteralPath $modelInputs[$family].Source) -and
+            (!$current -or !(Test-Path -LiteralPath "generated/models/$family.png"))) {
+            & $pythonPath -B $modelInputs[$family].Script
+            if ($LASTEXITCODE) { throw "Model extraction failed for $family." }
+        }
+    }
+    if (!(Test-Path -LiteralPath 'generated/sounds/sounds.json') -and (Test-Path -LiteralPath '../sources/Honeymoon/resources')) {
+        & $pythonPath -B world/sounds.py
+        if ($LASTEXITCODE) { throw 'Sound extraction failed.' }
     }
     & $nodePath server/index.mjs
     exit $LASTEXITCODE

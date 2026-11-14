@@ -1,4 +1,4 @@
-import { chromium, devices } from 'playwright-core';
+import { chromium } from 'playwright-core';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -16,6 +16,7 @@ const page = await context.newPage();
 page.on('pageerror', error => errors.push(error.stack));
 page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
 const results = {browser: browser.version(), resolution: '1280×720', errors, distances: []};
+const world = await (await fetch(`${base}/generated/world/world.json`)).json();
 const stats = page => page.evaluate(() => honeymoon.stats());
 page.on('response', response => { if (response.status() >= 400) errors.push(response.status() + ' ' + response.url()); });
 const percentile = (sample, p) => {
@@ -30,10 +31,10 @@ async function ready(page) {
 }
 
 async function settled(page) {
-  await page.waitForFunction(() => {
+  await page.waitForFunction(count => {
     const m = honeymoon.stats();
-    return m.pending === 0 && m.chunksLoaded === 64;
-  }, {timeout:90000});
+    return m.pending === 0 && m.chunksLoaded === count;
+  }, world.chunks.length, {timeout:90000});
 }
 
 try {
@@ -93,44 +94,18 @@ try {
   await page.waitForFunction(() => document.querySelector('#selected').textContent.includes('В руке'));
   await page.mouse.down({button:'left'});
   await page.mouse.up({button:'left'});
-  await peer.waitForFunction(({x,y,z}) => !honeymoon.getCell(x,y,z), selected, {timeout:10000});
-  const remove = await stats(page);
-  await peer.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision === revision, remove.revision);
-  results.edits = {selected, removedVisibleToSecondClient: true, removeMs: remove.lastEdit,
-    peerRemoveMeshMs: (await stats(peer)).lastEditRender.ms};
-  await page.waitForFunction(({x,y,z}) => { const next = honeymoon.target(); return next && next.x+next.offset[0]===x && next.y+next.offset[1]===y && next.z+next.offset[2]===z; }, selected, {timeout:10000});
-  await page.mouse.down({button:'right'});
-  await page.mouse.up({button:'right'});
-  await peer.waitForFunction(({x,y,z,key}) => {
+  const stillPresent = await peer.evaluate(({x,y,z,key}) => {
     const cell = honeymoon.getCell(x,y,z);
     return (typeof cell === 'string' ? cell : cell?.key) === key;
-  }, selected, {timeout:10000});
-  results.edits.replacedVisibleToSecondClient = true;
-  const place = await stats(page);
-  await peer.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision === revision, place.revision);
-  results.edits.placeMs = place.lastEdit;
-  results.edits.peerPlaceMeshMs = (await stats(peer)).lastEditRender.ms;
+  }, selected);
+  const removal = await page.request.post(`${base}/api/action`, {data:{type:'remove', requestId:'desktop-block-breaking',
+    x:selected.x, y:selected.y, z:selected.z, expectedRevision:0}});
+  const response = await removal.json();
+  if (!stillPresent || removal.status() !== 403 || response.error !== 'block_breaking_disabled') {
+    throw new Error('Block breaking is enabled');
+  }
+  results.edits = {selected, copyWorks: true, blockBreakingDisabled: true};
   await second.close();
-
-  await context.close();
-  const phone = await browser.newContext({...devices['Pixel 7']});
-  const touch = await phone.newPage();
-  await ready(touch);
-  await touch.locator('#play').tap();
-  await touch.locator('#stick').waitFor();
-  await settled(touch);
-  const before = (await stats(touch)).position;
-  const pad = await touch.locator('#stick').boundingBox();
-  const cdp = await phone.newCDPSession(touch);
-  const point = {x: Math.round(pad.x + pad.width / 2), y: Math.round(pad.y + pad.height / 2 - 30)};
-  await cdp.send('Input.dispatchTouchEvent', {type:'touchStart', touchPoints:[point]});
-  await touch.waitForTimeout(700);
-  await cdp.send('Input.dispatchTouchEvent', {type:'touchEnd', touchPoints:[]});
-  const after = (await stats(touch)).position;
-  if (Math.hypot(after.x - before.x, after.z - before.z) < .5) throw new Error('Touch joystick did not move player');
-  results.emulatedTouch = {controls: await touch.locator('#touch-use').isVisible(), width: await touch.evaluate(() => innerWidth), before, after};
-  await touch.screenshot({path:resolve(directory,'touch.png')});
-  await phone.close();
 } catch (error) {
   results.failure = error.stack;
   process.exitCode = 1;

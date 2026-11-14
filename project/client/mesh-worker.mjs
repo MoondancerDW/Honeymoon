@@ -1,20 +1,23 @@
 import * as geometry from '/world/geometry.mjs';
 import {decodeIndices} from './world-data.mjs';
 import {glassTexture, paneTexture} from '/world/connected-textures.mjs';
-import {coverShade, legacyLight, linearByte, FACE_SHADE} from './lighting.mjs';
+import {coverShade, FACE_SHADE} from './lighting.mjs';
+import {extractedModel} from '/world/extracted-models.mjs';
 
 const {shapeFor, ATLAS_GRID, TILE_SIZE, FACES} = geometry;
 const SIDE = 18;
 const STRIDE = [1, SIDE * SIDE, SIDE];
 const waterKey = key => key?.startsWith('legacy:8:') || key?.startsWith('legacy:9:');
+const usesNeighborLight = key => /^legacy:(44|53|67|108|109|113|114|126|128|134|135|136|156|4039):/.test(key ?? '');
 const MAX = ['x1', 'y1', 'z1'];
 const MIN = ['x0', 'y0', 'z0'];
 let cells = [];
 let compositions = {};
+let models = {};
 const cache = new Map();
 
 function layer() {
-  return {positions: [], colors: [], uvs: [], indices: []};
+  return {positions: [], colors: [], lightLevels: [], uvs: [], indices: []};
 }
 
 function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1) {
@@ -23,13 +26,33 @@ function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1) {
   const v0 = 1 - Math.floor(tile / ATLAS_GRID) / ATLAS_GRID;
   const padding = .25 / TILE_SIZE;
   const scale = 1 - 2 * padding;
-  const r = linearByte(light[0], shade, (tint >> 16) & 255);
-  const g = linearByte(light[1], shade, (tint >> 8) & 255);
-  const b = linearByte(light[2], shade, tint & 255);
+  const r = Math.round((tint >> 16 & 255) * shade);
+  const g = Math.round((tint >> 8 & 255) * shade);
+  const b = Math.round((tint & 255) * shade);
   for (let i = 0; i < 4; i++) {
     out.positions.push(...corners[i]);
     out.colors.push(r, g, b);
+    out.lightLevels.push(light);
     out.uvs.push(u0 + (padding + scale * uv[i][0]) / ATLAS_GRID, v0 - (padding + scale * uv[i][1]) / ATLAS_GRID);
+  }
+  out.indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
+}
+
+function modelQuad(out, {positions, uv, emissive, tint = 0xffffff}, origin, light) {
+  const start = out.positions.length / 3;
+  const ax = positions[3] - positions[0], ay = positions[4] - positions[1], az = positions[5] - positions[2];
+  const bx = positions[6] - positions[0], by = positions[7] - positions[1], bz = positions[8] - positions[2];
+  const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+  const norm = Math.hypot(nx, ny, nz);
+  if (norm < 1e-9) return;
+  const shade = (Math.abs(nx) * FACE_SHADE[0] + Math.abs(nz) * FACE_SHADE[4]
+    + Math.abs(ny) * FACE_SHADE[ny < 0 ? 2 : 3]) / (Math.abs(nx) + Math.abs(ny) + Math.abs(nz));
+  const color = [tint >> 16 & 255, tint >> 8 & 255, tint & 255].map(channel => Math.round(channel * (emissive ? 1 : shade)));
+  for (let i = 0; i < 4; i++) {
+    out.positions.push(positions[i * 3] + origin[0], positions[i * 3 + 1] + origin[1], positions[i * 3 + 2] + origin[2]);
+    out.uvs.push(uv[i * 2], 1 - uv[i * 2 + 1]);
+    out.colors.push(...color);
+    out.lightLevels.push(emissive ? 256 : light);
   }
   out.indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
 }
@@ -79,13 +102,25 @@ function coversFace(other, box, face) {
   return AXES[face].every(i => other[MIN[i]] <= box[MIN[i]] && other[MAX[i]] >= box[MAX[i]]);
 }
 
+function neighborLight(light, at, x, y, z) {
+  let sky = light[at] >> 4, block = light[at] & 15;
+  const samples = [y < SIDE - 1 ? at + STRIDE[1] : at, x > 0 ? at - 1 : at,
+    x < SIDE - 1 ? at + 1 : at, z > 0 ? at - SIDE : at, z < SIDE - 1 ? at + SIDE : at];
+  for (const sample of samples) {
+    sky = Math.max(sky, light[sample] >> 4);
+    block = Math.max(block, light[sample] & 15);
+  }
+  return sky << 4 | block;
+}
+
 function makeShape(index, at, cell, neighbors) {
   const key = cells[index];
   // Stairs and connected shapes can read neighboring cells. Include their face neighbors.
   const connected = geometry.shapeDependsOnNeighbors(key);
   if (!connected && !cell?.object && cache.has(index)) return cache.get(index);
-  const boxes = shapeFor(cell || key, (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE));
-  const shape = {boxes, full: boxes.find(fullCube)};
+  const model = extractedModel(models, cell || key);
+  const boxes = model ? [] : shapeFor(cell || key, (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE));
+  const shape = {boxes, model, full: boxes.find(fullCube)};
   if (!connected && !cell?.object) cache.set(index, shape);
   return shape;
 }
@@ -112,13 +147,22 @@ function precise({indices, light, objects, connectedTextures}) {
       for (let x = 0; x < 16; x++) {
         const at = (x + 1) + (z + 1) * SIDE + (y + 1) * SIDE * SIDE;
         if (!indices[at]) continue;
-        const {boxes} = shape(at);
+        const {boxes, model} = shape(at);
         const origin = [x, y, z];
+        if (model) {
+          const shade = light[at];
+          for (const surface of model.surfaces) {
+            const mode = `${model.family}:${surface.mode ?? 'cutout'}`;
+            modelQuad(layers[mode] ??= layer(), surface, origin, shade);
+          }
+          continue;
+        }
         const blockKey = cells[indices[at]];
         const ctm = connectedTextures && (blockKey.startsWith('legacy:20:') || blockKey.startsWith('legacy:102:'));
         const glass = ctm && blockKey.startsWith('legacy:20:');
         const water = waterKey(blockKey);
         const cover = blockKey.startsWith('cover:750:0:');
+        const neighborLit = usesNeighborLight(blockKey);
         const neighbors = ctm ? (dx, dy, dz) => cell(at + dx + dz * SIDE + dy * SIDE * SIDE) : null;
         if (indexedObjects.has(at)) {
           const sign = geometry.signFor?.(cell(at));
@@ -127,7 +171,7 @@ function precise({indices, light, objects, connectedTextures}) {
         for (const box of boxes) {
           const out = layers[box.mode] || layers.opaque;
           if (box.kind === 'cross') {
-            const shade = legacyLight(light[at]);
+            const shade = light[at];
             const a = x + box.x0, b = x + box.x1, c = y + box.y0, d = y + box.y1;
             const e = z + box.z0, f = z + box.z1;
             quad(out, [[a,c,e],[b,c,f],[b,d,f],[a,d,e]], box.faces[0], FULL_UV, shade, box.tint);
@@ -145,7 +189,14 @@ function precise({indices, light, objects, connectedTextures}) {
                   (neighbor && box.mode !== 'opaque' && indices[adjacent] === indices[at])) continue;
             }
             if (boxes.length > 1 && boxes.some(other => coversFace(other, box, f))) continue;
-            const brightness = box.emissive ? [255, 255, 255] : legacyLight(light[onEdge ? adjacent : at]);
+            let packed = light[onEdge ? adjacent : at];
+            if (onEdge && usesNeighborLight(cells[indices[adjacent]])) {
+              const [dx, dy, dz] = FACES[f];
+              packed = neighborLight(light, adjacent, x + 1 + dx, y + 1 + dy, z + 1 + dz);
+            } else if (!onEdge && neighborLit) {
+              packed = neighborLight(light, at, x + 1, y + 1, z + 1);
+            }
+            const brightness = box.emissive ? 256 : packed;
             const shade = box.emissive ? 1 : FACE_SHADE[f] * (cover ? coverShade(light[adjacent]) : 1);
             let tile = box.faces[f];
             if (glass) tile = glassTexture(f, neighbors, Number(blockKey.slice(10))) ?? tile;
@@ -192,7 +243,7 @@ function coarse({chunks, origin, stride}) {
     for (let f = 0; f < 6; f++) {
       const [dx, dy, dz] = FACES[f];
       if (lookup.has((x + dx * stride) + ',' + (y + dy * stride) + ',' + (z + dz * stride))) continue;
-      faceQuad(layers.opaque, box, f, [localX, y, localZ], legacyLight(240), shape.faces[f], FACE_SHADE[f]);
+      faceQuad(layers.opaque, box, f, [localX, y, localZ], 240, shape.faces[f], FACE_SHADE[f]);
     }
   }
   return {layers, signs: []};
@@ -202,6 +253,7 @@ self.onmessage = ({data}) => {
   if (data.type === 'init') {
     cells = data.palette;
     compositions = data.compositions;
+    models = data.models || {};
     return;
   }
   if (data.palette) cells = data.palette;
@@ -217,8 +269,9 @@ self.onmessage = ({data}) => {
       out.positions = new Float32Array(out.positions);
       out.uvs = new Float32Array(out.uvs);
       out.colors = new Uint8Array(out.colors);
+      out.lightLevels = new Uint16Array(out.lightLevels);
       out.indices = out.positions.length / 3 <= 65535 ? new Uint16Array(out.indices) : new Uint32Array(out.indices);
-      transfers.push(out.positions.buffer, out.uvs.buffer, out.colors.buffer, out.indices.buffer);
+      transfers.push(out.positions.buffer, out.uvs.buffer, out.colors.buffer, out.lightLevels.buffer, out.indices.buffer);
     }
     self.postMessage({id: data.id, version: data.version, layers, signs, elapsed: performance.now() - start}, transfers);
   } catch (error) {

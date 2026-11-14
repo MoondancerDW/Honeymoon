@@ -107,6 +107,12 @@ function wallPlate(meta, width, y0, y1, depth, tile, options = GROUND_DECOR) {
   return turnedBox([halfGap, y0, 1 - depth, 1 - halfGap, y1, 1], tile, turn, options);
 }
 
+function torch(tile, meta, emissive) {
+  const options = {mode:'cutout', solid:false, emissive, uv:'box'};
+  if (meta === 5 || meta === 0) return [box([0.4375, 0, 0.4375, 0.5625, 0.625, 0.5625], tile, options)];
+  return [wallPlate(({1:5, 2:4, 3:3, 4:2})[meta], 0.125, 0.25, 0.875, 0.1875, tile, options)];
+}
+
 function log(meta) {
   const bark = [20, 116, 117, 153][meta & 3];
   const end = (meta & 3) === 3 ? 153 : 21;
@@ -194,10 +200,7 @@ function fence(id, meta, neighbors, pane = false) {
   const wall = id === 139;
   const tile = pane ? paneTile : id === 113 ? 224 : wall ? (meta ? 36 : 16) : 4;
   const options = pane && id === 102 ? GLASS : pane ? { mode: 'cutout' } : DEFAULT;
-  const links = [0, 1, 4, 5].map(face => {
-    const [near] = unpack(neighbors?.(...FACES[face]));
-    return near === id || (pane && [20, 101, 102].includes(near)) || [1, 2, 3, 4, 5, 7, 12, 17, 24, 35, 45, 48, 98, 107, 112, 125].includes(near);
-  });
+  const links = fenceLinks(id, neighbors, pane);
   if (pane) {
     const arms = links.some(Boolean) ? links : [true, true, true, true];
     const result = [];
@@ -213,6 +216,13 @@ function fence(id, meta, neighbors, pane = false) {
     if (z0 || z1) result.push(box([0.5 - width / 2, bottom, z0 ? 0 : 0.5 - width, 0.5 + width / 2, top, z1 ? 1 : 0.5 + width], tile));
   }
   return result;
+}
+
+function fenceLinks(id, neighbors, pane) {
+  return [0, 1, 4, 5].map(face => {
+    const [near] = unpack(neighbors?.(...FACES[face]));
+    return near === id || (pane && [20, 101, 102].includes(near)) || [1, 2, 3, 4, 5, 7, 12, 17, 24, 35, 45, 48, 98, 107, 112, 125].includes(near);
+  });
 }
 
 function vine(meta) {
@@ -263,6 +273,7 @@ function coverBoxes(parts, frame) {
     if ([0, 1, 2].some(axis => bounds[axis] >= bounds[axis + 3])) return;
     const material = covers[part.material];
     result.push(box(bounds, material ?? tiles.unknown, {
+      material: part.material,
       mode: part.material === 7 ? 'cutout' : 'opaque',
       ...(material === undefined ? { approximation: 'Unidentified RedPower cover material' } : {}),
     }));
@@ -395,6 +406,51 @@ function connectedCore(neighbors, part, faceTile, radius, mode = 'opaque') {
     result.push(box(arm, faceTile, options));
   }
   return result;
+}
+
+const jacketMask = [16, 32, 1, 2, 4, 8];
+const jacketRotation = [4, 5, 0, 1, 2, 3];
+const jacketBounds = [.25, .25, .25, .75, .75, .75];
+
+function jacketShape(meta, data, neighbors) {
+  const material = covers[data.post] ?? cobble;
+  const sides = typeof material === 'number' ? Array(6).fill(material) : material;
+  const end = tiles.redPowerWire + (meta === 1 ? (data.pwr ? 6 : 5) : meta === 3 ? 7 : 10);
+  const linked = FACES.map((offset, face) => {
+    if (data.cons & jacketMask[face]) return true;
+    const neighbor = neighbors?.(...offset);
+    const [id, neighborMeta] = unpack(neighbor);
+    const adjacent = neighbor?.object?.data ?? neighbor?.object ?? neighbor?.data;
+    if (id === 750 && neighborMeta === meta) {
+      return Boolean(adjacent?.cons & (64 | jacketMask[face ^ 1]));
+    }
+    return meta === 1 && id === 768 && adjacent?.rot === jacketRotation[face ^ 1];
+  });
+
+  const ends = linked.flatMap((connects, face) => connects ? [face] : []);
+  if (!ends.length) return [box(jacketBounds, sides.map((tile, face) => (face >> 1) === 1 ? end : tile))];
+  if (ends.length === 2 && (ends[0] ^ 1) === ends[1]) {
+    const axis = ends[0] >> 1;
+    const bounds = [...jacketBounds];
+    bounds[axis] = 0;
+    bounds[axis + 3] = 1;
+    return [box(bounds, sides.map((tile, face) => (face >> 1) === axis ? end : tile))];
+  }
+  const core = box(jacketBounds, sides.map((tile, face) => linked[face] ? -1
+    : ends.length === 1 && face === (ends[0] ^ 1) ? end : tile));
+  const arms = ends.map(face => {
+    const axis = face >> 1;
+    const arm = [...jacketBounds];
+    if (face & 1) {
+      arm[axis] = arm[axis + 3];
+      arm[axis + 3] = 1;
+    } else {
+      arm[axis + 3] = arm[axis];
+      arm[axis] = 0;
+    }
+    return box(arm, sides.map((tile, side) => side === face ? end : side === (face ^ 1) ? -1 : tile));
+  });
+  return [core, ...arms];
 }
 
 const APPROX_FURNITURE = 'Simplified Jammy Furniture model';
@@ -548,8 +604,13 @@ function specialShape(id, meta, cell, neighbors) {
   const data = cell?.object?.data ?? cell?.object ?? cell?.data;
   if (id === 750) {
     const parts = Array.isArray(cell?.parts) ? cell.parts : AIR;
-    const components = coverBoxes(parts, false);
+    let components = coverBoxes(parts, false);
     if (meta === 0) return Array.isArray(cell?.parts) ? components : uniform(planks[1]);
+    if ([1, 3, 5].includes(meta) && (data?.cons & 64)) {
+      const jacket = jacketShape(meta, data, neighbors);
+      if (!(data.cons & 63)) return [...components, ...jacket];
+      components = [...components, ...jacket];
+    }
     const tube = meta === 8;
     const tile = tube ? tiles.redPowerMachine + 65 : tiles.redPowerWire + (meta === 5 ? 112 : 1);
     return [...components, ...connectedCore(neighbors, tube ? 'tube' : 'wire', tile, tube ? 0.1875 : 0.0625, 'cutout')];
@@ -594,18 +655,17 @@ function specialShape(id, meta, cell, neighbors) {
     const type = id === 3902 ? 29 : id === 4068 ? tiles.cotton + 32 : tiles.flowers + 16 + id % 14;
     return cross(type, 0.62).map(part => ({ ...part, approximation: 'Related plant texture for a rare HarvestCraft crop' }));
   }
-  if ([3968, 3989].includes(id)) return [wallPlate(2, 0.85, 0, 1, 0.03125, 143, {
-    mode: 'cutout', solid: false, approximation: 'Related vine texture for a rare HarvestCraft crop',
-  })];
-  if (id >= 3919 && id <= 3922) return [box([0.4375, 0, 0.4375, 0.5625, 0.375, 0.5625], 80, {
-    solid: false, emissive: true, approximation: 'Simplified HarvestCraft candle',
-  })];
+  if (id === 3968 || id === 3989) {
+    const stage = meta >= 7 && meta <= 8 ? 2 : meta >= 4 && meta <= 6 ? 1 : 0;
+    // HarvestCraft cinnamon renders and collides as a trunk. Vanilla bean is a crossed plant.
+    return id === 3968 ? uniform(3264 + stage) : cross(3267 + stage);
+  }
   if (id === 3943) return [box([0.0625, 0, 0.0625, 0.9375, 0.875, 0.9375], 4, {
     approximation: 'Simplified HarvestCraft sink barrel',
   })];
   if (id === 241) return cross(tiles.redPowerWorld + 0);
   if (id === 242) return uniform(tiles.redPowerWorld + 32 + meta);
-  if (id === 243) return uniform(tiles.redPowerWorld + 48 + (meta & 1), { mode: 'cutout', tint: WARM_LEAVES });
+  if (id === 243) return uniform(tiles.redPowerWorld + 49, { tint: WARM_LEAVES });
   if (id === 244) return uniform(tiles.redPowerWorld + 16 + meta);
   if (id === 245) return uniform(topSides(tiles.redPowerWorld + 50, tiles.redPowerWorld + 51));
   if (id === 213) return armchair(meta);
@@ -630,6 +690,7 @@ function specialShape(id, meta, cell, neighbors) {
 }
 
 function vanillaShape(id, meta, neighbors) {
+  if (id >= 3909 && id <= 3924) return torch(3270 + id - 3909, meta, true);
   if (STAIRS[id] !== undefined) return stairs(id, meta, neighbors);
   if (TERRAIN[id] !== undefined) return uniform(TERRAIN[id]);
   if (plants[id] !== undefined) {
@@ -650,7 +711,8 @@ function vanillaShape(id, meta, neighbors) {
     case 10:
     case 11: return [box([0, 0, 0, 1, meta < 8 ? 1 - (meta + 1) / 9 : 1, 1], tiles.lava, { solid: false, emissive: true })];
     case 17: return uniform(log(meta));
-    case 18: return uniform([52, 132, 52, 196][meta & 3], { mode: 'cutout', tint: [WARM_LEAVES, 0x619961, 0x80a755, WARM_LEAVES][meta & 3] });
+    // The reference client's Fast trees select the opaque tile next to each leaf tile.
+    case 18: return uniform([53, 133, 53, 197][meta & 3], { tint: [WARM_LEAVES, 0x619961, 0x80a755, WARM_LEAVES][meta & 3] });
     case 20: return uniform(49, GLASS);
     case 23:
     case 61:
@@ -682,9 +744,7 @@ function vanillaShape(id, meta, neighbors) {
     case 75:
     case 76: {
       const tile = id === 50 ? 80 : id === 75 ? 115 : 99;
-      const options = { mode: 'cutout', solid: false, emissive: id !== 75, uv: 'box' };
-      if (meta === 5 || meta === 0) return [box([0.4375, 0, 0.4375, 0.5625, 0.625, 0.5625], tile, options)];
-      return [wallPlate(({ 1: 5, 2: 4, 3: 3, 4: 2 })[meta], 0.125, 0.25, 0.875, 0.1875, tile, options)];
+      return torch(tile, meta, id !== 75);
     }
     case 54:
     case 130: return [turnedBox([0.0625, 0, 0.0625, 0.9375, 0.875, 0.9375],
@@ -698,12 +758,25 @@ function vanillaShape(id, meta, neighbors) {
     case 64:
     case 71: return door(id, meta, neighbors);
     case 65: return [wallPlate(meta, 1, 0, 1, 0.125, 83, { mode: 'cutout', solid: false, climbable: true })];
-    case 69:
+    case 69: {
+      const side = meta & 7;
+      const pressed = Boolean(meta & 8);
+      const base = [0.3125, 0, 0.25, 0.6875, 0.1875, 0.75];
+      const shaft = pressed ? [0.4375, 0.125, 0.55, 0.5625, 0.38, 0.67] : [0.4375, 0.125, 0.33, 0.5625, 0.5, 0.45];
+      if (side === 5 || side === 6) return [turnedBox(base, 16, side & 1, GROUND_DECOR), turnedBox(shaft, 4, side & 1, GROUND_DECOR)];
+      if (side === 0 || side === 7) {
+        const flip = ([x0, y0, z0, x1, y1, z1]) => [x0, 1 - y1, z0, x1, 1 - y0, z1];
+        return [turnedBox(flip(base), 16, side & 1, GROUND_DECOR), turnedBox(flip(shaft), 4, side & 1, GROUND_DECOR)];
+      }
+      const mount = [5, 4, 3, 2][side - 1];
+      return [wallPlate(mount, 0.375, 0.25, 0.75, 0.1875, 16, GROUND_DECOR),
+        wallPlate(mount, 0.125, pressed ? 0.29 : 0.48, pressed ? 0.5 : 0.71, 0.375, 4, GROUND_DECOR)];
+    }
     case 77:
-    case 143: return [wallPlate(({ 1: 5, 2: 4, 3: 3, 4: 2 })[meta & 7], 0.375, 0.3125, 0.6875,
-      0.125, id === 69 ? 96 : id === 77 ? 1 : 4)];
+    case 143: return [wallPlate(({1: 5, 2: 4, 3: 3, 4: 2})[meta & 7], 0.375, 0.375, 0.625,
+      meta & 8 ? 0.0625 : 0.125, id === 77 ? 1 : 4, GROUND_DECOR)];
     case 70:
-    case 72: return [box([0.0625, 0, 0.0625, 0.9375, 0.0625, 0.9375], id === 70 ? 1 : 4, GROUND_DECOR)];
+    case 72: return [box([0.0625, 0, 0.0625, 0.9375, meta & 1 ? 0.03125 : 0.0625, 0.9375], id === 70 ? 1 : 4, GROUND_DECOR)];
     case 78: return [box([0, 0, 0, 1, ((meta & 7) + 1) / 8, 1], 66, { solid: meta > 0 })];
     case 79: return uniform(67, { mode: 'blend' });
     case 81: return [box([0.0625, 0, 0.0625, 0.9375, 1, 0.9375], topSides(70, 69, 71))];
@@ -731,7 +804,21 @@ function vanillaShape(id, meta, neighbors) {
     case 101:
     case 102: return fence(id, meta, neighbors, true);
     case 106: return vine(meta);
-    case 107: return [turnedBox([0, 0.25, 0.40625, 1, 0.9375, 0.59375], 4, meta & 1, { solid: !(meta & 4) })];
+    case 107: {
+      const parts = [[0,0.3125,0.375,0.125,1,0.625], [0.875,0.3125,0.375,1,1,0.625]];
+      if (meta & 4) {
+        const [z0,z1] = meta & 2 ? [0.125,0.5] : [0.5,0.875];
+        for (const x of [0.125,0.75]) {
+          parts.push([x,0.375,z0,x + 0.125,0.5,z1], [x,0.75,z0,x + 0.125,0.875,z1]);
+          const tail = (meta & 2 ? z0 : z1 - 0.125);
+          parts.push([x,0.5,tail,x + 0.125,0.75,tail + 0.125]);
+        }
+      } else {
+        parts.push([0.125,0.375,0.4375,0.875,0.5,0.5625], [0.125,0.75,0.4375,0.875,0.875,0.5625]);
+        for (const x of [0.375,0.5]) parts.push([x,0.5,0.4375,x + 0.125,0.75,0.5625]);
+      }
+      return parts.map(bounds => turnedBox(bounds, 4, meta & 1, GROUND_DECOR));
+    }
     case 111: return [box([0.0625, 0, 0.0625, 0.9375, 0.015625, 0.9375], 76,
       { mode: 'cutout', solid: false, tint: WARM_LEAVES })];
     case 116: return [box([0, 0, 0, 1, 0.75, 1], topSides(182, 166, 37))];
@@ -788,10 +875,26 @@ export function shapeFor(cell, neighbors) {
 }
 
 const frameCollision = [box(CUBE, tiles.redPowerMachine + 1)];
+const brewingStandCollision = [box([0, 0, 0, 1, 0.125, 1], 157),
+  box([0.4375, 0, 0.4375, 0.5625, 0.875, 0.5625], 156)];
+const wireMetadata = new Set([1, 2, 3, 5]);
+const wirePostCollision = box(jacketBounds, tiles.redPowerWire + 1);
 const solidCache = new WeakMap();
 export function collisionFor(cell, neighbors) {
-  const [id] = unpack(cell);
+  const [id, meta] = unpack(cell);
   if (id === 765) return frameCollision;
+  if (id === 117) return brewingStandCollision;
+  if (id === 85 || id === 113) {
+    const [west,east,north,south] = fenceLinks(id, neighbors, false);
+    return [box([west ? 0 : .375, 0, north ? 0 : .375, east ? 1 : .625, 1.5, south ? 1 : .625], id === 85 ? 4 : 224)];
+  }
+  if (id === 107) return meta & 4 ? AIR : [turnedBox([0,0,0.375,1,1.5,0.625], 4, meta & 1)];
+  if (id === 750 && wireMetadata.has(meta)) {
+    const parts = coverBoxes(Array.isArray(cell?.parts) ? cell.parts : AIR, false);
+    const data = cell?.object?.data ?? cell?.object ?? cell?.data;
+    // RedPower TileWiring exposes covers and the center post as solid parts.
+    return data?.cons & 64 ? [...parts, wirePostCollision] : parts;
+  }
   const shape = shapeFor(cell, neighbors);
   if (!solidCache.has(shape)) {
     solidCache.set(shape, shape.every(part => part.solid) ? shape : shape.filter(part => part.solid));

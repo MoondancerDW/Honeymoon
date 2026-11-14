@@ -32,7 +32,8 @@ function rayBox(origin, delta, minima, maxima) {
 
 export function physics(base, geometry, getCell) {
   function boxesAt(kind, x, y, z, override, plannedNeighbor) {
-    const cell = override ? { key: override, parts: base.manifest.compositions?.[override]?.parts } : getCell(x, y, z);
+    const cell = typeof override === 'string' ? { key: override, parts: base.manifest.compositions?.[override]?.parts }
+      : override ?? getCell(x, y, z);
     if (!cell || cell.key === 'air') return [];
     return geometry[kind](cell, (dx, dy, dz) => plannedNeighbor?.(dx, dy, dz) ?? getCell(x + dx, y + dy, z + dz));
   }

@@ -211,6 +211,15 @@ def build(source, output, vanilla_jar=None):
         atlas = TextureAtlas(source, resources, vanilla_jar)
         for index, resource, dependency in ATLAS_SOURCES:
             atlas.grid(index, atlas.resolve(resource, dependency))
+        for offset, crop in enumerate(("cinnamon", "vanillabean")):
+            texture = atlas.resolve(f"pam/harvestcraft/pamhc{crop}.png", "pam")
+            width, height = texture.width // 16, texture.height // 16
+            for stage in range(3):
+                atlas.paste(3264 + offset * 3 + stage, texture.crop((stage * width, 0, (stage + 1) * width, height)))
+        candles = atlas.resolve("pam/harvestcraft/pamhccandle.png", "pam")
+        cw, ch = candles.width // 16, candles.height // 16
+        for color in range(16):
+            atlas.paste(3270 + color, candles.crop((color * cw, 4 * ch, (color + 1) * cw, 5 * ch)))
         terrain = atlas.resolve("terrain.png", "vanilla")
         connected = atlas.resolve("ctm.png", "vanilla", required=False)
         connected_textures = connected is not None and connected.size == terrain.size
@@ -241,7 +250,7 @@ def build(source, output, vanilla_jar=None):
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
-            "schemaVersion": 2, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
+            "schemaVersion": 4, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
             "connectedTextures": connected_textures,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return len(atlas.resources)

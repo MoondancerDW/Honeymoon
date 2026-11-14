@@ -16,6 +16,16 @@ TITLES = {
     "04-facade": "Фасад",
     "05-door": "Дверь",
     "06-armchair": "Интерьер",
+    "spawn-canopy-01-01": "Коричное дерево рядом со спавном",
+    "east-main-entrance": "Вход в восточное здание",
+    "east-far-interior": "Восточный зал, вид от дальней стены",
+    "iron-entry": "Вход с железной дверью",
+    "lamp-off": "Светильник выключен",
+    "lamp-on": "Светильник включён",
+    "lamp-restored": "Светильник снова выключен",
+    "redpower-lamp": "Фонарь RedPower и стойка",
+    "aerial-town-north": "Квартал с высоты, вид с севера",
+    "aerial-town-east": "Квартал с высоты, вид с востока",
 }
 BACKGROUND = "#151e22"
 MUTED = "#bcc7ca"
@@ -50,31 +60,39 @@ def panel(images, labels, title, subheading, width):
     return image
 
 
-def render(legacy, after, before, output):
+def render(legacy, after, before, output, selected=None):
     poses = json.loads((after / "poses.json").read_text(encoding="utf-8"))["poses"]
     output.mkdir(parents=True, exist_ok=True)
     pair_labels = ["Minecraft 1.4.7", "Honeymoon в браузере"]
     pairs = []
     for pose in poses:
         identity = pose["id"]
+        if selected and identity not in selected:
+            continue
         file = f"{identity}.png"
-        title = f"{identity[:2]} · {TITLES[identity]}"
+        title = TITLES.get(identity, identity)
         position = " / ".join(f"{coordinate:g}" for coordinate in pose["feet"])
         heading = f"X / Y / Z  {position}   ·   поворот {pose['yaw']}°   ·   наклон {pose['pitch']}°"
         paths = [legacy / file, after / file]
+        if any(not path.exists() for path in paths):
+            continue
         card = panel(paths, pair_labels, title, heading, 680)
         card.save(output / file)
         pairs.append(card)
-        if before is not None:
+        if before is not None and (before / file).exists():
             panel([paths[0], before / file, paths[1]], [pair_labels[0], "Браузер до", "Браузер после"],
                   title, heading, 520).save(output / f"{identity}-before-after.png")
 
-    sheet = Image.new("RGB", (pairs[0].width, sum(card.height for card in pairs)), BACKGROUND)
-    top = 0
-    for card in pairs:
-        sheet.paste(card, (0, top))
-        top += card.height
-    sheet.save(output / "route.png")
+    if not pairs:
+        raise ValueError("No matching Minecraft and browser frames")
+    for start in range(0, len(pairs), 8):
+        group = pairs[start:start + 8]
+        sheet = Image.new("RGB", (group[0].width, sum(card.height for card in group)), BACKGROUND)
+        top = 0
+        for card in group:
+            sheet.paste(card, (0, top))
+            top += card.height
+        sheet.save(output / ("route.png" if len(pairs) <= 8 else f"route-{start // 8 + 1:02}.png"))
 
 
 if __name__ == "__main__":
@@ -83,5 +101,6 @@ if __name__ == "__main__":
     parser.add_argument("--after", type=Path, default=BROWSER / "after")
     parser.add_argument("--before", type=Path)
     parser.add_argument("--output", type=Path, default=BROWSER / "pairs")
+    parser.add_argument("--pose", action="append", help="Include this pose ID. May be repeated.")
     arguments = parser.parse_args()
-    render(arguments.legacy, arguments.after, arguments.before, arguments.output)
+    render(arguments.legacy, arguments.after, arguments.before, arguments.output, arguments.pose)

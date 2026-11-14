@@ -8,6 +8,7 @@ import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { openStore } from './store.mjs';
+import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
 
 const PROJECT = fileURLToPath(new URL('..', import.meta.url));
 const COOKIE = 'honeymoon_guest';
@@ -25,6 +26,7 @@ const MIME = {
   '.webp': 'image/webp',
   '.bin': 'application/octet-stream',
   '.svg': 'image/svg+xml',
+  '.ogg': 'audio/ogg',
 };
 
 function json(response, status, payload, headers = {}) {
@@ -132,6 +134,10 @@ function staticPath(path, project, generated) {
   if (shared) return join(project, 'world', shared[1]);
   const atlas = path.match(/^\/generated\/textures\/([a-zA-Z0-9][a-zA-Z0-9_.-]*\.(?:json|png|webp))$/);
   if (atlas) return join(generated, 'textures', atlas[1]);
+  const model = path.match(/^\/generated\/models\/([a-z]+)\.(json|png)$/);
+  if (model && modelFamilies.includes(model[1])) return join(generated, 'models', `${model[1]}.${model[2]}`);
+  const sound = path.match(/^\/generated\/sounds\/([a-z0-9][a-z0-9-]*\.(?:ogg|json))$/);
+  if (sound) return join(generated, 'sounds', sound[1]);
   return null;
 }
 
@@ -145,18 +151,33 @@ export function createHoneymoonServer({
   allowedOrigin,
   clock,
   afterCommit,
+  allowRemoval,
 } = {}) {
+  const models = {};
+  const sounds = statSync(join(generated, 'sounds', 'sounds.json'), {throwIfNoEntry: false})?.isFile() ?? false;
+  for (const family of modelFamilies) {
+    try {
+      const file = readFileSync(join(generated, 'models', `${family}.json`), 'utf8');
+      statSync(join(generated, 'models', `${family}.png`));
+      models[family] = JSON.parse(file);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
   if (state !== ':memory:') mkdirSync(dirname(state), { recursive: true });
   const store = openStore(state);
   let game;
   try {
-    game = createGame(base, store, geometry, { clock });
+    game = createGame(base, store, withExtractedModels(geometry, models), { clock, allowRemoval });
   } catch (error) {
     store.close();
     throw error;
   }
   const streams = new Set();
   const serveWorld = serveWorldJson();
+  const dayStarted = Date.now();
+  const session = player => ({ ...game.session(player), modelFamilies: Object.keys(models), sounds,
+    dayTick: (6000 + (Date.now() - dayStarted) / 50) % 24000 });
 
   function writeEvent(response, name, event, revision) {
     const id = revision === undefined ? '' : `id: ${revision}\n`;
@@ -167,10 +188,12 @@ export function createHoneymoonServer({
 
   function broadcast(player, output) {
     for (const stream of streams) {
-      if (output.changes.length) {
+      const effects = player === stream.player ? [] : output.effects.filter(effect => effect.sound)
+        .map(({message: _, ...effect}) => effect);
+      if (output.changes.length || effects.length) {
         writeEvent(stream.response, 'commit', {
           ...output,
-          effects: stream.player === player ? output.effects : [],
+          effects,
         }, output.worldRevision);
       }
     }
@@ -188,10 +211,10 @@ export function createHoneymoonServer({
       const player = store.playerFromToken(tokenFrom(request));
       if (path === '/api/session' && method === 'POST') {
         await readBody(request);
-        if (player) return json(response, 200, game.session(player));
+        if (player) return json(response, 200, session(player));
         const newPlayer = store.createPlayer();
         const cookie = `${COOKIE}=${newPlayer.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? '; Secure' : ''}`;
-        return json(response, 200, game.session(newPlayer.id), { 'Set-Cookie': cookie });
+        return json(response, 200, session(newPlayer.id), { 'Set-Cookie': cookie });
       }
       if (!player) throw new RequestError(401, 'session_required');
       if (path === '/api/world' && method === 'GET') return json(response, 200, game.snapshot(player));
@@ -222,6 +245,7 @@ export function createHoneymoonServer({
         });
         const stream = { player, response };
         streams.add(stream);
+      game.touch(player);
         response.on('close', () => streams.delete(stream));
         const cursor = request.headers['last-event-id'] ?? url.searchParams.get('since');
         const revision = game.worldRevision();
@@ -261,15 +285,28 @@ export function createHoneymoonServer({
     });
   });
   const heartbeat = setInterval(() => {
-    for (const { response } of streams) if (!response.write(': heartbeat\n\n') && response.writableLength > 256 * 1024) response.destroy();
+    for (const { player, response } of streams) {
+      game.touch(player);
+      if (!response.write(': heartbeat\n\n') && response.writableLength > 256 * 1024) response.destroy();
+    }
   }, 15000);
   heartbeat.unref();
+  const blockTicks = setInterval(() => {
+    try {
+      const result = game.advance();
+      if (result?.changes.length || result?.effects.length) broadcast(null, result);
+    } catch (error) {
+      console.error(error);
+    }
+  }, 50);
+  blockTicks.unref();
 
   return {
     server,
     game,
     async close() {
       clearInterval(heartbeat);
+      clearInterval(blockTicks);
       for (const { response } of streams) response.end();
       await new Promise((success, fail) => {
         server.close(error => {

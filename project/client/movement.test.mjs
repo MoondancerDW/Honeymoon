@@ -32,3 +32,25 @@ test('cannot step into a full block or under a low ceiling', () => {
   assert.ok(wall.x <= -.28 && Math.abs(wall.y - 1) < .002);
   assert.ok(blocked.x <= -.28 && Math.abs(blocked.y - 1) < .002);
 });
+
+test('climbs and descends ladder blocks without removing their backing wall', () => {
+  const blocks = new Map([['0,1,0','legacy:65:2'],['0,2,0','legacy:65:2'],['0,3,0','legacy:65:2'],
+    ['0,1,1','legacy:1:0'],['0,2,1','legacy:1:0'],['0,3,1','legacy:1:0']]);
+  const movement = new Movement(worldFor(blocks));
+  const position = {x:.5,y:1,z:.5};
+  for (let i=0;i<35;i++) movement.update(position,0,0,false,.016,{rise:true});
+  assert.ok(position.y > 2.2);
+  assert.equal(movement.medium, 'ladder');
+  for (let i=0;i<70;i++) movement.update(position,0,0,false,.016,{descend:true});
+  assert.ok(Math.abs(position.y - 1) < .002);
+});
+
+test('water slows forward travel and Space raises the player through the waterline', () => {
+  const water = ['0,1,0','0,2,0','1,1,0','1,2,0'].map(key => [key,'legacy:9:0']);
+  const movement = new Movement(worldFor(new Map(water)));
+  const position = {x:.5,y:1.1,z:.5};
+  for (let i=0;i<20;i++) movement.update(position,3.8,0,false,.016,{rise:true});
+  assert.ok(position.x < 1.25 && position.x > 1);
+  assert.ok(position.y > 1.8 && position.y < 2);
+  assert.equal(movement.medium, 'water');
+});

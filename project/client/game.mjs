@@ -1,6 +1,8 @@
 import {Display} from './display.mjs';
 import {Movement, EYE, pick} from './movement.mjs';
 import {World, chunkKey, json} from './world-data.mjs';
+import {WorldAudio} from './audio.mjs';
+import {blockState, jammyAppliance} from '../world/block-interactions.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -12,12 +14,14 @@ const toast = element('toast');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const heading = {yaw: 0, pitch: -.045};
+const handControls = new Set([25,64,69,77,84,93,94,96,107,143,219,220]);
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
 let playing = false, jump = false, lastFrame = 0, lastSync = 0, lastPosition = '', timer;
 let sync = Promise.resolve(), acting = false, syncing = false;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
+const audio = new WorldAudio();
 
 if (touchMode) {
   game.classList.add('touch');
@@ -51,14 +55,20 @@ async function post(path, payload) {
 }
 
 function effects(data) {
+  audio.effects(data.effects ?? [], world);
   for (const effect of data.effects || []) {
     if (effect.message) notice(effect.message);
   }
 }
 
 function changes(list = [], revision = 0) {
+  const changed = [];
   for (const change of list) {
-    if (world.setOverride(change) && world.hasChunk(change.x, change.z)) view.remesh(change.x, change.y, change.z, change.revision);
+    if (world.setOverride(change)) changed.push(change);
+  }
+  view.remeshLighting(world.updateLighting());
+  for (const change of changed) {
+    if (world.hasChunk(change.x, change.z)) view.remesh(change.x, change.y, change.z, change.revision);
   }
   worldRevision = Math.max(worldRevision, revision);
 }
@@ -77,6 +87,7 @@ function stream() {
   feed.addEventListener('commit', event => {
     const data = JSON.parse(event.data);
     changes(data.changes, data.worldRevision);
+    audio.effects(data.effects ?? [], world);
   });
   feed.addEventListener('reset', () => refresh().catch(error => notice(error.message)));
   feed.addEventListener('ready', event => {
@@ -89,6 +100,7 @@ function updateCamera() {
   view.camera.rotation.order = 'YXZ';
   view.camera.rotation.set(heading.pitch, heading.yaw, 0, 'YXZ');
   view.camera.position.set(position.x, position.y + EYE, position.z);
+  view.camera.translateZ(.1);
   view.camera.updateMatrixWorld();
 }
 
@@ -99,6 +111,7 @@ function look(dx, dy, sensitivity = .0023) {
 
 function setPlaying(active) {
   playing = active;
+  audio.setPlaying(active);
   game.classList.toggle('playing', active);
   entry.hidden = active;
   if (!active) {
@@ -147,6 +160,7 @@ async function action(type) {
   const target = selection;
   const cell = getKey(target.cell);
   const request = {requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join(''), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
+  if (type === 'interact') request.yaw = heading.yaw;
   if (type === 'place') {
     if (!clipboard) { notice(messages.nothing_to_copy); return; }
     request.against = {x: target.x, y: target.y, z: target.z};
@@ -192,7 +206,10 @@ function tick(now) {
     const speed = (keys.has('ShiftLeft') ? 5.1 : 3.8) / Math.max(1, Math.hypot(forward, strafe));
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
     movement.update(position, (-sin * forward + cos * strafe) * speed,
-      (-cos * forward - sin * strafe) * speed, jump, dt);
+      (-cos * forward - sin * strafe) * speed, jump, dt,
+      {rise: jump || keys.has('Space'), descend: keys.has('ShiftLeft') || keys.has('ShiftRight')});
+    audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw,
+      climbing:movement.medium === 'ladder', swimming:movement.medium === 'water'});
     jump = false;
     if (now - lastSync >= 130 && !acting) {
       lastSync = now;
@@ -215,6 +232,7 @@ function tick(now) {
 function bindControls() {
   const canvas = view.renderer.domElement;
   button.addEventListener('click', () => {
+    audio.enable();
     if (touchMode) setPlaying(true);
     else {
       try {
@@ -242,7 +260,10 @@ function bindControls() {
   window.addEventListener('blur', () => keys.clear());
   canvas.addEventListener('mousedown', event => {
     if (!playing || touchMode) return;
-    const command = {0:'remove', 1:'copy', 2:'place'}[event.button];
+    const key = getKey(selection?.cell);
+    const [id, meta] = blockState(key);
+    const interactive = key === 'game:switch' || handControls.has(id) || jammyAppliance(id, meta);
+    const command = {1:'copy', 2:interactive ? 'interact' : 'place'}[event.button];
     if (command) action(command);
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
@@ -279,12 +300,36 @@ function bindControls() {
     stick.x = stick.z = 0;
     nub.style.transform = '';
   });
-  for (const [id, command] of [['touch-remove','remove'], ['touch-place','place'], ['touch-copy','copy'], ['touch-use','interact']]) {
+  for (const [id, command] of [['touch-place','place'], ['touch-copy','copy'], ['touch-use','interact']]) {
     element(id).addEventListener('click', () => action(command));
   }
   element('jump').addEventListener('pointerdown', () => { jump = true; });
   element('distance').addEventListener('change', event => {
     view.setDistance(Number(event.target.value)).catch(error => notice(error.message));
+  });
+  const sound = element('audio-toggle');
+  const showSound = muted => {
+    sound.textContent = muted ? 'Звук выкл.' : 'Звук вкл.';
+    sound.setAttribute('aria-pressed', String(!muted));
+    audio.setMuted(muted);
+  };
+  showSound(localStorage.getItem('honeymoon-muted') === '1');
+  sound.addEventListener('click', () => {
+    const muted = sound.getAttribute('aria-pressed') === 'true';
+    localStorage.setItem('honeymoon-muted', muted ? '1' : '0');
+    showSound(muted);
+  });
+  const music = element('music-toggle');
+  const showMusic = enabled => {
+    music.textContent = enabled ? 'Музыка вкл.' : 'Музыка выкл.';
+    music.setAttribute('aria-pressed', String(enabled));
+    audio.setMusicVolume(enabled ? .16 : 0);
+  };
+  showMusic(localStorage.getItem('honeymoon-music') === '1');
+  music.addEventListener('click', () => {
+    const enabled = music.getAttribute('aria-pressed') !== 'true';
+    localStorage.setItem('honeymoon-music', enabled ? '1' : '0');
+    showMusic(enabled);
   });
   element('reset').addEventListener('click', async () => {
     await sync;
@@ -326,12 +371,20 @@ async function loadChunks(chunks) {
 async function start() {
   const [manifest, session] = await Promise.all([json('/generated/world/world.json'), post('session', {})]);
   if (!session.ok) throw new Error('Сеанс не создан');
+  if (session.body.sounds) {
+    audio.load().then(loaded => {
+      element('audio-toggle').hidden = !loaded;
+      element('music-toggle').hidden = !loaded;
+    }).catch(error => console.error(error));
+  }
   world = new World(manifest);
+  world.models = Object.fromEntries(await Promise.all((session.body.modelFamilies ?? []).map(async family =>
+    [family, await json(`/generated/models/${family}.json`)])));
   const p = session.body.position;
   const [x, y, z] = session.body.spawn || manifest.spawn;
   position = p ? {...p} : {x, y, z};
   movement = new Movement(world);
-  view = new Display(surface, world);
+  view = new Display(surface, world, session.body.dayTick);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
   updateCamera();
   const available = new Set([4, ...(manifest.terrain || []).map(ring => ring.radius)]);
@@ -343,7 +396,8 @@ async function start() {
   stream();
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
-    stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
+    stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, audio:audio.stats(),
+      renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
     target: () => selection && {...selection},
     setDistance: distance => {

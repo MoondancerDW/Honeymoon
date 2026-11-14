@@ -23,6 +23,10 @@ function normalizeAction(body) {
   if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw new RequestError(400, 'invalid_revision');
   const input = { type: body.type, ...point(body, true), expectedRevision: body.expectedRevision };
   if (body.hit !== undefined) input.hit = point(body.hit);
+  if (body.type === 'interact' && body.yaw !== undefined) {
+    if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
+    input.yaw = body.yaw % (2 * Math.PI);
+  }
   if (body.type === 'place') {
     if (typeof body.cell !== 'string' || body.cell.length > 128) throw new RequestError(400, 'invalid_cell');
     input.cell = body.cell;
@@ -31,7 +35,9 @@ function normalizeAction(body) {
   return input;
 }
 
-export function createGame(base, store, geometry, { clock = () => performance.now(), modules } = {}) {
+export function createGame(base, store, geometry, {
+  clock = () => performance.timeOrigin + performance.now(), modules, allowRemoval = false,
+} = {}) {
   const positions = new Map();
   const mechanics = modules ?? registerMechanics(base, store, geometry);
   const [sx, sy, sz] = base.manifest.spawn;
@@ -67,23 +73,32 @@ export function createGame(base, store, geometry, { clock = () => performance.no
     return positions.get(player)?.position ?? spawn;
   }
 
-  function playerOverlaps(x, y, z, key, activePlayer, plannedNeighbor) {
+  function activePositions(player, position) {
     const now = clock();
-    if (physical.overlaps(playerAt(activePlayer), x, y, z, key, plannedNeighbor)) return true;
-    for (const [player, entry] of positions) {
-      if (player !== activePlayer && now - entry.updated < MAX_ACTIVE_IDLE_MS
-        && physical.overlaps(entry.position, x, y, z, key, plannedNeighbor)) return true;
+    const active = player ? [position ?? playerAt(player)] : [];
+    for (const [id, entry] of positions) {
+      if (id !== player && now - (entry.seen ?? entry.updated) < MAX_ACTIVE_IDLE_MS) active.push(entry.position);
     }
-    return false;
+    return active;
+  }
+
+  function playerOverlaps(x, y, z, key, activePlayer, plannedNeighbor) {
+    return activePositions(activePlayer).some(position => physical.overlaps(position, x, y, z, key, plannedNeighbor));
   }
 
   function moduleContext(module, player, fields) {
+    const position = player ? fields.position ?? playerAt(player) : null;
+    const active = activePositions(player, position);
     return {
       ...fields,
       player,
+      now: clock(),
+      playerPosition: position,
+      activePositions: active,
       getCell: getCurrent,
       readState: (owner, key) => store.getState(module.id, owner, key),
-      playerOverlaps: (x, y, z, cell, plannedNeighbor) => playerOverlaps(x, y, z, cell, player, plannedNeighbor),
+      playerOverlaps: (x, y, z, cell, plannedNeighbor) => active.some(position =>
+        physical.overlaps(position, x, y, z, cell, plannedNeighbor)),
     };
   }
 
@@ -105,12 +120,15 @@ export function createGame(base, store, geometry, { clock = () => performance.no
     };
   }
 
-  function writeCell(current, cell, object) {
-    const revision = store.nextRevision();
+  function writeCell(player, current, cell, object) {
     const { x, y, z } = current;
-    const change = { x, y, z, cell, object, revision };
-    store.writeEdit(change, originalAt(x, y, z));
-    return { worldRevision: revision, changes: [change], effects: [] };
+    const change = { x, y, z, cell, object };
+    const effects = cell === null ? [] : [{type: 'sound', sound: 'block.place', cell, position: [x, y, z]}];
+    for (const module of mechanics) {
+      const plan = module.prepareBlockChange?.(moduleContext(module, player, {change}));
+      if (plan) return writePlan(module, {...plan, effects: [...effects, ...plan.effects]});
+    }
+    return writePlan({}, {cells: [change], effects});
   }
 
   function placementAnchor(player, input) {
@@ -137,12 +155,13 @@ export function createGame(base, store, geometry, { clock = () => performance.no
       if (!base.catalog.has(input.cell) || input.cell === 'air') throw new RequestError(400, 'unknown_cell_type');
       if (current.cell !== null) throw new RequestError(409, 'occupied');
       if (!placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
-      if (playerOverlaps(x, y, z, input.cell, player)) throw new RequestError(409, 'occupied');
       const copied = store.getClipboard(player);
       const object = copied?.cell === input.cell && copied.object
         ? { ...copied.object, position: [x, y, z], key: `tile:${x}:${y}:${z}` }
         : null;
-      return writeCell(current, input.cell, object);
+      const parts = base.manifest.compositions?.[input.cell]?.parts;
+      if (playerOverlaps(x, y, z, {key: input.cell, object, parts}, player)) throw new RequestError(409, 'occupied');
+      return writeCell(player, current, input.cell, object);
     }
 
     if (current.cell === null) throw new RequestError(409, 'empty_cell');
@@ -159,11 +178,12 @@ export function createGame(base, store, geometry, { clock = () => performance.no
       store.putClipboard(player, { cell: current.cell, object: displayObject(current.object) });
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
     }
-    return writeCell(current, null, null);
+    return writeCell(player, current, null, null);
   }
 
   function action(player, body) {
     const input = normalizeAction(body);
+    if (input.type === 'remove' && !allowRemoval) throw new RequestError(403, 'block_breaking_disabled');
     const encoded = JSON.stringify(input);
     const { requestId } = body;
     const result = store.atomic(() => {
@@ -226,11 +246,28 @@ export function createGame(base, store, geometry, { clock = () => performance.no
     return { position: target, effects, changes, worldRevision: store.worldRevision() };
   }
 
+  function advance() {
+    const plans = mechanics.flatMap(module => {
+      const plan = module.prepareTick?.(moduleContext(module, null, {}));
+      return plan ? [[module, plan]] : [];
+    });
+    if (!plans.length) return null;
+    const results = store.atomic(() => plans.map(([module, plan]) => writePlan(module, plan)));
+    const changes = results.flatMap(result => result.changes);
+    if (changes.length) refreshMechanicCells();
+    return {changes, effects: results.flatMap(result => result.effects), worldRevision: store.worldRevision()};
+  }
+
   const descriptions = player => diagnostic?.describe(player) ?? null;
 
   return {
     action,
     position,
+    advance,
+    touch(player) {
+      const entry = positions.get(player);
+      if (entry) entry.seen = clock();
+    },
     respawn(player) {
       positions.set(player, { position: spawn, updated: clock(), budget: 1 });
       return { position: spawn, effects: [], worldRevision: store.worldRevision() };

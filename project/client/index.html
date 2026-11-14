@@ -21,6 +21,8 @@
             <option value="16">16 чанков</option><option value="32">32 чанка</option>
           </select>
         </label>
+        <button id="audio-toggle" type="button" aria-pressed="false" hidden>Звук</button>
+        <button id="music-toggle" type="button" aria-pressed="false" hidden>Музыка</button>
         <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
       </div>
     </header>
@@ -37,7 +39,6 @@
       <div id="stick"><i></i></div>
       <div class="touch-actions">
         <button id="jump" type="button">↑</button>
-        <button id="touch-remove" type="button" aria-label="Удалить блок">−</button>
         <button id="touch-place" type="button" aria-label="Установить блок">+</button>
         <button id="touch-copy" type="button">Копия</button>
         <button id="touch-use" type="button">Действие</button>
@@ -46,7 +47,7 @@
     <footer class="bottom">
       <span id="coords" aria-label="Координаты"></span>
       <span id="selected">Ячейка не выбрана</span>
-      <span id="keys">ЛКМ — убрать · ПКМ — поставить · Q — копировать · E — действие</span>
+      <span id="keys">ПКМ — действие / поставить · Q — копировать · Пробел / Shift — вверх / вниз в воде и на лестнице</span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>

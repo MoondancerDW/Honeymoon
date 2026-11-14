@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { displayObject } from '../server/base.mjs';
 import { ATLAS_GRID, collisionFor, shapeFor, signFor, tiles } from './geometry.mjs';
 
 const aabb = box => [box.x0, box.y0, box.z0, box.x1, box.y1, box.z1];
@@ -41,6 +42,32 @@ test('RedPower hollow cover is physically open and retains multiple materials', 
   assert.equal(shapeFor('cover-material:28')[0].faces[0], 198);
 });
 
+test('RedPower flat wires have no collision and center posts use the original half-block cube', () => {
+  const parts = [{ slot: 3, material: 20, shape: 0 }, { slot: 4, material: 20, shape: 0 }];
+  const key = 'cover:750:1:fixture';
+  const wire = cons => ({ key, parts, object: displayObject({ type: 'Redwire', data: { cons } }) });
+  const covers = collisionFor({ key: 'cover:750:0:fixture', parts });
+  assert.deepEqual(collisionFor(wire(1)).map(aabb), covers.map(aabb));
+  assert.deepEqual(collisionFor(wire(64)).map(aabb), [...covers.map(aabb), [.25, .25, .25, .75, .75, .75]]);
+  assert.ok(shapeFor(wire(1)).length > covers.length);
+  for (const meta of [1, 2, 3, 5]) {
+    assert.deepEqual(collisionFor({ key: `legacy:750:${meta}`, data: { cons: 63 } }), []);
+    assert.deepEqual(collisionFor({ key: `legacy:750:${meta}`, data: { cons: 65 } }).map(aabb),
+      [[.25, .25, .25, .75, .75, .75]]);
+  }
+});
+
+test('RedPower jacketed street light uses the silver wire cover and original post collision', () => {
+  const object = displayObject({ type: 'Redwire', data: { cons: 64, post: 66, pwr: 0 } });
+  const cell = { key: 'legacy:750:1', object };
+  const lamp = { key: 'legacy:768:0', data: { rot: 0 } };
+  const adjacent = (x, y, z) => y > 0 ? lamp : y < 0 ? cell : 'air';
+  const [post] = shapeFor(cell, adjacent);
+  assert.deepEqual(aabb(post), [.25, 0, .25, .75, 1, .75]);
+  assert.deepEqual(post.faces, [339, 339, 1797, 1797, 339, 339]);
+  assert.deepEqual(collisionFor(cell, adjacent).map(aabb), [[.25, .25, .25, .75, .75, .75]]);
+});
+
 test('door halves use the legacy panels, hinge and inset edge UVs', () => {
   const lower = shapeFor('legacy:64:3', () => 'legacy:64:8')[0];
   const upper = shapeFor('legacy:64:8', () => 'legacy:64:3')[0];
@@ -67,6 +94,13 @@ test('frame is pickable and full collision; clouds use their source collision he
   assert.equal(shapeFor('legacy:757:0')[0].emissive, false);
   assert.equal(shapeFor('legacy:219:0').some(box => box.emissive), true);
   assert.equal(shapeFor('legacy:220:0').some(box => box.emissive), false);
+});
+
+test('HarvestCraft cinnamon is a solid trunk and vanilla bean remains a crossed plant', () => {
+  assert.deepEqual(aabb(collisionFor('legacy:3968:7')[0]), [0, 0, 0, 1, 1, 1]);
+  assert.deepEqual(shapeFor('legacy:3968:7')[0].faces, Array(6).fill(3266));
+  assert.equal(shapeFor('legacy:3989:7')[0].kind, 'cross');
+  assert.deepEqual(collisionFor('legacy:3989:7'), []);
 });
 
 test('read source chair, bookshelf and Russian sign across negative chunk coordinates', t => {

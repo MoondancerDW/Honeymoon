@@ -1,4 +1,6 @@
 import {collisionFor, shapeFor} from '../world/geometry.mjs';
+import {extractedModel} from '../world/extracted-models.mjs';
+import {movementMedium} from '../world/block-movement.mjs';
 
 const HALF = .29;
 export const HEIGHT = 1.77;
@@ -10,6 +12,8 @@ export class Movement {
     this.world = world;
     this.fall = 0;
     this.grounded = false;
+    this.medium = null;
+    this.cellAt = (...coordinates) => this.world.cellAt(...coordinates);
   }
 
   blocked(x, y, z) {
@@ -22,7 +26,8 @@ export class Movement {
           if (!this.world.hasChunk(xx, zz) && xx >= Math.floor(x - HALF) && xx <= Math.floor(x + HALF) && zz >= Math.floor(z - HALF) && zz <= Math.floor(z + HALF)) return true;
           const cell = this.world.cellAt(xx, yy, zz);
           if (!cell) continue;
-          const boxes = collisionFor(cell, (dx, dy, dz) => this.world.cellAt(xx + dx, yy + dy, zz + dz));
+          const boxes = extractedModel(this.world.models, cell)?.collision
+            ?? collisionFor(cell, (dx, dy, dz) => this.world.cellAt(xx + dx, yy + dy, zz + dz));
           for (const box of boxes) {
             if (x + HALF > xx + box.x0 + EPSILON && x - HALF < xx + box.x1 - EPSILON &&
                 y + HEIGHT > yy + box.y0 + EPSILON && y < yy + box.y1 - EPSILON &&
@@ -53,38 +58,51 @@ export class Movement {
     return true;
   }
 
-  horizontal(position, axis, amount) {
-    if (!amount) return;
+  horizontal(position, axis, amount, swimOut = false) {
+    if (!amount) return false;
     const before = position[axis];
-    if (!this.axis(position, axis, amount) || !this.grounded) return;
+    if (!this.axis(position, axis, amount)) return false;
+    if (!(this.grounded && !this.medium) && !swimOut) return true;
     const partial = position[axis];
     const feet = position.y;
     // Test clearance during the lift before trying the horizontal step.
     for (let lift = .125; lift <= .5; lift += .125) {
       const raised = feet + lift;
-      if (this.blocked(position.x, raised, position.z)) return;
+      if (this.blocked(position.x, raised, position.z)) return true;
       position.y = raised;
       position[axis] = before + amount;
       if (!this.blocked(position.x, raised, position.z)) {
         this.axis(position, 'y', -lift);
-        return;
+        return false;
       }
       position.y = feet;
       position[axis] = partial;
     }
+    return true;
   }
 
-  update(position, dx, dz, jump, dt) {
-    if (jump && this.grounded) { this.fall = 6.8; this.grounded = false; }
+  update(position, dx, dz, jump, dt, {descend = false, rise = jump} = {}) {
+    this.medium = movementMedium(this.cellAt, position.x, position.y, position.z);
+    if (!this.medium && jump && this.grounded) { this.fall = 6.8; this.grounded = false; }
     const n = Math.max(1, Math.ceil(dt / .016));
     const step = dt / n;
     for (let i = 0; i < n; i++) {
-      this.horizontal(position, 'x', dx * step);
-      this.horizontal(position, 'z', dz * step);
-      this.fall = Math.max(-16, this.fall - 20 * step);
+      const drag = this.medium === 'water' ? .48 : this.medium === 'ladder' ? .62 : 1;
+      const swimOut = this.medium === 'water' && rise && !descend;
+      const wallX = this.horizontal(position, 'x', dx * step * drag, swimOut);
+      const wallZ = this.horizontal(position, 'z', dz * step * drag, swimOut);
+      this.medium = movementMedium(this.cellAt, position.x, position.y, position.z) ?? this.medium;
+      if (this.medium === 'ladder') {
+        this.fall = descend ? -1.8 : rise || wallX || wallZ ? 2.4 : Math.max(-1.8, this.fall - 12 * step);
+      } else if (this.medium === 'water') {
+        this.fall = descend ? -2 : rise || wallX || wallZ ? 2.5 : Math.max(-.85, this.fall - 5 * step);
+      } else {
+        this.fall = Math.max(-16, this.fall - 20 * step);
+      }
       const hit = this.axis(position, 'y', this.fall * step);
       this.grounded = hit && this.fall < 0;
       if (hit) this.fall = 0;
+      this.medium = movementMedium(this.cellAt, position.x, position.y, position.z);
     }
   }
 }
@@ -123,7 +141,8 @@ export function pick(world, origin, direction) {
       for (let x = min[0] - 1; x <= max[0] + 1; x++) {
         const cell = world.cellAt(x, y, z);
         if (!cell) continue;
-        const boxes = shapeFor(cell, (dx, dy, dz) => world.cellAt(x + dx, y + dy, z + dz));
+        const boxes = extractedModel(world.models, cell)?.selection
+          ?? shapeFor(cell, (dx, dy, dz) => world.cellAt(x + dx, y + dy, z + dz));
         for (const box of boxes) {
           const result = intersect(origin, direction, box, x, y, z);
           if (!result || (best && result.length >= best.length)) continue;

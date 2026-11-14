@@ -1,8 +1,9 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {chunkKey, sectionKey, json} from './world-data.mjs';
+import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
 
 export class Display {
-  constructor(container, world) {
+  constructor(container, world, dayTick = 6000) {
     this.world = world;
     this.container = container;
     this.scene = new THREE.Scene();
@@ -10,9 +11,21 @@ export class Display {
     this.scene.fog = new THREE.Fog('#95aad5', 70, 175);
     this.sky = createSky();
     this.scene.add(this.sky);
+    this.dayStarted = Date.now();
+    this.firstDayTick = dayTick;
+    this.cycleTime = null;
+    this.lightBytes = new Uint8Array(16 * 17 * 4);
+    this.lightmap = new THREE.DataTexture(this.lightBytes, 16, 17, THREE.RGBAFormat);
+    this.lightmap.magFilter = this.lightmap.minFilter = THREE.NearestFilter;
+    this.dayHorizon = new THREE.Color('#95aad5');
+    this.dayZenith = new THREE.Color('#84abfc');
+    this.nightHorizon = new THREE.Color('#10182b');
+    this.nightZenith = new THREE.Color('#05091a');
+    this.updateSky(dayTick);
     this.visualEntities = new THREE.Group();
     this.visualEntities.visible = false;
     this.scene.add(this.visualEntities);
+    this.paintingLights = new Map();
     this.camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
@@ -35,7 +48,7 @@ export class Display {
         this.active.delete(worker);
         this.onError?.(new Error(event.message));
       };
-      worker.postMessage({type: 'init', palette: world.palette, compositions: world.manifest.compositions || {}});
+      worker.postMessage({type: 'init', palette: world.palette, compositions: world.manifest.compositions || {}, models: world.models});
       return worker;
     });
     this.meshTimes = [];
@@ -56,20 +69,34 @@ export class Display {
 
   async loadTextures() {
     const loader = new THREE.TextureLoader();
+    const materialsFor = (map, alphaTest = .47) => {
+      map.colorSpace = THREE.SRGBColorSpace;
+      map.magFilter = map.minFilter = THREE.NearestFilter;
+      map.generateMipmaps = false;
+      const layers = {
+        opaque: new THREE.MeshBasicMaterial({map, vertexColors: true}),
+        cutout: new THREE.MeshBasicMaterial({map, vertexColors: true, alphaTest, side: THREE.DoubleSide}),
+        blend: new THREE.MeshBasicMaterial({map, vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide}),
+      };
+      for (const material of Object.values(layers)) this.useLightmap(material);
+      return layers;
+    };
     const [map, atlas] = await Promise.all([
       loader.loadAsync('/generated/textures/atlas.png'),
       json('/generated/textures/atlas.json').catch(() => null),
     ]);
     this.connectedTextures = atlas?.connectedTextures === true;
-    map.colorSpace = THREE.SRGBColorSpace;
-    map.magFilter = THREE.NearestFilter;
-    map.minFilter = THREE.NearestFilter;
-    map.generateMipmaps = false;
-    this.materials = {
-      opaque: new THREE.MeshBasicMaterial({map, vertexColors: true}),
-      cutout: new THREE.MeshBasicMaterial({map, vertexColors: true, alphaTest: .47, side: THREE.DoubleSide}),
-      blend: new THREE.MeshBasicMaterial({map, vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide}),
-    };
+    const additional = await Promise.all(Object.keys(this.world.models || {}).map(async family => {
+      const texture = await loader.loadAsync(`/generated/models/${family}.png`);
+      return Object.entries(materialsFor(texture, 26 / 255)).map(([mode, material]) => [`${family}:${mode}`, material]);
+    }));
+    this.materials = {...materialsFor(map), ...Object.fromEntries(additional.flat())};
+    if (this.world.models?.redpower) {
+      const glow = new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:.3,
+        blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide});
+      this.useLightmap(glow);
+      this.materials['redpower:glow'] = glow;
+    }
     try {
       this.paint = await loader.loadAsync('/generated/textures/paintings.png');
       this.paint.colorSpace = THREE.SRGBColorSpace;
@@ -77,6 +104,37 @@ export class Display {
     } catch {
       this.paint = null;
     }
+  }
+
+  useLightmap(material) {
+    material.onBeforeCompile = shader => {
+      shader.uniforms.honeymoonLightmap = {value:this.lightmap};
+      shader.vertexShader = `uniform sampler2D honeymoonLightmap;
+        attribute float legacyLightLevel;
+        vec3 lightSrgbToLinear(vec3 encoded) {
+          return mix(encoded / 12.92, pow((encoded + .055) / 1.055, vec3(2.4)), step(vec3(.04045), encoded));
+        }
+        ${shader.vertexShader}`.replace('#include <color_vertex>', `#include <color_vertex>
+          float blockLight = mod(legacyLightLevel, 16.0);
+          float skyLight = floor(legacyLightLevel / 16.0);
+          vec3 illumination = texture2D(honeymoonLightmap, vec2((blockLight + .5) / 16.0, (skyLight + .5) / 17.0)).rgb;
+          vColor.rgb = lightSrgbToLinear(vColor.rgb * illumination);`);
+    };
+  }
+
+  updateSky(tick) {
+    const sun = sunlightAt(tick);
+    const angle = Math.PI * 2 * celestialAngle(tick);
+    const sky = Math.max(0, Math.min(1, 2 * Math.cos(angle) + .5));
+    if (this.lastSun !== sun) {
+      writeLightmap(this.lightBytes, sun);
+      this.lightmap.needsUpdate = true;
+      this.lastSun = sun;
+    }
+    const {zenith, horizon} = this.sky.material.uniforms;
+    zenith.value.copy(this.nightZenith).lerp(this.dayZenith, sky);
+    horizon.value.copy(this.nightHorizon).lerp(this.dayHorizon, sky);
+    this.scene.fog.color.copy(horizon.value);
   }
 
   resize() {
@@ -98,6 +156,7 @@ export class Display {
   }
 
   addChunk(chunk) {
+    this.remeshLighting(this.world.updateLighting(chunk));
     const levels = new Set(chunk.sections.keys());
     for (const change of this.world.overrides.values()) {
       if (Math.floor(change.x / 16) === chunk.x && Math.floor(change.z / 16) === chunk.z) levels.add(Math.floor(change.y / 16));
@@ -107,6 +166,17 @@ export class Display {
       for (const [dx, dz] of [[-1,0], [1,0], [0,-1], [0,1]]) this.schedule(chunk.x + dx, cy, chunk.z + dz);
     }
     for (const entity of chunk.entities) this.addEntity(entity, chunk.visualOnly);
+  }
+
+  remeshLighting(sections) {
+    for (const section of sections) {
+      this.schedule(...section.split(',').map(Number));
+      for (const {mesh, position} of this.paintingLights.get(section) ?? []) {
+        const light = mesh.geometry.attributes.legacyLightLevel;
+        light.array.fill(this.world.lightAt(...position));
+        light.needsUpdate = true;
+      }
+    }
   }
 
   remesh(x, y, z, revision) {
@@ -136,7 +206,7 @@ export class Display {
     }
     this.scene.fog.near = distance === 4 ? 60 : distance * 8;
     this.scene.fog.far = Math.max(115, distance * 22);
-    for (const radius of [8, 16, 32]) {
+    for (const {radius} of this.world.manifest.terrain ?? []) {
       if (radius > distance || this.requestedDistance < radius) break;
       if (!this.rings.has(radius)) {
         const promise = json('/generated/world/terrain-' + radius + '.json').then(ring => {
@@ -171,8 +241,17 @@ export class Display {
     tex.repeat.set(w / 256, h / 256);
     tex.offset.set(u / 256, 1 - (v + h) / 256);
     tex.needsUpdate = true;
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w / 16, h / 16),
-      new THREE.MeshBasicMaterial({map: tex, side: THREE.DoubleSide}));
+    const material = new THREE.MeshBasicMaterial({map:tex, vertexColors:true, side:THREE.DoubleSide});
+    this.useLightmap(material);
+    const geometry = new THREE.PlaneGeometry(w / 16, h / 16);
+    const position = entity.position.map(Math.floor);
+    const block = this.world.lightAt(...position);
+    geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(new Uint16Array(4).fill(block), 1));
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(12).fill(255), 3, true));
+    const mesh = new THREE.Mesh(geometry, material);
+    const id = sectionKey(...position.map(value => value >> 4));
+    if (!this.paintingLights.has(id)) this.paintingLights.set(id, []);
+    this.paintingLights.get(id).push({mesh, position});
     mesh.position.set(...entity.position);
     mesh.rotation.y = [0, Math.PI / 2, Math.PI, -Math.PI / 2][dir & 3];
     (visualOnly ? this.visualEntities : this.scene).add(mesh);
@@ -228,6 +307,7 @@ export class Display {
       geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
       geometry.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
       geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3, true));
+      geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(data.lightLevels, 1));
       geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
       geometry.computeBoundingSphere();
       group.add(new THREE.Mesh(geometry, this.materials[mode]));
@@ -296,6 +376,10 @@ export class Display {
   }
 
   render(now, selection) {
+    if (now >= (this.nextSkyUpdate ?? 0)) {
+      this.updateSky(this.cycleTime ?? this.firstDayTick + Math.max(0, Date.now() - this.dayStarted) / 50);
+      this.nextSkyUpdate = now + 200;
+    }
     this.frameTimes.push(now - this.lastFrame);
     if (this.frameTimes.length > 10000) this.frameTimes.shift();
     this.lastFrame = now;
