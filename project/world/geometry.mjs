@@ -1,3 +1,8 @@
+import {hasHatchRung, westCellarLadder} from './west-cellar.mjs';
+
+import {connectedTubeMesh, tubeCore} from './redpower-tubes.mjs';
+import {wirePanels, wireSelection} from './redpower-wires.mjs';
+
 export const ATLAS_GRID = 64;
 export const TILE_SIZE = 16;
 export const FACES = Object.freeze([
@@ -67,6 +72,9 @@ const TERRAIN = {
 const plants = { 6: 15, 30: 11, 31: 39, 32: 55, 37: 13, 38: 12, 39: 29, 40: 28,
   51: 31, 59: 88, 83: 73, 104: 111, 105: 111, 115: 226, 141: 200, 142: 200 };
 const fruitTiles = {3989: 3267, 4031: 3286, 3983: 3289, 3977: 3292, 4084: 3295};
+const cropStorageTiles = {3823:3604, 3827:3605, 3829:3606, 3835:3607, 3838:3608, 3941:3609,
+  3961:3610, 3976:3611, 4023:3612, 4025:3613, 4033:3614, 4073:3615, 4077:3616};
+const wildCropTiles = {3902:3633, 3927:3634, 3930:3635, 3933:3636, 3942:3637, 4030:3638, 4068:3639, 4089:3640};
 
 function cross(tile, height = 1, tint, inset = 0.1) {
   return [box([inset, 0, inset, 1 - inset, height, 1 - inset], tile, {
@@ -384,14 +392,13 @@ function frame(parts) {
   return result;
 }
 
-function connectedCore(neighbors, part, faceTile, radius, mode = 'opaque') {
+function connectedCore(neighbors, faceTile, radius, mode = 'opaque') {
   const bounds = [0.5 - radius, 0.5 - radius, 0.5 - radius, 0.5 + radius, 0.5 + radius, 0.5 + radius];
-  const options = { mode, approximation: part === 'tube' ? 'RedPower tube connection geometry' : 'RedPower wire connection geometry' };
+  const options = { mode, approximation: 'RedPower wire connection geometry' };
   const result = [box(bounds, faceTile, options)];
   const connected = face => {
     const [id, meta] = unpack(neighbors?.(...FACES[face]));
-    return part === 'tube' ? id === 750 && meta === 8 || [763, 764, 767].includes(id)
-      : id === 750 && meta !== 0 && meta !== 8 || [69, 75, 76, 93, 94, 753, 760, 761, 762, 763, 764].includes(id);
+    return id === 750 && meta !== 0 && meta !== 8 || [69, 75, 76, 93, 94, 753, 760, 761, 762, 763, 764].includes(id);
   };
   for (const face of [0, 1, 2, 3, 4, 5]) {
     if (!connected(face)) continue;
@@ -615,20 +622,37 @@ export function signFor(cell) {
   };
 }
 
+export function redPowerTubeMesh(cell, neighbors) {
+  const [id, meta] = unpack(cell);
+  if (id !== 750 || meta !== 8) return null;
+  return [...coverBoxes(Array.isArray(cell?.parts) ? cell.parts : AIR, false), ...connectedTubeMesh(cell, neighbors)];
+}
+
+export function redPowerWireMesh(cell, neighbors) {
+  const [id, meta] = unpack(cell);
+  if (id !== 750 || !wireMetadata.has(meta)) return null;
+  const data = cell?.object?.data ?? cell?.data;
+  if (!Number.isInteger(data?.cons)) return null;
+  const parts = coverBoxes(Array.isArray(cell?.parts) ? cell.parts : AIR, false);
+  const result = [...parts, ...wirePanels(cell, meta, neighbors)];
+  return meta !== 2 && (data?.cons & 64) ? [...result, ...jacketShape(meta, data, neighbors)] : result;
+}
+
 function specialShape(id, meta, cell, neighbors) {
   const data = cell?.object?.data ?? cell?.object ?? cell?.data;
   if (id === 750) {
     const parts = Array.isArray(cell?.parts) ? cell.parts : AIR;
     let components = coverBoxes(parts, false);
     if (meta === 0) return Array.isArray(cell?.parts) ? components : uniform(planks[1]);
-    if ([1, 3, 5].includes(meta) && (data?.cons & 64)) {
-      const jacket = jacketShape(meta, data, neighbors);
-      if (!(data.cons & 63)) return [...components, ...jacket];
-      components = [...components, ...jacket];
+    if (meta === 8) return [...components, tubeCore];
+    if (wireMetadata.has(meta) && Number.isInteger(data?.cons)) {
+      const panels = wireSelection(cell, meta);
+      // The original ray trace uses multipart bounds; only rendering extends a post to its neighbors.
+      const result = [...components, ...panels];
+      return data?.cons & 64 ? [...result, wirePostCollision] : result;
     }
-    const tube = meta === 8;
-    const tile = tube ? tiles.redPowerMachine + 65 : tiles.redPowerWire + (meta === 5 ? 112 : 1);
-    return [...components, ...connectedCore(neighbors, tube ? 'tube' : 'wire', tile, tube ? 0.1875 : 0.0625, 'cutout')];
+    const tile = tiles.redPowerWire + (meta === 5 ? 112 : 1);
+    return [...components, ...connectedCore(neighbors, tile, 0.0625, 'cutout')];
   }
   if (id === 765) {
     const parts = Array.isArray(cell?.parts) ? cell.parts : AIR;
@@ -674,11 +698,9 @@ function specialShape(id, meta, cell, neighbors) {
     return [box([0, bottom, 0, 1, bottom + 0.5, 1], wool[2])];
   }
   if (id === 4067) return [box([0, 0, 0, 1, 0.125, 1], wool[meta])];
-  if ([3823, 3827, 3829, 3835, 3838, 3902, 3927, 3930, 3933, 3941, 3942, 3961, 3976,
-    3999, 4023, 4025, 4030, 4033, 4068, 4073, 4077, 4089].includes(id)) {
-    const type = id === 3902 ? 29 : id === 4068 ? tiles.cotton + 32 : tiles.flowers + 16 + id % 14;
-    return cross(type, 0.62).map(part => ({ ...part, approximation: 'Related plant texture for a rare HarvestCraft crop' }));
-  }
+  if (cropStorageTiles[id] !== undefined) return uniform(cropStorageTiles[id]);
+  if (id === 3999) return uniform(3617 + meta);
+  if (wildCropTiles[id] !== undefined) return cross(wildCropTiles[id], 1, undefined, .05);
   if (id === 3968 || fruitTiles[id] !== undefined) {
     const stage = meta >= 7 && meta <= 8 ? 2 : meta >= 4 && meta <= 6 ? 1 : 0;
     // HarvestCraft cinnamon is solid. The hanging fruit use the original crossed squares.
@@ -687,9 +709,9 @@ function specialShape(id, meta, cell, neighbors) {
   if (id === 2779 && meta === 7) return uniform(3298);
   if (id === 2835 && meta === 13) return uniform(3299);
   if (id === 2804 && meta === 12) return uniform(topSides(3300, 3301, 3302));
-  if (id === 3943) return [box([0.0625, 0, 0.0625, 0.9375, 0.875, 0.9375], 4, {
-    approximation: 'Simplified HarvestCraft sink barrel',
-  })];
+  if (id === 162 && meta === 1) return uniform(3653);
+  if (id === 701 && meta === 1) return uniform(topSides(3654, 3655));
+  if (id === 3943) return meta < 4 ? uniform(topSides(3645 + meta, 3641 + meta, 3649 + meta)) : uniform(3641);
   if (id === 241) return cross(tiles.redPowerWorld + 0);
   if (id === 242) return uniform(tiles.redPowerWorld + 32 + meta);
   if (id === 243) return uniform(tiles.redPowerWorld + 49, { tint: WARM_LEAVES });
@@ -893,6 +915,9 @@ export function shapeFor(cell, neighbors) {
   }
   const [id, meta] = unpack(cell);
   if (id === 0) return AIR;
+  if (id === 96 && hasHatchRung(cell)) {
+    return [...vanillaShape(id, meta, neighbors), ...vanillaShape(65, westCellarLadder, neighbors)];
+  }
   const cacheable = !dynamic.has(id);
   if (cacheable && simpleCache.has(key)) return simpleCache.get(key);
   const result = vanillaShape(id, meta, neighbors) ?? specialShape(id, meta, cell, neighbors)
@@ -911,6 +936,10 @@ export function collisionFor(cell, neighbors) {
   const [id, meta] = unpack(cell);
   if (id === 765) return frameCollision;
   if (id === 117) return brewingStandCollision;
+  if (id === 92) {
+    const [cake] = shapeFor(cell);
+    return [{...cake, y1: 7 / 16}];
+  }
   if (id === 85 || id === 113) {
     const [west,east,north,south] = fenceLinks(id, neighbors, false);
     return [box([west ? 0 : .375, 0, north ? 0 : .375, east ? 1 : .625, 1.5, south ? 1 : .625], id === 85 ? 4 : 224)];

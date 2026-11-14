@@ -2,11 +2,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { displayObject } from '../server/base.mjs';
-import { ATLAS_GRID, collisionFor, shapeFor, signFor, standingSignMesh, tiles } from './geometry.mjs';
+import { ATLAS_GRID, collisionFor, redPowerWireMesh, shapeFor, signFor, standingSignMesh, tiles } from './geometry.mjs';
 
 const aabb = box => [box.x0, box.y0, box.z0, box.x1, box.y1, box.z1];
 const inside = (box, [x, y, z]) => x > box.x0 && x < box.x1
   && y > box.y0 && y < box.y1 && z > box.z0 && z < box.z1;
+
+test('cake keeps its half-block model and a 7/16 collision top at every bite', () => {
+  for (let bites = 0; bites < 6; bites++) {
+    const key = `legacy:92:${bites}`;
+    assert.deepEqual(aabb(shapeFor(key)[0]), [(1 + bites * 2) / 16, 0, 1 / 16, 15 / 16, 1 / 2, 15 / 16]);
+    assert.deepEqual(aabb(collisionFor(key)[0]), [(1 + bites * 2) / 16, 0, 1 / 16, 15 / 16, 7 / 16, 15 / 16]);
+  }
+});
 
 test('standing sign board and text share the original sixteen-way heading', () => {
   const sign = 'legacy:63:6';
@@ -74,7 +82,7 @@ test('RedPower jacketed street light uses the silver wire cover and original pos
   const cell = { key: 'legacy:750:1', object };
   const lamp = { key: 'legacy:768:0', data: { rot: 0 } };
   const adjacent = (x, y, z) => y > 0 ? lamp : y < 0 ? cell : 'air';
-  const [post] = shapeFor(cell, adjacent);
+  const [post] = redPowerWireMesh(cell, adjacent);
   assert.deepEqual(aabb(post), [.25, 0, .25, .75, 1, .75]);
   assert.deepEqual(post.faces, [339, 339, 1797, 1797, 339, 339]);
   assert.deepEqual(collisionFor(cell, adjacent).map(aabb), [[.25, .25, .25, .75, .75, .75]]);
@@ -142,12 +150,30 @@ test('HarvestCraft fruit uses the original growth textures and leaves clear pass
   assert.equal(shapeFor('legacy:4053:0')[0].faces[0], 194);
 });
 
+test('HarvestCraft food crates and sink are solid while wild crops use crossed sprites', () => {
+  for (const [key, tile] of [['legacy:3823:0', 3604], ['legacy:3999:6', 3623]]) {
+    assert.deepEqual(shapeFor(key)[0].faces, Array(6).fill(tile));
+    assert.deepEqual(collisionFor(key).map(aabb), [[0, 0, 0, 1, 1, 1]]);
+  }
+  assert.deepEqual(shapeFor('legacy:3943:0')[0].faces, [3645, 3645, 3649, 3641, 3645, 3645]);
+  assert.deepEqual(collisionFor('legacy:3943:0').map(aabb), [[0, 0, 0, 1, 1, 1]]);
+  assert.equal(shapeFor('legacy:3902:0')[0].faces[0], 3633);
+  assert.equal(shapeFor('legacy:4068:0')[0].kind, 'cross');
+  assert.deepEqual(collisionFor('legacy:4068:0'), []);
+});
+
 test('Chisel fixtures use the selected source tiles and keep full cube collision', () => {
   for (const [key, faces] of [['legacy:2779:7', Array(6).fill(3298)],
     ['legacy:2835:13', Array(6).fill(3299)], ['legacy:2804:12', [3300, 3300, 3302, 3301, 3300, 3300]]]) {
     assert.deepEqual(shapeFor(key)[0].faces, faces);
     assert.deepEqual(aabb(collisionFor(key)[0]), [0, 0, 0, 1, 1, 1]);
   }
+});
+
+test('MoCreatures native rock and log use their own terrain rather than the placeholder', () => {
+  assert.deepEqual(shapeFor('legacy:162:1')[0].faces, Array(6).fill(3653));
+  assert.deepEqual(shapeFor('legacy:701:1')[0].faces, [3654, 3654, 3655, 3655, 3654, 3654]);
+  assert.deepEqual(collisionFor('legacy:701:1').map(aabb), [[0, 0, 0, 1, 1, 1]]);
 });
 
 test('read source chair, bookshelf and Russian sign across negative chunk coordinates', t => {

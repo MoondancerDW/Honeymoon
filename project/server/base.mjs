@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relatedBlockStates } from '../world/block-interactions.mjs';
+import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
 
 const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
 const MAX_CACHED_CHUNKS = 80;
@@ -14,6 +15,7 @@ const safeTileFields = new Set([
   'labelAngle', 'LidOpen', 'ps', 'cons',
 ]);
 const jacketTiles = new Set(['Redwire', 'RedCable', 'Bluewire']);
+const wireTiles = new Set([...jacketTiles, 'InsRedwire']);
 
 const visibleItems = {
   ArmorStandTile: ['StandInventory', 4],
@@ -59,7 +61,13 @@ export function displayObject(object) {
   }
   if (jacketTiles.has(object.type)) {
     if (Number.isInteger(object.data?.post)) data.post = object.data.post & 255;
+  }
+  if (wireTiles.has(object.type)) {
+    if (Number.isInteger(object.data?.md)) data.md = object.data.md & 255;
     if (Number.isInteger(object.data?.pwr)) data.pwr = object.data.pwr & 255;
+  }
+  if (object.type === 'RPTube' && Number.isInteger(object.data?.pCol)) {
+    data.pCol = object.data.pCol & 255;
   }
   if (object.type === 'Music' && Number.isInteger(object.data?.note)) {
     data.note = Math.min(24, Math.max(0, object.data.note));
@@ -68,6 +76,7 @@ export function displayObject(object) {
     const recordId = object.data?.RecordItem?.id ?? object.data?.Record;
     if (Number.isInteger(recordId) && recordId >= 2256 && recordId <= 2267) data.Record = recordId;
   }
+  if (object.type === 'WestCellarHatch') data.ladderRung = westCellarLadder;
   return { key: object.key, position: object.position, type: object.type, data };
 }
 
@@ -135,15 +144,28 @@ export function loadBase(directory) {
     const index = (x - cx * 16) + (z - cz * 16) * 16 + (y - cy * 16) * 256;
     const key = manifest.palette[section.readUInt16LE(index * 2)];
     if (!key) throw new Error(`Palette index outside catalog at ${cellAddress(x, y, z)}`);
-    return { key, object: chunk.objects.get(cellAddress(x, y, z)) ?? null };
+    const object = chunk.objects.get(cellAddress(x, y, z)) ?? null;
+    // The original save stays available for Minecraft comparison.
+    if (isWestCellarHatch(x, y, z) && (key === 'legacy:96:12' || key === 'legacy:96:8') &&
+        getCell(x, y - 1, z).key === `legacy:65:${westCellarLadder}`) {
+      return { key, object: {key: `tile:${x}:${y}:${z}`, position: [x, y, z], type: 'WestCellarHatch',
+        data: {ladderRung: westCellarLadder}} };
+    }
+    return { key, object };
   }
 
   function publicChunk(cx, cz) {
     const chunk = getChunk(cx, cz);
     if (!chunk) return null;
+    const objects = chunk.source.objects.map(displayObject);
+    const {x, y, z} = westCellarHatch;
+    if (cx === (x >> 4) && cz === (z >> 4)) {
+      const fixture = getCell(x, y, z).object;
+      if (fixture?.type === 'WestCellarHatch') objects.push(displayObject(fixture));
+    }
     return {
       ...chunk.source,
-      objects: chunk.source.objects.map(displayObject),
+      objects,
       entities: chunk.source.entities.map(displayEntity),
     };
   }

@@ -1,4 +1,8 @@
+import {FACES} from './geometry.mjs';
+
 export const CTM_START = 3328;
+export const CHISEL_FANTASY = 'legacy:2835:13';
+export const CHISEL_CTM_START = 3584;
 
 // Texture-space left, right, bottom, top for each face in geometry.FACES order.
 const BORDERS = [
@@ -46,4 +50,29 @@ export function paneTexture(face, neighbors) {
   const column = left ? (right ? 2 : 3) : Number(right);
   const row = above ? (below ? 2 : 3) : Number(below);
   return CTM_START + row * 16 + column;
+}
+
+// Original CTM/RenderBlocksCTM subdivide the face texture into four quadrants.
+// Each row is indexed by neighboring horizontal edge, vertical edge, and diagonal.
+const CHISEL_SUBMAPS = [
+  [16, 8, 2, 10, 16, 8, 2, 0],
+  [17, 9, 3, 11, 17, 9, 3, 1],
+  [18, 12, 6, 14, 18, 12, 6, 4],
+  [19, 13, 7, 15, 19, 13, 7, 5],
+];
+
+export function chiselFantasyQuarters(face, neighbors) {
+  const normal = FACES[face];
+  if (!normal) return null;
+  const borders = BORDERS[face];
+  const matches = (x, y, z) => keyOf(neighbors(x, y, z)) === CHISEL_FANTASY &&
+    keyOf(neighbors(x + normal[0], y + normal[1], z + normal[2])) !== CHISEL_FANTASY;
+  const edges = borders.map(offset => matches(...offset));
+  return CHISEL_SUBMAPS.map((variants, quarter) => {
+    const horizontal = quarter & 1;
+    const vertical = quarter < 2 ? 3 : 2;
+    const diagonal = borders[horizontal].map((component, axis) => component + borders[vertical][axis]);
+    const mask = Number(edges[horizontal]) + 2 * Number(edges[vertical]) + 4 * Number(matches(...diagonal));
+    return CHISEL_CTM_START + variants[mask];
+  });
 }

@@ -44,7 +44,7 @@ try {
     $atlasVersion = if (Test-Path -LiteralPath $atlasMetadata) {
         (Get-Content -Raw -LiteralPath $atlasMetadata | ConvertFrom-Json).schemaVersion
     }
-    if ($atlasVersion -ne 6 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
+    if ($atlasVersion -ne 7 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
         & $pythonPath -B world/textures.py
         if ($LASTEXITCODE) { throw 'Texture extraction failed. Install Pillow from world/requirements.txt.' }
     }
@@ -57,7 +57,7 @@ try {
         $modelJson = "generated/models/$family.json"
         $current = Test-Path -LiteralPath $modelJson
         if ($current -and $family -eq 'jammy') {
-            $current = (Get-Content -Raw -LiteralPath $modelJson | ConvertFrom-Json).schemaVersion -eq 2
+            $current = (Get-Content -Raw -LiteralPath $modelJson | ConvertFrom-Json).schemaVersion -eq 3
         }
         if ((Test-Path -LiteralPath $modelInputs[$family].Source) -and
             (!$current -or !(Test-Path -LiteralPath "generated/models/$family.png"))) {

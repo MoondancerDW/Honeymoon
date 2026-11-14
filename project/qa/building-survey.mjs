@@ -14,6 +14,7 @@ import * as geometry from '../world/geometry.mjs';
 // Run from project: node qa/building-survey.mjs [generated-world] [output] [model-directory] [--extended]
 // Optional repeatable pair: native-walk-result.tsv original-walk.tsv
 // Replay: node qa/building-survey.mjs --replay route.json [generated-world] [model-directory]
+// Probe: node qa/building-survey.mjs --movement-probes route.json result.tsv original-walk.tsv output.tsv [generated-world] [model-directory]
 const project = fileURLToPath(new URL('..', import.meta.url));
 const defaultWorld = join(project, 'generated/world');
 const defaultOutput = join(project, 'work/building-survey');
@@ -380,9 +381,8 @@ function specialLink(movement, from, to, mode, record = false) {
       : mode === 'ladder' && (to.y > actual.y + .012 || risingOut && actual.y < to.y + .08);
     const descend = (mode === 'ladder' || mode === 'water') && actual.y > to.y + .035;
     movement.update(actual, speed(to.x, actual.x), speed(to.z, actual.z), jump && tick === 0, dt, { rise, descend });
-    if (record && tick % 4 === 0) path.push(feet(actual));
+    if (record) path.push(feet(actual));
     if (dist2(actual, to) <= tolerance ** 2 && (!to.supported || movement.grounded)) {
-      if (record) path.push(feet(actual));
       return {path, actual};
     }
   }
@@ -824,6 +824,52 @@ function verifyGameRoute(report, worldDirectory, modelDirectory) {
   }
 }
 
+function movementProbes(route, resultFile, originalWalk, world) {
+  const original = readFileSync(originalWalk, 'utf8').trim().split(/\r?\n/).map(line => line.split(/\s+/));
+  const probes = new Set();
+  for (const row of readFileSync(resultFile, 'utf8').trim().split(/\r?\n/).slice(1)) {
+    const [index, status] = row.split('\t');
+    const [kind, , , , pathIndex] = original[Number(index)] ?? [];
+    const leg = Number(pathIndex);
+    if (status === 'different' && kind === 'm' && Number.isInteger(leg) && leg > 0 && leg < route.feet.length) {
+      probes.add(leg);
+    }
+  }
+  const browser = new Movement(world);
+  const nodes = coordinates => {
+    const [x, y, z] = coordinates;
+    return {x, y, z, medium:movementMedium(world.cellAt, x, y, z), supported:browser.blocked(x, y - .0001, z)};
+  };
+  const actions = Map.groupBy(route.actions, action => action.pathIndex);
+  const modes = new Map(route.movementSegments.map(segment => [segment.pathIndex, segment.mode]));
+  const doors = new Map(world.doors.map(door => [door.position.join(','), door]));
+  const output = [];
+  const blocked = [];
+  const tested = [];
+  world.resetDoors(false);
+  for (const [index, from] of route.feet.entries()) {
+    for (const action of actions.get(index) ?? []) {
+      const door = doors.get(action.position.join(','));
+      if (!door) throw new Error(`Route door ${action.position.join(', ')} is missing`);
+      world.setDoor(door, true);
+      output.push(['d', ...door.position, door.open.split(':').at(-1)].join(' '));
+    }
+    if (!probes.has(index + 1)) continue;
+    const to = route.feet[index + 1];
+    const mode = modes.get(index + 1);
+    if (!mode) throw new Error(`Native movement leg ${index + 1} has no route movement mode`);
+    const traversal = specialLink(browser, nodes(from), nodes(to), mode, true);
+    if (!traversal) {
+      blocked.push({leg:index + 1, mode, from, to});
+      continue;
+    }
+    output.push(['r', ...from].join(' '));
+    for (const sample of traversal.path) output.push(['m', ...sample, index + 1].join(' '));
+    tested.push({leg:index + 1, mode, samples:traversal.path.length});
+  }
+  return {walk: `${output.join('\n')}\n`, blocked, tested};
+}
+
 function main(args) {
   const extended = args.includes('--extended');
   args = args.filter(value => value !== '--extended');
@@ -836,6 +882,15 @@ function main(args) {
   if (args[0] === '--native-tsv') {
     const report = JSON.parse(readFileSync(resolve(args[1]), 'utf8'));
     writeFileSync(resolve(args[2]), nativeTsv(report.route));
+    return;
+  }
+  if (args[0] === '--movement-probes') {
+    const [, routePath, nativeResults, originalWalk, output, world = defaultWorld, models = defaultModels] = args;
+    if (!output) throw new Error('Pass the route JSON, native results TSV, original walk TSV, and output TSV');
+    const {route} = JSON.parse(readFileSync(resolve(routePath), 'utf8'));
+    const probes = movementProbes(route, resolve(nativeResults), resolve(originalWalk), makeWorld(resolve(world), resolve(models), true));
+    writeFileSync(resolve(output), probes.walk);
+    console.log(JSON.stringify({blocked:probes.blocked, tested:probes.tested}, null, 2));
     return;
   }
   const directory = resolve(args[0] ?? defaultWorld);

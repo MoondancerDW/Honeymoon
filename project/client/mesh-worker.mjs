@@ -1,6 +1,6 @@
 import * as geometry from '/world/geometry.mjs';
 import {decodeIndices} from './world-data.mjs';
-import {glassTexture, paneTexture} from '/world/connected-textures.mjs';
+import {CHISEL_FANTASY, chiselFantasyQuarters, glassTexture, paneTexture} from '/world/connected-textures.mjs';
 import {coverShade, FACE_SHADE} from './lighting.mjs';
 import {extractedModel} from '/world/extracted-models.mjs';
 
@@ -63,7 +63,7 @@ const FULL_UV = [[0, 1], [1, 1], [1, 0], [0, 0]];
 const AXES = [[2, 1], [1, 2], [0, 2], [2, 0], [1, 0], [0, 1]];
 const UV_AXES = [[2, 1], [2, 1], [0, 2], [0, 2], [0, 1], [0, 1]];
 
-function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], shade = 1) {
+function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], shade = 1, quarter = -1) {
   if (!Number.isInteger(tile) || tile < 0) return;
   const axis = face >> 1;
   const outward = face & 1;
@@ -85,14 +85,32 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
     if ((face === 1 || face === 4) !== Boolean(box.mirrorFaces?.[face] ?? box.mirrorU)) horizontal = 1 - horizontal;
     if (box.redPowerUv) {
       // RedPower takes the top and bottom U axis from Z.
-      if (axis === 1) horizontal = outward ? point[2] : 1 - point[2];
-      vertical = 1 - point[axis === 1 ? 0 : 1];
+      let local = point;
+      const localFace = box.redPowerFaces?.[face] ?? face;
+      const localAxis = localFace >> 1;
+      if (box.redPowerAxes) {
+        local = [];
+        for (const [i, component] of box.redPowerAxes.entries()) {
+          local[Math.abs(component) - 1] = component > 0 ? point[i] : 1 - point[i];
+        }
+      }
+      horizontal = local[localAxis === 2 ? 0 : 2];
+      if (localFace === 1 || localFace === 2 || localFace === 4) horizontal = 1 - horizontal;
+      vertical = 1 - local[localAxis === 1 ? 0 : 1];
       const flags = box.redPowerUv[face];
       if (flags & 1) horizontal = 1 - horizontal;
       if (flags & 2) vertical = 1 - vertical;
       uv.push(flags & 4 ? [vertical, horizontal] : [horizontal, vertical]);
     } else {
-      uv.push([horizontal, axis === 1 ? vertical : 1 - vertical]);
+      const textureY = axis === 1 ? vertical : 1 - vertical;
+      uv.push([horizontal, textureY]);
+      if (quarter >= 0) {
+        // Subdivide a full cube face in texture order, preserving the vertex winding.
+        const quarterU = ((quarter & 1) + horizontal) / 2;
+        const quarterV = ((quarter >> 1) + textureY) / 2;
+        point[textureU] = face === 1 || face === 4 ? 1 - quarterU : quarterU;
+        point[textureV] = axis === 1 ? quarterV : 1 - quarterV;
+      }
     }
     if (box.angle) {
       const [x, y, z] = [point[0] - .5, point[1], point[2] - .5];
@@ -135,14 +153,16 @@ function makeShape(index, at, cell, neighbors) {
   const connected = geometry.shapeDependsOnNeighbors(key);
   if (!connected && !cell?.object && cache.has(index)) return cache.get(index);
   const model = extractedModel(models, cell || key);
+  const adjacent = (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE);
   const boxes = model ? [] : geometry.standingSignMesh(key) ??
-    shapeFor(cell || key, (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE));
+    geometry.redPowerTubeMesh(cell || key, adjacent) ?? geometry.redPowerWireMesh(cell || key, adjacent) ??
+    shapeFor(cell || key, adjacent);
   const shape = {boxes, model, full: boxes.find(fullCube)};
   if (!connected && !cell?.object) cache.set(index, shape);
   return shape;
 }
 
-function precise({indices, light, objects, connectedTextures}) {
+function precise({indices, light, objects, connectedTextures, chiselConnectedTextures}) {
   const layers = {opaque: layer(), cutout: layer(), blend: layer()};
   const indexedObjects = new Map(objects);
   const rendered = new Map();
@@ -176,11 +196,12 @@ function precise({indices, light, objects, connectedTextures}) {
         }
         const blockKey = cells[indices[at]];
         const ctm = connectedTextures && (blockKey.startsWith('legacy:20:') || blockKey.startsWith('legacy:102:'));
+        const chisel = chiselConnectedTextures && blockKey === CHISEL_FANTASY;
         const glass = ctm && blockKey.startsWith('legacy:20:');
         const water = waterKey(blockKey);
         const cover = blockKey.startsWith('cover:750:0:');
         const neighborLit = usesNeighborLight(blockKey);
-        const neighbors = ctm ? (dx, dy, dz) => cell(at + dx + dz * SIDE + dy * SIDE * SIDE) : null;
+        const neighbors = ctm || chisel ? (dx, dy, dz) => cell(at + dx + dz * SIDE + dy * SIDE * SIDE) : null;
         if (indexedObjects.has(at)) {
           const sign = geometry.signFor?.(cell(at));
           if (sign) signs.push({...sign, x: x + sign.x, y: y + sign.y, z: z + sign.z});
@@ -213,8 +234,15 @@ function precise({indices, light, objects, connectedTextures}) {
             } else if (!onEdge && neighborLit) {
               packed = neighborLight(light, at, x + 1, y + 1, z + 1);
             }
-            const brightness = box.emissive ? 256 : packed;
-            const shade = box.emissive ? 1 : FACE_SHADE[f] * (cover ? coverShade(light[adjacent]) : 1);
+            const brightness = box.emissive ? 256 : box.redPowerLocalShade ? light[at] : packed;
+            const shade = box.emissive ? 1 : box.redPowerLocalShade?.[f] ?? FACE_SHADE[f] * (cover ? coverShade(light[adjacent]) : 1);
+            if (chisel) {
+              const tiles = chiselFantasyQuarters(f, neighbors);
+              for (let quarter = 0; quarter < tiles.length; quarter++) {
+                faceQuad(out, box, f, origin, brightness, tiles[quarter], shade, quarter);
+              }
+              continue;
+            }
             let tile = box.faces[f];
             if (glass) tile = glassTexture(f, neighbors, Number(blockKey.slice(10))) ?? tile;
             else if (ctm && axis !== 1) {

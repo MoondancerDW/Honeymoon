@@ -1,10 +1,10 @@
 import {collisionFor, shapeFor} from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {movementMedium} from '../world/block-movement.mjs';
+import {PLAYER} from '../world/player-body.mjs';
 
-const HALF = .29;
-export const HEIGHT = 1.77;
-export const EYE = 1.62;
+const {halfWidth: HALF, height: HEIGHT, eye: EYE} = PLAYER;
+export {HEIGHT, EYE};
 const EPSILON = .00001;
 
 export class Movement {
@@ -87,23 +87,33 @@ export class Movement {
     const n = Math.max(1, Math.ceil(dt / .016));
     const step = dt / n;
     for (let i = 0; i < n; i++) {
-      const drag = this.medium === 'water' ? .48 : this.medium === 'ladder' ? .62 : 1;
-      const swimOut = this.medium === 'water' && rise && !descend;
-      const wallX = this.horizontal(position, 'x', dx * step * drag, swimOut);
-      const wallZ = this.horizontal(position, 'z', dz * step * drag, swimOut);
-      this.medium = movementMedium(this.cellAt, position.x, position.y, position.z) ?? this.medium;
-      if (this.medium === 'ladder') {
-        this.fall = descend ? -1.8 : rise || wallX || wallZ ? 2.4 : Math.max(-1.8, this.fall - 12 * step);
-      } else if (this.medium === 'water') {
-        this.fall = descend ? -2 : rise || wallX || wallZ ? 2.5 : Math.max(-.85, this.fall - 5 * step);
+      const startMedium = this.medium;
+      if (startMedium === 'ladder') {
+        this.fall = descend ? -1.8 : rise ? 2.4 : Math.max(-1.8, this.fall - 12 * step);
+      } else if (startMedium === 'water') {
+        this.fall = descend ? -2 : rise ? 2.5 : Math.max(-.85, this.fall - 5 * step);
       } else {
         this.fall = Math.max(-16, this.fall - 20 * step);
       }
-      const hit = this.axis(position, 'y', this.fall * step);
-      this.grounded = hit && this.fall < 0;
-      if (hit) this.fall = 0;
+      // Resolve Y before X and Z, including when leaving a ledge or climbing
+      // past a ceiling. Contact with a wall can start ascent on the next step.
+      this.vertical(position, step);
+      const drag = startMedium === 'water' ? .48 : startMedium === 'ladder' ? .62 : 1;
+      const swimOut = startMedium === 'water' && rise && !descend;
+      const wallX = this.horizontal(position, 'x', dx * step * drag, swimOut);
+      const wallZ = this.horizontal(position, 'z', dz * step * drag, swimOut);
       this.medium = movementMedium(this.cellAt, position.x, position.y, position.z);
+      if (!descend && (wallX || wallZ)) {
+        if (this.medium === 'ladder') this.fall = 2.4;
+        if (this.medium === 'water') this.fall = 2.5;
+      }
     }
+  }
+
+  vertical(position, step) {
+    const hit = this.axis(position, 'y', this.fall * step);
+    this.grounded = hit && this.fall < 0;
+    if (hit) this.fall = 0;
   }
 }
 

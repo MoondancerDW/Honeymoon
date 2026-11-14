@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CTM_START, glassTexture, paneTexture } from './connected-textures.mjs';
+import { CHISEL_CTM_START, CHISEL_FANTASY, CTM_START, chiselFantasyQuarters, glassTexture, paneTexture } from './connected-textures.mjs';
 
 const block = 'legacy:20:0';
 const pane = 'legacy:102:0';
@@ -45,4 +45,20 @@ test('pane CTM connects pane IDs and reverses side columns for the back face', (
   assert.equal(paneTexture(0, neighbors), CTM_START + 19);
   assert.equal(paneTexture(1, neighbors), CTM_START + 17);
   assert.equal(paneTexture(3, neighbors), null);
+});
+
+test('Chisel CTMX chooses individual top and inner corners from the original texture submaps', () => {
+  const regions = (neighbors, face = 3) => chiselFantasyQuarters(face, neighbors).map(tile => tile - CHISEL_CTM_START);
+  assert.deepEqual(regions(neighborhood([])), [16, 17, 18, 19]);
+  assert.deepEqual(regions(neighborhood([['-1,0,0', CHISEL_FANTASY], ['0,0,-1', { key: CHISEL_FANTASY }]])), [10, 3, 12, 19]);
+  assert.deepEqual(regions(neighborhood([['-1,0,0', CHISEL_FANTASY], ['0,0,-1', CHISEL_FANTASY], ['-1,0,-1', CHISEL_FANTASY]])), [0, 3, 12, 19]);
+});
+
+test('Chisel CTMX requires the same metadata and does not connect to a covered face', () => {
+  const neighbors = neighborhood([['-1,0,0', CHISEL_FANTASY], ['-1,1,0', CHISEL_FANTASY],
+    ['1,0,0', 'legacy:2835:12'], ['0,1,-1', CHISEL_FANTASY]]);
+  const regions = face => chiselFantasyQuarters(face, neighbors).map(tile => tile - CHISEL_CTM_START);
+  assert.deepEqual(regions(3), [16, 17, 18, 19]);
+  assert.deepEqual(regions(2), [8, 17, 12, 19]);
+  assert.deepEqual(regions(4), [16, 9, 18, 13]);
 });

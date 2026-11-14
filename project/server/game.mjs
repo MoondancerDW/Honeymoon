@@ -60,9 +60,16 @@ export function createGame(base, store, geometry, {
   }
   refreshMechanicCells();
 
+  function editObject(edit) {
+    if (edit.object || (edit.cell !== 'legacy:96:8' && edit.cell !== 'legacy:96:12')) return edit.object;
+    // Older saved hatch toggles predate the added rung and have no object.
+    const original = base.getCell(edit.x, edit.y, edit.z).object;
+    return original?.type === 'WestCellarHatch' ? original : null;
+  }
+
   function getCurrent(x, y, z) {
     const edit = mechanicCells.get(cellAddress(x, y, z)) ?? store.getEdit(x, y, z);
-    if (edit) return { x, y, z, cell: edit.cell, object: edit.object, revision: edit.revision };
+    if (edit) return { x, y, z, cell: edit.cell, object: editObject(edit), revision: edit.revision };
     const original = base.getCell(x, y, z);
     return { x, y, z, cell: original.key === 'air' ? null : original.key, object: original.object, revision: 0 };
   }
@@ -179,7 +186,8 @@ export function createGame(base, store, geometry, {
     }
     if (reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
     if (type === 'copy') {
-      store.putClipboard(player, { cell: current.cell, object: displayObject(current.object) });
+      const object = current.object?.type === 'WestCellarHatch' ? null : displayObject(current.object);
+      store.putClipboard(player, { cell: current.cell, object });
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
     }
     return writeCell(player, current, null, null);
@@ -290,7 +298,8 @@ export function createGame(base, store, geometry, {
     snapshot(player) {
       return {
         bounds: base.manifest.bounds, spawn: base.manifest.spawn, worldRevision: store.worldRevision(), contentHash: base.hash,
-        overrides: [...store.edits().map(edit => ({ ...edit, object: displayObject(edit.object) })), ...snapshotCells()],
+        overrides: [...store.edits().map(edit => ({ ...edit, object: displayObject(editObject(edit)) })),
+          ...snapshotCells()],
         mechanics: descriptions(player),
       };
     },

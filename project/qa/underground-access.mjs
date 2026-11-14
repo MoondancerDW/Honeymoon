@@ -41,8 +41,10 @@ const distance = (a, b) => Math.hypot(...a.map((coordinate, i) => coordinate - b
 export function runAccess(routePath, output, worldPath, modelPath, branch) {
   const {name, start, poses, travel} = branch;
   assert.ok(routePath && output, `Usage: node qa/${name}-access.mjs ROUTE_JSON OUTPUT [WORLD] [MODELS]`);
-  const {scope, route} = JSON.parse(readFileSync(routePath, 'utf8'));
   const base = loadBase(worldPath ?? 'generated/world');
+  const fromBranchStart = branch.localStart && routePath === '--local';
+  const {scope, route} = fromBranchStart ? {scope: {contentHash: base.hash},
+    route: {feet: [start], actions: [], movementSegments: []}} : JSON.parse(readFileSync(routePath, 'utf8'));
   assert.equal(scope.contentHash, base.hash, 'Route and world must use the same import');
   const models = Object.fromEntries(modelFamilies.map(family =>
     [family, JSON.parse(readFileSync(join(modelPath ?? 'generated/models', `${family}.json`), 'utf8'))]));
@@ -53,7 +55,8 @@ export function runAccess(routePath, output, worldPath, modelPath, branch) {
   try {
     let now = 0;
     const modules = registerMechanics(base, store, physicalGeometry).filter(module => module.id !== 'diagnostic');
-    const game = createGame(base, store, physicalGeometry, {modules, clock: () => now});
+    const routeBase = fromBranchStart ? {...base, manifest: {...base.manifest, spawn: start}} : base;
+    const game = createGame(routeBase, store, physicalGeometry, {modules, clock: () => now});
     const {id} = store.createPlayer();
     const edits = new Map();
     function apply(result) {

@@ -9,8 +9,37 @@ import { extractedModel, modelFamilies, withExtractedModels } from '../world/ext
 import { displayObject, loadBase } from './base.mjs';
 import { createHoneymoonServer } from './index.mjs';
 import { physics } from './physics.mjs';
+import { isLadder } from '../world/block-movement.mjs';
+import { createGame } from './game.mjs';
+import { openStore } from './store.mjs';
 
 const directory = fileURLToPath(new URL('../generated/world/', import.meta.url));
+
+test('west cellar rung is public and works with an older saved hatch state', {
+  skip: !existsSync(join(directory, 'world.json')) ? 'Run the Anvil import to verify the west cellar' : false,
+}, () => {
+  const base = loadBase(directory);
+  const [x, y, z] = [-60, 64, 56];
+  const fixture = base.getCell(x, y, z);
+  assert.equal(fixture.key, 'legacy:96:12');
+  assert.equal(base.getCell(x, y - 1, z).key, 'legacy:65:3');
+  assert.deepEqual(base.publicChunk(x >> 4, z >> 4).objects.find(item => item.type === 'WestCellarHatch'), fixture.object);
+  assert.equal(isLadder(fixture), true);
+  assert.equal(isLadder({...fixture, key: 'legacy:96:8'}), false);
+  assert.equal(geometry.shapeFor(fixture).length, 2);
+  assert.equal(geometry.collisionFor(fixture).length, 1);
+  assert.equal(base.getCell(-72, 73, 28).object, null);
+  const store = openStore(':memory:');
+  try {
+    const game = createGame(base, store, geometry);
+    const {id} = store.createPlayer();
+    store.writeEdit({x, y, z, cell: 'legacy:96:12', object: null, revision: 1}, null);
+    const hatch = game.snapshot(id).overrides.find(edit => edit.x === x && edit.y === y && edit.z === z);
+    assert.deepEqual(hatch.object, fixture.object);
+  } finally {
+    store.close();
+  }
+});
 const stairs = new Set([53, 67, 108, 109, 114, 128, 134, 135, 136]);
 const directions = [[1, 0, 0], [-1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]];
 const cases = [

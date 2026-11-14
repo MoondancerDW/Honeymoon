@@ -88,15 +88,21 @@ def capture(source, java_home):
     return models
 
 
-def numbers(string, expected):
+def parsed_numbers(string, expected):
     values = [float(value) for value in string.split(',')]
     if len(values) != expected or not all(map(math.isfinite, values)):
         raise ValueError(f'Invalid capture values: {string}')
-    return [round(value, 8) + 0.0 for value in values]
+    return values
+
+
+def numbers(string, expected):
+    return [round(value, 8) + 0.0 for value in parsed_numbers(string, expected)]
 
 
 def bounds(string):
-    values = numbers(string, 6)
+    # A standing player must start exactly on the source AABB plane. Rounding
+    # floating-point bounds down can put the player's feet inside the block.
+    values = parsed_numbers(string, 6)
     if any(lo >= hi for lo, hi in zip(values[:3], values[3:])):
         raise ValueError(f'Invalid AABB: {string}')
     return dict(zip(BOX_FIELDS, values))
@@ -176,7 +182,7 @@ def generate(source, output, java_home):
 
     output.mkdir(parents=True, exist_ok=True)
     atlas.save(output / 'jammy.png')
-    catalog = {'schemaVersion': 2, 'atlas': {'width': atlas.width, 'height': atlas.height, 'textures': entries}, 'models': models}
+    catalog = {'schemaVersion': 3, 'atlas': {'width': atlas.width, 'height': atlas.height, 'textures': entries}, 'models': models}
     (output / 'jammy.json').write_text(json.dumps(catalog, separators=(',', ':')) + '\n', encoding='utf-8')
     faces = sum(1 for _ in all_surfaces(models))
     print(f'Jammy: {len(models)} states, {faces} quads, {len(images)} textures, atlas {atlas.width}x{atlas.height}')

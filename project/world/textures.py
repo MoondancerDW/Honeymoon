@@ -15,6 +15,7 @@ DEFAULT_OUTPUT = HERE.parent / "generated" / "textures"
 GRID = 64
 TILE = 16
 CONNECTED_TEXTURE_START = 3328
+CHISEL_CTM_START = 3584
 
 # Keep the source atlas's own tile indices. The base IDs mirror geometry.mjs.
 ATLAS_SOURCES = (
@@ -38,6 +39,7 @@ ARCHIVES = {
     "cloud": "mods/MLB-CORE_147.zip",
     "pam": "mods/Pam's HarvestCraft.zip",
     "chisel": "mods/ChiselRetro_beta0.9_mc1.4.7.zip",
+    "mocreatures": "mods/DrZharks MoCreatures Mod v4.7.0.zip",
     "jammy": "mods/1.4.7_Jammy_Furniture_Mod_V4.1.zip",
     "biblio": "mods/BiblioCraft.zip",
 }
@@ -216,12 +218,62 @@ def add_fruit_crops(atlas, start, names):
             atlas.paste(start + offset * 3 + stage, texture.crop(rect))
 
 
+def add_harvestcraft_tiles(atlas):
+    storage = ("turnip", "garlic", "celery", "asparagus", "tea", "spiceleaf", "banana", "peach",
+               "lettuce", "onion", "apple", "cucumber", "rice")
+    wild = ("whitemushroom", "blackberry", "raspberry", "cranberry", "spiceleaf", "strawberry", "cotton", "blueberry")
+    ranges = [(3604 + offset, name, 48, 1) for offset, name in enumerate(storage)]
+    ranges.append((3617, "vanillastorage", 0, 16))
+    ranges += [(3633 + offset, name, 2, 1) for offset, name in enumerate(wild)]
+    ranges += [(3641 + row * 4, "sink", row * 16, 4) for row in range(3)]
+    images = {}
+    for start, name, first, count in ranges:
+        if name not in images:
+            images[name] = atlas.resolve(f"pam/harvestcraft/pamhc{name}.png", "pam")
+        image = images[name]
+        w, h = image.width // 16, image.height // 16
+        for offset in range(count):
+            x, y = (first + offset) % 16 * w, (first + offset) // 16 * h
+            atlas.paste(start + offset, image.crop((x, y, x + w, y + h)))
+
+
 def add_chisel(atlas, fallback):
     paths = ("planks-birch/blinds", "fft/block", "gold/terrain-gold-space-side",
              "gold/terrain-gold-space-top", "gold/terrain-gold-space-bottom")
+    fantasy = None
     for offset, path in enumerate(paths):
         tile = atlas.resolve(f"assets/chisel/textures/blocks/{path}.png", "chisel", required=False)
         atlas.paste(3298 + offset, fallback if tile is None else tile)
+        if path == "fft/block":
+            fantasy = tile
+    if fantasy is None:
+        return False
+    seams = atlas.resolve("assets/chisel/textures/blocks/fft/block-ctm.png", "chisel", required=False)
+    settings = atlas.archive_paths["chisel"].parents[1] / "config" / "Chisel.cfg"
+    disabled = settings.is_file() and any(line.strip().lower() == 'b:"disable connected textures"=true'
+                                           for line in settings.read_text(encoding="utf-8", errors="replace").splitlines())
+    if seams is None or disabled:
+        return False
+    for offset, image, size in ((0, seams, 4), (16, fantasy, 2)):
+        if image.width % size or image.height % size:
+            raise ValueError(f"Invalid Chisel CTMX grid {image.size}")
+        w, h = image.width // size, image.height // size
+        for y in range(size):
+            for x in range(size):
+                atlas.paste(CHISEL_CTM_START + offset + y * size + x, image.crop((x * w, y * h, (x + 1) * w, (y + 1) * h)))
+    return True
+
+
+def add_mocreatures_tiles(atlas, fallback):
+    texture = atlas.resolve("mods/mocreatures/textures/misc/blocks.png", "mocreatures", required=False)
+    # The rock class's textureINT defaults to zero; the log constructor receives base 16.
+    for offset, index in enumerate((1, 18, 19)):
+        if texture is None:
+            atlas.paste(3653 + offset, fallback)
+            continue
+        w, h = texture.width // 16, texture.height // 16
+        x, y = index % 16 * w, index // 16 * h
+        atlas.paste(3653 + offset, texture.crop((x, y, x + w, y + h)))
 
 
 def add_standing_sign(atlas):
@@ -248,6 +300,7 @@ def build(source, output, vanilla_jar=None):
             atlas.grid(index, atlas.resolve(resource, dependency))
         add_fruit_crops(atlas, 3264, ("cinnamon", "vanillabean"))
         add_fruit_crops(atlas, 3286, ("apple", "olive", "lime", "lemon"))
+        add_harvestcraft_tiles(atlas)
         candles = atlas.resolve("pam/harvestcraft/pamhccandle.png", "pam")
         cw, ch = candles.width // 16, candles.height // 16
         for color in range(16):
@@ -276,7 +329,8 @@ def build(source, output, vanilla_jar=None):
         draw.rectangle((0, 0, 7, 7), fill=(171, 145, 179, 255))
         draw.rectangle((8, 8, 15, 15), fill=(171, 145, 179, 255))
         atlas.paste(3203, fallback)
-        add_chisel(atlas, fallback)
+        chisel_connected_textures = add_chisel(atlas, fallback)
+        add_mocreatures_tiles(atlas, fallback)
         atlas.paste(3204, Image.new("RGBA", (TILE, TILE), (255, 255, 255, 255)))
         atlas.paste(3205, terrain.crop((4 * 16, 0, 5 * 16, 16)))
         add_standing_sign(atlas)
@@ -284,8 +338,8 @@ def build(source, output, vanilla_jar=None):
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
-            "schemaVersion": 6, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
-            "connectedTextures": connected_textures,
+            "schemaVersion": 7, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
+            "connectedTextures": connected_textures, "chiselConnectedTextures": chisel_connected_textures,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return len(atlas.resources)
 

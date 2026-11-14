@@ -1,6 +1,7 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {chunkKey, sectionKey, json} from './world-data.mjs';
 import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
+import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 
 export class Display {
   constructor(container, world, dayTick = 6000) {
@@ -86,6 +87,7 @@ export class Display {
       json('/generated/textures/atlas.json').catch(() => null),
     ]);
     this.connectedTextures = atlas?.connectedTextures === true;
+    this.chiselConnectedTextures = atlas?.chiselConnectedTextures === true;
     const additional = await Promise.all(Object.keys(this.world.models || {}).map(async family => {
       const texture = await loader.loadAsync(`/generated/models/${family}.png`);
       return Object.entries(materialsFor(texture, 26 / 255)).map(([mode, material]) => [`${family}:${mode}`, material]);
@@ -158,12 +160,20 @@ export class Display {
   addChunk(chunk) {
     this.remeshLighting(this.world.updateLighting(chunk));
     const levels = new Set(chunk.sections.keys());
+    const fantasy = this.chiselConnectedTextures ? this.world.indices.get(CHISEL_FANTASY) : undefined;
     for (const change of this.world.overrides.values()) {
-      if (Math.floor(change.x / 16) === chunk.x && Math.floor(change.z / 16) === chunk.z) levels.add(Math.floor(change.y / 16));
+      if (Math.floor(change.x / 16) !== chunk.x || Math.floor(change.z / 16) !== chunk.z) continue;
+      levels.add(Math.floor(change.y / 16));
+      if (fantasy !== undefined && change.index === fantasy) this.remeshAdjacentSections(change.x, change.y, change.z);
     }
     for (const cy of levels) {
       this.schedule(chunk.x, cy, chunk.z, !chunk.sections.has(cy));
       for (const [dx, dz] of [[-1,0], [1,0], [0,-1], [0,1]]) this.schedule(chunk.x + dx, cy, chunk.z + dz);
+      const indices = chunk.sections.get(cy)?.indices;
+      if (!indices || fantasy === undefined) continue;
+      for (let index = indices.indexOf(fantasy); index >= 0; index = indices.indexOf(fantasy, index + 1)) {
+        this.remeshAdjacentSections(chunk.x * 16 + (index & 15), cy * 16 + (index >> 8), chunk.z * 16 + (index >> 4 & 15));
+      }
     }
     for (const entity of chunk.entities) this.addEntity(entity, chunk.visualOnly);
   }
@@ -188,9 +198,18 @@ export class Display {
       const previous = this.visibleEdits.get(id);
       this.visibleEdits.set(id, {revision, received: previous?.revision === revision ? previous.received : performance.now()});
     }
-    for (const [dx, dy, dz] of [[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,-1],[0,0,1]]) {
-      const xx = Math.floor((x + dx) / 16), yy = Math.floor((y + dy) / 16), zz = Math.floor((z + dz) / 16);
-      if (xx !== cx || yy !== cy || zz !== cz) this.schedule(xx, yy, zz, true);
+    this.remeshAdjacentSections(x, y, z, true);
+  }
+
+  remeshAdjacentSections(x, y, z, edit = false) {
+    const cx = x >> 4, cy = y >> 4, cz = z >> 4;
+    for (let zz = (z - 1) >> 4; zz <= (z + 1) >> 4; zz++) {
+      for (let yy = (y - 1) >> 4; yy <= (y + 1) >> 4; yy++) {
+        for (let xx = (x - 1) >> 4; xx <= (x + 1) >> 4; xx++) {
+          const axes = Number(xx !== cx) + Number(yy !== cy) + Number(zz !== cz);
+          if (axes === 1 || (axes > 1 && this.chiselConnectedTextures)) this.schedule(xx, yy, zz, edit);
+        }
+      }
     }
   }
 
@@ -353,7 +372,7 @@ export class Display {
       if (job.type === 'precise') {
         const halo = this.world.halo(job.cx, job.cy, job.cz);
         worker.postMessage({id: job.id, type: job.type, version: job.version, palette: this.world.palette,
-          connectedTextures: this.connectedTextures, ...halo},
+          connectedTextures: this.connectedTextures, chiselConnectedTextures: this.chiselConnectedTextures, ...halo},
           [halo.indices.buffer, halo.light.buffer]);
       } else {
         const chunks = [];

@@ -219,7 +219,7 @@ test('a Jammy appliance opens the native door mesh and keeps imported storage', 
   let catalogs;
   try {
     const jammy = JSON.parse(readFileSync(new URL('../generated/models/jammy.json', import.meta.url), 'utf8'));
-    if (jammy.schemaVersion !== 2) return t.skip('Generate the Jammy open appliance poses first');
+    if (!jammy.models['legacy:205:1']?.openSurfaces?.length) return t.skip('Generate the Jammy open appliance poses first');
     catalogs = {jammy};
   } catch (error) {
     if (error.code === 'ENOENT') return t.skip('Generated Jammy models required');

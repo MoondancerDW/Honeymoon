@@ -1,4 +1,6 @@
-export const PLAYER = Object.freeze({ halfWidth: 0.29, height: 1.77, eye: 1.62 });
+import { PLAYER } from '../world/player-body.mjs';
+
+export { PLAYER };
 const epsilon = 0.00001;
 const axisNames = ['x', 'y', 'z'];
 

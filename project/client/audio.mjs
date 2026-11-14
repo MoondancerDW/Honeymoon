@@ -1,5 +1,6 @@
 import {collisionFor} from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
+import {PLAYER} from '../world/player-body.mjs';
 
 const ASSETS = '/generated/sounds/';
 const STEP_DISTANCE = 1 / .6;
@@ -66,8 +67,8 @@ function support(world, position) {
         for (const box of boxes) {
           const top = y + box.y1;
           if (top > position.y + .0125 || top <= height || top < position.y - .125 ||
-              position.x + .29 <= xx + box.x0 || position.x - .29 >= xx + box.x1 ||
-              position.z + .29 <= zz + box.z0 || position.z - .29 >= zz + box.z1) continue;
+              position.x + PLAYER.halfWidth <= xx + box.x0 || position.x - PLAYER.halfWidth >= xx + box.x1 ||
+              position.z + PLAYER.halfWidth <= zz + box.z0 || position.z - PLAYER.halfWidth >= zz + box.z1) continue;
           height = top;
           closest = {cell, material: box.material};
         }

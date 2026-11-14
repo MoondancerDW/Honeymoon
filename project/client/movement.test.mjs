@@ -33,6 +33,25 @@ test('cannot step into a full block or under a low ceiling', () => {
   assert.ok(blocked.x <= -.28 && Math.abs(blocked.y - 1) < .002);
 });
 
+test('uses the original standing height and width when checking clearance', () => {
+  const movement = new Movement(worldFor(new Map([['0,3,0','legacy:1:0'], ['1,1,0','legacy:1:0']])));
+  assert.equal(movement.blocked(.5, 1.19, .5), false);
+  assert.equal(movement.blocked(.5, 1.22, .5), true);
+  assert.equal(movement.blocked(.695, 1, .5), false);
+  assert.equal(movement.blocked(.705, 1, .5), true);
+});
+
+test('finishes a dry vertical collision before leaving the edge horizontally', () => {
+  const movement = new Movement(worldFor(new Map([['0,1,0','legacy:44:0']])));
+  const position = {x:1.25, y:1.5, z:.5};
+  movement.grounded = true;
+  movement.update(position, 3.8, 0, false, .016);
+  assert.ok(position.x > 1.3);
+  assert.equal(position.y, 1.5);
+  movement.update(position, 3.8, 0, false, .016);
+  assert.ok(position.y < 1.5);
+});
+
 test('climbs and descends ladder blocks without removing their backing wall', () => {
   const blocks = new Map([['0,1,0','legacy:65:2'],['0,2,0','legacy:65:2'],['0,3,0','legacy:65:2'],
     ['0,1,1','legacy:1:0'],['0,2,1','legacy:1:0'],['0,3,1','legacy:1:0']]);
