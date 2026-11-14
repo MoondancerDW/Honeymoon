@@ -95,6 +95,7 @@ export class Display {
     this.visualEntities.visible = false;
     this.scene.add(this.visualEntities);
     this.entityLights = new Map();
+    this.chunkEntities = new Map();
     this.camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
     this.players = new RemotePlayers(this.scene, this.camera);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
@@ -116,8 +117,10 @@ export class Display {
     this.groups = new Map();
     this.pending = new Map();
     this.versions = new Map();
+    this.nextSectionVersion = 0;
     this.ready = [];
     this.active = new Map();
+    this.workerCatalogs = new Map();
     this.workerFailure = null;
     const workers = Math.max(1, Math.min(3, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
     this.workers = Array.from({length: workers}, () => {
@@ -131,6 +134,7 @@ export class Display {
         this.fail(new Error(event.message));
       };
       worker.postMessage({type: 'init', palette: world.palette, compositions: world.manifest.compositions || {}, models: world.models});
+      this.workerCatalogs.set(worker, world.palette.length);
       return worker;
     });
     this.meshTimes = [];
@@ -336,11 +340,13 @@ export class Display {
   }
 
   schedule(cx, cy, cz, edit = false) {
+    if (cy < 0 || cy >= 16) return;
     const id = sectionKey(cx, cy, cz);
     const chunk = this.world.chunks.get(chunkKey(cx, cz));
+    if (!chunk) return;
     const hasData = chunk?.sections.has(cy);
     if (!hasData && !edit && !this.groups.has(id)) return;
-    const version = (this.versions.get(id) || 0) + 1;
+    const version = ++this.nextSectionVersion;
     this.versions.set(id, version);
     this.pending.set(id, {id, cx, cy, cz, version, type: 'precise', edit, visualOnly: chunk?.visualOnly});
   }
@@ -348,28 +354,83 @@ export class Display {
   addChunk(chunk) {
     this.remeshLighting(this.world.updateLighting(chunk));
     const levels = new Set(chunk.sections.keys());
-    const fantasy = this.chiselConnectedTextures ? this.world.indices.get(CHISEL_FANTASY) : undefined;
-    for (const change of this.world.overrides.values()) {
-      if (Math.floor(change.x / 16) !== chunk.x || Math.floor(change.z / 16) !== chunk.z) continue;
+    const localFantasy = chunk.palette?.indexOf(CHISEL_FANTASY);
+    const fantasy = this.chiselConnectedTextures ? (localFantasy ?? this.world.indices.get(CHISEL_FANTASY)) : undefined;
+    for (const change of this.world.editsInChunk(chunk.x, chunk.z)) {
       levels.add(Math.floor(change.y / 16));
-      if (fantasy !== undefined && change.index === fantasy) this.remeshAdjacentSections(change.x, change.y, change.z);
+      if (this.chiselConnectedTextures && this.world.palette[change.index] === CHISEL_FANTASY) {
+        this.remeshAdjacentSections(change.x, change.y, change.z);
+      }
     }
     for (const cy of levels) {
       this.schedule(chunk.x, cy, chunk.z, !chunk.sections.has(cy));
       for (const [dx, dz] of [[-1,0], [1,0], [0,-1], [0,1]]) this.schedule(chunk.x + dx, cy, chunk.z + dz);
       const indices = chunk.sections.get(cy)?.indices;
-      if (!indices || fantasy === undefined) continue;
+      if (!indices || fantasy === undefined || fantasy < 0) continue;
       for (let index = indices.indexOf(fantasy); index >= 0; index = indices.indexOf(fantasy, index + 1)) {
         this.remeshAdjacentSections(chunk.x * 16 + (index & 15), cy * 16 + (index >> 8), chunk.z * 16 + (index >> 4 & 15));
       }
     }
-    for (const entity of chunk.entities) this.addEntity(entity, chunk.visualOnly);
+    if (chunk.entities.length) {
+      const group = new THREE.Group();
+      for (const entity of chunk.entities) {
+        const object = this.makeEntity(entity);
+        if (object) group.add(object);
+      }
+      if (group.children.length) {
+        const meshes = [];
+        group.traverse(node => { if (node.isMesh) meshes.push(node); });
+        this.chunkEntities.set(chunkKey(chunk.x, chunk.z), group);
+        this.uploads.push({meshes, object:group, parent:chunk.visualOnly ? this.visualEntities : this.scene});
+      }
+    }
+  }
+
+  removeChunks(chunks) {
+    const removedEntities = new Set();
+    for (const {x, z} of chunks) {
+      const key = chunkKey(x, z);
+      const entities = this.chunkEntities.get(key);
+      if (entities) {
+        removedEntities.add(entities);
+        this.chunkEntities.delete(key);
+        this.discardGroup(entities);
+      }
+      for (let y = 0; y < 16; y++) {
+        const id = sectionKey(x, y, z);
+        const group = this.groups.get(id);
+        if (group) this.discardGroup(group);
+        this.groups.delete(id);
+        this.pending.delete(id);
+        this.versions.delete(id);
+        this.installedVersions.delete(id);
+        this.visibleEdits.delete(id);
+      }
+    }
+    this.uploads = this.uploads.filter(job => !removedEntities.has(job.object));
+    // Rebuild rendered borders left behind by the eviction. Old in-flight
+    // section results can't match the monotonic version of a reloaded chunk.
+    const adjacent = new Set();
+    for (const {x, z} of chunks) {
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        adjacent.add(chunkKey(x + dx, z + dz));
+      }
+    }
+    for (const key of adjacent) {
+      const chunk = this.world.chunks.get(key);
+      if (!chunk) continue;
+      for (const y of chunk.sections.keys()) this.schedule(chunk.x, y, chunk.z);
+    }
+  }
+
+  streamAround(x, z, radius) {
+    this.streamArea = {x, z, radius};
   }
 
   remeshLighting(sections) {
     for (const section of sections) {
       this.schedule(...section.split(',').map(Number));
-      for (const {mesh, position} of this.entityLights.get(section) ?? []) {
+      for (const {mesh, position} of this.entityLights.get(section)?.values() ?? []) {
         const light = mesh.geometry.attributes.legacyLightLevel;
         light.array.fill(this.world.lightAt(...position));
         light.needsUpdate = true;
@@ -418,8 +479,13 @@ export class Display {
     for (const [id] of this.pending) {
       if (id.startsWith('lod:') && Number(id.split(':')[1]) > distance) this.pending.delete(id);
     }
-    this.scene.fog.near = distance === 4 ? 60 : distance * 8;
-    this.scene.fog.far = Math.max(115, distance * 22);
+    if (this.world.manifest.chunkPalettes) {
+      this.scene.fog.near = distance === 4 ? 56 : distance * 14;
+      this.scene.fog.far = distance * 16;
+    } else {
+      this.scene.fog.near = distance === 4 ? 60 : distance * 8;
+      this.scene.fog.far = Math.max(115, distance * 22);
+    }
     for (const {radius} of this.world.manifest.terrain ?? []) {
       if (radius > distance || this.requestedDistance < radius) break;
       if (!this.rings.has(radius)) {
@@ -451,11 +517,8 @@ export class Display {
     return material;
   }
 
-  addEntity(entity, visualOnly) {
-    if (entity.type === 'ItemFrame') {
-      this.addItemFrame(entity, visualOnly);
-      return;
-    }
+  makeEntity(entity) {
+    if (entity.type === 'ItemFrame') return this.makeItemFrame(entity);
     if (!this.paint || entity.type !== 'Painting') return;
     const art = paintings[entity.data.Motive];
     const dir = entity.data.Dir ?? entity.data.Direction;
@@ -472,13 +535,14 @@ export class Display {
     geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(new Uint16Array(4).fill(block), 1));
     geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(12).fill(255), 3, true));
     const mesh = new THREE.Mesh(geometry, material);
+    mesh.userData.painting = true;
     this.trackEntityLight(mesh, position);
     mesh.position.set(...entity.position);
     mesh.rotation.y = [0, Math.PI / 2, Math.PI, -Math.PI / 2][dir & 3];
-    this.uploads.push({meshes:[mesh], object:mesh, parent:visualOnly ? this.visualEntities : this.scene});
+    return mesh;
   }
 
-  addItemFrame(entity, visualOnly) {
+  makeItemFrame(entity) {
     const model = itemFrameModel(entity, this.world.models.biblio?.items);
     if (!model) return;
     const group = new THREE.Group();
@@ -492,15 +556,14 @@ export class Display {
       group.add(mesh);
       this.trackEntityLight(mesh, position);
     }
-    if (group.children.length) {
-      this.uploads.push({meshes: [...group.children], object: group, parent: visualOnly ? this.visualEntities : this.scene});
-    }
+    if (group.children.length) return group;
   }
 
   trackEntityLight(mesh, position) {
     const id = sectionKey(...position.map(value => value >> 4));
-    if (!this.entityLights.has(id)) this.entityLights.set(id, []);
-    this.entityLights.get(id).push({mesh, position});
+    if (!this.entityLights.has(id)) this.entityLights.set(id, new Map());
+    this.entityLights.get(id).set(mesh, {mesh, position});
+    mesh.userData.lightSection = id;
   }
 
   signMesh(sign) {
@@ -557,13 +620,19 @@ export class Display {
 
   discardGroup(group) {
     group.removeFromParent();
-    for (const mesh of group.children) {
+    group.traverse(mesh => {
+      if (!mesh.isMesh) return;
       mesh.geometry.dispose();
-      if (mesh.userData.sign) {
+      if (mesh.userData.sign || mesh.userData.painting) {
         mesh.material.map.dispose();
         mesh.material.dispose();
       }
-    }
+      if (mesh.userData.lightSection) {
+        const lights = this.entityLights.get(mesh.userData.lightSection);
+        lights?.delete(mesh);
+        if (lights?.size === 0) this.entityLights.delete(mesh.userData.lightSection);
+      }
+    });
   }
 
   install({object, parent, result}) {
@@ -642,21 +711,34 @@ export class Display {
   neighborsLoaded({cx, cz}) {
     for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
       const key = chunkKey(cx + dx, cz + dz);
+      const area = this.streamArea;
+      if (area && Math.max(Math.abs(cx + dx - area.x), Math.abs(cz + dz - area.z)) > area.radius) continue;
       if (this.expectedChunks.has(key) && !this.world.chunks.has(key)) return false;
     }
     return true;
   }
 
+  streamSettled() {
+    return !this.workerFailure && this.pendingWork === 0;
+  }
+
   async waitForStreamSlot(near) {
     const budget = near ? 40 : 16;
     while (!this.workerFailure) {
-      let ready = this.active.size + this.ready.length + this.uploads.length;
-      for (const job of this.pending.values()) {
-        if (job.type !== 'precise' || this.neighborsLoaded(job)) ready++;
-        if (ready >= budget) break;
+      const queued = this.active.size + this.ready.length + this.uploads.length;
+      if (this.streamArea) {
+        // Keep the nearby window fed as workers build the already available
+        // sections. Restrict actual upload backlog, independent of camera turns.
+        if (queued < budget) break;
+      } else {
+        let ready = queued;
+        for (const job of this.pending.values()) {
+          if (job.type !== 'precise' || this.neighborsLoaded(job)) ready++;
+          if (ready >= budget) break;
+        }
+        // A queue waiting for neighbor data can only progress if fetching resumes.
+        if (ready < budget && (ready === 0 || near || performance.now() >= this.nextBackgroundUpload)) break;
       }
-      // A queue waiting for neighbor data can only progress if fetching resumes.
-      if (ready < budget && (ready === 0 || near || performance.now() >= this.nextBackgroundUpload)) break;
       await new Promise(resolve => setTimeout(resolve, 40));
     }
     if (this.workerFailure) throw this.workerFailure;
@@ -692,7 +774,13 @@ export class Display {
       this.active.set(worker, job.id);
       if (job.type === 'precise') {
         const halo = this.world.halo(job.cx, job.cy, job.cz);
-        worker.postMessage({id: job.id, type: job.type, version: job.version, palette: this.world.palette,
+        const known = this.workerCatalogs.get(worker);
+        let paletteAppend;
+        if (!halo.palette && this.world.palette.length > known) {
+          paletteAppend = this.world.palette.slice(known);
+          this.workerCatalogs.set(worker, this.world.palette.length);
+        }
+        worker.postMessage({id: job.id, type: job.type, version: job.version, paletteAppend,
           atlasRows: this.atlasRows, connectedTextures: this.connectedTextures,
           chiselConnectedTextures: this.chiselConnectedTextures, carpentryModel: this.carpentryModel, ...halo},
           [halo.indices.buffer, halo.light.buffer]);

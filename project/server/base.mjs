@@ -80,7 +80,7 @@ export function displayObject(object) {
   return { key: object.key, position: object.position, type: object.type, data };
 }
 
-function displayEntity(entity) {
+export function displayEntity(entity) {
   const type = entity.type ?? entity.data?.id;
   const data = {};
   if (type === 'Painting' || type === 'ItemFrame') {
@@ -95,6 +95,14 @@ function displayEntity(entity) {
   return { key: entity.key, position: entity.position, type, data };
 }
 
+function publicWorld(manifest, hash) {
+  if (!manifest.chunkPalettes) return manifest;
+  const {schemaVersion, importVersion, catalogVersion, bounds, spawn, sourceSpawn,
+    coordinateTransform, chunks, legacyRegistry, terrain = []} = manifest;
+  return {schemaVersion, importVersion, catalogVersion, bounds, spawn, sourceSpawn, coordinateTransform,
+    chunks, legacyRegistry, terrain, palette:['air'], compositions:{}, contentHash:hash, chunkPalettes:true};
+}
+
 export function loadBase(directory) {
   const rawManifest = readFileSync(join(directory, 'world.json'), 'utf8');
   const manifest = JSON.parse(rawManifest);
@@ -106,6 +114,7 @@ export function loadBase(directory) {
   const chunks = new Map();
   const bounds = manifest.bounds;
   const hash = manifest.contentHash ?? createHash('sha256').update(rawManifest).digest('hex');
+  const publicManifest = publicWorld(manifest, hash);
   const corePalette = manifest.palette.slice(0, manifest.corePaletteSize ?? manifest.palette.length);
   const catalog = new Set(corePalette);
   for (const key of corePalette) {
@@ -128,6 +137,8 @@ export function loadBase(directory) {
     }
     const source = JSON.parse(readFileSync(join(directory, 'chunks', `${chunkKey}.json`), 'utf8'));
     if (source.x !== cx || source.z !== cz) throw new Error(`Mismatched chunk coordinates ${chunkKey}`);
+    const palette = manifest.chunkPalettes ? source.palette : manifest.palette;
+    if (!Array.isArray(palette) || palette[0] !== 'air') throw new Error(`Malformed palette in ${chunkKey}`);
     const sections = new Map();
     for (const section of source.sections) {
       const indices = Buffer.from(section.indices, 'base64');
@@ -135,7 +146,7 @@ export function loadBase(directory) {
       sections.set(section.y, indices);
     }
     const objects = new Map(source.objects.map(object => [cellAddress(...object.position), object]));
-    const chunk = { source, sections, objects };
+    const chunk = { source, palette, sections, objects };
     chunks.set(chunkKey, chunk);
     if (chunks.size > MAX_CACHED_CHUNKS) chunks.delete(chunks.keys().next().value);
     return chunk;
@@ -150,7 +161,7 @@ export function loadBase(directory) {
     const section = chunk?.sections.get(cy);
     if (!section) return { key: 'air', object: null };
     const index = (x - cx * 16) + (z - cz * 16) * 16 + (y - cy * 16) * 256;
-    const key = manifest.palette[section.readUInt16LE(index * 2)];
+    const key = chunk.palette[section.readUInt16LE(index * 2)];
     if (!key) throw new Error(`Palette index outside catalog at ${cellAddress(x, y, z)}`);
     const object = chunk.objects.get(cellAddress(x, y, z)) ?? null;
     // The original save stays available for Minecraft comparison.
@@ -178,5 +189,5 @@ export function loadBase(directory) {
     };
   }
 
-  return { manifest, hash, catalog, inBounds, getCell, publicChunk };
+  return { manifest, publicManifest, hash, catalog, inBounds, getCell, publicChunk };
 }

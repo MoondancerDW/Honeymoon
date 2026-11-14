@@ -33,7 +33,7 @@ if (values['verify-source']) {
   const chunk = JSON.parse(readFileSync(new URL(`chunks/${cx}.${cz}.json`, generated)));
   const section = chunk.sections.find(section => section.y === Math.floor(y / 16));
   const index = (x & 15) + 16 * (z & 15) + 256 * (y & 15);
-  const key = manifest.palette[Buffer.from(section.indices, 'base64').readUInt16LE(index * 2)];
+  const key = (chunk.palette ?? manifest.palette)[Buffer.from(section.indices, 'base64').readUInt16LE(index * 2)];
   assert.equal(key, fixture.key);
   assert.deepEqual(manifest.compositions[key], fixture.composition);
 }

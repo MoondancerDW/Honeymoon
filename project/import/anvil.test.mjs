@@ -26,6 +26,36 @@ test('Reads Java modified UTF-8 and exact signed 64-bit values', () => {
   assert.throws(() => readNbt(root.subarray(0, 10)), /Invalid NBT payload length/);
 });
 
+test('Anvil rectangle rounds outward and keeps original cells in independent chunk palettes', {
+  skip: !existsSync(join(source, 'level.dat')) ? 'Honeymoon transfer files are required' : false,
+}, () => {
+  mkdirSync(work, {recursive:true});
+  const temporary = mkdtempSync(join(work, 'anvil-area-test-'));
+  try {
+    const out = join(temporary, 'map');
+    const manifest = importWorld({out, area:'-33,-47,7,-17'});
+    assert.deepEqual(manifest.bounds, {minX:-48,maxX:15,minZ:-48,maxZ:-17,minY:0,maxY:255});
+    assert.equal(manifest.chunks.length, 8);
+    assert.equal(manifest.chunkPalettes, true);
+    assert.deepEqual(manifest.spawn, [-7.5,65,-19.5]);
+    const base = loadBase(out);
+    assert.deepEqual(base.publicManifest.palette, ['air']);
+    assert.deepEqual(base.publicManifest.compositions, {});
+    assert.equal(base.getCell(-8,64,-20).key, 'legacy:2:0');
+    const chunk = base.publicChunk(-1,-2);
+    assert.equal(chunk.palette[0], 'air');
+    assert.ok(chunk.palette.length > 1 && chunk.palette.length < manifest.palette.length);
+    assert.ok(chunk.palette.every(key => base.catalog.has(key)));
+    assert.ok(base.inBounds(-48,0,-48) && !base.inBounds(-49,0,-48));
+    assert.throws(() => importWorld({out, area:'1,1,2,2'}), /include the original spawn/);
+    assert.throws(() => importWorld({out, area:'0,0,-1,-1'}), /Invalid area coordinates/);
+  } finally {
+    if (dirname(temporary) === work && basename(temporary).startsWith('anvil-area-test-')) {
+      rmSync(temporary, {recursive:true,force:true});
+    }
+  }
+});
+
 test('Reads both Add and metadata nibbles and validates bad sectors', () => {
   const section = { Y: 4, Blocks: Buffer.alloc(4096), Add: Buffer.alloc(2048), Data: Buffer.alloc(2048) };
   section.Blocks[0] = 0xee;

@@ -53,7 +53,7 @@ export function makeWorld(directory, modelDirectory, extended = false) {
   const depth = maxZ + 1 - minZ;
   const plane = width * depth;
   const volume = plane * (maxY + 1 - minY);
-  const cells = new Uint16Array(volume);
+  const cells = manifest.palette.length > 65536 ? new Uint32Array(volume) : new Uint16Array(volume);
   const sky = new Uint8Array(volume).fill(15);
   const objects = new Map();
   const inventory = [];
@@ -62,6 +62,7 @@ export function makeWorld(directory, modelDirectory, extended = false) {
   const index = (x, y, z) => x - minX + (z - minZ) * width + (y - minY) * plane;
   const inside = (x, y, z) => x >= minX && x <= maxX && z >= minZ && z <= maxZ && y >= minY && y <= maxY;
   const palette = manifest.palette.map(key => ({ key, ...manifest.compositions[key] }));
+  const globalIndices = manifest.chunkPalettes ? new Map(manifest.palette.map((key,index) => [key,index])) : null;
   const kinds = palette.map(cell => cell.id ?? (Number(legacy(cell.key)?.[1]) || 0));
   const hasBiblio = palette.map(cell => Boolean(models.biblio?.models[cell.key]));
   const initialDoors = palette.map(cell => /^legacy:(64|71|96|107):(\d+)$/.exec(cell.key));
@@ -71,6 +72,7 @@ export function makeWorld(directory, modelDirectory, extended = false) {
 
   for (const [cx, cz] of manifest.chunks) {
     const chunk = JSON.parse(readFileSync(join(directory, 'chunks', `${cx}.${cz}.json`), 'utf8'));
+    const toGlobal = chunk.palette?.map(key => globalIndices.get(key));
     for (const section of chunk.sections) {
       const indices = Buffer.from(section.indices, 'base64');
       const skylight = Buffer.from(section.skyLight, 'base64');
@@ -80,7 +82,8 @@ export function makeWorld(directory, modelDirectory, extended = false) {
         const source = 256 * yy + 16 * zz;
         const destination = index(x, y, z);
         for (let xx = 0; xx < 16; xx++) {
-          const id = indices.readUInt16LE(2 * (source + xx));
+          const local = indices.readUInt16LE(2 * (source + xx));
+          const id = toGlobal ? toGlobal[local] : local;
           cells[destination + xx] = id;
           sky[destination + xx] = skylight[(source + xx) >> 1] >> ((xx & 1) * 4) & 15;
           const door = initialDoors[id];

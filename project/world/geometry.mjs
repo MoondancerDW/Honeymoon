@@ -35,7 +35,9 @@ const legacyKey = /^legacy:(\d+):(\d+)$/;
 const coverKey = /^cover:(\d+):(\d+):/;
 const parsedKeys = new Map();
 function unpack(cell) {
-  const key = keyOf(cell);
+  const source = keyOf(cell);
+  // A composition hash does not affect the numeric block state.
+  const key = source.startsWith('cover:') ? source.slice(0, source.lastIndexOf(':') + 1) : source;
   if (!parsedKeys.has(key)) {
     const match = legacyKey.exec(key) ?? coverKey.exec(key);
     parsedKeys.set(key, match ? [Number(match[1]), Number(match[2])] : [0, 0]);
@@ -1217,7 +1219,7 @@ export function shapeFor(cell, neighbors) {
   if (id === 96 && hasHatchRung(cell)) {
     return [...vanillaShape(id, meta, neighbors), ...vanillaShape(65, westCellarLadder, neighbors)];
   }
-  const cacheable = !dynamic.has(id);
+  const cacheable = !dynamic.has(id) && !key.startsWith('cover:');
   if (cacheable && simpleCache.has(key)) return simpleCache.get(key);
   const result = (id === 79 && meta > 0 ? registryShape(id, meta) : null) ?? vanillaShape(id, meta, neighbors) ??
     specialShape(id, meta, cell, neighbors) ?? registryShape(id, meta)
@@ -1256,6 +1258,8 @@ export function selectionFor(cell, neighbors) {
 export function collisionFor(cell, neighbors) {
   if (keyOf(cell) === voxelKey) return voxelCollisionBoxes(cell.voxels);
   const [id, meta] = unpack(cell);
+  // BlockTFHedge lowers the hedge collision top by one sixteenth; darkwood leaves use a full cube.
+  if (id === 2166 && meta === 0) return [{...shapeFor(cell)[0], y1: 15 / 16}];
   if (id === 2168) return [fireflyJarCollision];
   if (id === 765) return frameCollision;
   if (id === 768) return shapedLampCollision;

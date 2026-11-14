@@ -18,7 +18,7 @@ export function decodeBytes(encoded) {
 export function decodeIndices(encoded) {
   const bytes = decodeBytes(encoded);
   if (littleEndian) return new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
-  const input = new DataView(bytes.buffer);
+  const input = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const indices = new Uint16Array(bytes.length / 2);
   for (let i = 0; i < indices.length; i++) indices[i] = input.getUint16(i * 2, true);
   return indices;
@@ -37,6 +37,7 @@ export class World {
     this.indices = new Map(this.palette.map((key, index) => [key, index]));
     this.chunks = new Map();
     this.overrides = new Map();
+    this.overridesByChunk = new Map();
     this.blockLightOverrides = new Map();
     this.pendingLights = new Map();
   }
@@ -45,7 +46,8 @@ export class World {
     const sections = new Map(chunk.sections.map(({y, indices, skyLight, blockLight}) => [y, {
       indices: decodeIndices(indices), sky: decodeBytes(skyLight), block: decodeBytes(blockLight)
     }]));
-    const stored = {x: chunk.x, z: chunk.z, sections, visualOnly, entities: chunk.entities || []};
+    const stored = {x: chunk.x, z: chunk.z, sections, visualOnly, entities: chunk.entities || [],
+      palette: chunk.palette, compositions: chunk.compositions};
     this.chunks.set(chunkKey(chunk.x, chunk.z), stored);
     const objects = new Map();
     for (const object of chunk.objects || []) {
@@ -60,7 +62,7 @@ export class World {
 
   addPalette(key) {
     if (this.indices.has(key)) return this.indices.get(key);
-    if (this.palette.length >= 65536) throw new Error('Palette exceeds uint16');
+    if (!this.manifest.chunkPalettes && this.palette.length >= 65536) throw new Error('Palette exceeds uint16');
     const index = this.palette.length;
     this.palette.push(key);
     this.indices.set(key, index);
@@ -76,8 +78,27 @@ export class World {
     if (this.chunks.has(chunkKey(x >> 4, z >> 4)) && lightChanged(this.lightCell(x, y, z), {key, object: change.object, voxels: change.voxels})) {
       if (!this.pendingLights.has(position)) this.pendingLights.set(position, [x, y, z, this.lightAt(x, y, z) & 15]);
     }
-    this.overrides.set(position, {...change, index: this.addPalette(key)});
+    const override = {...change, index: this.addPalette(key)};
+    const coordinates = chunkKey(x >> 4, z >> 4);
+    let entries = this.overridesByChunk.get(coordinates);
+    if (!entries) this.overridesByChunk.set(coordinates, entries = new Map());
+    entries.set(position, override);
+    this.overrides.set(position, override);
     return true;
+  }
+
+  editsInChunk(cx, cz) {
+    return this.overridesByChunk.get(chunkKey(cx, cz))?.values() ?? [];
+  }
+
+  removeChunks(chunks) {
+    const removed = new Set(chunks.map(({x, z}) => chunkKey(x, z)));
+    if (!removed.size) return;
+    for (const key of removed) this.chunks.delete(key);
+    for (const key of this.blockLightOverrides.keys()) {
+      const [x, , z] = key.split(',').map(Number);
+      if (removed.has(chunkKey(x >> 4, z >> 4))) this.blockLightOverrides.delete(key);
+    }
   }
 
   hasChunk(x, z) {
@@ -89,18 +110,13 @@ export class World {
     return this.chunks.get(chunkKey(Math.floor(x / 16), Math.floor(z / 16)))?.sections.get(Math.floor(y / 16));
   }
 
-  indexAt(x, y, z) {
-    const override = this.overrides.get(cellKey(x, y, z));
-    if (override) return override.index;
-    return this.section(x, y, z)?.indices[blockIndex(x, y, z)] || 0;
-  }
-
   cellAt(x, y, z) {
-    if (!this.hasChunk(x, z)) return null;
-    const {key, object, parts, voxels} = this.lightCell(x, y, z);
+    const chunk = this.chunks.get(chunkKey(x >> 4, z >> 4));
+    if (!chunk || chunk.visualOnly) return null;
+    const {key, object, parts, voxels} = this.lightCell(x, y, z, false, chunk);
     if (key === 'air') return null;
     if (voxels) return {key, voxels, ...(parts && {parts})};
-    const composition = this.manifest.compositions?.[key];
+    const composition = (chunk.compositions ?? this.manifest.compositions)?.[key];
     if (parts) return {key, ...composition, object, parts};
     if (!composition && !object) return key;
     return {key, ...composition, object};
@@ -121,21 +137,23 @@ export class World {
     return packedLight(this.section(x, y, z), blockIndex(x, y, z));
   }
 
-  lightCell(x, y, z, base = false) {
+  lightCell(x, y, z, base = false, chunk = this.chunks.get(chunkKey(x >> 4, z >> 4))) {
     const override = !base && this.overrides.size ? this.overrides.get(cellKey(x, y, z)) : null;
     if (override) return {key: this.palette[override.index], object: override.object, parts: override.parts, voxels: override.voxels};
-    const chunk = this.chunks.get(chunkKey(x >> 4, z >> 4));
     const local = blockIndex(x, y, z);
     const index = chunk?.sections.get(y >> 4)?.indices[local] ?? 0;
-    return {key: this.palette[index], object: chunk?.objects.get(y >> 4)?.get(local)};
+    return {key: (chunk?.palette ?? this.palette)[index], object: chunk?.objects.get(y >> 4)?.get(local)};
   }
 
   updateLighting(chunk) {
     if (chunk) {
-      for (const [position, {x, y, z}] of this.overrides) {
-        if (Math.abs((x >> 4) - chunk.x) > 1 || Math.abs((z >> 4) - chunk.z) > 1 || !this.chunks.has(chunkKey(x >> 4, z >> 4))) continue;
-        if (lightChanged(this.lightCell(x, y, z, true), this.lightCell(x, y, z))) {
-          this.pendingLights.set(position, [x, y, z, this.lightAt(x, y, z) & 15]);
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        const coordinates = chunkKey(chunk.x + dx, chunk.z + dz);
+        if (!this.chunks.has(coordinates)) continue;
+        for (const [position, {x, y, z}] of this.overridesByChunk.get(coordinates) ?? []) {
+          if (lightChanged(this.lightCell(x, y, z, true), this.lightCell(x, y, z))) {
+            this.pendingLights.set(position, [x, y, z, this.lightAt(x, y, z) & 15]);
+          }
         }
       }
     }
@@ -146,12 +164,34 @@ export class World {
   }
 
   halo(cx, cy, cz) {
+    // A local halo can reference at most 5832 distinct cells. Remap only the
+    // keys it touches, and let chunk palettes and covers leave with the data.
+    const compact = this.manifest.chunkPalettes;
+    const palette = compact ? ['air'] : null;
+    const compositions = compact ? Object.create(null) : null;
+    const addresses = compact ? new Map([['air', 0]]) : null;
+    const packedIndex = (key, definition) => {
+      let index = addresses.get(key);
+      if (index === undefined) {
+        index = palette.length;
+        palette.push(key);
+        addresses.set(key, index);
+      }
+      if (definition && !compositions[key]) compositions[key] = definition;
+      return index;
+    };
     const indices = new Uint16Array(18 ** 3);
     const light = new Uint8Array(indices.length);
     const objects = [];
     const microblocks = [];
     const sculpted = [];
     const chunks = [-1, 0, 1].map(dz => [-1, 0, 1].map(dx => this.chunks.get(chunkKey(cx + dx, cz + dz))));
+    const mappings = compact && chunks.map(row => row.map(chunk => {
+      if (!chunk) return null;
+      const names = chunk.palette ?? this.palette;
+      const indices = new Uint16Array(names.length);
+      return {names, indices, definitions:chunk.compositions};
+    }));
     const overrides = this.overrides;
     const blockOverrides = this.blockLightOverrides;
     let i = 0;
@@ -160,10 +200,12 @@ export class World {
       for (let dz = -1; dz <= 16; dz++) {
         const z = cz * 16 + dz;
         const row = chunks[(dz >> 4) + 1];
+        const mapRow = compact && mappings[(dz >> 4) + 1];
         const ySection = y >> 4;
         const localRow = blockIndex(0, y, z);
         for (let segment = 0; segment < 3; segment++) {
           const chunk = row[segment];
+          const mapping = compact && mapRow[segment];
           const section = chunk?.sections.get(ySection);
           const layer = chunk?.objects.get(ySection);
           const from = segment === 0 ? -1 : segment === 1 ? 0 : 16;
@@ -172,7 +214,21 @@ export class World {
             const key = overrides.size || blockOverrides.size ? cellKey(cx * 16 + dx, y, z) : null;
             const override = key && overrides.get(key);
             const index = localRow + (dx & 15);
-            indices[i] = override?.index ?? section?.indices[index] ?? 0;
+            const baseIndex = section?.indices[index] ?? 0;
+            if (compact && override) {
+              const material = this.palette[override.index];
+              indices[i] = packedIndex(material, mapping?.definitions?.[material]);
+            } else if (compact && baseIndex) {
+              let mapped = mapping.indices[baseIndex];
+              if (!mapped) {
+                const material = mapping.names[baseIndex];
+                mapped = packedIndex(material, mapping.definitions?.[material]);
+                mapping.indices[baseIndex] = mapped;
+              }
+              indices[i] = mapped;
+            } else {
+              indices[i] = override?.index ?? baseIndex;
+            }
             const original = packedLight(section, index);
             const block = key ? blockOverrides.get(key) : undefined;
             light[i] = block === undefined ? original : (original & 240) | block;
@@ -184,7 +240,7 @@ export class World {
         }
       }
     }
-    return {indices, light, objects, microblocks, sculpted};
+    return {indices, light, objects, microblocks, sculpted, ...(compact && {palette, compositions})};
   }
 }
 

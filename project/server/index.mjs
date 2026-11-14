@@ -348,7 +348,7 @@ export function createHoneymoonServer({
       return;
     }
     if (path === '/generated/world/world.json') {
-      return serveWorld(request, response, path, () => base.manifest);
+      return serveWorld(request, response, path, () => base.publicManifest ?? base.manifest);
     }
     const chunk = path.match(/^\/generated\/world\/chunks\/(-?\d+)\.(-?\d+)\.json$/);
     if (chunk) {

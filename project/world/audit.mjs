@@ -119,6 +119,8 @@ let reviewedCells = 0, modelCells = 0;
 const staticReasons = new Map();
 for (const [x, z] of mapChunks) {
   const chunk = readChunk(x, z);
+  const palette = chunk.palette ?? world.palette;
+  const compositions = chunk.compositions ?? world.compositions;
   const objectsBySection = new Map();
   for (const object of chunk.objects) {
     if (!object.position) continue;
@@ -132,20 +134,20 @@ for (const [x, z] of mapChunks) {
     const objects = objectsBySection.get(section.y);
     for (let at = 0; at < 4096; at++) {
       const index = indices.readUInt16LE(at * 2);
-      const key = world.palette[index];
+      const key = palette[index];
       if (key === 'air') continue;
       reviewedCells++;
       const object = objects?.get(at);
-      let diagnostics = object ? undefined : staticReasons.get(index);
+      let diagnostics = object ? undefined : staticReasons.get(key);
       if (!diagnostics) {
-        const cell = {key, ...world.compositions[key], object};
+        const cell = {key, ...compositions[key], object};
         const model = extractedModel(catalogs, cell) ?? sourceAtlasModel(key);
         const boxes = model ? [] : standingSignMesh(key) ?? redPowerTubeMesh(cell) ?? redPowerWireMesh(cell) ??
           chestMesh(cell) ?? bedMesh(key) ?? shapeFor(cell);
         const reasons = [...new Set(boxes.map(box => box.approximation).filter(Boolean))];
         if (!model && !boxes.length) reasons.push('Empty or absent legacy part payload');
         diagnostics = {model: Boolean(model), reasons, unknownTexture: boxes.some(box => box.faces?.includes(tiles.unknown))};
-        if (!object) staticReasons.set(index, diagnostics);
+        if (!object) staticReasons.set(key, diagnostics);
       }
       modelCells += Number(diagnostics.model);
       if (!diagnostics.reasons.length && !diagnostics.unknownTexture) continue;

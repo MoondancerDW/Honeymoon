@@ -14,6 +14,7 @@ const DEFAULT_SOURCE = resolve(SOURCE_TREE, 'Honeymoon/saves/equestria');
 const DEFAULT_OUTPUT = resolve(PROJECT, 'generated/world');
 const DEFAULT_RADIUS = 4;
 const DEFAULT_VISUAL_RADIUS = 6;
+const DEFAULT_AREA = '-1984,-880,831,1055';
 const DATA_VERSION = 1;
 const LAST_VANILLA_ID = 145;
 const SAMPLE_POINTS = {
@@ -41,10 +42,8 @@ function regionLoader(folder) {
   };
 }
 
-function countsBy(items, key) {
-  const counts = Object.create(null);
-  for (const item of items) counts[item[key]] = (counts[item[key]] ?? 0) + 1;
-  return counts;
+function countTypes(counts, items) {
+  for (const {type} of items) counts[type] = (counts[type] ?? 0) + 1;
 }
 
 function partData(tile, id, meta) {
@@ -117,11 +116,11 @@ function getBlock(chunks, x, y, z) {
   const key = `${Math.floor(x / 16)}:${Math.floor(z / 16)}`;
   const chunk = chunks.get(key);
   if (!chunk) return null;
-  const section = chunk.get(Math.floor(y / 16));
-  return section ? section.readUInt16LE(cellOffset(x, y, z) * 2) : 0;
+  const section = chunk.sections.get(Math.floor(y / 16));
+  return section ? chunk.palette[section.readUInt16LE(cellOffset(x, y, z) * 2)] : 'air';
 }
 
-function findSpawn(sourceSpawn, chunks, palette) {
+function findSpawn(sourceSpawn, chunks) {
   const [x, y, z] = sourceSpawn;
   const solidSpawnBlocks = new Set([1, 2, 3, 4, 5, 7, 12, 13, 17, 24, 35, 41, 42, 43, 45,
     48, 49, 57, 80, 82, 87, 88, 89, 98, 112, 121, 125, 133, 155]);
@@ -131,9 +130,9 @@ function findSpawn(sourceSpawn, chunks, palette) {
         if (Math.max(Math.abs(dx), Math.abs(dz)) !== radius) continue;
         for (const dy of [0, 1, -1, 2, -2, 3, -3, 4, -4]) {
           const feet = y + dy;
-          const support = palette[getBlock(chunks, x + dx, feet - 1, z + dz)];
+          const support = getBlock(chunks, x + dx, feet - 1, z + dz);
           if (!support?.startsWith('legacy:') || !solidSpawnBlocks.has(Number(support.split(':')[1]))) continue;
-          if (getBlock(chunks, x + dx, feet, z + dz) === 0 && getBlock(chunks, x + dx, feet + 1, z + dz) === 0) {
+          if (getBlock(chunks, x + dx, feet, z + dz) === 'air' && getBlock(chunks, x + dx, feet + 1, z + dz) === 'air') {
             return [x + dx + 0.5, feet, z + dz + 0.5];
           }
         }
@@ -143,10 +142,26 @@ function findSpawn(sourceSpawn, chunks, palette) {
   throw new Error(`No clear spawn with a full block floor found near ${sourceSpawn.join(', ')}`);
 }
 
-function detailedMap({ world, out, radius, visualRadius, loadChunk }) {
+const squareArea = radius => ({minX:-radius,maxX:radius-1,minZ:-radius,maxZ:radius-1});
+const containsChunk = (area, x, z) => x >= area.minX && x <= area.maxX && z >= area.minZ && z <= area.maxZ;
+
+function expandedArea(area, buffer) {
+  return {minX:area.minX-buffer,maxX:area.maxX+buffer,minZ:area.minZ-buffer,maxZ:area.maxZ+buffer};
+}
+
+function walkChunks(area, visit) {
+  for (let z = area.minZ; z <= area.maxZ; z += 1) {
+    for (let x = area.minX; x <= area.maxX; x += 1) visit(x, z);
+  }
+}
+
+function detailedMap({ world, out, area, visualArea, visualRadius, chunkPalettes, loadChunk }) {
   const level = readNbt(gunzipSync(readFileSync(join(world, 'level.dat'))));
   const sourceSpawn = ['SpawnX', 'SpawnY', 'SpawnZ'].map((key) => level.Data?.[key]);
   if (!sourceSpawn.every(Number.isInteger)) throw new Error('Missing original spawn in level.dat');
+  const [spawnX, , spawnZ] = sourceSpawn;
+  if (!containsChunk(area, spawnX >> 4, spawnZ >> 4)) throw new Error('Detailed map area must include the original spawn');
+  const spawnArea = {minX:(spawnX-8)>>4,maxX:(spawnX+8)>>4,minZ:(spawnZ-8)>>4,maxZ:(spawnZ+8)>>4};
   const allRegistry = new Map((level.FML?.ModItemData ?? []).map((item) => [item.ItemId, item]));
   const palette = ['air'];
   const indexByKey = new Map([['air', 0]]);
@@ -157,20 +172,19 @@ function detailedMap({ world, out, radius, visualRadius, loadChunk }) {
   const countsByKey = Object.create(null);
   const chunks = [];
   const chunkHash = Object.create(null);
-  const chunkSections = new Map();
-  const allObjects = [];
-  const allEntities = [];
+  const spawnSections = new Map();
+  const objectCounts = Object.create(null);
+  const entityCounts = Object.create(null);
   const counts = { sections: 0, cells: 0, occupied: 0, covers: 0, malformedCompositions: 0 };
   const coverPatterns = new Set();
   const knownVariants = Object.create(null);
-  const getPaletteIndex = (key) => {
-    if (!indexByKey.has(key)) {
-      if (palette.length >= 65536) throw new Error('Detailed palette exceeds uint16. Reduce the detailed radius.');
-      indexByKey.set(key, palette.length);
-      palette.push(key);
+  function register(key, entries, indices) {
+    if (!indices.has(key)) {
+      indices.set(key, entries.length);
+      entries.push(key);
     }
-    return indexByKey.get(key);
-  };
+    return indices.get(key);
+  }
   const directory = join(out, 'chunks');
   mkdirSync(directory);
 
@@ -183,12 +197,22 @@ function detailedMap({ world, out, radius, visualRadius, loadChunk }) {
     const objects = makeObjects(chunk);
     const entities = makeEntities(chunk);
     if (playable) {
-      allObjects.push(...objects);
-      allEntities.push(...entities);
+      countTypes(objectCounts, objects);
+      countTypes(entityCounts, entities);
     }
     const objectsAt = new Map(objects.map((object) => [positionKey(...object.position), object]));
     const sections = [];
     const byY = new Map();
+    const entries = chunkPalettes ? ['air'] : palette;
+    const indicesByKey = chunkPalettes ? new Map([['air', 0]]) : indexByKey;
+    const definitions = chunkPalettes ? Object.create(null) : compositions;
+    if (chunkPalettes) byLegacy.fill(0);
+    function getPaletteIndex(key) {
+      const index = register(key, entries, indicesByKey);
+      if (index > 65535) throw new Error(`Chunk ${x},${z} exceeds the uint16 palette`);
+      if (chunkPalettes) register(key, palette, indexByKey);
+      return index;
+    }
     for (const source of [...(chunk.Sections ?? [])].sort((left, right) => left.Y - right.Y)) {
       const { blocks, variants } = sectionBlocks(source);
       if (byY.has(source.Y)) throw new Error(`Duplicate section ${source.Y} in chunk ${x},${z}`);
@@ -221,6 +245,7 @@ function detailedMap({ world, out, radius, visualRadius, loadChunk }) {
             const { key, definition } = composition;
             paletteIndex = getPaletteIndex(key);
             compositions[key] = definition;
+            definitions[key] = definition;
             if (playable) {
               if (definition.malformed) counts.malformedCompositions += 1;
               if (tile.type === 'Covers') {
@@ -230,7 +255,7 @@ function detailedMap({ world, out, radius, visualRadius, loadChunk }) {
             }
           }
         }
-        const key = palette[paletteIndex];
+        const key = entries[paletteIndex];
         if (playable) countsByKey[key] = (countsByKey[key] ?? 0) + 1;
         indices.writeUInt16LE(paletteIndex, index * 2);
       }
@@ -242,27 +267,27 @@ function detailedMap({ world, out, radius, visualRadius, loadChunk }) {
       byY.set(source.Y, indices);
     }
 
-    const data = `${canonicalJson({ x, z, sections, objects, entities })}\n`;
+    const data = `${canonicalJson({ x, z, sections, objects, entities,
+      ...(chunkPalettes && {palette:entries, compositions:definitions}) })}\n`;
     const file = `${x}.${z}.json`;
     hashes[file] = sha256(data);
     writeFileSync(join(directory, file), data);
     if (!playable) return true;
-    chunkSections.set(`${x}:${z}`, byY);
+    const at = `${x}:${z}`;
+    if (containsChunk(spawnArea, x, z)) spawnSections.set(at, {sections:byY, palette:entries});
     chunks.push([x, z]);
     for (const [name, position] of Object.entries(SAMPLE_POINTS)) {
       const [sx, sy, sz] = position;
       if (Math.floor(sx / 16) !== x || Math.floor(sz / 16) !== z) continue;
       knownVariants[name] = {
-        position, cell: palette[getBlock(chunkSections, sx, sy, sz)],
+        position, cell: entries[byY.get(sy >> 4)?.readUInt16LE(cellOffset(sx, sy, sz) * 2) ?? 0],
         objectType: objectsAt.get(positionKey(sx, sy, sz))?.type ?? null,
       };
     }
     return true;
   }
 
-  for (let z = -radius; z < radius; z += 1) {
-    for (let x = -radius; x < radius; x += 1) importChunk(x, z, true, chunkHash);
-  }
+  walkChunks(area, (x, z) => importChunk(x, z, true, chunkHash));
 
   const variants = [];
   const missingIds = new Set();
@@ -283,27 +308,24 @@ function detailedMap({ world, out, radius, visualRadius, loadChunk }) {
   counts.variants = variants.length;
   counts.coverPatterns = coverPatterns.size;
   counts.compositions = Object.keys(compositions).length;
-  counts.objects = countsBy(allObjects, 'type');
-  counts.entities = countsBy(allEntities, 'type');
-  const spawn = findSpawn(sourceSpawn, chunkSections, palette);
-  const bounds = { minX: -radius * 16, maxX: radius * 16 - 1, minZ: -radius * 16, maxZ: radius * 16 - 1,
+  counts.objects = objectCounts;
+  counts.entities = entityCounts;
+  const spawn = findSpawn(sourceSpawn, spawnSections);
+  const bounds = { minX:area.minX * 16, maxX:area.maxX * 16 + 15, minZ:area.minZ * 16, maxZ:area.maxZ * 16 + 15,
     minY: 0, maxY: 255 };
   const manifest = { schemaVersion: DATA_VERSION, importVersion: DATA_VERSION, catalogVersion: 1, bounds, spawn,
     sourceSpawn, coordinateTransform: 'identity', chunks, palette, compositions, legacyRegistry, chunkHash,
-    counts, countsByKey, unknownRegistry, variants, samples: knownVariants };
+    counts, countsByKey, unknownRegistry, variants, samples: knownVariants, ...(chunkPalettes && {chunkPalettes}) };
   // Keep authoritative data and palette indices stable when only the scenery changes.
   const contentHash = sha256(canonicalJson(manifest));
-  if (!visualRadius) return { ...manifest, contentHash };
+  if (!visualArea) return { ...manifest, contentHash };
   const corePaletteSize = palette.length;
   const visualChunks = [];
   const visualChunkHash = Object.create(null);
-  for (let z = -visualRadius; z < visualRadius; z += 1) {
-    for (let x = -visualRadius; x < visualRadius; x += 1) {
-      if (x >= -radius && x < radius && z >= -radius && z < radius) continue;
-      if (importChunk(x, z, false, visualChunkHash)) visualChunks.push([x, z]);
-    }
-  }
-  return { ...manifest, contentHash, corePaletteSize, visualChunks, visualRadius,
+  walkChunks(visualArea, (x, z) => {
+    if (!containsChunk(area, x, z) && importChunk(x, z, false, visualChunkHash)) visualChunks.push([x, z]);
+  });
+  return { ...manifest, contentHash, corePaletteSize, visualChunks, ...(visualRadius && {visualRadius}),
     visualHash: sha256(canonicalJson(visualChunkHash)) };
 }
 
@@ -326,8 +348,9 @@ function checkExistingOutput(out) {
 }
 
 export function importWorld({ world = DEFAULT_SOURCE, out = DEFAULT_OUTPUT, radius = DEFAULT_RADIUS,
-  terrainRadius = 0, visualRadius = terrainRadius > 8 ? Math.max(radius + 2, DEFAULT_VISUAL_RADIUS) :
-    terrainRadius > 0 && radius < DEFAULT_VISUAL_RADIUS ? DEFAULT_VISUAL_RADIUS : 0 } = {}) {
+  area, terrainRadius = 0, visualRadius } = {}) {
+  visualRadius ??= area ? 0 : terrainRadius > 8 ? Math.max(radius + 2, DEFAULT_VISUAL_RADIUS) :
+    terrainRadius > 0 && radius < DEFAULT_VISUAL_RADIUS ? DEFAULT_VISUAL_RADIUS : 0;
   if (!Number.isInteger(radius) || radius < 1 || radius > 16) throw new Error('Detailed radius must be 1 to 16 chunks');
   if (!terrainRadii.includes(terrainRadius) || (terrainRadius > 0 && radius > 8)) {
     throw new Error('Terrain radius must be 0, 8, 16 or 32, with detailed radius at most 8 when terrain is enabled');
@@ -336,6 +359,9 @@ export function importWorld({ world = DEFAULT_SOURCE, out = DEFAULT_OUTPUT, radi
       (visualRadius !== 0 && (visualRadius <= radius || visualRadius > 16 || (terrainRadius && visualRadius > terrainRadius)))) {
     throw new Error('Visual radius must be 0 or greater than the detailed radius and within the 16-chunk and terrain bounds');
   }
+  if (area && (terrainRadius || visualRadius)) throw new Error('A custom detailed area has its own map boundaries');
+  const detailArea = area ? parseArea(area) : squareArea(radius);
+  const visualArea = visualRadius ? squareArea(visualRadius) : null;
   world = realpathSync(resolve(world));
   out = resolve(out);
   const sourceTrees = [world, SOURCE_TREE];
@@ -357,7 +383,8 @@ export function importWorld({ world = DEFAULT_SOURCE, out = DEFAULT_OUTPUT, radi
   try {
     checkExistingOutput(out);
     const loadChunk = regionLoader(join(world, 'region'));
-    const manifest = detailedMap({ world, out: data, radius, visualRadius, loadChunk });
+    const manifest = detailedMap({ world, out: data, area:detailArea, visualArea, visualRadius,
+      chunkPalettes:Boolean(area), loadChunk });
     manifest.terrain = writeTerrainRings(data, terrainRadius, loadChunk, Math.max(radius, visualRadius));
     writeFileSync(join(data, 'world.json'), `${canonicalJson(manifest)}\n`);
     if (existsSync(out)) {
@@ -383,20 +410,33 @@ export function importWorld({ world = DEFAULT_SOURCE, out = DEFAULT_OUTPUT, radi
   }
 }
 
+function parseArea(area) {
+  if (typeof area !== 'string' || !/^-?\d+,-?\d+,-?\d+,-?\d+$/.test(area)) {
+    throw new Error('Area must use minX,minZ,maxX,maxZ in blocks');
+  }
+  const [minX,minZ,maxX,maxZ] = area.split(',').map(Number);
+  if ([minX,minZ,maxX,maxZ].some(value => !Number.isSafeInteger(value) || Math.abs(value) > 30_000_000) ||
+      minX > maxX || minZ > maxZ) throw new Error('Invalid area coordinates');
+  return {minX:Math.floor(minX/16),minZ:Math.floor(minZ/16),maxX:Math.floor(maxX/16),maxZ:Math.floor(maxZ/16)};
+}
+
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const { values } = parseArgs({ options: {
     world: { type: 'string' }, out: { type: 'string' }, radius: { type: 'string' },
+    area: { type: 'string' }, city: { type: 'boolean' },
     'terrain-radius': { type: 'string' }, 'visual-radius': { type: 'string' }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    console.log('node import/anvil.mjs [--world SOURCE_SAVE] [--out OUTPUT] [--radius 4] [--terrain-radius 0|8|16|32] [--visual-radius 0|N]');
+    console.log('node import/anvil.mjs [--world SOURCE_SAVE] [--out OUTPUT] [--city | --area=minX,minZ,maxX,maxZ | --radius 4 [--terrain-radius 0|8|16|32] [--visual-radius 0|N]]');
   } else {
     const start = performance.now();
+    if ([values.city, values.area, values.radius].filter(Boolean).length > 1) throw new Error('Choose one detailed area');
     const manifest = importWorld({ world: values.world, out: values.out,
+      area:values.city ? DEFAULT_AREA : values.area,
       radius: Number(values.radius ?? DEFAULT_RADIUS), terrainRadius: Number(values['terrain-radius'] ?? 0),
       visualRadius: values['visual-radius'] === undefined ? undefined : Number(values['visual-radius']) });
-    const { counts, samples, spawn, terrain, contentHash, visualChunks = [], visualRadius } = manifest;
-    console.log(JSON.stringify({ seconds: (performance.now() - start) / 1000, contentHash, spawn, counts, samples,
+    const { bounds, counts, samples, spawn, terrain, contentHash, visualChunks = [], visualRadius } = manifest;
+    console.log(JSON.stringify({ seconds: (performance.now() - start) / 1000, contentHash, bounds, spawn, counts, samples,
       terrain, visualRadius, visualChunks: visualChunks.length }, null, 2));
   }
 }

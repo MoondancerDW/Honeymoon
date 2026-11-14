@@ -1,6 +1,6 @@
 import {Display} from './display.mjs';
 import {Movement, EYE, overlapsPlacement, pick} from './movement.mjs';
-import {World, json} from './world-data.mjs';
+import {World, chunkKey, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {PlayerProfile} from './player-profile.mjs';
 import {createSocialHud} from './social-hud.mjs';
@@ -15,6 +15,7 @@ import {ATLAS_GRID, TILE_SIZE, chiselMaterialShape, coverBoxes, creativeIcon} fr
 import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselPlacementAtHit} from '../world/chisel-surface.mjs';
+import {positionBatch} from './position-packet.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -55,6 +56,7 @@ let seat = null, seatPending = false, seatEpoch = 0;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
+let nearbyStream;
 let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
 let nextClockUpdate = 0;
@@ -357,18 +359,7 @@ async function rightClick(buildInstead = false) {
 }
 
 function positionPacket(lastStep) {
-  const trail = [];
-  let distance = 0;
-  let from = confirmedPosition;
-  // Keep a delayed batch inside the server's wall-clock movement budget.
-  for (const step of positionTrail) {
-    distance += Math.hypot(step[0] - from[0], Math.max(0, step[1] - from[1]), step[2] - from[2]);
-    if (trail.length && (trail.length >= POSITION_TRAIL_LIMIT || distance > 1.05)) break;
-    trail.push(step);
-    from = step;
-    if (step === lastStep) break;
-  }
-  const [x, y, z] = from;
+  const {target:[x, y, z], trail} = positionBatch(confirmedPosition, positionTrail, lastStep);
   return {x, y, z, from: confirmedPosition, trail, ...(entered && {pose:playerPose()}),
     requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join('')};
 }
@@ -709,6 +700,7 @@ function tick(now) {
     social.updateClock(view.dayTick(now), view.worldTime.frozen);
     nextClockUpdate = now + 200;
   }
+  nearbyStream?.update();
   view.render(now, selection, playing && !menuOpen(), placement, document.hasFocus());
   requestAnimationFrame(tick);
 }
@@ -880,8 +872,9 @@ function distanceToChunk([x, z]) {
   return Math.max(Math.abs(x - Math.floor(position.x / 16)), Math.abs(z - Math.floor(position.z / 16)));
 }
 
-async function addChunk([x, z], visualOnly = false) {
-  const chunk = await json(`/generated/world/chunks/${x}.${z}.json`);
+async function addChunk([x, z], visualOnly = false, isNeeded, signal) {
+  const chunk = await json(`/generated/world/chunks/${x}.${z}.json`, {signal});
+  if (isNeeded && !isNeeded()) return;
   view.addChunk(world.addChunk(chunk, visualOnly));
   if (visualOnly) metrics.visualChunksLoaded++;
   else metrics.chunksLoaded++;
@@ -906,6 +899,77 @@ async function streamChunks(chunks, scenery) {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
+}
+
+function streamNearby(chunks, scenery) {
+  const playable = new Set(chunks.map(([x, z]) => chunkKey(x, z)));
+  const visual = new Set(scenery.map(([x, z]) => chunkKey(x, z)));
+  const inFlight = new Map();
+  const retryAt = new Map();
+  let area, planned = [];
+
+  function status() {
+    const missing = planned.filter(({key}) => !world.chunks.has(key)).length;
+    return {...area, loading:inFlight.size, missing, ready:!missing && view.streamSettled()};
+  }
+
+  function updateArea() {
+    const x = Math.floor(position.x / 16), z = Math.floor(position.z / 16);
+    const radius = Math.min(view.requestedDistance, 8) + 1;
+    if (area?.x === x && area.z === z && area.radius === radius) return;
+    area = {x, z, radius};
+    view.streamAround(x, z, radius);
+    for (const {coordinate, controller} of inFlight.values()) {
+      if (!needed(coordinate)) controller.abort();
+    }
+    const expired = [...world.chunks.values()].filter(chunk => distanceToChunk([chunk.x, chunk.z]) > radius + 1);
+    world.removeChunks(expired);
+    view.removeChunks(expired);
+    planned = [];
+    for (let dz = -radius; dz <= radius; dz++) for (let dx = -radius; dx <= radius; dx++) {
+      const coordinate = [x + dx, z + dz];
+      const key = chunkKey(...coordinate);
+      const visualOnly = !playable.has(key);
+      if (visualOnly && !visual.has(key) || world.chunks.has(key)) continue;
+      planned.push({coordinate, key, visualOnly, distance:Math.max(Math.abs(dx), Math.abs(dz)), order:dx * dx + dz * dz});
+    }
+    planned.sort((a, b) => a.distance - b.distance || Number(a.visualOnly) - Number(b.visualOnly) || a.order - b.order);
+    const wanted = new Set(planned.map(entry => entry.key));
+    for (const key of retryAt.keys()) if (!wanted.has(key)) retryAt.delete(key);
+  }
+
+  const needed = coordinate => distanceToChunk(coordinate) <= area.radius;
+  async function run() {
+    while (!view.workerFailure) {
+      updateArea();
+      const now = performance.now();
+      const next = planned.find(({key}) => !inFlight.has(key) && !world.chunks.has(key) && (retryAt.get(key) ?? 0) <= now);
+      if (!next) {
+        await new Promise(resolve => setTimeout(resolve, 80));
+        continue;
+      }
+      const controller = new AbortController();
+      inFlight.set(next.key, {coordinate:next.coordinate, controller});
+      try {
+        await view.waitForStreamSlot(!next.visualOnly && needed(next.coordinate) && next.distance <= 2);
+        updateArea();
+        if (!controller.signal.aborted) {
+          await addChunk(next.coordinate, next.visualOnly, () => needed(next.coordinate),
+            AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]));
+        }
+        retryAt.delete(next.key);
+      } catch (error) {
+        if (view.workerFailure) throw error;
+        if (!controller.signal.aborted) {
+          retryAt.set(next.key, performance.now() + 1500);
+          console.error(error);
+        }
+      } finally {
+        inFlight.delete(next.key);
+      }
+    }
+  }
+  return {status, update:updateArea, done:Promise.all([run(), run()])};
 }
 
 async function start() {
@@ -933,6 +997,7 @@ async function start() {
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
   updateCamera();
   const available = new Set([4, ...(manifest.terrain || []).map(ring => ring.radius)]);
+  if (manifest.chunkPalettes) available.add(8);
   const distance = element('distance');
   for (const option of distance.options) option.disabled = !available.has(Number(option.value));
   if (manifest.visualRadius > 8 && available.has(16)) distance.value = '16';
@@ -943,7 +1008,8 @@ async function start() {
   stream();
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
-    stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
+    stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
+      revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
       flying, chiseling, chiselMaterial, movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
@@ -971,7 +1037,9 @@ async function start() {
   loading.textContent = 'Можно войти в мир';
   button.disabled = false;
   view.setDistance(Number(distance.value)).catch(console.error);
-  streamChunks(manifest.chunks.filter(chunk => !buffered.includes(chunk)), manifest.visualChunks ?? []).catch(console.error);
+  if (manifest.chunkPalettes) nearbyStream = streamNearby(manifest.chunks, manifest.visualChunks ?? []);
+  const pending = nearbyStream?.done ?? streamChunks(manifest.chunks.filter(chunk => !buffered.includes(chunk)), manifest.visualChunks ?? []);
+  pending.catch(console.error);
 }
 
 start().catch(error => {

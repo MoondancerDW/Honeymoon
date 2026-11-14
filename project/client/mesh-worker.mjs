@@ -19,6 +19,7 @@ let models = {};
 let atlasRows = ATLAS_GRID;
 let carpentryModel = false;
 const cache = new Map();
+const MAX_CACHED_SHAPES = 4096;
 
 function layer() {
   return {positions: [], colors: [], lightLevels: [], uvs: [], indices: []};
@@ -160,13 +161,12 @@ function neighborLight(light, at, x, y, z) {
   return sky << 4 | block;
 }
 
-function makeShape(index, at, cell, neighbors, edited) {
-  const key = cells[index];
+function makeShape(key, at, cell, neighbors, edited) {
   // Stairs and connected shapes can read neighboring cells. Include their face neighbors.
   const connected = geometry.shapeDependsOnNeighbors(key) ||
     models.jammy?.models[key] && isJammyConnectableSeat(models.jammy, key);
-  const cacheable = !connected && !cell?.object && !edited;
-  if (cacheable && cache.has(index)) return cache.get(index);
+  const cacheable = !connected && !cell?.object && !edited && !key.startsWith('cover:');
+  if (cacheable && cache.has(key)) return cache.get(key);
   const adjacent = (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE);
   const model = extractedModel(models, cell || key, adjacent);
   const atlasModel = model || key.startsWith('legacy:1526:') && !carpentryModel ? null : geometry.sourceAtlasModel(key);
@@ -176,11 +176,15 @@ function makeShape(index, at, cell, neighbors, edited) {
     geometry.bedMesh(key) ??
     (cell?.voxels && cell.parts ? geometry.coverBoxes(cell.parts) : shapeFor(cell || key, adjacent));
   const shape = {boxes, model, atlasModel, full: boxes.find(fullCube)};
-  if (cacheable) cache.set(index, shape);
+  if (cacheable) {
+    if (cache.size >= MAX_CACHED_SHAPES) cache.delete(cache.keys().next().value);
+    cache.set(key, shape);
+  }
   return shape;
 }
 
-function precise({indices, light, objects, microblocks, sculpted, connectedTextures, chiselConnectedTextures}) {
+function precise({indices, light, objects, microblocks, sculpted, connectedTextures, chiselConnectedTextures,
+  palette = cells, compositions: definitions = compositions}) {
   const layers = {opaque: layer(), cutout: layer(), blend: layer()};
   const indexedObjects = new Map(objects);
   const editedParts = new Map(microblocks);
@@ -189,10 +193,10 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
   const rendered = new Map();
   const signs = [];
   function cell(at) {
-    const key = cells[indices[at]];
+    const key = palette[indices[at]];
     if (!key || key === 'air') return null;
     const object = indexedObjects.get(at);
-    const composition = compositions[key];
+    const composition = definitions[key];
     const voxels = hasSculptures && voxelCells.get(at);
     const parts = editedParts.get(at);
     if (parts) return {key, ...composition, object, parts, voxels};
@@ -201,7 +205,7 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
   }
   function shape(at) {
     if (!indices[at] || hasSculptures && voxelCells.has(at) && !editedParts.has(at)) return null;
-    if (!rendered.has(at)) rendered.set(at, makeShape(indices[at], at, cell(at), cell, editedParts.has(at)));
+    if (!rendered.has(at)) rendered.set(at, makeShape(palette[indices[at]], at, cell(at), cell, editedParts.has(at)));
     return rendered.get(at);
   }
   for (let y = 0; y < 16; y++) {
@@ -236,7 +240,7 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
           }
           continue;
         }
-        const blockKey = cells[indices[at]];
+        const blockKey = palette[indices[at]];
         const ctm = connectedTextures && (blockKey.startsWith('legacy:20:') || blockKey.startsWith('legacy:102:'));
         const chisel = chiselConnectedTextures && blockKey === CHISEL_FANTASY;
         const glass = ctm && blockKey.startsWith('legacy:20:');
@@ -273,7 +277,7 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
               continue;
             }
             const onEdge = box.angle === undefined && !box.redPowerOffset && (f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0);
-            if (water && (onEdge || f === 3) && waterKey(cells[indices[adjacent]])) continue;
+            if (water && (onEdge || f === 3) && waterKey(palette[indices[adjacent]])) continue;
             if (onEdge) {
               const neighbor = shape(adjacent)?.full;
               if (neighbor?.mode === 'opaque' || hasSculptures && isOpaqueFullVoxels(voxelCells.get(adjacent)) ||
@@ -281,7 +285,7 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             }
             if (boxes.length > 1 && boxes.some(other => coversFace(other, box, f))) continue;
             let packed = light[onEdge ? adjacent : at];
-            if (onEdge && usesNeighborLight(cells[indices[adjacent]])) {
+            if (onEdge && usesNeighborLight(palette[indices[adjacent]])) {
               const [dx, dy, dz] = FACES[f];
               packed = neighborLight(light, adjacent, x + 1 + dx, y + 1 + dy, z + 1 + dz);
             } else if (!onEdge && neighborLit) {
@@ -352,7 +356,7 @@ self.onmessage = ({data}) => {
     models = data.models || {};
     return;
   }
-  if (data.palette) cells = data.palette;
+  if (data.paletteAppend) for (const key of data.paletteAppend) cells.push(key);
   atlasRows = data.atlasRows ?? ATLAS_GRID;
   carpentryModel = data.carpentryModel === true;
   const start = performance.now();

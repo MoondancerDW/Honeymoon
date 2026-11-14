@@ -16,6 +16,13 @@ test('cake keeps its half-block model and a 7/16 collision top at every bite', (
   }
 });
 
+test('Twilight Forest hedges preserve a full model and the original inset collision top', () => {
+  const hedge = 'legacy:2166:0';
+  assert.deepEqual(aabb(shapeFor(hedge)[0]), [0, 0, 0, 1, 1, 1]);
+  assert.deepEqual(collisionFor(hedge).map(aabb), [[0, 0, 0, 1, 15 / 16, 1]]);
+  assert.deepEqual(collisionFor('legacy:2166:1').map(aabb), [[0, 0, 0, 1, 1, 1]]);
+});
+
 test('standing sign board and text share the original sixteen-way heading', () => {
   const sign = 'legacy:63:6';
   const [board, post] = standingSignMesh(sign);
@@ -190,9 +197,9 @@ test('read source chair, bookshelf and Russian sign across negative chunk coordi
     const chunk = JSON.parse(readFileSync(new URL('chunks/' + chunkFile, root)));
     const section = chunk.sections.find(section => section.y === Math.floor(y / 16));
     const index = (x & 15) + 16 * (z & 15) + 256 * (y & 15);
-    const key = manifest.palette[Buffer.from(section.indices, 'base64').readUInt16LE(index * 2)];
+    const key = (chunk.palette ?? manifest.palette)[Buffer.from(section.indices, 'base64').readUInt16LE(index * 2)];
     const object = chunk.objects.find(object => object.position.every((coordinate, i) => coordinate === [x, y, z][i]));
-    return { key, object, ...manifest.compositions[key] };
+    return { key, object, ...(chunk.compositions ?? manifest.compositions)[key] };
   }
   const chair = at([-34, 65, -61]);
   assert.equal(chair.key, 'legacy:213:0');

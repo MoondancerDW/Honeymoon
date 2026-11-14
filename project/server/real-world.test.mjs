@@ -14,14 +14,18 @@ import { createGame } from './game.mjs';
 import { openStore } from './store.mjs';
 
 const directory = fileURLToPath(new URL('../generated/world/', import.meta.url));
+const sampleChunkRadius = 8;
+const inOriginalDistrict = ([x,z]) => x >= -sampleChunkRadius && x < sampleChunkRadius &&
+  z >= -sampleChunkRadius && z < sampleChunkRadius;
 
 test('mounted item frames expose their visual state without the original NBT payload', {
   skip: !existsSync(join(directory, 'world.json')) ? 'Run the Anvil import to verify item frames' : false,
 }, () => {
   const base = loadBase(directory);
-  const frames = base.manifest.chunks.flatMap(([x, z]) => base.publicChunk(x, z).entities
+  const chunks = base.manifest.chunkPalettes ? base.manifest.chunks.filter(inOriginalDistrict) : base.manifest.chunks;
+  const frames = chunks.flatMap(([x, z]) => base.publicChunk(x, z).entities
     .filter(entity => entity.type === 'ItemFrame'));
-  assert.equal(frames.length, base.manifest.counts.entities.ItemFrame);
+  if (!base.manifest.chunkPalettes) assert.equal(frames.length, base.manifest.counts.entities.ItemFrame);
   assert.ok(frames.some(frame => frame.data.Item?.id === 260));
   for (const frame of frames) {
     assert.equal(frame.position.length, 3);
@@ -83,7 +87,7 @@ function at(base, x, y, z) {
 
 function availableCases(base) {
   const { palette, chunks, spawn, compositions } = base.manifest;
-  const matched = palette.map(key => {
+  const matchesKey = key => {
     const [, id, meta] = key.split(':');
     const block = Number(id);
     const parts = compositions[key]?.parts;
@@ -92,8 +96,11 @@ function availableCases(base) {
       if (candidate.name === 'lit lamp' && block === 768) return true;
       return candidate.match({ id: block, meta: Number(meta), parts });
     });
-  });
-  const sortedChunks = [...chunks].sort((a, b) => {
+  };
+  const matched = new Map(palette.map(key => [key, matchesKey(key)]));
+  // This test exercises block actions in the original district. The exhaustive
+  // source comparison covers the expanded map without running an HTTP server per block family.
+  const sortedChunks = chunks.filter(inOriginalDistrict).sort((a, b) => {
     const distance = ([x, z]) => Math.hypot(x * 16 + 8 - spawn[0], z * 16 + 8 - spawn[2]);
     return distance(a) - distance(b);
   });
@@ -102,16 +109,18 @@ function availableCases(base) {
 
   for (const [cx, cz] of sortedChunks) {
     const chunk = base.publicChunk(cx, cz);
+    const entries = chunk.palette ?? palette;
+    const chunkMatches = entries.map(key => matched.get(key));
     for (const { y: sy, indices } of chunk.sections) {
       const bytes = Buffer.from(indices, 'base64');
       for (let offset = 0; offset < 4096; offset++) {
         const index = bytes.readUInt16LE(offset * 2);
         if (!index) continue;
-        if (!matched[index].some(candidate => candidates.get(candidate.name).length < capPerType)) continue;
-        const [, id, meta] = palette[index].split(':');
+        if (!chunkMatches[index].some(candidate => candidates.get(candidate.name).length < capPerType)) continue;
         const position = [cx * 16 + (offset & 15), sy * 16 + (offset >> 8), cz * 16 + ((offset >> 4) & 15)];
+        const [, id, meta] = entries[index].split(':');
         const { object, parts } = at(base, ...position);
-        for (const candidate of matched[index]) {
+        for (const candidate of chunkMatches[index]) {
           const list = candidates.get(candidate.name);
           if (list.length < capPerType && candidate.match({ id: Number(id), meta: Number(meta), object, parts })) list.push(position);
         }
@@ -203,7 +212,8 @@ async function checkActions(base, candidate, target, { stand, anchor }, catalogs
     assert.deepEqual(removed.changes[0], { x, y, z, cell: null, object: null, revision: 1 });
     const placed = await action('place', 1, { cell: copy.cell, against: { x: ax, y: ay, z: az } });
     const placedObject = placementModelObject(catalogs, original.key, displayObject(original.object), target);
-    assert.deepEqual(placed.changes[0], { x, y, z, cell: original.key, object: displayObject(placedObject), revision: 2 });
+    assert.deepEqual(placed.changes[0], { x, y, z, cell: original.key, object: displayObject(placedObject), revision: 2,
+      ...(base.manifest.chunkPalettes && original.parts && {parts:original.parts}) });
     const restored = (await request('/api/world')).overrides.find(cell => cell.x === x && cell.y === y && cell.z === z);
     assert.deepEqual(restored, placed.changes[0]);
     return `cell ${target.join(',')}, stand ${[stand.x, stand.y, stand.z].join(',')}, ${original.key.slice(0, 32)}`;

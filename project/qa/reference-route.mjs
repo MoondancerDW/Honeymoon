@@ -131,14 +131,22 @@ export async function browserPhotos(base, output, exerciseDoor, { checkPoints = 
     });
     const origin = 'http://127.0.0.1:' + app.server.address().port;
     await page.goto(origin);
-    await page.waitForFunction(count => globalThis.honeymoon?.stats().chunksLoaded === count,
-      base.manifest.chunks.length,{timeout:90_000});
+    const streamed = base.manifest.chunkPalettes;
+    await page.locator('#play').waitFor();
+    if (!streamed) {
+      await page.waitForFunction(count => globalThis.honeymoon?.stats().chunksLoaded === count,
+        base.manifest.chunks.length,{timeout:90_000});
+    } else {
+      await page.waitForFunction(() => globalThis.honeymoon?.stats().playable > 0, undefined, {timeout:90_000});
+    }
     await page.evaluate(distance => honeymoon.setDistance(distance), base.manifest.visualRadius > 8 ? 16 : 8);
-    const visualChunks = base.manifest.visualChunks?.length ?? 0;
-    await page.waitForFunction(expected => {
-      const stats = honeymoon.stats();
-      return stats.pending === 0 && (stats.visualChunksLoaded ?? 0) === expected;
-    },visualChunks,{timeout:90_000});
+    if (!streamed) {
+      const visualChunks = base.manifest.visualChunks?.length ?? 0;
+      await page.waitForFunction(expected => {
+        const stats = honeymoon.stats();
+        return stats.pending === 0 && (stats.visualChunksLoaded ?? 0) === expected;
+      },visualChunks,{timeout:90_000});
+    }
     await page.addStyleTag({content:'#game > :not(#scene) {display:none !important;}'});
     let serverWalk;
     const revisions = new Map();
@@ -164,6 +172,12 @@ export async function browserPhotos(base, output, exerciseDoor, { checkPoints = 
         honeymoon.referencePose({feet,yaw,pitch});
         return new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
       },{feet:pose.feet,yaw:radians(180-pose.yaw),pitch:-radians(pose.pitch)});
+      if (streamed) {
+        await page.waitForFunction(([x, ,z]) => {
+          const progress = honeymoon.stats().streaming;
+          return progress?.ready && progress.x === Math.floor(x / 16) && progress.z === Math.floor(z / 16);
+        },pose.feet,{timeout:120_000,polling:250});
+      }
       await page.screenshot({path:join(output,pose.id+'.png')});
     }
     assert.deepEqual(errors,[]);

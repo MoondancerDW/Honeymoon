@@ -1,7 +1,3 @@
-param(
-    [ValidateSet(0, 8, 16, 32)] [int] $TerrainRadius = 32
-)
-
 $ErrorActionPreference = 'Stop'
 Push-Location -LiteralPath $PSScriptRoot
 try {
@@ -33,12 +29,12 @@ try {
     $importRequired = !(Test-Path -LiteralPath $worldPath)
     if (!$importRequired) {
         $world = Get-Content -Raw -LiteralPath $worldPath | ConvertFrom-Json
-        $importRequired = $world.bounds.minX -ne -128 -or
-            ($TerrainRadius -gt 8 -and $world.visualRadius -ne 10) -or
-            ($TerrainRadius -and $TerrainRadius -notin $world.terrain.radius)
+        $importRequired = !$world.chunkPalettes -or
+            $world.bounds.minX -ne -1984 -or $world.bounds.maxX -ne 831 -or
+            $world.bounds.minZ -ne -880 -or $world.bounds.maxZ -ne 1055
     }
     if ($importRequired) {
-        & $nodePath import/anvil.mjs --radius 8 --terrain-radius "$TerrainRadius"
+        & $nodePath import/anvil.mjs --city
         if ($LASTEXITCODE) { throw 'World import failed.' }
     }
     $atlasMetadata = 'generated\textures\atlas.json'
@@ -62,6 +58,7 @@ try {
         }
         if ($current -and $family -eq 'biblio') {
             $current = (Get-Content -Raw -LiteralPath $modelJson | ConvertFrom-Json).schemaVersion -eq 2
+            $current = $current -and !$importRequired
         }
         if ((Test-Path -LiteralPath $modelInputs[$family].Source) -and
             (!$current -or !(Test-Path -LiteralPath "generated/models/$family.png"))) {

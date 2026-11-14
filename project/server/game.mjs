@@ -185,6 +185,11 @@ export function createGame(base, store, geometry, {
     return {key: cell, object, parts: current.parts ?? base.manifest.compositions?.[cell]?.parts, voxels};
   }
 
+  function publicChange(change, object = change.object) {
+    const parts = change.parts ?? (base.manifest.chunkPalettes ? base.manifest.compositions?.[change.cell]?.parts : undefined);
+    return {...change, ...(parts && {parts}), object:displayObject(object)};
+  }
+
   const physical = physics(base, geometry, (x, y, z) => {
     const current = getCurrent(x, y, z);
     return current.cell === null ? null : cellView(current);
@@ -308,7 +313,7 @@ export function createGame(base, store, geometry, {
     }
     return {
       worldRevision: revision,
-      changes: changes.map(change => ({ ...change, object: displayObject(change.object) })),
+      changes: changes.map(change => publicChange(change)),
       effects: plan.effects ?? [],
     };
   }
@@ -567,7 +572,7 @@ export function createGame(base, store, geometry, {
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
     const current = getCurrent(x, y, z);
     if (input.expectedRevision !== current.revision) {
-      throw new RequestError(409, 'stale_cell', { current: { ...current, object: displayObject(current.object) }, worldRevision: store.worldRevision() });
+      throw new RequestError(409, 'stale_cell', {current:publicChange(current), worldRevision:store.worldRevision()});
     }
     if (partActions.has(type)) return editMicroParts(player, input, current);
     if (voxelActions.has(type)) return editVoxels(player, input, current);
@@ -769,7 +774,7 @@ export function createGame(base, store, geometry, {
     snapshot(player) {
       return {
         bounds: base.manifest.bounds, spawn: base.manifest.spawn, worldRevision: store.worldRevision(), contentHash: base.hash,
-        overrides: [...store.edits().map(edit => ({ ...edit, object: displayObject(editObject(edit)) })),
+        overrides: [...store.edits().map(edit => publicChange(edit, editObject(edit))),
           ...snapshotCells()],
         mechanics: descriptions(player),
       };
