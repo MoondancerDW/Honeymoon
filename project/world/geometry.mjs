@@ -3,6 +3,8 @@ import {hasHatchRung, westCellarLadder} from './west-cellar.mjs';
 import {connectedTubeMesh, tubeCore} from './redpower-tubes.mjs';
 import {wirePanels, wireSelection} from './redpower-wires.mjs';
 import {shapedLampCollision} from './redpower-lamps.mjs';
+import {staticEmission} from './block-light-properties.mjs';
+import {voxelCollisionBoxes, voxelKey} from './voxel-chisel.mjs';
 
 export const ATLAS_GRID = 64;
 export const TILE_SIZE = 16;
@@ -910,6 +912,26 @@ const simpleCache = new Map();
 const neighborDependent = new Set([8, 9, 53, 64, 67, 71, 85, 101, 102, 108, 109, 113, 114, 128, 134,
   135, 136, 139, 750, 4039]);
 const dynamic = new Set([...neighborDependent, 751, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
+// Static building materials with no model data or active block behavior.
+const chiselMaterialIds = new Set([1, 2, 3, 4, 5, 14, 15, 16, 17, 21, 22, 24, 35, 41, 42, 43,
+  45, 48, 49, 56, 57, 80, 82, 87, 98, 110, 112, 121, 129, 133, 162, 242, 244, 245, 701]);
+const chiselMaterialShapes = new Map();
+
+export function chiselMaterialShape(key) {
+  const match = typeof key === 'string' && key.length <= 24 && legacyKey.exec(key);
+  if (!match) return null;
+  const id = Number(match[1]), meta = Number(match[2]);
+  if (key !== `legacy:${id}:${meta}` || meta > 15 || !chiselMaterialIds.has(id) || staticEmission[id]) return null;
+  if (chiselMaterialShapes.has(key)) return chiselMaterialShapes.get(key);
+  const [shape, extra] = shapeFor(key);
+  const allowed = shape && !extra && shape.solid && shape.mode === 'opaque' && !shape.emissive && !shape.approximation
+    && shape.x0 === 0 && shape.y0 === 0 && shape.z0 === 0 && shape.x1 === 1 && shape.y1 === 1 && shape.z1 === 1
+    && shape.faces.every(tile => Number.isInteger(tile) && tile >= 0 && tile < ATLAS_GRID ** 2);
+  const result = allowed ? shape : null;
+  chiselMaterialShapes.set(key, result);
+  return result;
+}
+
 export function shapeDependsOnNeighbors(cell) {
   const [id, meta] = unpack(cell);
   return neighborDependent.has(id) && (id !== 750 || meta !== 0);
@@ -918,6 +940,7 @@ export function shapeDependsOnNeighbors(cell) {
 
 export function shapeFor(cell, neighbors) {
   const key = keyOf(cell);
+  if (key === voxelKey) return voxelCollisionBoxes(cell.voxels);
   if (key === 'game:switch') return [box([0.375, 0.25, 0.75, 0.625, 0.65, 1], 96, GROUND_DECOR)];
   if (key === 'game:door') return [box([0, 0, 0.40625, 1, 1, 0.59375], 97, GLASS)];
   if (key === 'air') return AIR;
@@ -944,6 +967,7 @@ const wireMetadata = new Set([1, 2, 3, 5]);
 const wirePostCollision = box(jacketBounds, tiles.redPowerWire + 1);
 const solidCache = new WeakMap();
 export function collisionFor(cell, neighbors) {
+  if (keyOf(cell) === voxelKey) return voxelCollisionBoxes(cell.voxels);
   const [id, meta] = unpack(cell);
   if (id === 765) return frameCollision;
   if (id === 768) return shapedLampCollision;

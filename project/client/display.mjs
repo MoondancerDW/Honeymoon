@@ -646,10 +646,11 @@ export class Display {
       this.dispatch(deadline, playing ? 2 : this.workers.length);
       this.lastBackgroundUpload = now;
     }
-    this.partOutline.visible = Boolean(selection?.part);
-    this.outline.visible = Boolean(selection && !selection.part);
+    const detail = selection?.voxel !== undefined ? `voxel:${selection.voxel}` : selection?.partSlot;
+    this.partOutline.visible = detail !== undefined;
+    this.outline.visible = Boolean(selection) && detail === undefined;
     if (this.partOutline.visible) {
-      const key = `${selection.x},${selection.y},${selection.z},${selection.partSlot},${this.world.revisionAt(selection.x, selection.y, selection.z)}`;
+      const key = `${selection.x},${selection.y},${selection.z},${detail},${this.world.revisionAt(selection.x, selection.y, selection.z)}`;
       if (key !== this.partOutlineKey) {
         drawPart(this.partOutline, selection, boxEdges, .002);
         this.partOutlineKey = key;

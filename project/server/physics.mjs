@@ -179,7 +179,9 @@ export function physics(base, geometry, getCell) {
     }
     if (!closest || closest.x !== x || closest.y !== y || closest.z !== z ||
         Math.abs(closest.length - range) > tolerance) return null;
-    return closest;
+    const surface = Object.fromEntries(axisNames.map((axis, index) =>
+      [axis, origin[index] + direction[index] * closest.length]));
+    return {...closest, hit: surface};
   }
 
   function visiblePart(position, x, y, z, partSlot, hit) {
@@ -193,6 +195,7 @@ export function physics(base, geometry, getCell) {
     visible,
     visiblePart,
     targetAtHit,
+    overlapsBox: (position, x, y, z, box) => overlapsPlayer(position, box, x, y, z),
     overlaps(position, x, y, z, cell, plannedNeighbor) {
       return boxesAt('collisionFor', x, y, z, cell, plannedNeighbor).some(box => overlapsPlayer(position, box, x, y, z));
     },

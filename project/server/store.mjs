@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export function transaction(db, run) {
   db.exec('BEGIN IMMEDIATE');
@@ -81,7 +81,8 @@ function migrate(db) {
       )
       UPDATE edits SET placed_by=proven.owner FROM proven
         WHERE edits.x=proven.x AND edits.y=proven.y AND edits.z=proven.z;`);
-    db.exec(`ALTER TABLE edits ADD COLUMN micro_parts TEXT; PRAGMA user_version = ${SCHEMA_VERSION};`);
+    if (version < 4) db.exec('ALTER TABLE edits ADD COLUMN micro_parts TEXT;');
+    db.exec(`ALTER TABLE edits ADD COLUMN voxels TEXT; PRAGMA user_version = ${SCHEMA_VERSION};`);
   });
 }
 
@@ -110,23 +111,24 @@ export function openStore(filename) {
   const readState = statement('SELECT version,value FROM module_state WHERE module=? AND owner=? AND key=?');
   const writeState = statement(`INSERT INTO module_state VALUES (?,?,?,?,?) ON CONFLICT(module,owner,key)
     DO UPDATE SET version=excluded.version,value=excluded.value`);
-  const readEdit = statement('SELECT cell,object,revision,micro_parts FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
+  const readEdit = statement('SELECT cell,object,revision,micro_parts,voxels FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
   const readMicroParts = statement('SELECT micro_parts FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
   const readEditOwner = statement('SELECT placed_by FROM edits WHERE x=? AND y=? AND z=? AND cell IS NOT NULL AND quarantined=0');
-  const listEdits = statement('SELECT x,y,z,cell,object,revision,micro_parts FROM edits WHERE quarantined=0 ORDER BY x,y,z');
-  const writeEdit = statement(`INSERT INTO edits(x,y,z,cell,object,revision,original,quarantined,placed_by,micro_parts)
-    VALUES (?,?,?,?,?,?,?,0,?,?) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
-    object=excluded.object,revision=excluded.revision,quarantined=0,micro_parts=excluded.micro_parts,
+  const listEdits = statement('SELECT x,y,z,cell,object,revision,micro_parts,voxels FROM edits WHERE quarantined=0 ORDER BY x,y,z');
+  const writeEdit = statement(`INSERT INTO edits(x,y,z,cell,object,revision,original,quarantined,placed_by,micro_parts,voxels)
+    VALUES (?,?,?,?,?,?,?,0,?,?,?) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
+    object=excluded.object,revision=excluded.revision,quarantined=0,micro_parts=excluded.micro_parts,voxels=excluded.voxels,
     placed_by=CASE WHEN excluded.micro_parts IS NOT NULL THEN NULL
       WHEN excluded.placed_by IS NOT NULL THEN excluded.placed_by
       WHEN edits.quarantined=0 THEN edits.placed_by END`);
-  const allEdits = statement('SELECT x,y,z,cell,original,placed_by,micro_parts IS NOT NULL AS is_multipart FROM edits ORDER BY x,y,z');
+  const allEdits = statement('SELECT x,y,z,cell,original,placed_by,micro_parts IS NOT NULL AS is_multipart,voxels FROM edits ORDER BY x,y,z');
   const updateOriginal = statement('UPDATE edits SET original=?,quarantined=? WHERE x=? AND y=? AND z=?');
   const insertConflict = statement('INSERT OR REPLACE INTO rebase_conflicts VALUES (?,?,?,?,?,?,?,?)');
   const listConflicts = statement('SELECT * FROM rebase_conflicts WHERE base_hash=? ORDER BY x,y,z');
 
   const worldRevision = () => Number(readMeta.get('world_revision').value);
   const partsCache = new Map();
+  const voxelCache = new Map();
   function readParts(raw) {
     if (raw == null) return null;
     let cached = partsCache.get(raw);
@@ -141,9 +143,19 @@ export function openStore(filename) {
   }
   function unpackEdit(row) {
     if (!row) return row;
-    const { micro_parts: raw, ...edit } = row;
+    const { micro_parts: raw, voxels, ...edit } = row;
     const decoded = readParts(raw);
-    return { ...edit, object: edit.object ? JSON.parse(edit.object) : null, ...(decoded && {parts: decoded.parts}) };
+    let sculpture;
+    if (voxels !== null) {
+      sculpture = voxelCache.get(voxels);
+      if (!sculpture) {
+        sculpture = JSON.parse(voxels);
+        if (voxelCache.size >= 256) voxelCache.delete(voxelCache.keys().next().value);
+        voxelCache.set(voxels, sculpture);
+      }
+    }
+    return { ...edit, object: edit.object ? JSON.parse(edit.object) : null,
+      ...(decoded && {parts: decoded.parts}), ...(sculpture && {voxels: sculpture}) };
   }
 
   return {
@@ -199,22 +211,23 @@ export function openStore(filename) {
     edits() {
       return listEdits.all().map(unpackEdit);
     },
-    writeEdit({ x, y, z, cell, object, revision }, original, placedBy = null, parts = null) {
+    writeEdit({ x, y, z, cell, object, revision, voxels }, original, placedBy = null, parts = null) {
       writeEdit.run(x, y, z, cell, object ? JSON.stringify(object) : null, revision, original, placedBy,
-        parts === null ? null : JSON.stringify(parts));
+        parts === null ? null : JSON.stringify(parts), voxels ? JSON.stringify(voxels) : null);
     },
     rebase(base, reserved, originalAt) {
       return transaction(db, () => {
         const previousHash = readMeta.get('base_hash')?.value;
         if (previousHash === base.hash) return listConflicts.all(base.hash);
-        for (const { x, y, z, cell, original, placed_by: owner, is_multipart: isMultipart } of allEdits.all()) {
+        for (const { x, y, z, cell, original, placed_by: owner, is_multipart: isMultipart, voxels } of allEdits.all()) {
           const current = originalAt(x, y, z);
           let reason;
           let quarantined = 0;
           if (!base.inBounds(x, y, z) || reserved(x, y, z)) {
             reason = 'outside_playable_area';
             quarantined = 1;
-          } else if (!isMultipart && cell !== null && !base.catalog.has(cell)) {
+          } else if (voxels ? JSON.parse(voxels).materials.some(material => !base.catalog.has(material))
+            : !isMultipart && cell !== null && !base.catalog.has(cell)) {
             reason = 'missing_catalog_entry';
             quarantined = 1;
           } else if ((isMultipart && current !== original) || (owner && base.getCell(x, y, z).key !== 'air')) {

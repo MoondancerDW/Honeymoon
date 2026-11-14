@@ -5,9 +5,12 @@ import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
 import { isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockRemoval } from '../world/microblocks.mjs';
 import { POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
+import { filledVoxels, isChiselMaterial, voxelAtHit, voxelBox, voxelKey, voxelMaterialAt,
+  voxelPlacementAtHit, VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxel } from '../world/voxel-chisel.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
-const actions = new Set(['place', 'remove', 'copy', 'interact', ...partActions]);
+const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
+const actions = new Set(['place', 'remove', 'copy', 'interact', ...partActions, ...voxelActions]);
 const axes = ['x', 'y', 'z'];
 const MOVEMENT_GRACE = 0.24;
 const RUN_SPEED = 9;
@@ -63,6 +66,18 @@ function normalizeAction(body) {
       input.partSlot = body.partSlot;
     }
   }
+  if (voxelActions.has(body.type)) {
+    if (!input.hit) throw new RequestError(400, 'invalid_coordinates');
+    if (!Number.isInteger(body.voxel) || body.voxel < 0 || body.voxel >= VOXEL_COUNT) {
+      throw new RequestError(400, 'invalid_voxel');
+    }
+    input.voxel = body.voxel;
+    if (body.type === 'place_voxel') {
+      if (typeof body.material !== 'string' || body.material.length > 128) throw new RequestError(400, 'invalid_material');
+      input.material = body.material;
+      input.against = point(body.against, true);
+    }
+  }
   return input;
 }
 
@@ -97,14 +112,14 @@ export function createGame(base, store, geometry, {
   function getCurrent(x, y, z) {
     const edit = mechanicCells.get(cellAddress(x, y, z)) ?? store.getEdit(x, y, z);
     if (edit) return { x, y, z, cell: edit.cell, object: editObject(edit), revision: edit.revision,
-      ...(edit.parts && {parts: edit.parts}) };
+      ...(edit.parts && {parts: edit.parts}), ...(edit.voxels && {voxels: edit.voxels}) };
     const original = base.getCell(x, y, z);
     return { x, y, z, cell: original.key === 'air' ? null : original.key, object: original.object, revision: 0 };
   }
 
   function cellView(current) {
-    const {cell, object} = current;
-    return {key: cell, object, parts: current.parts ?? base.manifest.compositions?.[cell]?.parts};
+    const {cell, object, voxels} = current;
+    return {key: cell, object, parts: current.parts ?? base.manifest.compositions?.[cell]?.parts, voxels};
   }
 
   const physical = physics(base, geometry, (x, y, z) => {
@@ -254,6 +269,71 @@ export function createGame(base, store, geometry, {
     return writeMicroParts(current, nextOwners, input.part);
   }
 
+  function chiselMaterial(cell) {
+    return !cell.object && isChiselMaterial(cell.cell) && base.catalog.has(cell.cell);
+  }
+
+  function checkVoxelOwner(player, {x, y, z, cell}) {
+    if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
+    if (base.getCell(x, y, z).key !== 'air' || (cell !== null && store.getEditOwner(x, y, z) !== player)) {
+      throw new RequestError(403, 'voxel_not_owned');
+    }
+  }
+
+  function writeVoxels(player, current, voxels, material) {
+    const {x, y, z} = current;
+    const change = {x, y, z, cell: voxels ? voxelKey : null, object: null, ...(voxels && {voxels})};
+    const placement = voxels ? {key: cellAddress(x, y, z), player} : undefined;
+    const effects = material ? [{type: 'sound', sound: 'block.place', cell: voxelKey,
+      position: [x, y, z], voxelMaterial: material}] : [];
+    // Re-evaluate neighbours if chiselling converts an ordinary solid block.
+    if (current.cell !== null && current.cell !== voxelKey) {
+      for (const module of mechanics) {
+        const plan = module.prepareBlockChange?.(moduleContext(module, player, {change}));
+        if (plan) return writePlan(module, {...plan, effects: [...effects, ...plan.effects]}, placement);
+      }
+    }
+    return writePlan({}, {cells: [change], effects}, placement);
+  }
+
+  function editVoxels(player, input, current) {
+    const {x, y, z, type, hit, voxel} = input;
+    const position = playerAt(player);
+    if (type === 'place_voxel') {
+      checkVoxelOwner(player, current);
+      if (!chiselMaterial({cell: input.material})) throw new RequestError(400, 'invalid_material');
+      if (current.cell !== null && !current.voxels) throw new RequestError(409, 'occupied');
+      const against = input.against;
+      const anchor = getCurrent(against.x, against.y, against.z);
+      const surface = physical.targetAtHit(position, against.x, against.y, against.z, hit);
+      if (!surface || (!anchor.voxels && !chiselMaterial(anchor))) throw new RequestError(403, 'outside_reach');
+      const next = voxelPlacementAtHit(against, surface.hit, surface.face, anchor.voxels);
+      if (!next || !samePoint(next, input) || next.voxel !== voxel) throw new RequestError(403, 'outside_reach');
+      if (voxelMaterialAt(current.voxels, voxel)) throw new RequestError(409, 'occupied');
+      const materials = current.voxels?.materials;
+      if (materials?.length >= VOXEL_MATERIAL_LIMIT && !materials.includes(input.material)) {
+        throw new RequestError(409, 'voxel_material_limit');
+      }
+      const box = voxelBox(voxel);
+      if (activePositions(player).some(feet => physical.overlapsBox(feet, x, y, z, box))) {
+        throw new RequestError(409, 'occupied');
+      }
+      return writeVoxels(player, current, writeVoxel(current.voxels, voxel, input.material), input.material);
+    }
+
+    if (type === 'remove_voxel') checkVoxelOwner(player, current);
+    if (!current.voxels && !chiselMaterial(current)) throw new RequestError(409, 'invalid_material');
+    const surface = physical.targetAtHit(position, x, y, z, hit);
+    if (!surface || voxelAtHit(current, surface.hit, surface.face, true, current.voxels) !== voxel) {
+      throw new RequestError(403, 'outside_reach');
+    }
+    const material = current.voxels ? voxelMaterialAt(current.voxels, voxel) : current.cell;
+    if (!material) throw new RequestError(409, 'empty_cell');
+    if (type === 'copy_voxel') return {worldRevision: store.worldRevision(), changes: [], effects: [], material};
+    const voxels = current.voxels ?? filledVoxels(current.cell);
+    return writeVoxels(player, current, writeVoxel(voxels, voxel, null));
+  }
+
   function execute(player, input) {
     const { x, y, z, type } = input;
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
@@ -262,9 +342,12 @@ export function createGame(base, store, geometry, {
       throw new RequestError(409, 'stale_cell', { current: { ...current, object: displayObject(current.object) }, worldRevision: store.worldRevision() });
     }
     if (partActions.has(type)) return editMicroParts(player, input, current);
+    if (voxelActions.has(type)) return editVoxels(player, input, current);
     if (type === 'place') {
       if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
-      if (!base.catalog.has(input.cell) || input.cell === 'air') throw new RequestError(400, 'unknown_cell_type');
+      if (!base.catalog.has(input.cell) || input.cell === 'air' || input.cell === voxelKey) {
+        throw new RequestError(400, 'unknown_cell_type');
+      }
       if (!allowRemoval && (input.cell === microblockKey ||
           isMicroblockCell({key: input.cell, parts: base.manifest.compositions?.[input.cell]?.parts}))) {
         throw new RequestError(409, 'part_required');
@@ -283,6 +366,7 @@ export function createGame(base, store, geometry, {
 
     if (type === 'remove' && reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
     if (current.cell === null) throw new RequestError(409, 'empty_cell');
+    if ((type === 'remove' || type === 'copy') && current.cell === voxelKey) throw new RequestError(409, 'voxel_required');
     if ((type === 'remove' || type === 'copy') &&
         (current.parts || (!allowRemoval && isMicroblockCell(cellView(current))))) {
       throw new RequestError(409, 'part_required');

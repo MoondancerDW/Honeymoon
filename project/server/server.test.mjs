@@ -208,7 +208,7 @@ test('block ownership survives changes to a placed lamp and protects imported an
   for (const result of [unknown, proven, unconfirmed, changed]) assert.equal(result.status, 200);
   await app.close();
   const legacy = new DatabaseSync(state);
-  legacy.exec('ALTER TABLE edits DROP COLUMN micro_parts; ALTER TABLE edits DROP COLUMN placed_by; PRAGMA user_version=2');
+  legacy.exec('ALTER TABLE edits DROP COLUMN voxels; ALTER TABLE edits DROP COLUMN micro_parts; ALTER TABLE edits DROP COLUMN placed_by; PRAGMA user_version=2');
   legacy.exec(`DELETE FROM receipts WHERE id='place-no-proof';
     UPDATE receipts SET status=409 WHERE id='place-failed-proof';
     UPDATE receipts SET output=json_set(output, '$.changes[0].revision', 0) WHERE id='place-wrong-revision';`);
@@ -323,7 +323,7 @@ test('switch and zone survive process death after commit, save upgrade and base 
   await app.close();
 
   const old = new DatabaseSync(state);
-  old.exec('ALTER TABLE edits DROP COLUMN micro_parts; ALTER TABLE edits DROP COLUMN placed_by; ALTER TABLE edits DROP COLUMN quarantined; ALTER TABLE edits DROP COLUMN original; DROP TABLE rebase_conflicts; PRAGMA user_version=1');
+  old.exec('ALTER TABLE edits DROP COLUMN voxels; ALTER TABLE edits DROP COLUMN micro_parts; ALTER TABLE edits DROP COLUMN placed_by; ALTER TABLE edits DROP COLUMN quarantined; ALTER TABLE edits DROP COLUMN original; DROP TABLE rebase_conflicts; PRAGMA user_version=1');
   old.close();
   app = await start(base, state);
   let snapshot = (await request(app, '/api/world', { cookie })).data;

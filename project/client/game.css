@@ -51,6 +51,7 @@ button:disabled { cursor: wait; opacity: .45; }
 #aim { display: none; position: absolute; inset: 50% auto auto 50%; pointer-events: none; }
 .playing #aim { display: block; }
 #game:not(.playing) #micro-hint { display: none; }
+#game:not(.playing) #chisel-hint { display: none; }
 #aim::before, #aim::after { content: ""; position: absolute; background: #fff; box-shadow: 0 0 3px #000; transform: translate(-50%, -50%); }
 #aim::before { width: 13px; height: 1px; }
 #aim::after { width: 1px; height: 13px; }
@@ -79,6 +80,7 @@ button:disabled { cursor: wait; opacity: .45; }
 #stick i { pointer-events: none; position: absolute; left: calc(50% - 17px); top: calc(50% - 17px); width: 34px; height: 34px; border-radius: 50%; background: #f0d297b8; }
 .touch-actions { right: max(1rem, env(safe-area-inset-right)); display: grid; grid-template-columns: repeat(2, auto); gap: .35rem; }
 .touch-actions button { min-width: 2.65rem; min-height: 2.65rem; background: var(--glass); }
+.touch-actions button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold); }
 #jump { grid-column: 1 / -1; }
 @media (max-width: 640px) {
   .top, .bottom { left: max(.5rem, env(safe-area-inset-left)); right: max(.5rem, env(safe-area-inset-right)); }

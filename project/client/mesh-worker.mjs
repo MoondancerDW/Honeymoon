@@ -3,6 +3,7 @@ import {decodeIndices} from './world-data.mjs';
 import {CHISEL_FANTASY, chiselFantasyQuarters, glassTexture, paneTexture} from '/world/connected-textures.mjs';
 import {coverShade, FACE_SHADE} from './lighting.mjs';
 import {extractedModel} from '/world/extracted-models.mjs';
+import {isFullVoxels, voxelFaces} from '/world/voxel-chisel.mjs';
 
 const {shapeFor, ATLAS_GRID, TILE_SIZE, FACES} = geometry;
 const SIDE = 18;
@@ -166,10 +167,12 @@ function makeShape(index, at, cell, neighbors, edited) {
   return shape;
 }
 
-function precise({indices, light, objects, microblocks, connectedTextures, chiselConnectedTextures}) {
+function precise({indices, light, objects, microblocks, sculpted, connectedTextures, chiselConnectedTextures}) {
   const layers = {opaque: layer(), cutout: layer(), blend: layer()};
   const indexedObjects = new Map(objects);
   const editedParts = new Map(microblocks);
+  const voxelCells = new Map(sculpted);
+  const hasSculptures = voxelCells.size > 0;
   const rendered = new Map();
   const signs = [];
   function cell(at) {
@@ -177,12 +180,14 @@ function precise({indices, light, objects, microblocks, connectedTextures, chise
     if (!key || key === 'air') return null;
     const object = indexedObjects.get(at);
     const composition = compositions[key];
+    const voxels = hasSculptures && voxelCells.get(at);
+    if (voxels) return {key, voxels};
     const parts = editedParts.get(at);
     if (parts) return {key, ...composition, object, parts};
     return object || composition ? {key, ...composition, object} : key;
   }
   function shape(at) {
-    if (!indices[at]) return null;
+    if (!indices[at] || hasSculptures && voxelCells.has(at)) return null;
     if (!rendered.has(at)) rendered.set(at, makeShape(indices[at], at, cell(at), cell, editedParts.has(at)));
     return rendered.get(at);
   }
@@ -191,8 +196,20 @@ function precise({indices, light, objects, microblocks, connectedTextures, chise
       for (let x = 0; x < 16; x++) {
         const at = (x + 1) + (z + 1) * SIDE + (y + 1) * SIDE * SIDE;
         if (!indices[at]) continue;
-        const {boxes, model} = shape(at);
         const origin = [x, y, z];
+        const voxels = hasSculptures && voxelCells.get(at);
+        if (voxels) {
+          const next = face => at + FACES[face][face >> 1] * STRIDE[face >> 1];
+          const faces = voxelFaces(voxels, face => cell(next(face)), face => shape(next(face))?.full?.mode === 'opaque');
+          for (const {box, face} of faces) {
+            const axis = face >> 1;
+            const boundary = face & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0;
+            const packed = light[boundary ? next(face) : at];
+            faceQuad(layers[box.mode] ?? layers.opaque, box, face, origin, packed, box.faces[face], FACE_SHADE[face]);
+          }
+          continue;
+        }
+        const {boxes, model} = shape(at);
         if (model) {
           const shade = light[at];
           for (const surface of model.surfaces) {
@@ -230,7 +247,7 @@ function precise({indices, light, objects, microblocks, connectedTextures, chise
             if (water && (onEdge || f === 3) && waterKey(cells[indices[adjacent]])) continue;
             if (onEdge) {
               const neighbor = shape(adjacent)?.full;
-              if (neighbor?.mode === 'opaque' ||
+              if (neighbor?.mode === 'opaque' || hasSculptures && isFullVoxels(voxelCells.get(adjacent)) ||
                   (neighbor && box.mode !== 'opaque' && indices[adjacent] === indices[at])) continue;
             }
             if (boxes.length > 1 && boxes.some(other => coversFace(other, box, f))) continue;

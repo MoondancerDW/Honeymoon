@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { FACE_SHADE, coverShade, legacyLight, linearByte, sunlightAt, writeLightmap } from './lighting.mjs';
 import { World } from './world-data.mjs';
+import { filledVoxels, voxelKey, writeVoxel } from '../world/voxel-chisel.mjs';
+import { lightChanged } from './block-light.mjs';
 
 test('preserves independent sky and block lighting from the imported section', () => {
   const world = new World({palette: ['air']});
@@ -53,6 +55,17 @@ test('native day cycle dims sky light without scaling block light', () => {
   assert.ok(light[240 * 4] < 100);
   assert.deepEqual([...light.slice(8 * 4, 8 * 4 + 3)], legacyLight(8));
   assert.deepEqual([...light.slice(256 * 4, 256 * 4 + 4)], [255,255,255,255]);
+});
+
+test('a sculpture only changes block lighting when its cell opens or closes', () => {
+  const key = 'legacy:1:0';
+  const full = filledVoxels(key);
+  const open = writeVoxel(full, 9, null);
+  const moreOpen = writeVoxel(open, 10, null);
+  assert.equal(lightChanged({key}, {key:voxelKey,voxels:full}), false);
+  assert.equal(lightChanged({key}, {key:voxelKey,voxels:open}), true);
+  assert.equal(lightChanged({key:voxelKey,voxels:open}, {key:voxelKey,voxels:moreOpen}), false);
+  assert.equal(lightChanged({key:voxelKey,voxels:moreOpen}, {key:'air'}), false);
 });
 
 function lightingWorld() {

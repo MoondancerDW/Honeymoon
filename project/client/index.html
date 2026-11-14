@@ -31,7 +31,7 @@
         <h1>Honeymoon</h1>
         <p id="loading" role="status">Загружаем район Equestria…</p>
         <button id="play" type="button" disabled>Войти в мир</button>
-        <small id="entry-help">WASD — ходьба · Пробел — прыжок · F — полёт · Esc — пауза</small>
+        <small id="entry-help">WASD — ходьба · Пробел — прыжок · F — полёт · V — резец · Esc — пауза</small>
       </div>
     </section>
     <div id="toast" role="status" aria-live="polite"></div>
@@ -44,14 +44,16 @@
         <button id="touch-use" type="button">Действие</button>
         <button id="touch-remove" type="button" aria-label="Сломать свой блок">−</button>
         <button id="touch-rotate" type="button" aria-label="Сменить позицию детали" hidden>↻</button>
+        <button id="touch-chisel" type="button" aria-pressed="false">Резец</button>
       </div>
     </div>
     <footer class="bottom">
       <span id="coords" aria-label="Координаты"></span>
       <span id="selected">Ячейка не выбрана</span>
       <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
+      <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · Q взять материал</span>
       <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Shift вниз</span>
-      <span id="keys">ЛКМ — сломать своё · ПКМ — действие / поставить · Q — копировать · F — полёт</span>
+      <span id="keys">ЛКМ — сломать своё · ПКМ — действие / поставить · Q — копировать · F — полёт · V — резец</span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>

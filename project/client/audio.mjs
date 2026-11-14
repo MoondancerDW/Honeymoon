@@ -242,10 +242,10 @@ export class WorldAudio {
     }
   }
 
-  placed(world, {cell, position, material}) {
+  placed(world, {cell, position, material, voxelMaterial}) {
     if (!Array.isArray(position)) return;
     const placed = world?.cellAt(...position) ?? cell;
-    const [, event, volume, pitch] = blockSoundProfile(this.#catalog, placed, material ?? placed?.parts?.[0]?.material);
+    const [, event, volume, pitch] = blockSoundProfile(this.#catalog, voxelMaterial ?? placed, material ?? placed?.parts?.[0]?.material);
     void this.play(event, position, {volume: (volume + 1) / 2, pitch: pitch * .8});
   }
 

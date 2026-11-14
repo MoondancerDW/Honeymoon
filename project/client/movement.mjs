@@ -3,10 +3,18 @@ import {extractedModel} from '../world/extracted-models.mjs';
 import {movementMedium} from '../world/block-movement.mjs';
 import {PLAYER} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
+import {isChiselMaterial, voxelAtHit, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 
 const {halfWidth: HALF, height: HEIGHT, eye: EYE} = PLAYER;
 export {HEIGHT, EYE};
 const EPSILON = .00001;
+export function overlapsPlacement(position, placement) {
+  const {x, y, z} = position;
+  const {x: cx, y: cy, z: cz, boxes} = placement;
+  return boxes.some(box => x + HALF > cx + box.x0 + EPSILON && x - HALF < cx + box.x1 - EPSILON &&
+    y + HEIGHT > cy + box.y0 + EPSILON && y < cy + box.y1 - EPSILON &&
+    z + HALF > cz + box.z0 + EPSILON && z - HALF < cz + box.z1 - EPSILON);
+}
 
 export class Movement {
   constructor(world) {
@@ -14,6 +22,7 @@ export class Movement {
     this.fall = 0;
     this.grounded = false;
     this.medium = null;
+    this.pendingPlacement = null;
     this.cellAt = (...coordinates) => this.world.cellAt(...coordinates);
   }
 
@@ -21,6 +30,7 @@ export class Movement {
     const b = this.world.manifest.bounds;
     if (x - HALF < b.minX || x + HALF > b.maxX + 1 || z - HALF < b.minZ || z + HALF > b.maxZ + 1 ||
         y < b.minY || y + HEIGHT > b.maxY + 1) return true;
+    if (this.pendingPlacement && overlapsPlacement({x,y,z}, this.pendingPlacement)) return true;
     for (let yy = Math.floor(y) - 1; yy <= Math.floor(y + HEIGHT); yy++) {
       for (let zz = Math.floor(z - HALF - .0625); zz <= Math.floor(z + HALF + .0625); zz++) {
         for (let xx = Math.floor(x - HALF - .0625); xx <= Math.floor(x + HALF + .0625); xx++) {
@@ -148,7 +158,7 @@ export class Movement {
   }
 }
 
-export function pick(world, origin, direction) {
+export function pick(world, origin, direction, chiseling = false) {
   const min = origin.map((value, axis) => Math.floor(Math.min(value, value + direction[axis] * 6)));
   const max = origin.map((value, axis) => Math.floor(Math.max(value, value + direction[axis] * 6)));
   let best = null;
@@ -176,6 +186,19 @@ export function pick(world, origin, direction) {
   if (best?.partSlot !== undefined) {
     best.part = best.cell.parts.find(part => part.slot === best.partSlot);
     best.boxes = selectedBoxes.filter(box => box.partSlot === best.partSlot);
+  }
+  if (chiseling && best) {
+    const state = best.cell.voxels;
+    const key = typeof best.cell === 'string' ? best.cell : best.cell.key;
+    if (state || isChiselMaterial(key)) {
+      const index = voxelAtHit(best, best.hit, best.offset, true, state);
+      const material = state ? voxelMaterialAt(state, index) : key;
+      if (index != null && material) {
+        best.voxel = index;
+        best.voxelMaterial = material;
+        best.boxes = [voxelBox(index)];
+      }
+    }
   }
   return best;
 }

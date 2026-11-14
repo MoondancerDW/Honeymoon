@@ -1,10 +1,11 @@
 import {Display} from './display.mjs';
-import {Movement, EYE, pick} from './movement.mjs';
+import {Movement, EYE, overlapsPlacement, pick} from './movement.mjs';
 import {World, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {biblioWeaponCase, blockState, jammyAppliance, jammyUseSound} from '../world/block-interactions.mjs';
-import {PLAYER, POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
+import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 import {microblockPlacement} from '../world/microblocks.mjs';
+import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, voxelPlacementAtHit, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -17,6 +18,8 @@ const selectionStatus = element('selected');
 const coordinateStatus = element('coords');
 const microHint = element('micro-hint');
 const touchRotate = element('touch-rotate');
+const chiselHint = element('chisel-hint');
+const touchChisel = element('touch-chisel');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const heading = {yaw: 0, pitch: -.045};
@@ -24,6 +27,8 @@ const handControls = new Set([25,64,69,77,84,93,94,96,107,143,219,220]);
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
 let heldPart = null, partRotation = 0, placement = null, placementKey = '';
+let chiseling = false, chiselMaterial = null;
+let selectionInputs, selectionRevision = 0;
 const positionInterval = 130;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 const positionTrail = [];
@@ -57,6 +62,11 @@ const messages = {
   part_missing: 'Деталь уже убрана', invalid_part: 'Эта форма или материал недоступны',
   part_required: 'Наведите прицел на отдельную деталь',
   incompatible_part: 'Деталь здесь не помещается',
+  voxel_required: 'Нажмите V, чтобы взять резец',
+  voxel_not_owned: 'Резцом можно менять только свои блоки',
+  invalid_voxel: 'Наведите прицел на нужную часть блока',
+  invalid_material: 'Этот материал не подходит для резца',
+  voxel_material_limit: 'В кубе уже слишком много разных материалов',
   outside_playable_area: 'Граница района', protected_cell: 'Это часть контрольной механики',
   no_interaction: 'С этим объектом нельзя взаимодействовать'
 };
@@ -81,6 +91,7 @@ function changes(list = [], revision = 0) {
   for (const change of list) {
     if (world.setOverride(change)) changed.push(change);
   }
+  if (changed.length) selectionRevision++;
   view.remeshLighting(world.updateLighting());
   for (const change of changed) {
     if (world.hasChunk(change.x, change.z)) view.remesh(change.x, change.y, change.z, change.revision);
@@ -222,6 +233,7 @@ async function flushPosition() {
 const getKey = cell => typeof cell === 'string' ? cell : cell?.key;
 const labelFor = key => {
   if (!key) return '';
+  if (key === voxelKey) return 'Резной блок';
   if (key === 'game:switch') return 'Переключатель';
   if (key === 'game:door') return 'Дверь';
   const id = Number(key.split(':')[1]);
@@ -238,49 +250,102 @@ function partLabel({slot, shape}) {
 }
 
 function updatePlacement(target) {
-  if (!heldPart || !target) {
+  if (!(chiseling ? chiselMaterial && target?.voxel !== undefined : heldPart && target)) {
     placement = null;
     placementKey = '';
     return;
   }
   const {x, y, z, hit, partSlot, offset: [dx, dy, dz]} = target;
-  const key = [x,y,z,partSlot,dx,dy,dz,Math.floor(hit.x * 8),Math.floor(hit.y * 8),Math.floor(hit.z * 8),
-    world.revisionAt(x,y,z), world.revisionAt(x+dx,y+dy,z+dz), world.hasChunk(x+dx,z+dz), partRotation].join(',');
-  if (key !== placementKey) {
-    placementKey = key;
-    placement = microblockPlacement(world, target, heldPart, {rotation:partRotation});
+  const adjacentRevision = world.revisionAt(x+dx,y+dy,z+dz);
+  const adjacentLoaded = world.hasChunk(x+dx,z+dz);
+  const revision = world.revisionAt(x,y,z);
+  if (chiseling) {
+    const key = `voxel,${x},${y},${z},${target.voxel},${target.offset},${revision},${adjacentRevision},${adjacentLoaded}`;
+    if (key !== placementKey) {
+      placementKey = key;
+      placement = previewVoxel(target);
+    }
+  } else {
+    const key = [x,y,z,partSlot,dx,dy,dz,Math.floor(hit.x * 8),Math.floor(hit.y * 8),Math.floor(hit.z * 8),
+      revision,adjacentRevision,adjacentLoaded,partRotation].join(',');
+    if (key !== placementKey) {
+      placementKey = key;
+      placement = microblockPlacement(world, target, heldPart, {rotation:partRotation});
+    }
   }
-  if (!placement) return;
-  const {x: px, y: py, z: pz, boxes} = placement;
-  const {x: fx, y: fy, z: fz} = position;
-  const {halfWidth: w, height: h} = PLAYER;
-  const epsilon = .00001;
-  placement.blocked = boxes.some(box => fx + w > px + box.x0 + epsilon && fx - w < px + box.x1 - epsilon &&
-    fy + h > py + box.y0 + epsilon && fy < py + box.y1 - epsilon &&
-    fz + w > pz + box.z0 + epsilon && fz - w < pz + box.z1 - epsilon);
+  if (placement) placement.blocked = Boolean(placement.unavailable) || overlapsPlacement(position, placement);
+}
+
+function previewVoxel(target) {
+  const next = voxelPlacementAtHit(target, target.hit, target.offset, target.cell.voxels);
+  if (!next) return null;
+  const {x,y,z,voxel} = next;
+  const {minX,maxX,minY,maxY,minZ,maxZ} = world.manifest.bounds;
+  if (x < minX || x > maxX || y < minY || y > maxY || z < minZ || z > maxZ || !world.hasChunk(x,z)) return null;
+  const old = world.cellAt(x,y,z);
+  let unavailable = null;
+  if (old && (!old.voxels || voxelMaterialAt(old.voxels, voxel))) unavailable = 'occupied';
+  else if (old?.voxels?.materials.length >= VOXEL_MATERIAL_LIMIT && !old.voxels.materials.includes(chiselMaterial)) {
+    unavailable = 'voxel_material_limit';
+  }
+  return {...next, boxes:[voxelBox(voxel)], against:{x:target.x,y:target.y,z:target.z}, unavailable};
 }
 
 function cyclePlacement() {
-  if (heldPart) partRotation++;
+  if (heldPart && !chiseling) partRotation++;
 }
 
 function setHeldPart(part) {
   heldPart = part;
   partRotation = 0;
   placementKey = '';
-  microHint.hidden = !part;
-  touchRotate.hidden = !part;
+  microHint.hidden = !part || chiseling;
+  touchRotate.hidden = !part || chiseling;
+}
+
+function toggleChisel() {
+  chiseling = !chiseling;
+  if (chiseling && !chiselMaterial && isChiselMaterial(clipboard)) chiselMaterial = clipboard;
+  placementKey = '';
+  placement = null;
+  chiselHint.hidden = !chiseling;
+  microHint.hidden = !heldPart || chiseling;
+  touchRotate.hidden = !heldPart || chiseling;
+  touchChisel.setAttribute('aria-pressed', String(chiseling));
+}
+
+function updateSelection() {
+  if (!playing) {
+    selection = null;
+    selectionInputs = null;
+    return;
+  }
+  const {x,y,z} = position;
+  const {yaw,pitch} = heading;
+  const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling];
+  if (selectionInputs && stamp.every((value, index) => value === selectionInputs[index])) return;
+  selectionInputs = stamp;
+  const cp = Math.cos(pitch);
+  selection = pick(world, [x,y + EYE,z], [-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp], chiseling);
 }
 
 async function action(type, sneaking = false) {
   if (!selection || acting || resetting || !playing) return;
   const target = selection;
   const cell = getKey(target.cell);
-  if (target.part && type === 'copy') type = 'copy_part';
-  if (target.part && type === 'remove') type = 'remove_part';
-  if (heldPart && type === 'place') type = 'place_part';
+  let pendingVoxel;
+  if (chiseling && type !== 'interact') {
+    if (target.voxel === undefined) { notice(messages.invalid_material); return; }
+    if (type === 'place' && !chiselMaterial) { notice('Сначала скопируйте материал клавишей Q'); return; }
+    type += '_voxel';
+  } else {
+    if (target.part && type === 'copy') type = 'copy_part';
+    if (target.part && type === 'remove') type = 'remove_part';
+    if (heldPart && type === 'place') type = 'place_part';
+  }
   const request = {requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join(''), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
   if (type === 'copy_part' || type === 'remove_part') request.partSlot = target.partSlot;
+  if (type === 'copy_voxel' || type === 'remove_voxel') request.voxel = target.voxel;
   if (type === 'interact') {
     request.yaw = heading.yaw;
     if (sneaking) request.sneaking = true;
@@ -299,11 +364,20 @@ async function action(type, sneaking = false) {
     const {x, y, z, part, against} = placement;
     Object.assign(request, {x, y, z, part, against});
   }
+  if (type === 'place_voxel') {
+    updatePlacement(target);
+    if (!placement || placement.blocked) { notice(messages[placement?.unavailable ?? 'occupied']); return; }
+    const {x,y,z,voxel,against,boxes} = placement;
+    Object.assign(request, {x,y,z,voxel,against,material:chiselMaterial});
+    pendingVoxel = {x,y,z,boxes};
+  }
   request.expectedRevision = world.revisionAt(request.x, request.y, request.z);
   const started = performance.now();
   acting = true;
   try {
+    if (pendingVoxel) movement.pendingPlacement = pendingVoxel;
     if (!await flushPosition()) { notice(messages.movement_blocked); return; }
+    if (pendingVoxel && overlapsPlacement(position, pendingVoxel)) { notice(messages.occupied); return; }
     let result;
     try { result = await post('action', request); }
     catch { result = await post('action', request); }
@@ -322,6 +396,11 @@ async function action(type, sneaking = false) {
       clipboard = null;
       notice('Скопировано · ' + partLabel(heldPart));
     }
+    if (type === 'copy_voxel') {
+      chiselMaterial = result.body.material;
+      placementKey = '';
+      notice('Материал резца · ' + labelFor(chiselMaterial));
+    }
     changes(result.body.changes, result.body.worldRevision);
     effects(result.body);
     metrics.lastEdit = performance.now() - started;
@@ -329,6 +408,7 @@ async function action(type, sneaking = false) {
     notice('Связь с сервером прервалась');
     console.error(error);
   } finally {
+    if (pendingVoxel) movement.pendingPlacement = null;
     acting = false;
   }
 }
@@ -356,14 +436,11 @@ function tick(now) {
   }
   if (!resetting && now >= nextPositionSync && !acting) syncPosition();
   updateCamera();
-  if (playing) {
-    const cp = Math.cos(heading.pitch);
-    selection = pick(world, [position.x, position.y + EYE, position.z],
-      [-Math.sin(heading.yaw) * cp, Math.sin(heading.pitch), -Math.cos(heading.yaw) * cp]);
-  } else selection = null;
+  updateSelection();
   updatePlacement(selection);
-  const selected = selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
-  const held = heldPart ? partLabel(heldPart) : labelFor(clipboard);
+  const selected = selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
+    selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
+  const held = chiseling ? labelFor(chiselMaterial) : heldPart ? partLabel(heldPart) : labelFor(clipboard);
   const status = [selected, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
   const coordinates = [position.x, position.y, position.z].map(Math.floor).join('  ·  ');
@@ -397,6 +474,7 @@ function bindControls() {
     if (event.repeat) return;
     if (event.code === 'Space') jump = true;
     if (event.code === 'KeyF' && !resetting) setFlight(!flying);
+    if (event.code === 'KeyV' && !resetting && !acting) toggleChisel();
     if (event.code === 'KeyQ') action('copy');
     if (event.code === 'KeyR') cyclePlacement();
     if (event.code === 'KeyE') action('interact', event.shiftKey);
@@ -409,7 +487,7 @@ function bindControls() {
     const [id, meta] = blockState(key);
     const interactive = key === 'game:switch' || handControls.has(id) || jammyAppliance(id, meta) || jammyUseSound(id, meta)
       || (event.shiftKey && biblioWeaponCase(id));
-    const use = interactive && (!heldPart || event.shiftKey);
+    const use = interactive && (!chiseling && !heldPart || event.shiftKey);
     const command = {0:'remove', 1:'copy', 2:use ? 'interact' : 'place'}[event.button];
     if (command) action(command, event.shiftKey);
   });
@@ -451,6 +529,7 @@ function bindControls() {
     element(id).addEventListener('click', () => action(command));
   }
   touchRotate.addEventListener('click', cyclePlacement);
+  touchChisel.addEventListener('click', () => { if (!resetting && !acting) toggleChisel(); });
   element('jump').addEventListener('pointerdown', () => { jump = true; });
   element('distance').addEventListener('change', event => {
     view.setDistance(Number(event.target.value)).catch(error => notice(error.message));
@@ -561,7 +640,7 @@ async function start() {
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, audio:audio.stats(),
-      flying, movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
+      flying, chiseling, chiselMaterial, movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
     target: () => selection && {...selection},
