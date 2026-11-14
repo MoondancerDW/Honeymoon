@@ -3,11 +3,14 @@ import {Movement, EYE, overlapsPlacement, pick} from './movement.mjs';
 import {World, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {PlayerProfile} from './player-profile.mjs';
-import {biblioWeaponCase, blockState, jammyAppliance, jammyUseSound} from '../world/block-interactions.mjs';
-import {extractedModel, placementModelObject} from '../world/extracted-models.mjs';
-import {isJammySofa} from '../world/jammy-sofas.mjs';
+import {createSocialHud} from './social-hud.mjs';
+import {blockState} from '../world/block-interactions.mjs';
+import {seatFor, SEATED_EYE} from '../world/seats.mjs';
+import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
+import {jammyBenchState} from '../world/jammy-benches.mjs';
 import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
-import {microblockPlacement} from '../world/microblocks.mjs';
+import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
+import {coverBoxes} from '../world/geometry.mjs';
 import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, voxelPlacementAtHit, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 
 const element = id => document.getElementById(id);
@@ -19,6 +22,7 @@ const surface = element('scene');
 const toast = element('toast');
 const selectionStatus = element('selected');
 const coordinateStatus = element('coords');
+const clearSelection = element('clear-selection');
 const microHint = element('micro-hint');
 const touchRotate = element('touch-rotate');
 const chiselHint = element('chisel-hint');
@@ -26,26 +30,38 @@ const touchChisel = element('touch-chisel');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const heading = {yaw: 0, pitch: -.045};
-const handControls = new Set([25,54,64,69,77,84,93,94,96,107,130,143,219,220]);
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
 let heldPart = null, partRotation = 0, placement = null, placementKey = '';
 let heldSofa = null, sofaTurns = 0;
 let chiseling = false, chiselMaterial = null;
+let heldVersion = 0;
 let selectionInputs, selectionRevision = 0;
 const positionInterval = 130;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 const positionTrail = [];
 let playing = false, jump = false, lastFrame = 0, nextPositionSync = 0, timer;
 let flying = false;
+let seat = null, seatPending = false, seatEpoch = 0;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
 let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
+let nextClockUpdate = 0;
 const audio = new WorldAudio();
 const profile = new PlayerProfile({nickname:element('nickname'), skin:element('pony-skin'), status:element('skin-status'),
   clear:element('clear-skin'), label:element('player-name')}, notice);
+const social = createSocialHud({post, notice,
+  pause() { keys.clear(); jump = false; stick.x = stick.z = 0; if (document.pointerLockElement) document.exitPointerLock(); },
+  resume() {
+    if (touchMode || !view) return;
+    const canvas = view.renderer.domElement;
+    if (document.pointerLockElement === canvas) return;
+    try { Promise.resolve(canvas.requestPointerLock()).catch(() => setPlaying(false)); }
+    catch { setPlaying(false); }
+  },
+});
 
 if (touchMode) {
   game.classList.add('touch');
@@ -73,10 +89,12 @@ const messages = {
   voxel_required: 'Нажмите V, чтобы взять резец',
   voxel_not_owned: 'Резцом можно менять только свои блоки',
   invalid_voxel: 'Наведите прицел на нужную часть блока',
-  invalid_material: 'Этот материал не подходит для резца',
+  invalid_material: 'Материал для резца берётся с полного блока или с части, созданной резцом',
   voxel_material_limit: 'В кубе уже слишком много разных материалов',
   outside_playable_area: 'Граница района', protected_cell: 'Это часть контрольной механики',
   no_interaction: 'С этим объектом нельзя взаимодействовать',
+  not_a_seat: 'На этот блок нельзя сесть', seat_taken: 'Место уже занято',
+  seat_blocked: 'Над сиденьем недостаточно места',
   invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
   invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
   invalid_skin_size: 'Размер PNG должен быть 64×32, 64×64, 128×64 или 256×128',
@@ -121,10 +139,21 @@ async function refresh() {
 }
 
 function stream() {
-  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1');
+  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1');
   feed.addEventListener('open', () => { presenceDirty = true; });
-  feed.addEventListener('presence', event => view.players.replace(JSON.parse(event.data).players));
+  feed.addEventListener('presence', event => {
+    const {players, selfOnline} = JSON.parse(event.data);
+    view.players.replace(players);
+    social.roster(players, selfOnline && profile.confirmed);
+  });
   feed.addEventListener('presence-motion', event => view.players.update(JSON.parse(event.data).players));
+  feed.addEventListener('chat-history', event => social.history(JSON.parse(event.data).entries));
+  feed.addEventListener('chat', event => social.message(JSON.parse(event.data)));
+  feed.addEventListener('world-time', event => {
+    const time = JSON.parse(event.data);
+    view.setWorldTime(time);
+    social.clockState(time);
+  });
   feed.addEventListener('commit', event => {
     const data = JSON.parse(event.data);
     changes(data.changes, data.worldRevision);
@@ -138,7 +167,7 @@ function stream() {
 }
 
 function playerPose() {
-  const motion = !playing ? 'idle' : flying ? 'fly' : movement.medium === 'water' ? 'swim' :
+  const motion = seat ? 'sit' : !playing ? 'idle' : flying ? 'fly' : movement.medium === 'water' ? 'swim' :
     !movement.grounded && !movement.medium ? 'air' : horizontalSpeed > .15 ? 'walk' : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
     seq:Math.round(performance.timeOrigin + performance.now())};
@@ -152,8 +181,12 @@ function sendPresence(now) {
   if (!presenceDirty && !changed) return;
   nextPresence = now + positionInterval;
   presenceDirty = false;
-  presenceRequest = post('presence', pose, AbortSignal.timeout(3000)).then(({ok}) => {
-    if (ok && (!lastSentPose || pose.seq >= lastSentPose.seq)) lastSentPose = pose;
+  const epoch = seatEpoch;
+  presenceRequest = post('presence', pose, AbortSignal.timeout(3000)).then(({ok, body}) => {
+    if (ok && (!lastSentPose || pose.seq >= lastSentPose.seq)) {
+      lastSentPose = pose;
+      if (epoch === seatEpoch && !acting && !resetting && Boolean(body.seat) !== Boolean(seat)) setSeat(body.seat, body.position);
+    }
     else presenceDirty = true;
   }).catch(() => { presenceDirty = true; }).finally(() => { presenceRequest = null; });
 }
@@ -161,13 +194,18 @@ function sendPresence(now) {
 function updateCamera() {
   view.camera.rotation.order = 'YXZ';
   view.camera.rotation.set(heading.pitch, heading.yaw, 0, 'YXZ');
-  view.camera.position.set(position.x, position.y + EYE, position.z);
+  view.camera.position.set(position.x, position.y + (seat ? SEATED_EYE : EYE), position.z);
   view.camera.translateZ(.1);
   view.camera.updateMatrixWorld();
 }
 
 function look(dx, dy, sensitivity = .0023) {
   heading.yaw -= dx * sensitivity;
+  if (seat) {
+    const difference = heading.yaw - seat.yaw;
+    const offset = Math.atan2(Math.sin(difference), Math.cos(difference));
+    heading.yaw = seat.yaw + Math.min(1.35, Math.max(-1.35, offset));
+  }
   heading.pitch = Math.min(1.55, Math.max(-1.55, heading.pitch - dy * sensitivity));
 }
 
@@ -213,6 +251,42 @@ function setAuthoritativePosition(feet) {
   movement.grounded = false;
 }
 
+function setSeat(next, feet) {
+  seatEpoch++;
+  seat = next;
+  setAuthoritativePosition(feet);
+  game.classList.toggle('seated', Boolean(seat));
+  element('seat-status').hidden = !seat;
+  if (seat) {
+    setFlight(false);
+    heading.yaw = seat.yaw;
+    heading.pitch = -.045;
+  }
+  presenceDirty = true;
+}
+
+async function rightClick(buildInstead = false) {
+  if (!playing || acting || resetting) return;
+  if (!seat && (buildInstead || !seatFor(selection?.cell, world.models))) return action('place');
+  const {x, y, z, hit} = selection ?? {};
+  const target = seat ? undefined : {x, y, z, hit};
+  acting = true;
+  seatPending = true;
+  seatEpoch++;
+  try {
+    if (!await flushPosition()) return;
+    const {ok, body} = await post('seat', {...playerPose(), target}, AbortSignal.timeout(4000));
+    if (ok) setSeat(body.seat, body.position);
+    else notice(messages[body.error] ?? body.error);
+  } catch {
+    presenceDirty = true;
+    notice('Связь с сервером прервалась');
+  } finally {
+    seatPending = false;
+    acting = false;
+  }
+}
+
 function positionPacket(lastStep) {
   const trail = [];
   let distance = 0;
@@ -243,7 +317,8 @@ function syncPosition(lastStep) {
       if (payload.pose && (!lastSentPose || payload.pose.seq >= lastSentPose.seq)) lastSentPose = payload.pose;
     } else if (body.position) {
       positionMetrics.corrections++;
-      setAuthoritativePosition(body.position);
+      if (body.seat) setSeat(body.seat, body.position);
+      else setAuthoritativePosition(body.position);
     } else {
       throw new Error(body.error || 'Position sync failed');
     }
@@ -281,12 +356,14 @@ const labelFor = key => {
   const sofas = world.models?.jammy?.sofaIds;
   if (sofas && id === sofas.chair) return 'Кресло';
   if (sofas && (id === sofas.left || id === sofas.right || id === sofas.center || id === sofas.corner)) return 'Секция дивана';
+  if (jammyBenchState(world.models?.jammy, key)) return 'Секция скамьи';
   return world.manifest.legacyRegistry?.[id]?.name || ({1:'Камень',2:'Дёрн',3:'Земля',4:'Булыжник',
     5:'Доски',17:'Бревно',20:'Стекло',35:'Шерсть',44:'Плита',63:'Табличка',68:'Табличка'})[id] ||
     (key.startsWith('cover:') ? 'Микроблоки' : 'Блок ' + id);
 };
 
-function partLabel({slot, shape}) {
+function partLabel({slot, sourceSlot = slot, shape}) {
+  slot = sourceSlot;
   if (slot < 6) return [3, 4, 5, 10, 11, 12, 13].includes(shape) ? 'Полая панель' : 'Пластина';
   if (slot < 14) return 'Уголок';
   if (slot < 26) return 'Ребро';
@@ -294,7 +371,8 @@ function partLabel({slot, shape}) {
 }
 
 function updatePlacement(target) {
-  if (!(chiseling ? chiselMaterial && target?.voxel !== undefined : (heldPart || heldSofa) && target)) {
+  if (!(chiseling ? chiselMaterial && (target?.voxel !== undefined || target?.partSlot !== undefined) :
+      (heldPart || heldSofa) && target)) {
     placement = null;
     placementKey = '';
     return;
@@ -319,7 +397,8 @@ function updatePlacement(target) {
   const adjacentLoaded = world.hasChunk(x+dx,z+dz);
   const revision = world.revisionAt(x,y,z);
   if (chiseling) {
-    const key = `voxel,${x},${y},${z},${target.voxel},${target.offset},${revision},${adjacentRevision},${adjacentLoaded}`;
+    const key = `voxel,${x},${y},${z},${target.voxel},${partSlot},${target.offset},${revision},${adjacentRevision},${adjacentLoaded},` +
+      `${Math.floor(hit.x * 8)},${Math.floor(hit.y * 8)},${Math.floor(hit.z * 8)}`;
     if (key !== placementKey) {
       placementKey = key;
       placement = previewVoxel(target);
@@ -336,18 +415,22 @@ function updatePlacement(target) {
 }
 
 function previewVoxel(target) {
-  const next = voxelPlacementAtHit(target, target.hit, target.offset, target.cell.voxels);
+  const next = voxelPlacementAtHit(target, target.hit, target.offset, target.partSlot === undefined ? target.cell.voxels : undefined);
   if (!next) return null;
   const {x,y,z,voxel} = next;
   const {minX,maxX,minY,maxY,minZ,maxZ} = world.manifest.bounds;
   if (x < minX || x > maxX || y < minY || y > maxY || z < minZ || z > maxZ || !world.hasChunk(x,z)) return null;
   const old = world.cellAt(x,y,z);
+  const box = voxelBox(voxel);
   let unavailable = null;
-  if (old && (!old.voxels || voxelMaterialAt(old.voxels, voxel))) unavailable = 'occupied';
+  if (old && (!old.voxels && !isMicroblockCell(old) || voxelMaterialAt(old.voxels, voxel) ||
+      old.parts && partBoxesOverlapBox(coverBoxes(old.parts), box))) unavailable = 'occupied';
   else if (old?.voxels?.materials.length >= VOXEL_MATERIAL_LIMIT && !old.voxels.materials.includes(chiselMaterial)) {
     unavailable = 'voxel_material_limit';
   }
-  return {...next, boxes:[voxelBox(voxel)], against:{x:target.x,y:target.y,z:target.z}, unavailable};
+  const against = {x:target.x,y:target.y,z:target.z};
+  if (target.partSlot !== undefined) against.partSlot = target.partSlot;
+  return {...next, boxes:[box], against, unavailable};
 }
 
 function cyclePlacement() {
@@ -359,8 +442,8 @@ function cyclePlacement() {
 function updatePlacementHints() {
   microHint.hidden = !(heldPart || heldSofa) || chiseling;
   touchRotate.hidden = microHint.hidden;
-  touchRotate.setAttribute('aria-label', heldSofa ? 'Повернуть секцию дивана' : 'Сменить позицию детали');
-  microHint.textContent = heldSofa ? 'ПКМ — поставить секцию дивана · R — повернуть' :
+  touchRotate.setAttribute('aria-label', heldSofa ? 'Повернуть сиденье' : 'Сменить позицию детали');
+  microHint.textContent = heldSofa ? 'ПКМ — поставить сиденье · R — повернуть' :
     'ПКМ — поставить деталь · R — выбрать позицию · E — действие';
 }
 
@@ -369,6 +452,17 @@ function setHeldPart(part) {
   partRotation = 0;
   placementKey = '';
   updatePlacementHints();
+}
+
+function clearHeld() {
+  heldVersion++;
+  clipboard = null;
+  heldSofa = null;
+  sofaTurns = 0;
+  chiselMaterial = null;
+  placement = null;
+  setHeldPart(null);
+  notice('Выбор сброшен');
 }
 
 function toggleChisel() {
@@ -389,20 +483,24 @@ function updateSelection() {
   }
   const {x,y,z} = position;
   const {yaw,pitch} = heading;
-  const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling];
+  const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,seat];
   if (selectionInputs && stamp.every((value, index) => value === selectionInputs[index])) return;
   selectionInputs = stamp;
   const cp = Math.cos(pitch);
-  selection = pick(world, [x,y + EYE,z], [-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp], chiseling);
+  selection = pick(world, [x,y + (seat ? SEATED_EYE : EYE),z], [-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp], chiseling);
 }
 
 async function action(type, sneaking = false) {
   if (!selection || acting || resetting || !playing) return;
   const target = selection;
+  const selectedVersion = heldVersion;
   const cell = getKey(target.cell);
   let pendingPlacement;
   if (chiseling && type !== 'interact') {
-    if (target.voxel === undefined) { notice(messages.invalid_material); return; }
+    if (target.voxel === undefined && !(type === 'place' && target.partSlot !== undefined)) {
+      notice(messages.invalid_material);
+      return;
+    }
     if (type === 'place' && !chiselMaterial) { notice('Сначала скопируйте материал клавишей Q'); return; }
     type += '_voxel';
   } else {
@@ -434,8 +532,9 @@ async function action(type, sneaking = false) {
   if (type === 'place_part') {
     updatePlacement(target);
     if (!placement || placement.blocked) { notice(messages[placement ? 'occupied' : 'incompatible_part']); return; }
-    const {x, y, z, part, against} = placement;
-    Object.assign(request, {x, y, z, part, against});
+    const {x, y, z, part, against, orientation, boxes} = placement;
+    Object.assign(request, {x, y, z, part, against, orientation});
+    pendingPlacement = {x, y, z, boxes};
   }
   if (type === 'place_voxel') {
     updatePlacement(target);
@@ -459,20 +558,20 @@ async function action(type, sneaking = false) {
       notice(messages[result.body.error] || result.body.error || 'Действие отклонено');
       return;
     }
-    if (type === 'copy') {
+    if (type === 'copy' && selectedVersion === heldVersion) {
       clipboard = result.body.cell || cell;
-      heldSofa = isJammySofa(world.models?.jammy, clipboard) ? {object: target.cell?.object} : null;
+      heldSofa = isJammyConnectableSeat(world.models?.jammy, clipboard) ? {object: target.cell?.object} : null;
       sofaTurns = 0;
       setHeldPart(null);
       notice('Скопировано · ' + labelFor(clipboard));
     }
-    if (type === 'copy_part') {
+    if (type === 'copy_part' && selectedVersion === heldVersion) {
       clipboard = null;
       heldSofa = null;
-      setHeldPart(result.body.part);
+      setHeldPart({...result.body.part, pattern:result.body.pattern});
       notice('Скопировано · ' + partLabel(heldPart));
     }
-    if (type === 'copy_voxel') {
+    if (type === 'copy_voxel' && selectedVersion === heldVersion) {
       chiselMaterial = result.body.material;
       placementKey = '';
       notice('Материал резца · ' + labelFor(chiselMaterial));
@@ -492,7 +591,7 @@ async function action(type, sneaking = false) {
 function tick(now) {
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
   lastFrame = now;
-  if (playing) {
+  if (playing && !seat && !seatPending) {
     const startX = position.x, startZ = position.z;
     const forward = Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) - stick.z;
     const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + stick.x;
@@ -523,14 +622,19 @@ function tick(now) {
   const held = chiseling ? labelFor(chiselMaterial) : heldPart ? partLabel(heldPart) : labelFor(clipboard);
   const status = [selected, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
-  const coordinates = [position.x, position.y, position.z].map(Math.floor).join('  ·  ');
+  const coordinates = `X ${position.x.toFixed(2)}  Y ${position.y.toFixed(2)}  Z ${position.z.toFixed(2)}`;
   if (coordinateStatus.textContent !== coordinates) coordinateStatus.textContent = coordinates;
-  view.render(now, selection, playing, placement);
+  if (now >= nextClockUpdate) {
+    social.updateClock(view.dayTick(now), view.worldTime.frozen);
+    nextClockUpdate = now + 200;
+  }
+  view.render(now, selection, playing && !social.isOpen(), placement, document.hasFocus());
   requestAnimationFrame(tick);
 }
 
 function bindControls() {
   const canvas = view.renderer.domElement;
+  clearSelection.addEventListener('click', clearHeld);
   button.addEventListener('click', () => {
     let pending;
     try {
@@ -568,35 +672,33 @@ function bindControls() {
     }
   });
   document.addEventListener('pointerlockchange', () => {
-    if (!touchMode) setPlaying(document.pointerLockElement === canvas);
+    if (!touchMode && !social.isOpen()) setPlaying(document.pointerLockElement === canvas);
   });
   document.addEventListener('pointerlockerror', () => notice('Браузер заблокировал захват курсора'));
   document.addEventListener('mousemove', event => {
-    if (!touchMode && playing) look(event.movementX, event.movementY);
+    if (!touchMode && playing && !social.isOpen()) look(event.movementX, event.movementY);
   });
   document.addEventListener('keydown', event => {
+    if (social.keydown(event, playing)) return;
     if (!playing) return;
     if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.code)) event.preventDefault();
     keys.add(event.code);
     if (event.repeat) return;
     if (event.code === 'Space') jump = true;
-    if (event.code === 'KeyF' && !resetting) setFlight(!flying);
+    if (event.code === 'KeyF' && !resetting && !seat) setFlight(!flying);
     if (event.code === 'KeyV' && !resetting && !acting) toggleChisel();
+    if (event.code === 'KeyX') clearHeld();
     if (event.code === 'KeyQ') action('copy');
     if (event.code === 'KeyR') cyclePlacement();
     if (event.code === 'KeyE') action('interact', event.shiftKey);
   });
-  document.addEventListener('keyup', event => keys.delete(event.code));
-  window.addEventListener('blur', () => keys.clear());
+  document.addEventListener('keyup', event => { keys.delete(event.code); social.keyup(event); });
+  window.addEventListener('blur', () => { keys.clear(); social.blur(); });
   canvas.addEventListener('mousedown', event => {
-    if (!playing || touchMode) return;
-    const key = getKey(selection?.cell);
-    const [id, meta] = blockState(key);
-    const interactive = key === 'game:switch' || handControls.has(id) || jammyAppliance(id, meta) || jammyUseSound(id, meta)
-      || (event.shiftKey && biblioWeaponCase(id));
-    const use = interactive && (!chiseling && !heldPart && !heldSofa || event.shiftKey);
-    const command = {0:'remove', 1:'copy', 2:use ? 'interact' : 'place'}[event.button];
-    if (command) action(command, event.shiftKey);
+    if (!playing || touchMode || social.isOpen()) return;
+    if (event.button === 2) rightClick(event.shiftKey);
+    if (event.button === 0) action('remove');
+    if (event.button === 1) action('copy');
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
 
@@ -632,7 +734,8 @@ function bindControls() {
     stick.x = stick.z = 0;
     nub.style.transform = '';
   });
-  for (const [id, command] of [['touch-place','place'], ['touch-copy','copy'], ['touch-use','interact'], ['touch-remove','remove']]) {
+  element('touch-place').addEventListener('click', () => rightClick());
+  for (const [id, command] of [['touch-copy','copy'], ['touch-use','interact'], ['touch-remove','remove']]) {
     element(id).addEventListener('click', () => action(command));
   }
   touchRotate.addEventListener('click', cyclePlacement);
@@ -672,7 +775,7 @@ function bindControls() {
       await sync;
       const {ok, body} = await post('respawn', {});
       if (ok) {
-        setAuthoritativePosition(body.position);
+        setSeat(null, body.position);
         setFlight(false);
         presenceDirty = true;
       }
@@ -736,6 +839,8 @@ async function start() {
   confirmedPosition = positionTuple(position);
   movement = new Movement(world);
   view = new Display(surface, world, session.body.dayTick);
+  if (session.body.seat) setSeat(session.body.seat, p);
+  if (session.body.time) view.setWorldTime(session.body.time);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
   updateCamera();
   const available = new Set([4, ...(manifest.terrain || []).map(ring => ring.radius)]);
@@ -749,7 +854,7 @@ async function start() {
   stream();
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
-    stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, audio:audio.stats(),
+    stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
       flying, chiseling, chiselMaterial, movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
@@ -761,6 +866,9 @@ async function start() {
     },
     getCell: (x, y, z) => world.cellAt(x, y, z),
     players: () => view.players.inspect(),
+    online: social.names,
+    time: () => ({tick:view.dayTick(performance.now()), frozen:view.worldTime.frozen,
+      sun:view.sky.material.uniforms.sunDirection.value.toArray()}),
   });
   const near = manifest.chunks.filter(chunk => distanceToChunk(chunk) <= 1);
   const buffered = manifest.chunks.filter(chunk => distanceToChunk(chunk) <= 2);

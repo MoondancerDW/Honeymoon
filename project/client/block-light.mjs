@@ -1,5 +1,5 @@
 import {attenuationOf, emissionOf} from '../world/block-light.mjs';
-import {isFullVoxels, voxelKey} from '../world/voxel-chisel.mjs';
+import {isOpaqueFullVoxels} from '../world/voxel-chisel.mjs';
 
 const RADIUS = 15;
 const SIDE = RADIUS * 2 + 3;
@@ -21,13 +21,20 @@ for (let dy = -MIDDLE; dy <= MIDDLE; dy++) {
 function cellAttenuation(cell, emission) {
   // Keep light propagation on the original block grid. Only changing between
   // a full and an open cell needs a relight, not each cut in the same sculpture.
-  if (cell.key === voxelKey) return isFullVoxels(cell.voxels) ? 15 : 1;
+  if (cell.voxels) return isOpaqueFullVoxels(cell.voxels) && !emission ? 15 : 1;
   return attenuationOf(cell.key, emission);
 }
 
+function cellEmission(cell) {
+  if (!cell.voxels) return emissionOf(cell.key, cell.object?.data);
+  let emission = 0;
+  for (const material of cell.voxels?.materials ?? []) emission = Math.max(emission, emissionOf(material));
+  return emission;
+}
+
 export function lightChanged(before, after) {
-  const oldEmission = emissionOf(before.key, before.object?.data);
-  const newEmission = emissionOf(after.key, after.object?.data);
+  const oldEmission = cellEmission(before);
+  const newEmission = cellEmission(after);
   return oldEmission !== newEmission || cellAttenuation(before, oldEmission) !== cellAttenuation(after, newEmission);
 }
 
@@ -42,7 +49,7 @@ export function updateBlockLight(world, x, y, z, previousCenter) {
       values[i] = world.lightAt(xx, yy, zz) & 15;
     } else {
       const cell = world.lightCell(xx, yy, zz);
-      const level = emissionOf(cell.key, cell.object?.data);
+      const level = cellEmission(cell);
       values[i] = level;
       attenuation[i] = cellAttenuation(cell, level);
     }

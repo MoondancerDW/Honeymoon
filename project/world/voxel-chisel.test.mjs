@@ -28,21 +28,34 @@ test('canonical volume packs exactly 512 samples and stores only used materials'
   const different = new Uint8Array(512);
   for (let i = 0; i < 16; i++) different[i] = i + 1;
   const fullPalette = encodeVoxels(different, manyMaterials);
-  assert.throws(() => writeVoxel(fullPalette, 16, stone), RangeError);
+  assert.equal(voxelMaterialAt(writeVoxel(fullPalette, 16, stone), 16), stone);
   assert.equal(voxelMaterialAt(writeVoxel(fullPalette, 15, stone), 15), stone);
+  const widePalette = [1,2,3,4,5,7,12,13,14,15,16,17,19,20,21,22].flatMap(id =>
+    Array.from({length:16}, (_, meta) => `legacy:${id}:${meta}`));
+  const wideData = new Uint16Array(512);
+  for (let i = 0; i < widePalette.length; i++) wideData[i] = i + 1;
+  const wide = JSON.parse(JSON.stringify(encodeVoxels(wideData, widePalette)));
+  assert.equal(wide.materials.length, 256);
+  assert.equal(wide.data.length, 1368);
+  assert.deepEqual(widePalette.map((_, i) => voxelMaterialAt(wide, i)), widePalette);
+  const back = writeVoxel(wide, 255, null);
+  assert.equal(back.data.length, 684);
+  assert.equal(voxelMaterialAt(back,254), widePalette[254]);
 });
 
-test('allowed materials preserve original stone, grass, log faces and exclude mechanisms and models', () => {
-  for (const key of [stone, dirt, grass, 'legacy:17:8', 'legacy:35:6']) assert.ok(isChiselMaterial(key), key);
-  for (const key of ['legacy:20:0', 'legacy:89:0', 'legacy:54:0', 'legacy:23:0', 'legacy:46:0', 'legacy:124:0',
-    'legacy:52:0', 'legacy:44:0', 'legacy:73:0', 'legacy:750:0', 'legacy:699:0', 'legacy:035:02']) {
+test('full cube materials include translucent and luminous blocks and preserve their faces', () => {
+  for (const key of [stone, dirt, grass, 'legacy:17:8', 'legacy:35:6', 'legacy:20:0', 'legacy:89:0',
+    'legacy:23:0', 'legacy:46:0', 'legacy:124:0', 'legacy:52:0', 'legacy:73:0']) assert.ok(isChiselMaterial(key), key);
+  for (const key of ['legacy:54:0', 'legacy:44:0','legacy:750:0', 'legacy:699:0', 'legacy:035:02']) {
     assert.equal(isChiselMaterial(key), false, key);
   }
-  for (const material of [grass, 'legacy:17:8']) {
+  for (const material of [grass, 'legacy:17:8','legacy:20:0','legacy:89:0']) {
     const [source] = shapeFor(material);
     for (const {face,box} of voxelFaces(filledVoxels(material))) {
       assert.equal(box.faces[face], source.faces[face]);
       assert.equal(box.tintFaces?.[face], source.tintFaces?.[face]);
+      assert.equal(box.mode, source.mode);
+      assert.equal(box.emissive, source.emissive);
     }
   }
 });

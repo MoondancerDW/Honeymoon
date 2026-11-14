@@ -5,7 +5,8 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {test} from 'node:test';
 import * as geometry from '../world/geometry.mjs';
-import {microblockKey} from '../world/microblocks.mjs';
+import {guidedMicroblock, microblockKey} from '../world/microblocks.mjs';
+import {voxelIndex, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {createHoneymoonServer} from './index.mjs';
 
 const originalKey = 'cover:750:0:original-panel';
@@ -20,7 +21,7 @@ const point = (x, y, z) => ({x, y, z});
 function fixture(hash = 'test-microblocks', authored = true) {
   return {
     manifest: {bounds, spawn: [8.5, 1, 8.5], compositions}, hash,
-    catalog: new Set(['legacy:1:0', originalKey]),
+    catalog: new Set(['legacy:1:0', 'legacy:20:0', originalKey]),
     inBounds(x, y, z) { return x >= 0 && x <= 15 && y >= 0 && y <= 15 && z >= 0 && z <= 15; },
     getCell(x, y, z) {
       const key = y === 0 ? 'legacy:1:0' : authored && x === 8 && y === 1 && z === 10 ? originalKey : 'air';
@@ -179,4 +180,56 @@ test('an older owned Cover assembly lazily splits into individual parts', async 
     hit: point(8.5, height.floor, 10.9)}, player);
   assert.equal(removed.status, 200, JSON.stringify(removed.body));
   assert.deepEqual(removed.body.changes[0].parts, [edge]);
+});
+
+test('puts exact copies and chisel materials in one imported cell and preserves ownership after restart', async t => {
+  const restart = workspace(t);
+  let app = await restart();
+  const userA = (await app.request('session', {})).cookie;
+  const userB = (await app.request('session', {})).cookie;
+  const edit = (player, data) => app.request('action', data, player);
+  const at = point(8,1,10);
+  const source = await edit(userA, originalPart('copy_part', 'guided-copy-panel'));
+  const {part: copied, pattern} = source.body;
+  assert.deepEqual(pattern, [[0,0,0,8,1,8]]);
+  const place = (height, slot, anchor, revision) => {
+    const hit = point(8.5,height,10.5);
+    const proposal = guidedMicroblock({...at, partSlot:anchor, hit, offset:[0,1,0]}, {...copied,slot}, pattern, 0);
+    // Preserve the kind from the copied part while assigning a new independent placement ID.
+    proposal.part.sourceSlot = copied.slot;
+    return command('place_part', `guided-placement-${slot}`, at, revision, {...proposal,hit});
+  };
+  const put = place(height.floor,29,0,0);
+  const invalid = structuredClone(put);
+  invalid.requestId = 'guided-tampered-box';
+  invalid.part.bounds[0][1]++;
+  invalid.part.bounds[0][4]++;
+  assert.equal((await edit(userA,invalid)).body.error,'outside_reach');
+  const placed = await edit(userA,put);
+  assert.equal(placed.status,200,JSON.stringify(placed.body));
+  const stacked = await edit(userA,place(1.25,30,29,placed.body.worldRevision));
+  assert.equal(stacked.status,200,JSON.stringify(stacked.body));
+  assert.equal(stacked.body.changes[0].parts[2].bounds[0][1],2);
+  const hit = point(8.4375,1.375,10.4375);
+  const voxel = voxelIndex(3,3,3);
+  const chisel = command('place_voxel','guided-place-glass',at,stacked.body.worldRevision,
+    {material:'legacy:20:0', against:{...at,partSlot:30}, voxel, hit});
+  const mixed = await edit(userB,chisel);
+  assert.equal(mixed.status,200,JSON.stringify(mixed.body));
+  assert.equal(voxelMaterialAt(mixed.body.changes[0].voxels,voxel),'legacy:20:0');
+  assert.equal(mixed.body.changes[0].parts.length,3);
+
+  app = await restart(fixture('guided-parts-reimported'));
+  const {body:world} = await app.request('world',undefined,userA);
+  const saved = world.overrides.find(change => change.x === at.x && change.y === at.y && change.z === at.z);
+  assert.deepEqual(saved,mixed.body.changes[0]);
+  const removeGlass = command('remove_voxel','guided-remove-glass',at,saved.revision,{voxel, hit:{...hit,y:1.5}});
+  assert.equal((await edit(userA,removeGlass)).body.error,'voxel_not_owned');
+  const removed = await edit(userB,removeGlass);
+  assert.equal(removed.status,200,JSON.stringify(removed.body));
+  assert.equal(removed.body.changes[0].voxels,undefined);
+  assert.equal(removed.body.changes[0].parts.length,3);
+  const removeStack = command('remove_part','guided-remove-panel-30',at,removed.body.worldRevision,{partSlot:30,hit});
+  assert.equal((await edit(userB,removeStack)).body.error,'part_not_owned');
+  assert.equal((await edit(userA,removeStack)).status,200);
 });

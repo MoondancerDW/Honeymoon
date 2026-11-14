@@ -4,6 +4,7 @@ import {defaultPonyPixels, ponySkinHeight, readPonySkin} from '../world/pony-ski
 
 const LEG_NAMES = ['frontRight', 'frontLeft', 'hindRight', 'hindLeft'];
 const TAU = Math.PI * 2;
+const seatedLegAngles = [-.4, -.4, 4.712 - TAU, 4.712 - TAU];
 const geometryCache = new Map();
 const imageLoader = new THREE.ImageLoader();
 const defaultPixels = defaultPonyPixels();
@@ -147,8 +148,8 @@ function buildRig(visual, material, skin) {
   if (skin.mane === 3 || skin.mane === 4) headNames.push('maneRight');
   const hornScale = skin.size === 'large' ? 1.05 : skin.size === 'tall' ? 1.2 : 1;
   const head = attach(headGroup, groupParts(parts, headNames), pivot, undefined, hornScale);
-  attach(neckGroup, groupParts(parts, ['neck']));
-  attach(bodyGroup, groupParts(parts, ['body']));
+  const neck = attach(neckGroup, groupParts(parts, ['neck']));
+  const body = attach(bodyGroup, groupParts(parts, ['body']));
   const hips = ['hipRight', 'hipLeft'].map(name => attach(bodyGroup, groupParts(parts, [name])));
   const legs = LEG_NAMES.map(name => attach(legGroup, groupParts(parts, [name]), parts[name][0]));
   const tailCount = 21 - skin.tail * 5;
@@ -159,7 +160,7 @@ function buildRig(visual, material, skin) {
   if (hasWings && skin.size !== 'small') {
     for (const side of ['Left', 'Right']) {
       const name = 'wing' + side;
-      foldedWings.push(attach(bodyGroup, groupParts(parts, [name])));
+      foldedWings.push(attach(bodyGroup, groupParts(parts, [name]), parts[name + '.0'][0]));
       const open = name + 'Open';
       const pose = parts[open + '.0'][0], rotation = [0, 0, pose[5]];
       openWings.push(attach(bodyGroup, groupParts(parts, [open]), pose, rotation));
@@ -176,7 +177,11 @@ function buildRig(visual, material, skin) {
     headTop = Math.max(headTop, y * Math.cos(angle) + z * Math.sin(angle));
   }
   const labelHeight = visual.position.y - headGroup.position.y + headGroup.scale.y * headTop + 0.19;
-  return {head, hips, legs, tail, foldedWings, openWings, meshes, labelHeight};
+  const fore = legs.slice(0, 2).map(leg => leg.position.clone());
+  const hind = legs.slice(2).map(leg => leg.position.clone());
+  return {head, neck, body, hips, legs, tail, foldedWings, openWings, meshes, labelHeight, fore, hind,
+    tailPivot:tail?.position.clone(), wingPivots:foldedWings.map(wing => wing.position.clone()),
+    headScale:headGroup.scale.y, sitHeight:skin.size === 'small' ? .5 : .2};
 }
 
 export function createPonyAvatar() {
@@ -189,7 +194,7 @@ export function createPonyAvatar() {
   let skin = defaultSkin, texture = defaultTexture;
   let rig = buildRig(visual, material, skin);
   let skinUrl = null, skinReady = true, pending, revision = 0, disposed = false;
-  let time = 0, phase = 0, tailPhase = 0, run = 0, flight = 0, airborne = 0, paddling = 0, motion = 'idle';
+  let time = 0, phase = 0, tailPhase = 0, run = 0, flight = 0, airborne = 0, paddling = 0, sitting = 0, motion = 'idle';
 
   function applySkin(next, nextTexture) {
     const changed = Object.keys(next).some(key => next[key] !== skin[key]);
@@ -247,6 +252,7 @@ export function createPonyAvatar() {
     flight += (Number(motion === 'fly') - flight) * fade;
     airborne += (Number(motion === 'jump') - airborne) * fade;
     paddling += (Number(motion === 'swim') - paddling) * fade;
+    sitting += (Number(motion === 'sit') - sitting) * fade;
     if (run > 0.001) {
       const advancement = elapsed * (3 + 8 * run);
       phase = (phase + advancement) % TAU;
@@ -271,10 +277,47 @@ export function createPonyAvatar() {
       rig.tail.rotation.x = 0.5 * run + 0.05 * Math.sin(time * 20 * 0.067) + 0.35 * flight;
       rig.tail.rotation.z = Math.cos(tailPhase) * 0.2 * run;
     }
+    // Mine Little Pony's ponySit() lowers the body and head, folds and spreads the hocks,
+    // and repositions the shoulders, wings and tail in the original 1/16-block model space.
+    const part = sitting / 16;
+    const height = rig.sitHeight;
+    rig.head.position.set(0, (3.5 + height) * part, 1.2 * part);
+    rig.neck.position.set(0, (2.5 + height) * part, .8 * part);
+    rig.body.position.set(0, (4 + height) * part, 3 * part);
+    rig.body.rotation.x = -.4 * sitting;
+    for (let i = 0; i < rig.legs.length; i++) {
+      const leg = rig.legs[i];
+      leg.rotation.x += (seatedLegAngles[i] - leg.rotation.x) * sitting;
+      if (i < 2) {
+        leg.position.copy(rig.fore[i]);
+        leg.position.y += (2 + height) * part;
+      } else {
+        const side = i === 2 ? 1 : -1;
+        leg.rotation.y += (.5 * side - leg.rotation.y) * sitting;
+        leg.position.copy(rig.hind[i - 2]);
+        leg.position.x += 2 * side * part;
+        leg.position.y += (13 + height) * part;
+        leg.position.z += 5 * part;
+      }
+    }
+    for (const hip of rig.hips) hip.position.y = (8 + height) * part;
+    if (rig.tail) {
+      rig.tail.position.copy(rig.tailPivot);
+      rig.tail.position.x -= 3.5 * part;
+      rig.tail.position.y += (11.2 + height) * part;
+      rig.tail.position.z += part;
+      rig.tail.rotation.x += (-.5 - rig.tail.rotation.x) * sitting;
+      rig.tail.rotation.z += (-1.1 - rig.tail.rotation.z) * sitting;
+    }
     const flap = Math.sin(time * 20 * 0.536);
     for (let i = 0; i < rig.openWings.length; i++) {
       const extended = motion === 'fly';
-      rig.foldedWings[i].visible = !extended;
+      const folded = rig.foldedWings[i];
+      folded.visible = !extended;
+      folded.position.copy(rig.wingPivots[i]);
+      folded.position.y += (1.75 + height) * part;
+      folded.position.z -= 2.5 * part;
+      folded.rotation.x = (1.1 - 1.571) * sitting;
       rig.openWings[i].visible = extended;
       rig.openWings[i].rotation.z = (i === 0 ? -1 : 1) * (5.112 + flap);
     }
@@ -296,5 +339,7 @@ export function createPonyAvatar() {
     visual.clear();
     object.removeFromParent();
   }
-  return {object, get labelHeight() { return rig.labelHeight; }, setSkin, animate, inspect, dispose};
+  return {object, get labelHeight() {
+    return rig.labelHeight - rig.head.position.y * rig.headScale;
+  }, setSkin, animate, inspect, dispose};
 }

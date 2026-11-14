@@ -4,6 +4,7 @@ import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
 import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 import {itemFrameModel} from '../world/item-frames.mjs';
 import {RemotePlayers} from './remote-players.mjs';
+import {clockTick} from '../world/world-time.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -80,8 +81,7 @@ export class Display {
     this.scene.fog = new THREE.Fog('#95aad5', 70, 175);
     this.sky = createSky();
     this.scene.add(this.sky);
-    this.dayStarted = Date.now();
-    this.firstDayTick = dayTick;
+    this.worldTime = {tick:dayTick, frozen:false, received:performance.now()};
     this.cycleTime = null;
     this.lightBytes = new Uint8Array(16 * 17 * 4);
     this.lightmap = new THREE.DataTexture(this.lightBytes, 16, 17, THREE.RGBAFormat);
@@ -119,7 +119,8 @@ export class Display {
     this.ready = [];
     this.active = new Map();
     this.workerFailure = null;
-    this.workers = Array.from({length: Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 4) - 1))}, () => {
+    const workers = Math.max(1, Math.min(3, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+    this.workers = Array.from({length: workers}, () => {
       const worker = new Worker('/mesh-worker.mjs', {type: 'module'});
       worker.onmessage = ({data}) => {
         this.active.delete(worker);
@@ -234,7 +235,13 @@ export class Display {
       this.shaderSamples.push(material);
     }
     try {
-      await this.renderer.compileAsync(warmup, camera);
+      // Some graphics drivers never finish the parallel-compile query under load.
+      // Rendering the warmup still forces the first-use programs to finish safely.
+      let wait;
+      try {
+        await Promise.race([this.renderer.compileAsync(warmup, camera),
+          new Promise(resolve => { wait = setTimeout(resolve, 2500); })]);
+      } finally { clearTimeout(wait); }
       for (const texture of textures) if (texture) this.renderer.initTexture(texture);
       // Complete Three's first-use reflection on the same framebuffer as play.
       this.renderer.setScissor(0, 0, 1, 1);
@@ -301,10 +308,21 @@ export class Display {
       this.lightmap.needsUpdate = true;
       this.lastSun = sun;
     }
-    const {zenith, horizon} = this.sky.material.uniforms;
+    const {zenith, horizon, sunDirection, night} = this.sky.material.uniforms;
     zenith.value.copy(this.nightZenith).lerp(this.dayZenith, sky);
     horizon.value.copy(this.nightHorizon).lerp(this.dayHorizon, sky);
+    sunDirection.value.set(-Math.sin(angle), Math.cos(angle) * .96, Math.cos(angle) * -.28);
+    night.value = 1 - sky;
     this.scene.fog.color.copy(horizon.value);
+  }
+
+  setWorldTime(time) {
+    this.worldTime = {...time, received:performance.now()};
+    this.nextSkyUpdate = 0;
+  }
+
+  dayTick(now) {
+    return this.cycleTime ?? clockTick(this.worldTime, now - this.worldTime.received);
   }
 
   resize() {
@@ -695,9 +713,9 @@ export class Display {
     }
   }
 
-  render(now, selection, playing = false, placement = null) {
+  render(now, selection, playing = false, placement = null, foreground = true) {
     if (now >= (this.nextSkyUpdate ?? 0)) {
-      this.updateSky(this.cycleTime ?? this.firstDayTick + Math.max(0, Date.now() - this.dayStarted) / 50);
+      this.updateSky(this.dayTick(now));
       this.nextSkyUpdate = now + 200;
     }
     const interval = now - this.lastFrame;
@@ -744,9 +762,13 @@ export class Display {
       this.partPreview.material.color.set(placement.blocked ? '#ed7779' : '#79f0ba');
       this.previewBlocked = placement.blocked;
     }
-    this.sky.position.copy(this.camera.position);
-    this.sky.updateMatrixWorld();
-    this.renderer.render(this.scene, this.camera);
+    // Inactive tabs keep receiving player and world updates while limiting GPU work.
+    if (foreground || now >= (this.nextIdleRender ?? 0)) {
+      this.sky.position.copy(this.camera.position);
+      this.sky.updateMatrixWorld();
+      this.renderer.render(this.scene, this.camera);
+      this.nextIdleRender = now + 100;
+    }
   }
 
   statistics() {
@@ -777,6 +799,10 @@ function createSky() {
     uniforms: {
       zenith: {value: new THREE.Color('#84abfc')},
       horizon: {value: new THREE.Color('#95aad5')},
+      sunDirection: {value: new THREE.Vector3(0, 1, 0)},
+      night: {value: 0},
+      sunColor: {value: new THREE.Color('#fff7cf')},
+      moonColor: {value: new THREE.Color('#dce8f9')},
     },
     vertexShader: /* glsl */ `
       varying vec3 skyDirection;
@@ -788,11 +814,39 @@ function createSky() {
     fragmentShader: /* glsl */ `
       uniform vec3 zenith;
       uniform vec3 horizon;
+      uniform vec3 sunDirection;
+      uniform vec3 sunColor;
+      uniform vec3 moonColor;
+      uniform float night;
       varying vec3 skyDirection;
+      float hash(vec2 cell) {
+        return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      float disk(float distanceToCenter, float radius) {
+        float edge = max(fwidth(distanceToCenter), .0003);
+        return 1.0 - smoothstep(radius - edge, radius + edge, distanceToCenter);
+      }
       void main() {
-        float height = normalize(skyDirection).y;
-        float mixAmount = 1.0 - exp(-max(height, 0.0) * 8.0);
-        gl_FragColor = vec4(mix(horizon, zenith, mixAmount), 1.0);
+        vec3 ray = normalize(skyDirection);
+        float mixAmount = 1.0 - exp(-max(ray.y, 0.0) * 8.0);
+        vec3 skyColor = mix(horizon, zenith, mixAmount);
+        if (night > .01 && ray.y > 0.0) {
+          vec2 uv = vec2(atan(ray.z, ray.x) * (128.0 / 6.2831853), asin(ray.y) * 24.0);
+          vec2 cell = floor(uv);
+          cell.x = mod(cell.x, 128.0);
+          float seed = hash(cell);
+          vec2 center = .24 + .52 * vec2(seed, hash(cell + 17.0));
+          vec2 delta = (fract(uv) - center) * vec2(1.18 * max(length(ray.xz), .45), 1.0);
+          float polarFade = smoothstep(.08, .36, length(ray.xz));
+          float star = 1.0 - smoothstep(.025, .046 + .026 * seed, length(delta));
+          skyColor += moonColor * night * smoothstep(0.0, .17, ray.y) * polarFade * step(.82, seed) * star * seed;
+        }
+        float horizonMask = smoothstep(-.02, .015, ray.y);
+        float sun = length(ray - sunDirection);
+        float moon = length(ray + sunDirection);
+        skyColor = mix(skyColor, sunColor, horizonMask * (.18 * exp(-34.0 * sun) + .8 * disk(sun, .032)));
+        skyColor = mix(skyColor, moonColor, horizonMask * (.11 * exp(-38.0 * moon) + .87 * disk(moon, .026)));
+        gl_FragColor = vec4(skyColor, 1.0);
         #include <colorspace_fragment>
       }
     `,

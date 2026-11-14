@@ -16,6 +16,8 @@
       <div class="brand"><strong>Honeymoon</strong><span>Equestria</span></div>
       <div class="tools">
         <span id="player-name" hidden></span>
+        <button id="clock-toggle" type="button" aria-label="Игровое время (K)" disabled>12:00</button>
+        <button id="chat-toggle" type="button" title="Чат · T" disabled>Чат</button>
         <label class="distance" for="distance">Горизонт
           <select id="distance">
             <option value="4">4 чанка</option><option value="8" selected>8 чанков</option>
@@ -24,6 +26,7 @@
         </label>
         <button id="audio-toggle" type="button" aria-pressed="false" hidden>Звук</button>
         <button id="music-toggle" type="button" aria-pressed="false" hidden>Музыка</button>
+        <button id="clear-selection" type="button" title="Сбросить выбранный блок или материал (X)">Сбросить выбор</button>
         <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
       </div>
     </header>
@@ -42,10 +45,28 @@
           <span id="skin-status" class="skin-status" role="status">PNG 64×32, 64×64, 128×64 или 256×128</span>
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
-        <small id="entry-help">WASD — ходьба · Пробел — прыжок · F — полёт · V — резец · Esc — пауза</small>
+        <small id="entry-help">WASD — ходьба · Пробел — прыжок · F — полёт · V — резец · X — сброс выбора · Esc — пауза</small>
       </div>
     </section>
     <div id="toast" role="status" aria-live="polite"></div>
+    <aside id="online" class="social-panel" aria-label="Игроки онлайн" hidden>
+      <strong>Онлайн · <span id="online-count">0</span></strong>
+      <ul id="online-names"></ul>
+    </aside>
+    <section id="chat" aria-label="Чат">
+      <ul id="chat-log" role="log" aria-live="polite"></ul>
+      <form id="chat-form" hidden>
+        <input id="chat-input" autocomplete="off" aria-label="Сообщение" placeholder="Сообщение…" maxlength="480">
+        <button id="chat-send" type="submit">Отправить</button>
+        <button id="chat-close" type="button">Закрыть</button>
+      </form>
+    </section>
+    <form id="clock-form" class="social-panel" hidden>
+      <label for="clock-input">Время в мире</label>
+      <input id="clock-input" type="time" required>
+      <label><input id="clock-frozen" type="checkbox"> Заморозить</label>
+      <div><button type="submit">Применить</button> <button id="clock-close" type="button">Закрыть</button></div>
+    </form>
     <div id="touch" aria-label="Сенсорное управление">
       <div id="stick"><i></i></div>
       <div class="touch-actions">
@@ -64,7 +85,8 @@
       <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
       <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · Q взять материал</span>
       <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Shift вниз</span>
-      <span id="keys">ЛКМ — сломать своё · ПКМ — действие / поставить · Q — копировать · F — полёт · V — резец</span>
+      <span id="seat-status" role="status" hidden>Сидите · ПКМ встать</span>
+      <span id="keys">ЛКМ — сломать своё · ПКМ — поставить / сесть · E — действие · Q — копировать · F — полёт · V — резец</span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>

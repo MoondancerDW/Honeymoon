@@ -45,7 +45,7 @@ try {
     $atlasVersion = if (Test-Path -LiteralPath $atlasMetadata) {
         (Get-Content -Raw -LiteralPath $atlasMetadata | ConvertFrom-Json).schemaVersion
     }
-    if ($atlasVersion -ne 8 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
+    if ($atlasVersion -ne 9 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
         & $pythonPath -B world/textures.py
         if ($LASTEXITCODE) { throw 'Texture extraction failed. Install Pillow from world/requirements.txt.' }
     }

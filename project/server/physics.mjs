@@ -5,10 +5,10 @@ export { PLAYER };
 const epsilon = 0.00001;
 const axisNames = ['x', 'y', 'z'];
 
-function overlapsPlayer(position, box, x, y, z) {
+function overlapsPlayer(position, box, x, y, z, height = PLAYER.height) {
   return position.x + PLAYER.halfWidth > x + box.x0 + epsilon
     && position.x - PLAYER.halfWidth < x + box.x1 - epsilon
-    && position.y + PLAYER.height > y + box.y0 + epsilon
+    && position.y + height > y + box.y0 + epsilon
     && position.y < y + box.y1 - epsilon
     && position.z + PLAYER.halfWidth > z + box.z0 + epsilon
     && position.z - PLAYER.halfWidth < z + box.z1 - epsilon;
@@ -43,11 +43,12 @@ export function physics(base, geometry, getCell) {
     return geometry[kind](cell, (dx, dy, dz) => plannedNeighbor?.(dx, dy, dz) ?? getCell(x + dx, y + dy, z + dz));
   }
 
-  function collides(position) {
-    for (let y = Math.floor(position.y) - 1; y <= Math.floor(position.y + PLAYER.height); y++) {
+  function collides(position, height = PLAYER.height, ignored = []) {
+    for (let y = Math.floor(position.y) - 1; y <= Math.floor(position.y + height); y++) {
       for (let z = Math.floor(position.z - PLAYER.halfWidth) - 1; z <= Math.floor(position.z + PLAYER.halfWidth) + 1; z++) {
         for (let x = Math.floor(position.x - PLAYER.halfWidth) - 1; x <= Math.floor(position.x + PLAYER.halfWidth) + 1; x++) {
-          if (boxesAt('collisionFor', x, y, z).some(box => overlapsPlayer(position, box, x, y, z))) return true;
+          if (ignored.some(cell => cell.x === x && cell.y === y && cell.z === z)) continue;
+          if (boxesAt('collisionFor', x, y, z).some(box => overlapsPlayer(position, box, x, y, z, height))) return true;
         }
       }
     }
@@ -137,7 +138,7 @@ export function physics(base, geometry, getCell) {
   }
 
   function visible(position, x, y, z, hit) {
-    const origin = [position.x, position.y + PLAYER.eye, position.z];
+    const origin = [position.x, position.y + (position.eye ?? PLAYER.eye), position.z];
     const targets = [];
     if (hit) targets.push([hit.x, hit.y, hit.z]);
     for (const box of boxesAt(selection, x, y, z)) {
@@ -156,7 +157,7 @@ export function physics(base, geometry, getCell) {
 
   function targetAtHit(position, x, y, z, hit) {
     if (![hit?.x, hit?.y, hit?.z].every(Number.isFinite)) return null;
-    const origin = [position.x, position.y + PLAYER.eye, position.z];
+    const origin = [position.x, position.y + (position.eye ?? PLAYER.eye), position.z];
     const point = [hit.x, hit.y, hit.z];
     const delta = point.map((value, axis) => value - origin[axis]);
     const range = Math.hypot(...delta);

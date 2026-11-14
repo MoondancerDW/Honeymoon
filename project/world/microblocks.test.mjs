@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as geometry from './geometry.mjs';
-import { isMicroPart, microblockAddition, microblockKey, microblockPlacement, microblockRemoval } from './microblocks.mjs';
+import { isMicroPart, microblockAddition, microblockKey, microblockPattern, microblockPlacement, microblockRemoval } from './microblocks.mjs';
+import { voxelIndex, writeVoxel } from './voxel-chisel.mjs';
 import { physics } from '../server/physics.mjs';
 
 const part = (slot, shape = 0, material = 2) => ({slot, shape, material});
@@ -54,4 +55,29 @@ test('preview chooses valid same-cell slots or the clicked neighboring cube', ()
   const next = microblockPlacement(world, target, part(0), {adjacent: true});
   assert.deepEqual([next.x, next.y, next.z, next.part.slot], [0, 1, 0, 0]);
   assert.equal(microblockPlacement({...world, hasChunk:()=>false}, target, part(0)), null);
+});
+
+test('copied patterns stack and follow the hit without changing other pieces', () => {
+  const held = part(0,0,5);
+  held.pattern = microblockPattern(geometry.coverBoxes([held]));
+  const bottom = part(0,0,2);
+  const target = {x:0,y:0,z:0,partSlot:0,offset:[0,1,0],hit:{x:.4,y:.125,z:.6}};
+  let cell = multipart([bottom]);
+  const world = {cellAt: (x,y,z) => x === 0 && y === 0 && z === 0 ? cell : null};
+  const second = microblockPlacement(world, {...target,cell}, held);
+  assert.deepEqual(second.part, {slot:29, sourceSlot:0, shape:0, material:5,bounds:[[0,1,0,8,2,8]]});
+  cell = multipart([bottom,second.part]);
+  const third = microblockPlacement(world, {...target,cell,partSlot:29,hit:{...target.hit,y:.25}}, held);
+  assert.deepEqual(third.part.bounds, [[0,2,0,8,3,8]]);
+  assert.equal(third.part.slot,30);
+  const packed = microblockAddition(cell.parts, third.part);
+  assert.deepEqual(microblockRemoval(packed.parts, 29).parts,[bottom,third.part]);
+
+  const peg = part(6,0,1);
+  peg.pattern = microblockPattern(geometry.coverBoxes([peg]));
+  const otherAim = microblockPlacement(world,{...target,cell,partSlot:29,hit:{x:.7,y:.25,z:.2}},peg);
+  assert.deepEqual(otherAim.part.bounds, [[5,2,1,6,3,2]]);
+  const sculpted = writeVoxel(null,voxelIndex(5,2,1),'legacy:20:0');
+  assert.equal(microblockAddition(cell.parts, otherAim.part, sculpted), null);
+  assert.ok(microblockAddition(cell.parts, otherAim.part, writeVoxel(null,voxelIndex(4,2,1),'legacy:89:0')));
 });

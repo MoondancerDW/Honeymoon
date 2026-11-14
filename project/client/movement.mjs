@@ -190,7 +190,7 @@ export function pick(world, origin, direction, chiseling = false) {
     best.part = best.cell.parts.find(part => part.slot === best.partSlot);
     best.boxes = selectedBoxes.filter(box => box.partSlot === best.partSlot);
   }
-  if (chiseling && best) {
+  if (chiseling && best && best.partSlot === undefined) {
     const state = best.cell.voxels;
     const key = typeof best.cell === 'string' ? best.cell : best.cell.key;
     if (state || isChiselMaterial(key)) {

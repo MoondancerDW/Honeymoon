@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { publicMicroPart } from '../world/microblocks.mjs';
 
 const SCHEMA_VERSION = 6;
 
@@ -132,8 +133,8 @@ export function openStore(filename) {
   const writeEdit = statement(`INSERT INTO edits(x,y,z,cell,object,revision,original,quarantined,placed_by,micro_parts,voxels)
     VALUES (?,?,?,?,?,?,?,0,?,?,?) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
     object=excluded.object,revision=excluded.revision,quarantined=0,micro_parts=excluded.micro_parts,voxels=excluded.voxels,
-    placed_by=CASE WHEN excluded.micro_parts IS NOT NULL THEN NULL
-      WHEN excluded.placed_by IS NOT NULL THEN excluded.placed_by
+    placed_by=CASE WHEN excluded.placed_by IS NOT NULL THEN excluded.placed_by
+      WHEN excluded.micro_parts IS NOT NULL THEN NULL
       WHEN edits.quarantined=0 THEN edits.placed_by END`);
   const allEdits = statement('SELECT x,y,z,cell,original,placed_by,micro_parts IS NOT NULL AS is_multipart,voxels FROM edits ORDER BY x,y,z');
   const updateOriginal = statement('UPDATE edits SET original=?,quarantined=? WHERE x=? AND y=? AND z=?');
@@ -148,7 +149,7 @@ export function openStore(filename) {
     let cached = partsCache.get(raw);
     if (!cached) {
       const owned = JSON.parse(raw);
-      const parts = owned.map(({slot, shape, material}) => ({slot, shape, material}));
+      const parts = owned.map(publicMicroPart);
       cached = {owned, parts};
       if (partsCache.size >= 512) partsCache.delete(partsCache.keys().next().value);
       partsCache.set(raw, cached);
@@ -256,7 +257,7 @@ export function openStore(filename) {
             : !isMultipart && cell !== null && !base.catalog.has(cell)) {
             reason = 'missing_catalog_entry';
             quarantined = 1;
-          } else if ((isMultipart && current !== original) || (owner && base.getCell(x, y, z).key !== 'air')) {
+          } else if ((isMultipart && current !== original) || (!isMultipart && owner && base.getCell(x, y, z).key !== 'air')) {
             reason = 'original_cell_changed';
             quarantined = 1;
           } else if (original !== null && current !== original) {

@@ -2,8 +2,9 @@ import * as geometry from '/world/geometry.mjs';
 import {decodeIndices} from './world-data.mjs';
 import {CHISEL_FANTASY, chiselFantasyQuarters, glassTexture, paneTexture} from '/world/connected-textures.mjs';
 import {coverShade, FACE_SHADE} from './lighting.mjs';
-import {extractedModel} from '/world/extracted-models.mjs';
-import {isFullVoxels, voxelFaces} from '/world/voxel-chisel.mjs';
+import {extractedModel, isJammyConnectableSeat} from '/world/extracted-models.mjs';
+import {crossSpriteCorners} from '/world/cross-sprites.mjs';
+import {isOpaqueFullVoxels, voxelFaces} from '/world/voxel-chisel.mjs';
 
 const {shapeFor, ATLAS_GRID, TILE_SIZE, FACES} = geometry;
 const SIDE = 18;
@@ -159,7 +160,8 @@ function neighborLight(light, at, x, y, z) {
 function makeShape(index, at, cell, neighbors, edited) {
   const key = cells[index];
   // Stairs and connected shapes can read neighboring cells. Include their face neighbors.
-  const connected = geometry.shapeDependsOnNeighbors(key);
+  const connected = geometry.shapeDependsOnNeighbors(key) ||
+    models.jammy?.models[key] && isJammyConnectableSeat(models.jammy, key);
   const cacheable = !connected && !cell?.object && !edited;
   if (cacheable && cache.has(index)) return cache.get(index);
   const adjacent = (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE);
@@ -169,7 +171,7 @@ function makeShape(index, at, cell, neighbors, edited) {
     geometry.redPowerTubeMesh(cell || key, adjacent) ?? geometry.redPowerWireMesh(cell || key, adjacent) ??
     geometry.chestMesh(cell || key, adjacent) ??
     geometry.bedMesh(key) ??
-    shapeFor(cell || key, adjacent);
+    (cell?.voxels && cell.parts ? geometry.coverBoxes(cell.parts) : shapeFor(cell || key, adjacent));
   const shape = {boxes, model, atlasModel, full: boxes.find(fullCube)};
   if (cacheable) cache.set(index, shape);
   return shape;
@@ -189,13 +191,13 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
     const object = indexedObjects.get(at);
     const composition = compositions[key];
     const voxels = hasSculptures && voxelCells.get(at);
-    if (voxels) return {key, voxels};
     const parts = editedParts.get(at);
-    if (parts) return {key, ...composition, object, parts};
+    if (parts) return {key, ...composition, object, parts, voxels};
+    if (voxels) return {key, voxels};
     return object || composition ? {key, ...composition, object} : key;
   }
   function shape(at) {
-    if (!indices[at] || hasSculptures && voxelCells.has(at)) return null;
+    if (!indices[at] || hasSculptures && voxelCells.has(at) && !editedParts.has(at)) return null;
     if (!rendered.has(at)) rendered.set(at, makeShape(indices[at], at, cell(at), cell, editedParts.has(at)));
     return rendered.get(at);
   }
@@ -213,9 +215,10 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             const axis = face >> 1;
             const boundary = face & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0;
             const packed = light[boundary ? next(face) : at];
-            faceQuad(layers[box.mode] ?? layers.opaque, box, face, origin, packed, box.faces[face], FACE_SHADE[face]);
+            faceQuad(layers[box.mode] ?? layers.opaque, box, face, origin, box.emissive ? 256 : packed,
+              box.faces[face], box.emissive ? 1 : FACE_SHADE[face]);
           }
-          continue;
+          if (!editedParts.get(at)?.length) continue;
         }
         const {boxes, model, atlasModel} = shape(at);
         if (atlasModel) {
@@ -252,11 +255,9 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             continue;
           }
           if (box.kind === 'cross') {
-            const shade = light[at];
-            const a = x + box.x0, b = x + box.x1, c = y + box.y0, d = y + box.y1;
-            const e = z + box.z0, f = z + box.z1;
-            quad(out, [[a,c,e],[b,c,f],[b,d,f],[a,d,e]], box.faces[0], FULL_UV, shade, box.tint);
-            quad(out, [[a,c,f],[b,c,e],[b,d,e],[a,d,f]], box.faces[0], FULL_UV, shade, box.tint);
+            for (const corners of crossSpriteCorners(box, origin)) {
+              quad(out, corners, box.faces[0], FULL_UV, box.emissive ? 256 : light[at], box.tint);
+            }
             continue;
           }
           for (let f = 0; f < 6; f++) {
@@ -272,7 +273,7 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             if (water && (onEdge || f === 3) && waterKey(cells[indices[adjacent]])) continue;
             if (onEdge) {
               const neighbor = shape(adjacent)?.full;
-              if (neighbor?.mode === 'opaque' || hasSculptures && isFullVoxels(voxelCells.get(adjacent)) ||
+              if (neighbor?.mode === 'opaque' || hasSculptures && isOpaqueFullVoxels(voxelCells.get(adjacent)) ||
                   (neighbor && box.mode !== 'opaque' && indices[adjacent] === indices[at])) continue;
             }
             if (boxes.length > 1 && boxes.some(other => coversFace(other, box, f))) continue;

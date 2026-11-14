@@ -247,6 +247,10 @@ def add_harvestcraft_tiles(atlas):
     ranges += [(3641 + row * 4, "sink", row * 16, 4) for row in range(3)]
     ranges.extend(((3732, "coffee", 48, 1), (3733, "mango", 48, 1), (3734, "kiwi", 2, 1)))
     ranges.extend(((3792, "salt", 0, 1), (3793, "salt", 48, 1)))
+    ranges.extend((3861 + offset, name, 48, 1) for offset, name in enumerate(
+        ("corn", "peanut", "olive", "bellpepper", "cherry", "orange", "cinnamon")))
+    ranges.extend((3868 + offset, name, 2, 1) for offset, name in enumerate(("cactusfruit", "candle", "grape")))
+    ranges.extend((3871 + offset, name, 16, 1) for offset, name in enumerate(("avocado", "peach")))
     images = {}
     for start, name, first, count in ranges:
         if name not in images:
@@ -380,6 +384,7 @@ def build(source, output, vanilla_jar=None):
         add_fruit_crops(atlas, 3264, ("cinnamon", "vanillabean"))
         add_fruit_crops(atlas, 3286, ("apple", "olive", "lime", "lemon"))
         add_fruit_crops(atlas, 3735, ("papaya", "pomergranate"))
+        add_fruit_crops(atlas, 3840, ("cherry", "plum", "walnut", "banana", "starfruit", "mango", "coconut"))
         add_harvestcraft_tiles(atlas)
         twilight = atlas.resolve("twilightforest/terrain.png", "twilight")
         for offset, tile in enumerate((7, 8, 9)):
@@ -419,7 +424,7 @@ def build(source, output, vanilla_jar=None):
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
-            "schemaVersion": 8, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
+            "schemaVersion": 9, "grid": GRID, "tileSize": TILE, "resources": atlas.resources,
             "connectedTextures": connected_textures, "chiselConnectedTextures": chisel_connected_textures,
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return len(atlas.resources)

@@ -1,15 +1,20 @@
 import { biblioFor } from './biblio-models.mjs';
+import { jammyBenchModel, jammyBenchState } from './jammy-benches.mjs';
 import { isJammySofa, jammySofaModel } from './jammy-sofas.mjs';
 import { redPowerLamp } from './redpower-lamps.mjs';
 
 export const modelFamilies = ['jammy', 'biblio', 'redpower'];
 
+export const isJammyConnectableSeat = (catalog, key) =>
+  isJammySofa(catalog, key) || Boolean(jammyBenchState(catalog, key));
+
 export function placementModelObject(catalogs, key, copiedObject, position, turns = 0) {
   let object = copiedObject;
-  if (isJammySofa(catalogs?.jammy, key)) {
-    const copiedTurns = copiedObject?.type === 'JammySofa' ? copiedObject.data?.rotation ?? 0 : 0;
+  if (isJammyConnectableSeat(catalogs?.jammy, key)) {
+    const type = isJammySofa(catalogs.jammy, key) ? 'JammySofa' : 'JammyBench';
+    const copiedTurns = copiedObject?.type === type ? copiedObject.data?.rotation ?? 0 : 0;
     const rotation = (copiedTurns + turns) & 3;
-    object = {type: 'JammySofa', data: rotation ? {rotation} : {}};
+    object = {type, data: rotation ? {rotation} : {}};
   }
   return object ? { ...object, position, key: `tile:${position.join(':')}` } : null;
 }
@@ -20,7 +25,8 @@ export function extractedModel(catalogs, cell, neighbors) {
   if (catalogs.redpower && key.startsWith('legacy:768:')) return redPowerLamp(catalogs.redpower, cell?.object?.data);
   const jammy = catalogs.jammy?.models[key];
   if (jammy) {
-    const model = jammySofaModel(catalogs.jammy, cell, neighbors) ?? jammy;
+    const model = jammySofaModel(catalogs.jammy, cell, neighbors) ??
+      jammyBenchModel(catalogs.jammy, cell, neighbors) ?? jammy;
     return { ...model, family: 'jammy',
       surfaces: cell?.object?.data?.open && model.openSurfaces ? model.openSurfaces : model.surfaces };
   }
@@ -33,8 +39,8 @@ export function extractedModel(catalogs, cell, neighbors) {
 export function withExtractedModels(geometry, catalogs) {
   return {
     ...geometry,
-    isSofa: key => isJammySofa(catalogs?.jammy, key),
-    neighborCollisionShapeDependsOn: cell => cell?.object?.type === 'JammySofa'
+    isSofa: key => isJammyConnectableSeat(catalogs?.jammy, key),
+    neighborCollisionShapeDependsOn: cell => isJammyConnectableSeat(catalogs?.jammy, cell)
       || Boolean(geometry.neighborCollisionShapeDependsOn?.(cell)),
     placementObject: (key, copiedObject, position, turns) => placementModelObject(catalogs, key, copiedObject, position, turns),
     collisionFor: (cell, neighbors) => extractedModel(catalogs, cell, neighbors)?.collision ?? geometry.collisionFor(cell, neighbors),

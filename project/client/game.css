@@ -48,6 +48,29 @@ button:disabled { cursor: wait; opacity: .45; }
 .distance { display: flex; gap: .45rem; align-items: center; }
 .bottom { font-size: .77rem; }
 #coords { font-variant-numeric: tabular-nums; }
+#clock-toggle { min-width: 4.6rem; font-variant-numeric: tabular-nums; }
+#clock-toggle.frozen { color: var(--gold); border-color: var(--gold); }
+.social-panel, #chat.expanded {
+  z-index: 3; position: absolute; border: 1px solid var(--line); border-radius: .7rem;
+  background: var(--glass); padding: .85rem; box-shadow: 0 2px 12px #14202755;
+}
+#clock-form { top: 5rem; right: 1rem; gap: .65rem; }
+#clock-form:not([hidden]) { display: grid; }
+#clock-input, #chat-input { padding: .45rem .55rem; background: #14252e; border: 1px solid var(--line); border-radius: .4rem; }
+#online { top: 5rem; left: 50%; transform: translateX(-50%); width: min(22rem, 85vw); pointer-events: none; }
+#online-names { columns: 2; padding: 0; margin: .5rem 0 0; list-style: none; overflow-wrap: anywhere; }
+#online-names li { margin: .25rem .4rem .25rem 0; }
+#chat { z-index: 1; position: absolute; left: 1rem; bottom: max(4.9rem, calc(env(safe-area-inset-bottom) + 4rem)); width: min(35rem, calc(100vw - 2rem)); pointer-events: none; }
+#chat.expanded { pointer-events: auto; }
+#chat-log { display: flex; flex-direction: column; gap: .2rem; list-style: none; padding: 0; margin: 0; }
+#chat-log li { align-self: flex-start; max-width: 100%; overflow-wrap: anywhere; font-size: .86rem; }
+#chat:not(.expanded) li { display: none; }
+.playing #chat:not(.expanded) li.recent { display: block; padding: .24rem .4rem; border-radius: .25rem; background: var(--glass); }
+.playing #chat:not(.expanded) li.recent:has(~ .recent ~ .recent ~ .recent ~ .recent) { display: none; }
+#chat.expanded #chat-log { max-height: min(36vh, 19rem); overflow-y: auto; margin-bottom: .55rem; }
+#chat-log strong, .chat-status { color: var(--gold); }
+#chat-form:not([hidden]) { display: flex; flex-wrap: wrap; gap: .38rem; }
+#chat-input { flex: 1 1 9rem; min-width: 0; }
 #aim { display: none; position: absolute; inset: 50% auto auto 50%; pointer-events: none; }
 .playing #aim { display: block; }
 #game:not(.playing) #micro-hint { display: none; }

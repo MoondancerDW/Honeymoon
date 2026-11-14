@@ -7,9 +7,11 @@ import { gzipSync } from 'node:zlib';
 import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
+import { createChat } from './chat.mjs';
 import { createPresence, readPose } from './presence.mjs';
 import { MAX_PROFILE_BODY, profileChanges, publicProfile } from './presence-profile.mjs';
 import { openStore } from './store.mjs';
+import { createWorldTime } from './world-time.mjs';
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
 
 const PROJECT = fileURLToPath(new URL('..', import.meta.url));
@@ -171,24 +173,34 @@ export function createHoneymoonServer({
   const store = openStore(state);
   let game;
   try {
-    game = createGame(base, store, withExtractedModels(geometry, models), { clock, allowRemoval });
+    game = createGame(base, store, withExtractedModels(geometry, models), { clock, allowRemoval, models });
   } catch (error) {
     store.close();
     throw error;
   }
   const streams = new Set();
-  const presence = createPresence({ store, send: writeEvent });
+  const worldTime = createWorldTime(store);
+  const chat = createChat(entry => sendSocial('chat', entry));
+  const presence = createPresence({ store, send: writeEvent, onVisibility(profile, online, player) {
+    if (!online) game.leaveSeat(player);
+    chat.playerStatus(profile, online);
+  } });
   const serveWorld = serveWorldJson();
-  const dayStarted = Date.now();
-  const session = player => ({ ...game.session(player), modelFamilies: Object.keys(models), sounds,
-    dayTick: (6000 + (Date.now() - dayStarted) / 50) % 24000,
-    profile: publicProfile(player, store.getProfile(player)) });
+  const session = player => {
+    const time = worldTime.snapshot();
+    return { ...game.session(player), modelFamilies: Object.keys(models), sounds, dayTick: time.tick, time,
+      profile: publicProfile(player, store.getProfile(player)) };
+  };
 
   function writeEvent(response, name, event, revision) {
     const id = revision === undefined ? '' : `id: ${revision}\n`;
     if (!response.write(`${id}event: ${name}\ndata: ${JSON.stringify(event)}\n\n`) && response.writableLength > 256 * 1024) {
       response.destroy();
     }
+  }
+
+  function sendSocial(name, data) {
+    for (const stream of streams) if (stream.social) writeEvent(stream.response, name, data);
   }
 
   function broadcast(player, output) {
@@ -222,6 +234,17 @@ export function createHoneymoonServer({
         return json(response, 200, session(newPlayer.id), { 'Set-Cookie': cookie });
       }
       if (!player) throw new RequestError(401, 'session_required');
+      if (path === '/api/chat' && method === 'POST') {
+        const body = await readBody(request);
+        return json(response, 200, chat.message(presence.onlineProfile(player), body));
+      }
+      if (path === '/api/time' && method === 'POST') {
+        const body = await readBody(request);
+        if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
+        const time = worldTime.set(body);
+        sendSocial('world-time', time);
+        return json(response, 200, time);
+      }
       if (path === '/api/profile' && method === 'POST') {
         const updates = await profileChanges(await readBody(request, MAX_PROFILE_BODY));
         const saved = store.getProfile(player);
@@ -236,27 +259,38 @@ export function createHoneymoonServer({
       if (path === '/api/presence') {
         if (method === 'POST') {
           const pose = readPose(await readBody(request));
-          presence.join(player, game.session(player).position, pose);
-          return json(response, 200, {ok: true});
+          const {position, seat} = game.session(player);
+          presence.join(player, position, game.poseFor(player, pose));
+          return json(response, 200, {ok:true, position, seat});
         }
         if (method === 'DELETE') {
           presence.leave(player);
           return json(response, 200, {ok: true});
         }
       }
+      if (path === '/api/seat' && method === 'POST') {
+        const body = await readBody(request);
+        if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
+        const pose = readPose(body);
+        const result = game.sit(player, body.target, pose);
+        presence.update(player, result.position, game.poseFor(player, {
+          yaw:result.seat?.yaw ?? pose.yaw, pitch:result.seat ? 0 : pose.pitch, motion:'idle',
+        }));
+        return json(response, 200, result);
+      }
       if (path === '/api/world' && method === 'GET') return json(response, 200, game.snapshot(player));
       if (path === '/api/position' && method === 'POST') {
         const body = await readBody(request);
         const pose = body.pose === undefined ? undefined : readPose(body.pose);
         const result = game.position(player, body);
-        presence.update(player, result.position, pose);
+        presence.update(player, result.position, game.poseFor(player, pose));
         if (result.changes.length || result.effects.length) broadcast(player, result);
         return json(response, 200, result);
       }
       if (path === '/api/respawn' && method === 'POST') {
         await readBody(request);
         const result = game.respawn(player);
-        presence.update(player, result.position);
+        presence.update(player, result.position, {yaw:0, pitch:0, motion:'idle'});
         return json(response, 200, result);
       }
       if (path === '/api/action' && method === 'POST') {
@@ -276,7 +310,7 @@ export function createHoneymoonServer({
           'Cache-Control': 'no-cache, no-transform',
           'X-Accel-Buffering': 'no',
         });
-        const stream = { player, response };
+        const stream = { player, response, social: url.searchParams.get('social') === '1' };
         streams.add(stream);
         game.touch(player);
         response.on('close', () => {
@@ -288,6 +322,10 @@ export function createHoneymoonServer({
         const kind = cursor !== null && Number(cursor) !== revision ? 'reset' : 'ready';
         writeEvent(response, kind, { worldRevision: revision, contentHash: game.contentHash }, revision);
         if (presenceEntry) presence.connect(stream, presenceEntry);
+        if (stream.social) {
+          writeEvent(response, 'chat-history', {entries:chat.history()});
+          writeEvent(response, 'world-time', worldTime.snapshot());
+        }
         return;
       }
       throw new RequestError(404, 'not_found');

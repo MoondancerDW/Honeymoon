@@ -99,7 +99,7 @@ export class World {
     if (!this.hasChunk(x, z)) return null;
     const {key, object, parts, voxels} = this.lightCell(x, y, z);
     if (key === 'air') return null;
-    if (voxels) return {key, voxels};
+    if (voxels) return {key, voxels, ...(parts && {parts})};
     const composition = this.manifest.compositions?.[key];
     if (parts) return {key, ...composition, object, parts};
     if (!composition && !object) return key;

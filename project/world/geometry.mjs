@@ -3,7 +3,6 @@ import {hasHatchRung, westCellarLadder} from './west-cellar.mjs';
 import {connectedTubeMesh, tubeCore} from './redpower-tubes.mjs';
 import {wirePanels, wireSelection} from './redpower-wires.mjs';
 import {shapedLampCollision} from './redpower-lamps.mjs';
-import {staticEmission} from './block-light-properties.mjs';
 import {fenceCubes, paneOpaqueBlocks} from './block-geometry-properties.mjs';
 import {isFullVoxels, voxelCollisionBoxes, voxelKey} from './voxel-chisel.mjs';
 import {chestCollision, chestShape} from './chest-models.mjs';
@@ -80,11 +79,14 @@ const TERRAIN = {
 };
 const plants = { 6: 15, 30: 11, 31: 39, 32: 55, 37: 13, 38: 12, 39: 29, 40: 28,
   51: 31, 59: 88, 83: 73, 104: 111, 105: 111, 115: 226, 141: 200, 142: 200 };
-const fruitTiles = {3989: 3267, 4031: 3286, 3983: 3289, 3977: 3292, 4084: 3295, 3965: 3735, 3986: 3738};
+const fruitTiles = {3989: 3267, 4031: 3286, 3983: 3289, 3977: 3292, 4084: 3295, 3965: 3735, 3986: 3738,
+  4090:3840, 3950:3843, 3944:3846, 3959:3849, 3995:3852, 3980:3855, 3962:3858};
 const cropStorageTiles = {3823:3604, 3827:3605, 3829:3606, 3835:3607, 3838:3608, 3941:3609,
   3961:3610, 3976:3611, 4023:3612, 4025:3613, 4033:3614, 4073:3615, 4077:3616, 3803:3732, 3982:3733,
-  3998:3793};
-const wildCropTiles = {3902:3633, 3927:3634, 3930:3635, 3933:3636, 3942:3637, 4030:3638, 4068:3639, 4089:3640, 3936:3734};
+  3998:3793, 4027:3861, 4075:3862, 3985:3863, 4081:3864, 4092:3865, 3973:3866, 3970:3867};
+const wildCropTiles = {3902:3633, 3927:3634, 3930:3635, 3933:3636, 3942:3637, 4030:3638, 4068:3639, 4089:3640,
+  3936:3734, 3814:3868, 3908:3869, 4071:3870};
+const saplingTiles = {3954:3871, 3975:3872};
 const fireflyJarCollision = box([3 / 16, 0, 3 / 16, 13 / 16, 1, 13 / 16], 3742);
 const campfireCollision = box([0, 0, 0, 1, 0.25, 1], 3812);
 
@@ -92,6 +94,28 @@ function cross(tile, height = 1, tint, inset = 0.1) {
   return [box([inset, 0, inset, 1 - inset, height, 1 - inset], tile, {
     kind: 'cross', mode: 'cutout', solid: false, tint, uv: 'box',
   })];
+}
+
+const isCandle = id => id >= 3909 && id <= 3924;
+const candleMount = [null, [-1, 0], [1, 0], [0, -1], [0, 1]];
+
+function candleSprite(id, meta) {
+  const [sprite] = cross(3270 + id - 3909, 1, undefined, .05);
+  const mount = candleMount[meta & 7];
+  if (mount) {
+    const [dx, dz] = mount;
+    sprite.y0 = .22;
+    sprite.y1 = 1.22;
+    sprite.spriteShift = [dx * .4, dz * .4, dx * -.2, dz * -.2];
+  }
+  return [{...sprite, emissive:true}];
+}
+
+function candleSelection(id, meta) {
+  const mount = candleMount[meta & 7];
+  const bounds = mount ? rotateBounds([0, .2, .35, .3, .8, .65], [0, 0, 2, 3, 1][meta & 7])
+    : [.4, 0, .4, .6, .6, .6];
+  return [box(bounds, 3270 + id - 3909, GROUND_DECOR)];
 }
 
 function faceMaterial(faceTiles, face, tile) {
@@ -227,7 +251,7 @@ const fenceTile = id => id === 113 ? 224 : 4;
 const wallTile = meta => meta === 1 ? 36 : 16;
 const paneFace = id => id === 102 ? 49 : 85;
 const paneEdge = id => id === 102 ? 148 : 85;
-const fullCarving = cell => keyOf(cell) === voxelKey && isFullVoxels(cell?.voxels);
+const fullCarving = cell => isFullVoxels(cell?.voxels);
 
 function barrierLinks(id, neighbors) {
   const pane = isPane(id);
@@ -487,6 +511,10 @@ export function coverBoxes(parts, frame = false) {
       owned(part, near);
       owned(part, bounds);
     }
+  }
+  for (const part of parts) {
+    if (!Array.isArray(part.bounds)) continue;
+    for (const bounds of part.bounds) owned(part, bounds.map(value => value / 8));
   }
   coverCache.set(parts, { frame, boxes: result });
   return result;
@@ -844,10 +872,13 @@ function specialShape(id, meta, cell, neighbors) {
     const bottom = meta & 8 ? 0.5 : 0;
     return [box([0, bottom, 0, 1, bottom + 0.5, 1], id === 3248 ? tiles.cloud + 32 : wool[id - 4051])];
   }
+  if (id === 3249) return [box([(1 + 2 * Math.min(meta, 6)) / 16, 0, .0625, .9375, .5, .9375],
+    topSides(tiles.cloud + 23, tiles.cloud + 24, tiles.cloud + 22))];
   if (id === 4067) return [box([0, 0, 0, 1, 0.125, 1], wool[meta])];
   if (cropStorageTiles[id] !== undefined) return uniform(cropStorageTiles[id]);
   if (id === 3999) return uniform(3617 + meta);
   if (wildCropTiles[id] !== undefined) return cross(wildCropTiles[id], 1, undefined, .05);
+  if (saplingTiles[id] !== undefined) return cross(saplingTiles[id], 1, undefined, .05);
   if (id === 3968 || fruitTiles[id] !== undefined) {
     const stage = meta >= 7 && meta <= 8 ? 2 : meta >= 4 && meta <= 6 ? 1 : 0;
     // HarvestCraft cinnamon is solid. The hanging fruit use the original crossed squares.
@@ -886,7 +917,7 @@ function specialShape(id, meta, cell, neighbors) {
 }
 
 function vanillaShape(id, meta, neighbors) {
-  if (id >= 3909 && id <= 3924) return torch(3270 + id - 3909, meta, true);
+  if (isCandle(id)) return candleSprite(id, meta);
   if (stairTiles(id) !== undefined) return stairs(id, meta, neighbors);
   if (TERRAIN[id] !== undefined) return uniform(TERRAIN[id]);
   if (plants[id] !== undefined) {
@@ -1028,19 +1059,18 @@ const simpleCache = new Map();
 const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 139, 750,
   ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
 const dynamic = new Set([...neighborDependent, 751, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
-// Static building materials with no model data or active block behavior.
-const chiselMaterialIds = new Set([1, 2, 3, 4, 5, 14, 15, 16, 17, 21, 22, 24, 35, 41, 42, 43,
-  45, 48, 49, 56, 57, 80, 82, 87, 98, 110, 112, 121, 129, 133, 162, 242, 244, 245, 701]);
 const chiselMaterialShapes = new Map();
 
 export function chiselMaterialShape(key) {
   const match = typeof key === 'string' && key.length <= 24 && legacyKey.exec(key);
   if (!match) return null;
   const id = Number(match[1]), meta = Number(match[2]);
-  if (key !== `legacy:${id}:${meta}` || meta > 15 || !chiselMaterialIds.has(id) || staticEmission[id]) return null;
+  if (key !== `legacy:${id}:${meta}` || meta > 15 || id > 4095 || id === 750) return null;
   if (chiselMaterialShapes.has(key)) return chiselMaterialShapes.get(key);
   const [shape, extra] = shapeFor(key);
-  const allowed = shape && !extra && shape.solid && shape.mode === 'opaque' && !shape.emissive && !shape.approximation
+  const fullInRegistry = fenceCubes.has(id) || paneOpaqueBlocks.has(id);
+  const allowed = shape && !extra && shape.solid && !shape.kind && !shape.angle && !sourceAtlasModel(key)
+    && (shape.approximation !== 'Unknown legacy block definition' || fullInRegistry)
     && shape.x0 === 0 && shape.y0 === 0 && shape.z0 === 0 && shape.x1 === 1 && shape.y1 === 1 && shape.z1 === 1
     && shape.faces.every(tile => Number.isInteger(tile) && tile >= 0 && tile < ATLAS_GRID ** 2);
   const result = allowed ? shape : null;
@@ -1062,6 +1092,12 @@ export function neighborCollisionShapeDependsOn(cell) {
 export function shapeFor(cell, neighbors) {
   const key = keyOf(cell);
   if (key === voxelKey) return voxelCollisionBoxes(cell.voxels);
+  if (cell?.voxels && cell.parts) {
+    if (!mixedCarvingBoxes.has(cell.voxels)) mixedCarvingBoxes.set(cell.voxels, new WeakMap());
+    const cache = mixedCarvingBoxes.get(cell.voxels);
+    if (!cache.has(cell.parts)) cache.set(cell.parts, [...coverBoxes(cell.parts), ...voxelCollisionBoxes(cell.voxels)]);
+    return cache.get(cell.parts);
+  }
   if (key === 'game:switch') return [box([0.375, 0.25, 0.75, 0.625, 0.65, 1], 96, GROUND_DECOR)];
   if (key === 'game:door') return [box([0, 0, 0.40625, 1, 1, 0.59375], 97, GLASS)];
   if (key === 'air') return AIR;
@@ -1081,6 +1117,7 @@ export function shapeFor(cell, neighbors) {
   return result;
 }
 
+const mixedCarvingBoxes = new WeakMap();
 const frameCollision = [box(CUBE, tiles.redPowerMachine + 1)];
 const brewingStandCollision = [box([0, 0, 0, 1, 0.125, 1], 157),
   box([0.4375, 0, 0.4375, 0.5625, 0.875, 0.5625], 156)];
@@ -1095,6 +1132,7 @@ function wallBounds(links, top) {
 
 export function selectionFor(cell, neighbors) {
   const [id, meta] = unpack(cell);
+  if (isCandle(id)) return candleSelection(id, meta);
   if (isFence(id)) return [box(barrierBounds(barrierLinks(id, neighbors), .375, .625, 1), fenceTile(id))];
   if (id === 139) return [box(wallBounds(barrierLinks(id, neighbors)), wallTile(meta))];
   if (isPane(id)) return [box(barrierBounds(paneLinks(id, neighbors), .4375, .5625, 1), paneFace(id))];
@@ -1115,6 +1153,7 @@ export function collisionFor(cell, neighbors) {
     const [cake] = shapeFor(cell);
     return [{...cake, y1: 7 / 16}];
   }
+  if (id === 3249) return [{...shapeFor(cell)[0], y1: 7 / 16}];
   if (isFence(id)) return [box(barrierBounds(barrierLinks(id, neighbors), .375, .625, 1.5), fenceTile(id))];
   if (id === 139) return [box(wallBounds(barrierLinks(id, neighbors), 1.5), wallTile(meta))];
   if (isPane(id)) {

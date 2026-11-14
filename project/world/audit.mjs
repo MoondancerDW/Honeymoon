@@ -5,7 +5,9 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { readRegionChunk } from '../import/nbt.mjs';
-import { ATLAS_GRID, TILE_SIZE, shapeFor } from './geometry.mjs';
+import { ATLAS_GRID, TILE_SIZE, bedMesh, chestMesh, redPowerTubeMesh, redPowerWireMesh,
+  shapeFor, sourceAtlasModel, standingSignMesh, tiles } from './geometry.mjs';
+import { extractedModel, modelFamilies } from './extracted-models.mjs';
 
 const PROJECT = fileURLToPath(new URL('../', import.meta.url));
 const { values } = parseArgs({ options: {
@@ -98,30 +100,69 @@ if (radius > 4) {
   benchmarks.push(bench('Source radius ' + radius, broader.definitions, broader.coverCells, broader.readChunks));
 }
 
-const approximations = new Map();
-const readChunk = (x, z) => JSON.parse(readFileSync(join(values['world-data'], 'chunks', x + '.' + z + '.json')));
-const objectByVariant = new Map();
-for (const [x, z] of world.chunks) {
-  const chunk = readChunk(x, z);
-  const sections = new Map(chunk.sections.map(section => [section.y, Buffer.from(section.indices, 'base64')]));
-  for (const object of chunk.objects) {
-    const [x, y, z] = object.position;
-    const section = sections.get(y >> 4);
-    if (!section) continue;
-    const index = (x & 15) + 16 * (z & 15) + 256 * (y & 15);
-    objectByVariant.set(world.palette[section.readUInt16LE(index * 2)], object);
+const modelsDirectory = join(values['world-data'], '..', 'models');
+const catalogs = {};
+for (const family of modelFamilies) {
+  try {
+    catalogs[family] = JSON.parse(readFileSync(join(modelsDirectory, family + '.json'), 'utf8'));
+    statSync(join(modelsDirectory, family + '.png'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    delete catalogs[family];
   }
 }
-for (const [key, cells] of Object.entries(world.countsByKey)) {
-  const boxes = shapeFor({ key, ...world.compositions[key], object: objectByVariant.get(key) });
-  const reasons = [...new Set(boxes.map(box => box.approximation).filter(Boolean))];
-  if (!boxes.length && cells > 0) reasons.push('Empty or absent legacy part payload');
-  if (!reasons.length) continue;
-  const id = Number(key.split(':')[1]);
-  const block = approximations.get(id) ?? { id, cells: 0, reasons: new Map() };
-  block.cells += cells;
-  for (const reason of reasons) block.reasons.set(reason, (block.reasons.get(reason) ?? 0) + cells);
-  approximations.set(id, block);
+
+const approximations = new Map(), unknownTextures = new Map();
+const readChunk = (x, z) => JSON.parse(readFileSync(join(values['world-data'], 'chunks', x + '.' + z + '.json')));
+const mapChunks = [...world.chunks, ...(world.visualChunks ?? [])];
+let reviewedCells = 0, modelCells = 0;
+const staticReasons = new Map();
+for (const [x, z] of mapChunks) {
+  const chunk = readChunk(x, z);
+  const objectsBySection = new Map();
+  for (const object of chunk.objects) {
+    if (!object.position) continue;
+    const [bx, by, bz] = object.position;
+    const cy = by >> 4;
+    if (!objectsBySection.has(cy)) objectsBySection.set(cy, new Map());
+    objectsBySection.get(cy).set((bx & 15) + 16 * (bz & 15) + 256 * (by & 15), object);
+  }
+  for (const section of chunk.sections) {
+    const indices = Buffer.from(section.indices, 'base64');
+    const objects = objectsBySection.get(section.y);
+    for (let at = 0; at < 4096; at++) {
+      const index = indices.readUInt16LE(at * 2);
+      const key = world.palette[index];
+      if (key === 'air') continue;
+      reviewedCells++;
+      const object = objects?.get(at);
+      let diagnostics = object ? undefined : staticReasons.get(index);
+      if (!diagnostics) {
+        const cell = {key, ...world.compositions[key], object};
+        const model = extractedModel(catalogs, cell) ?? sourceAtlasModel(key);
+        const boxes = model ? [] : standingSignMesh(key) ?? redPowerTubeMesh(cell) ?? redPowerWireMesh(cell) ??
+          chestMesh(cell) ?? bedMesh(key) ?? shapeFor(cell);
+        const reasons = [...new Set(boxes.map(box => box.approximation).filter(Boolean))];
+        if (!model && !boxes.length) reasons.push('Empty or absent legacy part payload');
+        diagnostics = {model: Boolean(model), reasons, unknownTexture: boxes.some(box => box.faces?.includes(tiles.unknown))};
+        if (!object) staticReasons.set(index, diagnostics);
+      }
+      modelCells += Number(diagnostics.model);
+      if (!diagnostics.reasons.length && !diagnostics.unknownTexture) continue;
+      const position = [16 * x + (at & 15), 16 * section.y + (at >> 8), 16 * z + (at >> 4 & 15)];
+      if (diagnostics.unknownTexture) {
+        const texture = unknownTextures.get(key) ?? {key, cells: 0, sample:position};
+        texture.cells++;
+        unknownTextures.set(key, texture);
+      }
+      if (!diagnostics.reasons.length) continue;
+      const id = Number(key.split(':')[1]);
+      const block = approximations.get(id) ?? {id, cells: 0, reasons: new Map(), sample:position};
+      block.cells++;
+      for (const reason of diagnostics.reasons) block.reasons.set(reason, (block.reasons.get(reason) ?? 0) + 1);
+      approximations.set(id, block);
+    }
+  }
 }
 
 const atlasPath = join(PROJECT, 'generated/textures/atlas.png');
@@ -133,6 +174,8 @@ const report = {
     rgba8Bytes: (ATLAS_GRID * TILE_SIZE) ** 2 * 4,
   },
   benchmarks,
+  renderer: {chunks: mapChunks.length, reviewedCells, modelCells,
+    unknownTextures: [...unknownTextures.values()].sort((a, b) => b.cells - a.cells)},
   approximations: [...approximations.values()].sort((a, b) => b.cells - a.cells).map(block => ({
     ...block, reasons: Object.fromEntries(block.reasons),
   })),

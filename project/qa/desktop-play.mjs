@@ -6,6 +6,7 @@ import {chromium} from 'playwright-core';
 import {loadBase} from '../server/base.mjs';
 import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
+import {voxelMaterialAt} from '../world/voxel-chisel.mjs';
 
 const output = process.argv[2] ?? 'work/desktop-play';
 const base = loadBase('generated/world');
@@ -67,6 +68,31 @@ async function exerciseMicroblocks(page, origin) {
       return hit?.x === x && hit.y === y && hit.z === z && (slot === undefined || hit.partSlot === slot);
     }, {...cell,slot});
   };
+  const targetPart = async (cell, part) => {
+    const seen = await page.evaluate(({cell,part}) => {
+      const bounds = part.bounds[0];
+      const [x, y, z] = Object.values(cell);
+      const middle = [x+(bounds[0]+bounds[3])/16, y+(bounds[1]+bounds[4])/16, z+(bounds[2]+bounds[5])/16];
+      const eye = honeymoon.stats().position;
+      const aim = point => {
+        const [dx,dy,dz] = [point[0]-eye.x, point[1]-eye.y-1.62, point[2]-eye.z];
+        const yaw = Math.atan2(-dx,-dz), pitch = Math.atan2(dy,Math.hypot(dx,dz));
+        honeymoon.look(yaw,pitch);
+        return new Promise(resolve => requestAnimationFrame(() => {
+          const target = honeymoon.target();
+          resolve(target?.x === x && target.y === y && target.z === z && target.partSlot === part.slot);
+        }));
+      };
+      return (async () => {
+        for (const candidate of [middle,
+          ...bounds.map((value, index) => middle.map((axis, i) => i === index % 3 ? [x,y,z][i] + value / 8 : axis))]) {
+          if (await aim(candidate)) return true;
+        }
+        return false;
+      })();
+    }, {cell,part});
+    return seen;
+  };
   const action = async (type, input) => {
     const response = page.waitForResponse(r => r.url().endsWith('/api/action') && r.request().postDataJSON()?.type === type);
     await input();
@@ -109,17 +135,19 @@ async function exerciseMicroblocks(page, origin) {
   const peer = await browser.newContext();
   try {
     assert.ok((await peer.request.post(`${origin}/api/session`, {data:{}})).ok());
-    await targeting(101.5,-32.25,destination,second.slot);
+    const removable = await targetPart(destination,second) ? second : third;
+    assert.ok(await targetPart(destination,removable), 'A placed detail has an exposed face');
     const {hit} = await page.evaluate(() => honeymoon.target());
     const foreign = await peer.request.post(`${origin}/api/action`, {data:{type:'remove_part', requestId:'qa-foreign-part',
-      ...destination,partSlot:second.slot,hit,expectedRevision:third.revision}});
+      ...destination,partSlot:removable.slot,hit,expectedRevision:third.revision}});
     assert.equal(foreign.status(),403);
     assert.equal((await foreign.json()).error,'part_not_owned');
     await page.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision >= revision, third.revision);
     await page.screenshot({path:join(output, 'three-parts.png')});
     const own = await action('remove_part', () => page.mouse.click(640,360,{button:'left'}));
     assert.equal(own.status,200,JSON.stringify(own.body));
-    assert.deepEqual(own.body.changes[0].parts.map(p => p.slot).sort((a,b) => a-b), [first.slot,third.slot].sort((a,b) => a-b));
+    assert.deepEqual(own.body.changes[0].parts.map(p => p.slot).sort((a,b) => a-b),
+      [first,second,third].filter(part => part.slot !== removable.slot).map(part => part.slot).sort((a,b) => a-b));
   } finally { await peer.close(); }
 
   await targeting(315,-23,source,0);
@@ -129,20 +157,67 @@ async function exerciseMicroblocks(page, origin) {
   const builtAt = {x:-7,y:65,z:-18};
   const mixed = await place(195,-15,builtAt,edge,builtAt);
   assert.equal(mixed.count,3);
-  await targeting(198,-24,builtAt,mixed.slot);
+  assert.ok(await targetPart(builtAt,mixed),'Added part remains individually reachable on the map assembly');
   const mixedRemoved = await action('remove_part', () => page.mouse.click(640,360,{button:'left'}));
   assert.equal(mixedRemoved.status,200,JSON.stringify(mixedRemoved.body));
   assert.deepEqual(mixedRemoved.body.changes[0].parts.map(p => p.slot), [19,23]);
+
+  // One free plate goes directly on a copy of itself. In chisel mode a
+  // selected full-block material can then be attached to that same cell.
+  await copy(315,-23,source,0);
+  await targeting(90,-37.815,destination,first.slot);
+  const secondPlate = await place(90,-37.815,destination,plate);
+  assert.equal(secondPlate.bounds[0][1],first.bounds[0][4]);
+  assert.equal(secondPlate.material,first.material);
+  assert.ok(secondPlate.slot !== first.slot);
+  await page.keyboard.press('KeyV');
+  await page.waitForFunction(() => honeymoon.stats().chiseling);
+  const fullBlock = {x:-9,y:64,z:-20};
+  const [yaw,pitch] = await page.evaluate(({x,y,z}) => {
+    const eye = honeymoon.stats().position;
+    const [dx,dy,dz] = [x+.65-eye.x,y+1-eye.y-1.62,z+.55-eye.z];
+    return [Math.atan2(-dx,-dz),Math.atan2(dy,Math.hypot(dx,dz))].map(value => value * 180 / Math.PI);
+  },fullBlock);
+  await targeting(yaw,pitch,fullBlock);
+  const copyMaterial = await action('copy_voxel', () => page.keyboard.press('KeyQ'));
+  assert.ok(copyMaterial.body.material);
+  assert.ok(await targetPart(destination,secondPlate));
+  await page.waitForFunction(({x,y,z}) => {
+    const preview = honeymoon.placement();
+    return preview?.x === x && preview.y === y && preview.z === z && !preview.blocked;
+  },destination);
+  const voxel = await page.evaluate(() => honeymoon.placement().voxel);
+  const joined = await action('place_voxel',()=>page.mouse.click(640,360,{button:'right'}));
+  assert.equal(joined.status,200,JSON.stringify(joined.body));
+  const edited = joined.body.changes[0];
+  assert.ok(edited.parts.some(p => p.slot === secondPlate.slot));
+  assert.equal(voxelMaterialAt(edited.voxels,voxel),copyMaterial.body.material);
+  await page.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision >= revision, edited.revision);
+  await page.screenshot({path:join(output,'hybrid-stack.png')});
+  await page.keyboard.press('KeyX');
+  await page.waitForFunction(() => !honeymoon.placement() && !honeymoon.stats().chiselMaterial);
+  await page.mouse.click(640,360,{button:'right'});
+  assert.equal(await page.evaluate(() => honeymoon.stats().revision),edited.revision);
+  await page.keyboard.press('KeyV');
+
   const after = await snapshot(page);
   assert.equal(after.movementSync.corrections, 0);
   assert.equal(after.movementSync.errors, 0);
   return {x:destination.x,y:destination.y,z:destination.z, slots:[first.slot,second.slot,third.slot],
-    protectedPart:protectedPart.status, foreignPart:403, preservedImportedSlots:[19,23], frames:frames(before, after)};
+    protectedPart:protectedPart.status, foreignPart:403, preservedImportedSlots:[19,23],
+    combined:{plate:secondPlate.bounds, voxel, material:copyMaterial.body.material, clear:true}, frames:frames(before, after)};
 }
 
 try {
   await mkdir(output, {recursive:true});
-  result.spawnPackets = await scenario(base.manifest.spawn, async (page, origin) => {
+  if (process.env.HONEYMOON_BUILDING_ONLY === '1') {
+    result.spawnPackets = await scenario(base.manifest.spawn, async (page, origin) => {
+      result.microblocks = await exerciseMicroblocks(page, origin);
+      await key(page,'KeyW',250);
+      await page.waitForTimeout(180);
+    });
+  } else {
+    result.spawnPackets = await scenario(base.manifest.spawn, async (page, origin) => {
     const entry = await snapshot(page);
     assert.ok(entry.chunksLoaded < base.manifest.chunks.length, 'Entry should open before all chunks arrive');
     await page.evaluate(() => honeymoon.look(0, -.08));
@@ -241,7 +316,7 @@ try {
     result.flight = {from:lift.position, hover:hover.position, afterDescent:descent.position};
   });
 
-  result.cornerPackets = await scenario([-8,65,-17.5], async page => {
+    result.cornerPackets = await scenario([-8,65,-17.5], async page => {
     await page.evaluate(() => honeymoon.look(3 * Math.PI / 4, 0));
     await key(page, 'KeyW', 620);
     await page.waitForTimeout(220);
@@ -250,7 +325,8 @@ try {
     assert.equal(movementSync.corrections, 0);
     assert.equal(movementSync.errors, 0);
     result.redPowerCorner = {position, movementSync};
-  });
+    });
+  }
   await writeFile(join(output, 'result.json'), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result, null, 2));
 } finally {

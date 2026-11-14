@@ -49,9 +49,10 @@ function setPose(player, pose, now) {
   const step = Math.hypot(x - player.target.x, z - player.target.z);
   const elapsed = Math.max(.08, (now - player.updated) / 1000);
   if (step > .001) player.speed = Math.min(6, step / elapsed);
-  if (pose.motion === 'idle') player.speed = 0;
+  if (pose.motion === 'idle' || pose.motion === 'sit') player.speed = 0;
   if (player.object.position.distanceToSquared(player.target.set(x, y, z)) > 64) player.object.position.copy(player.target);
   player.yaw = pose.yaw;
+  player.lookYaw = pose.lookYaw ?? pose.yaw;
   player.pitch = pose.pitch;
   player.motion = pose.motion;
   player.updated = now;
@@ -120,6 +121,7 @@ export class RemotePlayers {
         Math.max(1, Math.sqrt(distance));
       player.drawnPitch += (player.pitch - player.drawnPitch) * mix;
       player.avatar.animate({time: now / 1000, dt, speed: player.speed, pitch: player.drawnPitch,
+        yawOffset: angleBetween(player.yaw, player.lookYaw),
         motion: player.motion === 'air' ? 'jump' : player.motion});
       object.updateMatrixWorld(true);
     }

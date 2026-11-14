@@ -66,11 +66,12 @@ test('corner opens both wings and reorients the remaining seat when a wing is re
   }
 });
 
-test('saved sofas retain their original models and only expose their uncovered sides', () => {
+test('saved sofas retain their authored models until an adjacent new section changes the layout', () => {
   const saved = {key: key('left', 0), object: {type: 'TileEntitySofaLeft'}};
   const copied = placed('center', 0);
-  assert.equal(extractedModel(catalogs, saved, () => copied).surfaces[0], saved.key);
+  assert.equal(extractedModel(catalogs, saved, () => null).surfaces[0], saved.key);
+  assert.equal(extractedModel(catalogs, saved, dx => dx === 1 ? copied : null).surfaces[0], key('right', 0));
   assert.equal(extractedModel(catalogs, copied, (dx, dy, dz) => dx === 1 && dz === 0 ? saved : null).surfaces[0], key('right', 0));
-  assert.equal(extractedModel(catalogs, copied, (dx, dy, dz) => dx === -1 && dz === 0 ? saved : null).surfaces[0], key('chair', 0));
-  assert.equal(placementModelObject(catalogs, key('chair', 0), null, [1, 2, 3]), null);
+  assert.equal(extractedModel(catalogs, copied, (dx, dy, dz) => dx === -1 && dz === 0 ? saved : null).surfaces[0], key('left', 0));
+  assert.equal(placementModelObject(catalogs, key('chair', 0), null, [1, 2, 3]).type, 'JammySofa');
 });

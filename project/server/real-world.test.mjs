@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as geometry from '../world/geometry.mjs';
-import { extractedModel, modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
+import { extractedModel, modelFamilies, placementModelObject, withExtractedModels } from '../world/extracted-models.mjs';
 import { displayObject, loadBase } from './base.mjs';
 import { createHoneymoonServer } from './index.mjs';
 import { physics } from './physics.mjs';
@@ -202,7 +202,8 @@ async function checkActions(base, candidate, target, { stand, anchor }, catalogs
     const removed = await action('remove', 0);
     assert.deepEqual(removed.changes[0], { x, y, z, cell: null, object: null, revision: 1 });
     const placed = await action('place', 1, { cell: copy.cell, against: { x: ax, y: ay, z: az } });
-    assert.deepEqual(placed.changes[0], { x, y, z, cell: original.key, object: displayObject(original.object), revision: 2 });
+    const placedObject = placementModelObject(catalogs, original.key, displayObject(original.object), target);
+    assert.deepEqual(placed.changes[0], { x, y, z, cell: original.key, object: displayObject(placedObject), revision: 2 });
     const restored = (await request('/api/world')).overrides.find(cell => cell.x === x && cell.y === y && cell.z === z);
     assert.deepEqual(restored, placed.changes[0]);
     return `cell ${target.join(',')}, stand ${[stand.x, stand.y, stand.z].join(',')}, ${original.key.slice(0, 32)}`;

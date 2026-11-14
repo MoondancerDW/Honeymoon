@@ -3,7 +3,7 @@ import {chiselMaterialShape} from './geometry.mjs';
 export const voxelKey = 'voxel:chisel';
 export const VOXEL_SIZE = 8;
 export const VOXEL_COUNT = VOXEL_SIZE ** 3;
-export const VOXEL_MATERIAL_LIMIT = 16;
+export const VOXEL_MATERIAL_LIMIT = VOXEL_COUNT;
 
 const axes = ['x', 'y', 'z'];
 const strides = [1, 64, 8];
@@ -35,10 +35,13 @@ function decoded(voxels) {
   const {materials, data} = voxels;
   if (!Array.isArray(materials) || !materials.length || materials.length > VOXEL_MATERIAL_LIMIT ||
       materials.some(material => !isChiselMaterial(material)) || new Set(materials).size !== materials.length ||
-      typeof data !== 'string' || !/^[A-Za-z0-9+/]{683}=$/.test(data)) return null;
+      typeof data !== 'string') return null;
+  const wide = materials.length > 255;
+  if (!(wide ? /^[A-Za-z0-9+/]{1366}==$/ : /^[A-Za-z0-9+/]{683}=$/).test(data)) return null;
   const bytes = atob(data);
   if (btoa(bytes) !== data) return null;
-  const samples = Uint8Array.from(bytes, char => char.charCodeAt(0));
+  const samples = wide ? new Uint16Array(VOXEL_COUNT) : Uint8Array.from(bytes, char => char.charCodeAt(0));
+  if (wide) for (let i = 0; i < VOXEL_COUNT; i++) samples[i] = bytes.charCodeAt(i * 2) | bytes.charCodeAt(i * 2 + 1) << 8;
   if (samples.length !== VOXEL_COUNT || samples.some(value => value > materials.length)) return null;
   const state = {samples, count: samples.reduce((n, value) => n + Number(value !== 0), 0)};
   decodedStates.set(voxels, state);
@@ -48,9 +51,11 @@ function decoded(voxels) {
 // Callers treat a decoded snapshot as immutable. Edits copy the typed array.
 export const decodeVoxels = voxels => decoded(voxels)?.samples ?? null;
 export const isFullVoxels = voxels => decoded(voxels)?.count === VOXEL_COUNT;
+export const isOpaqueFullVoxels = voxels => isFullVoxels(voxels) &&
+  voxels.materials.every(material => chiselMaterialShape(material).mode === 'opaque');
 
 export function encodeVoxels(samples, materials) {
-  if (!(samples instanceof Uint8Array) || samples.length !== VOXEL_COUNT || !Array.isArray(materials) ||
+  if (!(samples instanceof Uint8Array || samples instanceof Uint16Array) || samples.length !== VOXEL_COUNT || !Array.isArray(materials) ||
       materials.length > VOXEL_MATERIAL_LIMIT + 1 ||
       materials.some(material => !isChiselMaterial(material)) || new Set(materials).size !== materials.length ||
       samples.some(value => value > materials.length)) throw new RangeError('Invalid chisel volume');
@@ -58,8 +63,16 @@ export function encodeVoxels(samples, materials) {
   if (!used.length) return null;
   if (used.length > VOXEL_MATERIAL_LIMIT) throw new RangeError('Too many chisel materials');
   const remap = [0, ...materials.map(material => used.indexOf(material) + 1)];
-  const packed = samples.map(value => remap[value]);
-  const result = {materials:used, data:btoa(String.fromCharCode(...packed))};
+  const packed = (used.length > 255 ? Uint16Array : Uint8Array).from(samples, value => remap[value]);
+  let bytes = packed;
+  if (packed instanceof Uint16Array) {
+    bytes = new Uint8Array(VOXEL_COUNT * 2);
+    for (let i = 0; i < VOXEL_COUNT; i++) {
+      bytes[i * 2] = packed[i] & 255;
+      bytes[i * 2 + 1] = packed[i] >> 8;
+    }
+  }
+  const result = {materials:used, data:btoa(String.fromCharCode(...bytes))};
   decodedStates.set(result, {samples:packed, count: packed.reduce((n, value) => n + Number(value !== 0), 0)});
   return result;
 }
@@ -78,13 +91,14 @@ export function writeVoxel(voxels, index, material) {
   const input = voxels ? decodeVoxels(voxels) : null;
   if (voxels && !input) throw new RangeError('Invalid chisel volume');
   if ((voxels?.materials?.[(input?.[index] ?? 0) - 1] ?? null) === material) return voxels ?? null;
-  const samples = input?.slice() ?? new Uint8Array(VOXEL_COUNT);
   const materials = voxels ? voxels.materials.slice() : [];
   let value = 0;
   if (material !== null) {
     value = materials.indexOf(material) + 1;
     if (!value) value = materials.push(material);
   }
+  const samples = value > 255 && input instanceof Uint8Array ? Uint16Array.from(input) :
+    input?.slice() ?? new Uint8Array(VOXEL_COUNT);
   samples[index] = value;
   return encodeVoxels(samples, materials);
 }
@@ -175,16 +189,17 @@ export function voxelFaces(voxels, neighbor, opaqueFullNeighbor) {
   if (!samples) return empty;
   const result = [];
   const materials = voxels.materials.map(chiselMaterialShape);
-  const mask = new Uint8Array(64);
+  const mask = new Uint16Array(64);
   for (let face = 0; face < 6; face++) {
     const axis = face >> 1, positive = face & 1;
     const side = positive ? 1 : -1;
     const uAxis = (axis + 1) % 3, vAxis = (axis + 2) % 3;
     const [normal, uStride, vStride] = [strides[axis], strides[uAxis], strides[vAxis]];
     const adjacentCell = neighbor?.(face);
-    const adjacent = adjacentCell?.key === voxelKey ? decodeVoxels(adjacentCell.voxels) : null;
+    const adjacentVoxels = adjacentCell?.voxels;
+    const adjacent = decodeVoxels(adjacentVoxels);
     const coversBoundary = !adjacent && Boolean(opaqueFullNeighbor?.(face) ??
-      isChiselMaterial(typeof adjacentCell === 'string' ? adjacentCell : adjacentCell?.key));
+      (chiselMaterialShape(typeof adjacentCell === 'string' ? adjacentCell : adjacentCell?.key)?.mode === 'opaque'));
     for (let slice = 0; slice < 8; slice++) {
       const boundary = slice === (positive ? 7 : 0);
       if (boundary && coversBoundary) continue;
@@ -192,8 +207,11 @@ export function voxelFaces(voxels, neighbor, opaqueFullNeighbor) {
       const neighborPlane = (positive ? 0 : 7) * normal;
       for (let v = 0; v < 8; v++) for (let u = 0; u < 8; u++) {
         const offset = u * uStride + v * vStride;
-        const hidden = boundary ? adjacent?.[neighborPlane + offset] : samples[plane + offset + side * normal];
-        mask[u + 8 * v] = hidden ? 0 : samples[plane + offset];
+        const value = samples[plane + offset];
+        const next = boundary ? adjacent?.[neighborPlane + offset] : samples[plane + offset + side * normal];
+        const nextKey = next && (boundary ? adjacentVoxels.materials : voxels.materials)[next - 1];
+        const hidden = next && (nextKey === voxels.materials[value - 1] || chiselMaterialShape(nextKey).mode === 'opaque');
+        mask[u + 8 * v] = hidden ? 0 : value;
       }
       for (let v = 0; v < 8; v++) for (let u = 0; u < 8; u++) {
         const material = mask[u + 8 * v];
