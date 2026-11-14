@@ -83,7 +83,17 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
       vertical = (vertical - box[MIN[textureV]]) / (box[MAX[textureV]] - box[MIN[textureV]]);
     }
     if ((face === 1 || face === 4) !== Boolean(box.mirrorFaces?.[face] ?? box.mirrorU)) horizontal = 1 - horizontal;
-    uv.push([horizontal, axis === 1 ? vertical : 1 - vertical]);
+    if (box.redPowerUv) {
+      // RedPower takes the top and bottom U axis from Z.
+      if (axis === 1) horizontal = outward ? point[2] : 1 - point[2];
+      vertical = 1 - point[axis === 1 ? 0 : 1];
+      const flags = box.redPowerUv[face];
+      if (flags & 1) horizontal = 1 - horizontal;
+      if (flags & 2) vertical = 1 - vertical;
+      uv.push(flags & 4 ? [vertical, horizontal] : [horizontal, vertical]);
+    } else {
+      uv.push([horizontal, axis === 1 ? vertical : 1 - vertical]);
+    }
     corners.push(point.map((value, i) => value + origin[i]));
   }
   quad(out, corners, tile, uv, brightness, box.tintFaces?.[face] ?? box.tint, shade);

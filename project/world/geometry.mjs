@@ -453,6 +453,18 @@ function jacketShape(meta, data, neighbors) {
   return [core, ...arms];
 }
 
+// RenderBufferChest uses machine1.png and rotates its texture faces by the tile's stored side.
+const bufferFaces = [
+  [88, 88, 87, 89, 88, 88], [88, 88, 89, 87, 88, 88],
+  [88, 88, 88, 88, 87, 89], [88, 88, 88, 88, 89, 87],
+  [87, 89, 88, 88, 88, 88], [89, 87, 88, 88, 88, 88],
+];
+const bufferUvFlags = [
+  [0, 0, 0, 0, 0, 0], [3, 3, 3, 3, 3, 3],
+  [5, 6, 6, 5, 0, 0], [6, 5, 5, 6, 0, 0],
+  [0, 0, 0, 0, 6, 5], [0, 0, 3, 3, 5, 6],
+];
+
 const APPROX_FURNITURE = 'Simplified Jammy Furniture model';
 const APPROX_BIBLIO = 'Simplified BiblioCraft model';
 const APPROX_SIGN = 'Standing sign collision and panel bounds are axis-aligned';
@@ -618,6 +630,11 @@ function specialShape(id, meta, cell, neighbors) {
   if (id === 765) {
     const parts = Array.isArray(cell?.parts) ? cell.parts : AIR;
     return [...coverBoxes(parts, true), ...frame(parts)];
+  }
+  if (id === 751 && meta === 2) {
+    const rotation = Number.isInteger(data?.rot) && data.rot >= 0 && data.rot < bufferFaces.length ? data.rot : 0;
+    const faces = bufferFaces[rotation].map(tile => tiles.redPowerMachine + tile);
+    return [box(CUBE, faces, { redPowerUv: bufferUvFlags[rotation] })];
   }
   if ([756, 757, 758, 759].includes(id)) {
     const on = id === 756 || id === 758;
@@ -849,7 +866,7 @@ function vanillaShape(id, meta, neighbors) {
 const simpleCache = new Map();
 const neighborDependent = new Set([8, 9, 53, 64, 67, 71, 85, 101, 102, 108, 109, 113, 114, 128, 134,
   135, 136, 139, 750, 4039]);
-const dynamic = new Set([...neighborDependent, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
+const dynamic = new Set([...neighborDependent, 751, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
 export function shapeDependsOnNeighbors(cell) {
   const [id, meta] = unpack(cell);
   return neighborDependent.has(id) && (id !== 750 || meta !== 0);

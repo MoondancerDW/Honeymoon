@@ -7,17 +7,23 @@
 в том числе его вход около `(100, 66, 44)` и дальняя стена за X=111.
 За детальными чанками продолжается упрощённый горизонт.
 
-Основной маршрут длиной около 62 136 блоков покрывает 254 наружных
-сектора и 965 доступных участков под крышей. Он включает 118 436
-отрезков и 139 взаимодействий. Для съёмки сохранены 5 033 точки
-и 14 531 ракурс. Проверка движения браузера прошла без расхождений
-на всех отрезках, включая 3 812 прыжков, 310 отрезков на лестницах и
-48 в воде. Площадки выделены по геометрии, поэтому среди них есть
+Основной маршрут длиной около 62 064 блоков покрывает 254 наружных
+сектора и 961 участок под крышей. В нём 118 300 отрезков
+и 139 взаимодействий, принятых сервером. Для съёмки сохранены
+5 024 точки и 14 487 ракурсов. Проверка движения браузера прошла
+без расхождений, включая 3 806 отрезков с прыжком, 310 на лестницах
+и 48 в воде. Площадки выделены по геометрии, поэтому среди них есть
 коридоры, части крыш и пещеры.
 
-Маршрут перестроен по результатам первого прогона в Minecraft.
-Расхождения затрагивали узкие кромки микроблоков и переходы
-вплотную к мебели или светильникам.
+В Minecraft совпали 158 949 отсчётов перемещения. Ещё 42 расходились
+в промежуточных положениях, включая 34 при прыжках, шесть на лестницах
+и два в воде. Максимальное смещение составило 0,09 блока по Y
+и 0,17 блока по Z. Конечные положения отрезков и все дополнительные
+ответвления совпали в пределах допуска. Все нужные чанки загрузились.
+После предварительного прогона из маршрута убраны 136 отрезков
+с расхождениями у мебели, светильников и узких кромок микроблоков.
+На четырёх небольших площадках сняты точки обзора. Крупные помещения
+в этих зданиях сохранили свои точки.
 
 Проверка восточного зала начинается от `(91, 65, 45)`, куда
 ведёт сохранённый маршрут от спавна. Персонаж проходит через открытую
@@ -34,9 +40,10 @@
 Из каталога `project`:
 
 ```sh
-node qa/building-survey.mjs --replay work/building-survey/full-district-verified/route.json
+node qa/building-survey.mjs --replay work/building-survey/full-district-pruned/route.json
+node qa/building-survey.mjs --native-tsv work/building-survey/full-district-pruned/route.json work/building-survey/full-district-pruned/walk.tsv
 node qa/building-access.mjs work/building-survey/full-district-verified/route.json work/building-survey/access-full-district
-node qa/east-access.mjs work/building-survey/full-district-verified/route.json work/building-survey/east-from-full-route
+node qa/east-access.mjs work/building-survey/full-district-pruned/route.json work/building-survey/east-from-full-route
 node qa/building-photos.mjs work/building-survey/east-from-full-route/east-poses.txt work/reference-comparison/east-full-browser
 ```
 
@@ -44,12 +51,16 @@ node qa/building-photos.mjs work/building-survey/east-from-full-route/east-poses
 `(-34.5, 53, -42)` остаётся непроверенным. Для западного подвала
 верифицирован спуск по лестнице. Обратный проход ещё не подтверждён.
 
-Сценарий проверяет основной путь до точки ответвления на текущем импорте
-и сохраняет `east-access.json`, `east-walk.tsv` и `east-poses.txt`.
-В маршруте на 256 чанков ближайшая общая точка `(92, 65, 45)`.
-Оригинальный прогон из точки `(91, 65, 45)` хранится в
-`work/reference-capture/east-full-native/`. Парные кадры восточного
-зала сохранены в `work/reference-comparison/east-full-pairs/`.
+Данные маршрута и [проверка сервера](../work/building-survey/full-district-pruned/game-replay.json)
+сохранены в `work/building-survey/full-district-pruned/`.
+[Журнал Minecraft](../work/reference-capture/full-pruned-native/walk-complete.txt)
+включает основной путь и ответвления. Сценарий восточного зала
+проверяет путь до точки ответвления и сохраняет `east-access.json`,
+`east-walk.tsv` и `east-poses.txt`. В маршруте на 256 чанков ближайшая
+общая точка `(92, 65, 45)`. Оригинальный прогон из точки
+`(91, 65, 45)` хранится в `work/reference-capture/east-full-native/`.
+Парные кадры восточного зала после восстановления текстур шести
+буферных сундуков RedPower сохранены в `work/reference-comparison/east-buffer-pairs/`.
 
 ### Проверенный маршрут до расширения района
 

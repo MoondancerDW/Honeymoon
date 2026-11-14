@@ -68,6 +68,15 @@ test('RedPower jacketed street light uses the silver wire cover and original pos
   assert.deepEqual(collisionFor(cell, adjacent).map(aabb), [[.25, .25, .25, .75, .75, .75]]);
 });
 
+test('RedPower buffer chest has source face tiles and a full collision cube', () => {
+  const chest = rot => ({ key: 'legacy:751:2', object: displayObject({ type: 'RPBuffer', data: { rot } }) });
+  assert.deepEqual(shapeFor(chest(0))[0].faces, [600, 600, 599, 601, 600, 600]);
+  const [upsideDown] = shapeFor(chest(1));
+  assert.deepEqual(upsideDown.faces, [600, 600, 601, 599, 600, 600]);
+  assert.deepEqual(upsideDown.redPowerUv, [3, 3, 3, 3, 3, 3]);
+  assert.deepEqual(collisionFor(chest(1)).map(aabb), [[0, 0, 0, 1, 1, 1]]);
+});
+
 test('door halves use the legacy panels, hinge and inset edge UVs', () => {
   const lower = shapeFor('legacy:64:3', () => 'legacy:64:8')[0];
   const upper = shapeFor('legacy:64:8', () => 'legacy:64:3')[0];
