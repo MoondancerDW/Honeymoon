@@ -69,7 +69,8 @@ function wireConnection(neighbor, mount, direction, powerClass) {
 function exteriorWireConnection(neighbor, mount, direction, offset, neighbors, powerClass) {
   const key = keyOf(neighbor);
   if (key && key !== 'air' && !/^legacy:[89]:/.test(key)) {
-    if (!/^cover:750:/.test(key) || (sidesOf(neighbor) & (1 << mount)) ||
+    const hasCover = /^cover:750:/.test(key) || key === 'legacy:750:0' && Array.isArray(neighbor?.parts);
+    if (!hasCover || (sidesOf(neighbor) & (1 << mount)) ||
         blockedByCover(neighbor, direction ^ 1) || blockedByCover(neighbor, mount)) return false;
   }
   const diagonal = neighbors?.(...offset.map((value, axis) => value + signalSides[mount][axis]));

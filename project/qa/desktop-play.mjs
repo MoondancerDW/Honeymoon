@@ -54,6 +54,92 @@ function frames(before, after) {
     max:intervals.at(-1), over50ms:intervals.filter(interval => interval > 50).length};
 }
 
+async function exerciseMicroblocks(page, origin) {
+  const before = await snapshot(page);
+  const source = {x:-5,y:65,z:-23};
+  const destination = {x:-10,y:65,z:-20};
+  const aim = (degrees, pitch) => page.evaluate(([yaw, pitch]) => honeymoon.look(yaw, pitch),
+    [degrees * Math.PI / 180,pitch * Math.PI / 180]);
+  const targeting = async (degrees, pitch, cell, slot) => {
+    await aim(degrees, pitch);
+    await page.waitForFunction(({x,y,z,slot}) => {
+      const hit = honeymoon.target();
+      return hit?.x === x && hit.y === y && hit.z === z && (slot === undefined || hit.partSlot === slot);
+    }, {...cell,slot});
+  };
+  const action = async (type, input) => {
+    const response = page.waitForResponse(r => r.url().endsWith('/api/action') && r.request().postDataJSON()?.type === type);
+    await input();
+    const sent = await response;
+    return {status:sent.status(), body:await sent.json()};
+  };
+  async function copy(degrees, pitch, cell, wanted) {
+    await targeting(degrees, pitch, cell, wanted);
+    const result = await action('copy_part', () => page.keyboard.press('KeyQ'));
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.part.slot, wanted);
+    return result.body.part;
+  }
+  async function place(degrees, pitch, anchor, expected, target = destination) {
+    await targeting(degrees, pitch, anchor);
+    await page.waitForFunction(({x,y,z}) => {
+      const preview = honeymoon.placement();
+      return preview?.x === x && preview.y === y && preview.z === z && !preview.blocked;
+    },target);
+    const {part} = await page.evaluate(() => honeymoon.placement());
+    assert.equal(part.material, expected.material);
+    assert.equal(part.shape, expected.shape);
+    const result = await action('place_part', () => page.mouse.click(640,360,{button:'right'}));
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    const change = result.body.changes.find(c => c.x === target.x && c.y === target.y && c.z === target.z);
+    await page.waitForFunction(({x,y,z,slot}) => honeymoon.getCell(x,y,z)?.parts?.some(p => p.slot === slot),
+      {...target,slot:part.slot});
+    return {...part, revision:change.revision, count:change.parts.length};
+  }
+
+  const plate = await copy(315,-23,source,0);
+  const first = await place(90,-37.815,{...destination,y:64},plate);
+  const post = await copy(315,-15,source,26);
+  const second = await place(96,-39,destination,post);
+  const edge = await copy(195,-15,{x:-7,y:65,z:-18},23);
+  const third = await place(85,-34,destination,edge);
+  assert.deepEqual([first.count,second.count,third.count],[1,2,3]);
+  assert.equal(new Set([first.slot,second.slot,third.slot]).size, 3);
+
+  const peer = await browser.newContext();
+  try {
+    assert.ok((await peer.request.post(`${origin}/api/session`, {data:{}})).ok());
+    await targeting(101.5,-32.25,destination,second.slot);
+    const {hit} = await page.evaluate(() => honeymoon.target());
+    const foreign = await peer.request.post(`${origin}/api/action`, {data:{type:'remove_part', requestId:'qa-foreign-part',
+      ...destination,partSlot:second.slot,hit,expectedRevision:third.revision}});
+    assert.equal(foreign.status(),403);
+    assert.equal((await foreign.json()).error,'part_not_owned');
+    await page.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision >= revision, third.revision);
+    await page.screenshot({path:join(output, 'three-parts.png')});
+    const own = await action('remove_part', () => page.mouse.click(640,360,{button:'left'}));
+    assert.equal(own.status,200,JSON.stringify(own.body));
+    assert.deepEqual(own.body.changes[0].parts.map(p => p.slot).sort((a,b) => a-b), [first.slot,third.slot].sort((a,b) => a-b));
+  } finally { await peer.close(); }
+
+  await targeting(315,-23,source,0);
+  const protectedPart = await action('remove_part', () => page.mouse.click(640,360,{button:'left'}));
+  assert.equal(protectedPart.status,403);
+  assert.equal(protectedPart.body.error,'part_not_owned');
+  const builtAt = {x:-7,y:65,z:-18};
+  const mixed = await place(195,-15,builtAt,edge,builtAt);
+  assert.equal(mixed.count,3);
+  await targeting(198,-24,builtAt,mixed.slot);
+  const mixedRemoved = await action('remove_part', () => page.mouse.click(640,360,{button:'left'}));
+  assert.equal(mixedRemoved.status,200,JSON.stringify(mixedRemoved.body));
+  assert.deepEqual(mixedRemoved.body.changes[0].parts.map(p => p.slot), [19,23]);
+  const after = await snapshot(page);
+  assert.equal(after.movementSync.corrections, 0);
+  assert.equal(after.movementSync.errors, 0);
+  return {x:destination.x,y:destination.y,z:destination.z, slots:[first.slot,second.slot,third.slot],
+    protectedPart:protectedPart.status, foreignPart:403, preservedImportedSlots:[19,23], frames:frames(before, after)};
+}
+
 try {
   await mkdir(output, {recursive:true});
   result.spawnPackets = await scenario(base.manifest.spawn, async (page, origin) => {
@@ -123,6 +209,36 @@ try {
     assert.equal(removed.status(), 200);
     assert.equal((await removed.json()).changes[0].cell, null);
     result.breaking = {original:403, otherPlayer:403, owner:200};
+    result.microblocks = await exerciseMicroblocks(page, origin);
+    await page.evaluate(() => honeymoon.look(Math.PI / 2, -.12));
+
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(() => honeymoon.stats().flying);
+    const lift = await snapshot(page);
+    await page.keyboard.down('Space');
+    await page.keyboard.down('KeyW');
+    try {
+      await page.waitForFunction(y => honeymoon.stats().position.y > y + 2, lift.position.y);
+    } finally {
+      await page.keyboard.up('Space');
+      await page.keyboard.up('KeyW');
+    }
+    await page.waitForTimeout(220);
+    const hover = await snapshot(page);
+    assert.ok(hover.position.x < lift.position.x - 1.4);
+    await page.waitForTimeout(220);
+    assert.deepEqual((await snapshot(page)).position, hover.position);
+    await page.keyboard.down('ShiftLeft');
+    try { await page.waitForFunction(y => honeymoon.stats().position.y < y - 1, hover.position.y); }
+    finally { await page.keyboard.up('ShiftLeft'); }
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(() => !honeymoon.stats().flying);
+    await page.waitForTimeout(240);
+    const descent = await snapshot(page);
+    assert.ok(descent.position.y < hover.position.y - 1);
+    assert.equal(descent.movementSync.corrections, 0);
+    assert.equal(descent.movementSync.errors, 0);
+    result.flight = {from:lift.position, hover:hover.position, afterDescent:descent.position};
   });
 
   result.cornerPackets = await scenario([-8,65,-17.5], async page => {

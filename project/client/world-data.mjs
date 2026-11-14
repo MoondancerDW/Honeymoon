@@ -97,9 +97,10 @@ export class World {
 
   cellAt(x, y, z) {
     if (!this.hasChunk(x, z)) return null;
-    const {key, object} = this.lightCell(x, y, z);
+    const {key, object, parts} = this.lightCell(x, y, z);
     if (key === 'air') return null;
     const composition = this.manifest.compositions?.[key];
+    if (parts) return {key, ...composition, object, parts};
     if (!composition && !object) return key;
     return {key, ...composition, object};
   }
@@ -121,7 +122,7 @@ export class World {
 
   lightCell(x, y, z, base = false) {
     const override = !base && this.overrides.size ? this.overrides.get(cellKey(x, y, z)) : null;
-    if (override) return {key: this.palette[override.index], object: override.object};
+    if (override) return {key: this.palette[override.index], object: override.object, parts: override.parts};
     const chunk = this.chunks.get(chunkKey(x >> 4, z >> 4));
     const local = blockIndex(x, y, z);
     const index = chunk?.sections.get(y >> 4)?.indices[local] ?? 0;
@@ -147,6 +148,7 @@ export class World {
     const indices = new Uint16Array(18 ** 3);
     const light = new Uint8Array(indices.length);
     const objects = [];
+    const microblocks = [];
     const chunks = [-1, 0, 1].map(dz => [-1, 0, 1].map(dx => this.chunks.get(chunkKey(cx + dx, cz + dz))));
     const overrides = this.overrides;
     const blockOverrides = this.blockLightOverrides;
@@ -174,11 +176,12 @@ export class World {
             light[i] = block === undefined ? original : (original & 240) | block;
             const object = override ? override.object : layer?.get(index);
             if (object && indices[i]) objects.push([i, object]);
+            if (override?.parts && indices[i]) microblocks.push([i, override.parts]);
           }
         }
       }
     }
-    return {indices, light, objects};
+    return {indices, light, objects, microblocks};
   }
 }
 

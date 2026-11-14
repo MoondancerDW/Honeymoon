@@ -1,4 +1,5 @@
 import { PLAYER } from '../world/player-body.mjs';
+import { intersectSelection } from '../world/selection.mjs';
 
 export { PLAYER };
 const epsilon = 0.00001;
@@ -152,11 +153,46 @@ export function physics(base, geometry, getCell) {
     });
   }
 
+  function targetAtHit(position, x, y, z, hit) {
+    if (![hit?.x, hit?.y, hit?.z].every(Number.isFinite)) return null;
+    const origin = [position.x, position.y + PLAYER.eye, position.z];
+    const point = [hit.x, hit.y, hit.z];
+    const delta = point.map((value, axis) => value - origin[axis]);
+    const range = Math.hypot(...delta);
+    const tolerance = .002;
+    if (range > 6 + tolerance || range < epsilon) return null;
+    const direction = delta.map(value => value / range);
+    const min = point.map((value, axis) => Math.floor(Math.min(origin[axis], value)));
+    const max = point.map((value, axis) => Math.floor(Math.max(origin[axis], value)));
+    let closest = null;
+    // Same selection boxes, axis traversal and tie order as client picking.
+    for (let yy = min[1] - 1; yy <= max[1]; yy++) {
+      for (let zz = min[2] - 1; zz <= max[2] + 1; zz++) {
+        for (let xx = min[0] - 1; xx <= max[0] + 1; xx++) {
+          for (const box of boxesAt('shapeFor', xx, yy, zz)) {
+            const result = intersectSelection(origin, direction, box, xx, yy, zz, range + tolerance);
+            if (!result || (closest && result.length >= closest.length)) continue;
+            closest = {x: xx, y: yy, z: zz, partSlot: box.partSlot, face: result.offset, length: result.length};
+          }
+        }
+      }
+    }
+    if (!closest || closest.x !== x || closest.y !== y || closest.z !== z ||
+        Math.abs(closest.length - range) > tolerance) return null;
+    return closest;
+  }
+
+  function visiblePart(position, x, y, z, partSlot, hit) {
+    return Number.isInteger(partSlot) && targetAtHit(position, x, y, z, hit)?.partSlot === partSlot;
+  }
+
   return {
     collides,
     movementAllowed,
     movementTrailAllowed,
     visible,
+    visiblePart,
+    targetAtHit,
     overlaps(position, x, y, z, cell, plannedNeighbor) {
       return boxesAt('collisionFor', x, y, z, cell, plannedNeighbor).some(box => overlapsPlayer(position, box, x, y, z));
     },

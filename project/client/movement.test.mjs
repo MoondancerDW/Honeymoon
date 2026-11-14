@@ -87,3 +87,21 @@ test('water slows forward travel and Space raises the player through the waterli
   assert.ok(position.y > 1.8 && position.y < 2);
   assert.equal(movement.medium, 'water');
 });
+
+test('flight hovers, uses physical colliders and records each movement step', () => {
+  const obstacles = new Map([
+    ['1,4,0','legacy:1:0'], ['0,6,0','legacy:1:0'],
+  ]);
+  const movement = new Movement(worldFor(obstacles));
+  const position = {x:.5,y:4,z:.5};
+  const trail = [];
+  movement.fly(position, 0, 0, 0, .05);
+  assert.equal(position.y, 4);
+  for (let i = 0; i < 8; i++) movement.fly(position, 5.1, 5.1, 0, .05, p => trail.push({...p}));
+  assert.ok(position.x <= .70002);
+  assert.ok(position.y > 4.19 && position.y <= 4.20002);
+  assert.equal(trail.length, 32);
+  const {y} = position;
+  movement.update(position, 0, 0, false, .05);
+  assert.ok(position.y < y);
+});

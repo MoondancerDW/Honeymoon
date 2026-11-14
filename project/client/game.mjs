@@ -3,7 +3,8 @@ import {Movement, EYE, pick} from './movement.mjs';
 import {World, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {biblioWeaponCase, blockState, jammyAppliance, jammyUseSound} from '../world/block-interactions.mjs';
-import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
+import {PLAYER, POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
+import {microblockPlacement} from '../world/microblocks.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -12,16 +13,22 @@ const loading = element('loading');
 const button = element('play');
 const surface = element('scene');
 const toast = element('toast');
+const selectionStatus = element('selected');
+const coordinateStatus = element('coords');
+const microHint = element('micro-hint');
+const touchRotate = element('touch-rotate');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const heading = {yaw: 0, pitch: -.045};
 const handControls = new Set([25,64,69,77,84,93,94,96,107,143,219,220]);
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
+let heldPart = null, partRotation = 0, placement = null, placementKey = '';
 const positionInterval = 130;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 const positionTrail = [];
 let playing = false, jump = false, lastFrame = 0, nextPositionSync = 0, timer;
+let flying = false;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
@@ -46,7 +53,10 @@ const messages = {
   reserved: 'Это часть контрольной механики', nothing_to_copy: 'Сначала скопируйте блок',
   empty_cell: 'В ячейке нет блока', cannot_interact: 'С этим объектом нельзя взаимодействовать',
   movement_blocked: 'Позиция скорректирована сервером', outside_reach: 'Цель вне досягаемости',
-  block_not_owned: 'Можно ломать только свои блоки',
+  block_not_owned: 'Можно ломать только свои блоки', part_not_owned: 'Можно ломать только свои детали',
+  part_missing: 'Деталь уже убрана', invalid_part: 'Эта форма или материал недоступны',
+  part_required: 'Наведите прицел на отдельную деталь',
+  incompatible_part: 'Деталь здесь не помещается',
   outside_playable_area: 'Граница района', protected_cell: 'Это часть контрольной механики',
   no_interaction: 'С этим объектом нельзя взаимодействовать'
 };
@@ -127,6 +137,14 @@ function setPlaying(active) {
   }
 }
 
+function setFlight(active) {
+  flying = active;
+  movement.fall = 0;
+  movement.grounded = false;
+  jump = false;
+  element('flight-status').hidden = !active;
+}
+
 const positionTuple = ({x, y, z}) => [x, y, z];
 
 function recordPosition(feet) {
@@ -144,7 +162,7 @@ function setAuthoritativePosition(feet) {
   movement.grounded = false;
 }
 
-function positionPacket() {
+function positionPacket(lastStep) {
   const trail = [];
   let distance = 0;
   let from = confirmedPosition;
@@ -154,15 +172,16 @@ function positionPacket() {
     if (trail.length && (trail.length >= POSITION_TRAIL_LIMIT || distance > 1.05)) break;
     trail.push(step);
     from = step;
+    if (step === lastStep) break;
   }
   const [x, y, z] = from;
   return {x, y, z, from: confirmedPosition, trail,
     requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join('')};
 }
 
-function syncPosition() {
+function syncPosition(lastStep) {
   if (sync || !positionTrail.length || performance.now() < nextPositionSync) return sync;
-  const payload = pendingPosition ??= positionPacket();
+  const payload = pendingPosition ??= positionPacket(lastStep);
   nextPositionSync = performance.now() + positionInterval;
   positionMetrics.requests++;
   sync = post('position', payload, AbortSignal.timeout(3000)).then(({ok, body}) => {
@@ -188,14 +207,16 @@ function syncPosition() {
 
 async function flushPosition() {
   const lastStep = positionTrail.at(-1);
+  const corrections = positionMetrics.corrections;
   while (lastStep && positionTrail.includes(lastStep)) {
     const before = positionMetrics.errors;
     if (!sync && performance.now() < nextPositionSync) {
       await new Promise(resolve => setTimeout(resolve, nextPositionSync - performance.now()));
     }
-    await syncPosition();
+    await syncPosition(lastStep);
     if (positionMetrics.errors !== before) throw new Error('Position sync failed');
   }
+  return positionMetrics.corrections === corrections;
 }
 
 const getKey = cell => typeof cell === 'string' ? cell : cell?.key;
@@ -209,11 +230,57 @@ const labelFor = key => {
     (key.startsWith('cover:') ? 'Микроблоки' : 'Блок ' + id);
 };
 
+function partLabel({slot, shape}) {
+  if (slot < 6) return [3, 4, 5, 10, 11, 12, 13].includes(shape) ? 'Полая панель' : 'Пластина';
+  if (slot < 14) return 'Уголок';
+  if (slot < 26) return 'Ребро';
+  return 'Стойка';
+}
+
+function updatePlacement(target) {
+  if (!heldPart || !target) {
+    placement = null;
+    placementKey = '';
+    return;
+  }
+  const {x, y, z, hit, partSlot, offset: [dx, dy, dz]} = target;
+  const key = [x,y,z,partSlot,dx,dy,dz,Math.floor(hit.x * 8),Math.floor(hit.y * 8),Math.floor(hit.z * 8),
+    world.revisionAt(x,y,z), world.revisionAt(x+dx,y+dy,z+dz), world.hasChunk(x+dx,z+dz), partRotation].join(',');
+  if (key !== placementKey) {
+    placementKey = key;
+    placement = microblockPlacement(world, target, heldPart, {rotation:partRotation});
+  }
+  if (!placement) return;
+  const {x: px, y: py, z: pz, boxes} = placement;
+  const {x: fx, y: fy, z: fz} = position;
+  const {halfWidth: w, height: h} = PLAYER;
+  const epsilon = .00001;
+  placement.blocked = boxes.some(box => fx + w > px + box.x0 + epsilon && fx - w < px + box.x1 - epsilon &&
+    fy + h > py + box.y0 + epsilon && fy < py + box.y1 - epsilon &&
+    fz + w > pz + box.z0 + epsilon && fz - w < pz + box.z1 - epsilon);
+}
+
+function cyclePlacement() {
+  if (heldPart) partRotation++;
+}
+
+function setHeldPart(part) {
+  heldPart = part;
+  partRotation = 0;
+  placementKey = '';
+  microHint.hidden = !part;
+  touchRotate.hidden = !part;
+}
+
 async function action(type, sneaking = false) {
   if (!selection || acting || resetting || !playing) return;
   const target = selection;
   const cell = getKey(target.cell);
+  if (target.part && type === 'copy') type = 'copy_part';
+  if (target.part && type === 'remove') type = 'remove_part';
+  if (heldPart && type === 'place') type = 'place_part';
   const request = {requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join(''), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
+  if (type === 'copy_part' || type === 'remove_part') request.partSlot = target.partSlot;
   if (type === 'interact') {
     request.yaw = heading.yaw;
     if (sneaking) request.sneaking = true;
@@ -226,11 +293,17 @@ async function action(type, sneaking = false) {
     request.z += target.offset[2];
     request.cell = clipboard;
   }
+  if (type === 'place_part') {
+    updatePlacement(target);
+    if (!placement || placement.blocked) { notice(messages[placement ? 'occupied' : 'incompatible_part']); return; }
+    const {x, y, z, part, against} = placement;
+    Object.assign(request, {x, y, z, part, against});
+  }
   request.expectedRevision = world.revisionAt(request.x, request.y, request.z);
   const started = performance.now();
   acting = true;
   try {
-    await flushPosition();
+    if (!await flushPosition()) { notice(messages.movement_blocked); return; }
     let result;
     try { result = await post('action', request); }
     catch { result = await post('action', request); }
@@ -241,7 +314,13 @@ async function action(type, sneaking = false) {
     }
     if (type === 'copy') {
       clipboard = result.body.cell || cell;
+      setHeldPart(null);
       notice('Скопировано · ' + labelFor(clipboard));
+    }
+    if (type === 'copy_part') {
+      setHeldPart(result.body.part);
+      clipboard = null;
+      notice('Скопировано · ' + partLabel(heldPart));
     }
     changes(result.body.changes, result.body.worldRevision);
     effects(result.body);
@@ -260,12 +339,16 @@ function tick(now) {
   if (playing) {
     const forward = Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) - stick.z;
     const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + stick.x;
-    const speed = (keys.has('ShiftLeft') ? 5.1 : 3.8) / Math.max(1, Math.hypot(forward, strafe));
+    const descending = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    const vertical = flying ? Number(keys.has('Space')) - Number(descending) : 0;
+    const speed = (flying ? 5.1 : keys.has('ShiftLeft') ? 5.1 : 3.8) / Math.max(1, Math.hypot(forward, strafe, vertical));
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
     if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
-      movement.update(position, (-sin * forward + cos * strafe) * speed,
-        (-cos * forward - sin * strafe) * speed, jump, dt,
-        {rise: jump || keys.has('Space'), descend: keys.has('ShiftLeft') || keys.has('ShiftRight'), recordStep: recordPosition});
+      const dx = (-sin * forward + cos * strafe) * speed;
+      const dz = (-cos * forward - sin * strafe) * speed;
+      if (flying) movement.fly(position, dx, vertical * speed, dz, dt, recordPosition);
+      else movement.update(position, dx, dz, jump, dt,
+        {rise: jump || keys.has('Space'), descend: descending, recordStep: recordPosition});
     }
     audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw,
       climbing:movement.medium === 'ladder', swimming:movement.medium === 'water'});
@@ -278,10 +361,14 @@ function tick(now) {
     selection = pick(world, [position.x, position.y + EYE, position.z],
       [-Math.sin(heading.yaw) * cp, Math.sin(heading.pitch), -Math.cos(heading.yaw) * cp]);
   } else selection = null;
-  const selected = labelFor(getKey(selection?.cell));
-  element('selected').textContent = [selected, clipboard && 'В руке · ' + labelFor(clipboard)].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
-  element('coords').textContent = [position.x, position.y, position.z].map(Math.floor).join('  ·  ');
-  view.render(now, selection, playing);
+  updatePlacement(selection);
+  const selected = selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
+  const held = heldPart ? partLabel(heldPart) : labelFor(clipboard);
+  const status = [selected, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
+  if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
+  const coordinates = [position.x, position.y, position.z].map(Math.floor).join('  ·  ');
+  if (coordinateStatus.textContent !== coordinates) coordinateStatus.textContent = coordinates;
+  view.render(now, selection, playing, placement);
   requestAnimationFrame(tick);
 }
 
@@ -309,7 +396,9 @@ function bindControls() {
     keys.add(event.code);
     if (event.repeat) return;
     if (event.code === 'Space') jump = true;
+    if (event.code === 'KeyF' && !resetting) setFlight(!flying);
     if (event.code === 'KeyQ') action('copy');
+    if (event.code === 'KeyR') cyclePlacement();
     if (event.code === 'KeyE') action('interact', event.shiftKey);
   });
   document.addEventListener('keyup', event => keys.delete(event.code));
@@ -320,7 +409,8 @@ function bindControls() {
     const [id, meta] = blockState(key);
     const interactive = key === 'game:switch' || handControls.has(id) || jammyAppliance(id, meta) || jammyUseSound(id, meta)
       || (event.shiftKey && biblioWeaponCase(id));
-    const command = {0:'remove', 1:'copy', 2:interactive ? 'interact' : 'place'}[event.button];
+    const use = interactive && (!heldPart || event.shiftKey);
+    const command = {0:'remove', 1:'copy', 2:use ? 'interact' : 'place'}[event.button];
     if (command) action(command, event.shiftKey);
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
@@ -360,6 +450,7 @@ function bindControls() {
   for (const [id, command] of [['touch-place','place'], ['touch-copy','copy'], ['touch-use','interact'], ['touch-remove','remove']]) {
     element(id).addEventListener('click', () => action(command));
   }
+  touchRotate.addEventListener('click', cyclePlacement);
   element('jump').addEventListener('pointerdown', () => { jump = true; });
   element('distance').addEventListener('change', event => {
     view.setDistance(Number(event.target.value)).catch(error => notice(error.message));
@@ -394,7 +485,10 @@ function bindControls() {
     try {
       await sync;
       const {ok, body} = await post('respawn', {});
-      if (ok) setAuthoritativePosition(body.position);
+      if (ok) {
+        setAuthoritativePosition(body.position);
+        setFlight(false);
+      }
       else notice(messages[body.error] || body.error);
     } catch {
       notice('Связь с сервером прервалась');
@@ -467,10 +561,11 @@ async function start() {
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), revision: worldRevision, position: {...position}, audio:audio.stats(),
-      movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
+      flying, movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
     target: () => selection && {...selection},
+    placement: () => placement && {...placement},
     setDistance: distance => {
       element('distance').value = String(distance);
       return view.setDistance(distance);

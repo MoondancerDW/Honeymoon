@@ -3,6 +3,35 @@ import {chunkKey, sectionKey, json} from './world-data.mjs';
 import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
 import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 
+const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
+const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
+  1,3,5, 3,7,5, 0,1,4, 1,5,4, 2,6,3, 3,6,7];
+
+function partGeometry(pointsPerBox) {
+  const geometry = new THREE.BufferGeometry();
+  // A hollow cover has four bars. Other individual pieces use fewer boxes.
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(4 * pointsPerBox * 3), 3)
+    .setUsage(THREE.DynamicDrawUsage));
+  geometry.setDrawRange(0, 0);
+  return geometry;
+}
+
+function drawPart(object, {x, y, z, boxes}, vertices, padding = 0) {
+  const position = object.geometry.attributes.position;
+  let vertex = 0;
+  for (const box of boxes) {
+    for (const corner of vertices) {
+      position.setXYZ(vertex++, corner & 1 ? box.x1 + padding : box.x0 - padding,
+        corner & 2 ? box.y1 + padding : box.y0 - padding,
+        corner & 4 ? box.z1 + padding : box.z0 - padding);
+    }
+  }
+  position.needsUpdate = true;
+  object.geometry.setDrawRange(0, vertex);
+  object.position.set(x, y, z);
+  object.updateMatrixWorld();
+}
+
 export class Display {
   constructor(container, world, dayTick = 6000) {
     this.world = world;
@@ -78,6 +107,17 @@ export class Display {
     this.outline.visible = false;
     this.outline.renderOrder = 3;
     this.scene.add(this.outline);
+    this.partOutline = new THREE.LineSegments(partGeometry(boxEdges.length), this.outline.material);
+    this.partOutline.renderOrder = 3;
+    this.partPreview = new THREE.Mesh(partGeometry(boxTriangles.length), new THREE.MeshBasicMaterial({
+      color: '#79f0ba', transparent: true, opacity: .32, depthWrite: false, side: THREE.DoubleSide,
+    }));
+    this.partPreview.renderOrder = 2;
+    for (const object of [this.partOutline, this.partPreview]) {
+      object.frustumCulled = false;
+      object.visible = false;
+      this.scene.add(object);
+    }
   }
 
   async loadTextures() {
@@ -131,6 +171,9 @@ export class Display {
     line.visible = true;
     line.position.z = -2;
     warmup.add(line, this.sky.clone());
+    const preview = new THREE.Mesh(geometry, this.partPreview.material);
+    preview.position.z = -2;
+    warmup.add(preview);
     const textures = new Set([this.lightmap, this.paint]);
     for (const material of Object.values(this.materials)) {
       textures.add(material.map);
@@ -577,7 +620,7 @@ export class Display {
     }
   }
 
-  render(now, selection, playing = false) {
+  render(now, selection, playing = false, placement = null) {
     if (now >= (this.nextSkyUpdate ?? 0)) {
       this.updateSky(this.cycleTime ?? this.firstDayTick + Math.max(0, Date.now() - this.dayStarted) / 50);
       this.nextSkyUpdate = now + 200;
@@ -603,10 +646,26 @@ export class Display {
       this.dispatch(deadline, playing ? 2 : this.workers.length);
       this.lastBackgroundUpload = now;
     }
-    this.outline.visible = Boolean(selection);
-    if (selection) {
+    this.partOutline.visible = Boolean(selection?.part);
+    this.outline.visible = Boolean(selection && !selection.part);
+    if (this.partOutline.visible) {
+      const key = `${selection.x},${selection.y},${selection.z},${selection.partSlot},${this.world.revisionAt(selection.x, selection.y, selection.z)}`;
+      if (key !== this.partOutlineKey) {
+        drawPart(this.partOutline, selection, boxEdges, .002);
+        this.partOutlineKey = key;
+      }
+    } else if (selection) {
       this.outline.position.set(selection.x + .5, selection.y + .5, selection.z + .5);
       this.outline.updateMatrixWorld();
+    }
+    this.partPreview.visible = Boolean(placement);
+    if (placement && this.drawnPlacement !== placement) {
+      drawPart(this.partPreview, placement, boxTriangles);
+      this.drawnPlacement = placement;
+    }
+    if (placement && this.previewBlocked !== placement.blocked) {
+      this.partPreview.material.color.set(placement.blocked ? '#ed7779' : '#79f0ba');
+      this.previewBlocked = placement.blocked;
     }
     this.sky.position.copy(this.camera.position);
     this.sky.updateMatrixWorld();

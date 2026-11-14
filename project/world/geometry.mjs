@@ -274,7 +274,16 @@ const partThickness = [1, 2, 4, 3, 5, 6, 7];
 const hollowShapes = new Set([3, 4, 5, 10, 11, 12, 13]);
 const coverCache = new WeakMap();
 
-function coverBoxes(parts, frame) {
+export const coverPartTypes = Object.freeze([
+  Object.freeze({first: 0, end: 6, shapes: plateThickness.length}),
+  Object.freeze({first: 6, end: 14, shapes: partThickness.length}),
+  Object.freeze({first: 14, end: 26, shapes: partThickness.length}),
+  Object.freeze({first: 26, end: 29, shapes: 3}),
+]);
+
+export const isCoverMaterial = material => Number.isInteger(material) && covers[material] !== undefined;
+
+export function coverBoxes(parts, frame = false) {
   const cached = coverCache.get(parts);
   if (cached?.frame === frame) return cached.boxes;
   const faceRange = [...CUBE];
@@ -284,6 +293,7 @@ function coverBoxes(parts, frame) {
     const material = covers[part.material];
     result.push(box(bounds, material ?? tiles.unknown, {
       material: part.material,
+      partSlot: part.slot,
       mode: part.material === 7 ? 'cutout' : 'opaque',
       ...(material === undefined ? { approximation: 'Unidentified RedPower cover material' } : {}),
     }));

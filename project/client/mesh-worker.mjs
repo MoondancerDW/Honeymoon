@@ -150,24 +150,26 @@ function neighborLight(light, at, x, y, z) {
   return sky << 4 | block;
 }
 
-function makeShape(index, at, cell, neighbors) {
+function makeShape(index, at, cell, neighbors, edited) {
   const key = cells[index];
   // Stairs and connected shapes can read neighboring cells. Include their face neighbors.
   const connected = geometry.shapeDependsOnNeighbors(key);
-  if (!connected && !cell?.object && cache.has(index)) return cache.get(index);
+  const cacheable = !connected && !cell?.object && !edited;
+  if (cacheable && cache.has(index)) return cache.get(index);
   const model = extractedModel(models, cell || key);
   const adjacent = (dx, dy, dz) => neighbors(at + dx + dz * SIDE + dy * SIDE * SIDE);
   const boxes = model ? [] : geometry.standingSignMesh(key) ??
     geometry.redPowerTubeMesh(cell || key, adjacent) ?? geometry.redPowerWireMesh(cell || key, adjacent) ??
     shapeFor(cell || key, adjacent);
   const shape = {boxes, model, full: boxes.find(fullCube)};
-  if (!connected && !cell?.object) cache.set(index, shape);
+  if (cacheable) cache.set(index, shape);
   return shape;
 }
 
-function precise({indices, light, objects, connectedTextures, chiselConnectedTextures}) {
+function precise({indices, light, objects, microblocks, connectedTextures, chiselConnectedTextures}) {
   const layers = {opaque: layer(), cutout: layer(), blend: layer()};
   const indexedObjects = new Map(objects);
+  const editedParts = new Map(microblocks);
   const rendered = new Map();
   const signs = [];
   function cell(at) {
@@ -175,11 +177,13 @@ function precise({indices, light, objects, connectedTextures, chiselConnectedTex
     if (!key || key === 'air') return null;
     const object = indexedObjects.get(at);
     const composition = compositions[key];
+    const parts = editedParts.get(at);
+    if (parts) return {key, ...composition, object, parts};
     return object || composition ? {key, ...composition, object} : key;
   }
   function shape(at) {
     if (!indices[at]) return null;
-    if (!rendered.has(at)) rendered.set(at, makeShape(indices[at], at, cell(at), cell));
+    if (!rendered.has(at)) rendered.set(at, makeShape(indices[at], at, cell(at), cell, editedParts.has(at)));
     return rendered.get(at);
   }
   for (let y = 0; y < 16; y++) {
@@ -202,7 +206,7 @@ function precise({indices, light, objects, connectedTextures, chiselConnectedTex
         const chisel = chiselConnectedTextures && blockKey === CHISEL_FANTASY;
         const glass = ctm && blockKey.startsWith('legacy:20:');
         const water = waterKey(blockKey);
-        const cover = blockKey.startsWith('cover:750:0:');
+        const cover = blockKey === 'legacy:750:0' || blockKey.startsWith('cover:750:0:');
         const neighborLit = usesNeighborLight(blockKey);
         const neighbors = ctm || chisel ? (dx, dy, dz) => cell(at + dx + dz * SIDE + dy * SIDE * SIDE) : null;
         if (indexedObjects.has(at)) {

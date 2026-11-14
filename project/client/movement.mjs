@@ -2,6 +2,7 @@ import {collisionFor, shapeFor} from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {movementMedium} from '../world/block-movement.mjs';
 import {PLAYER} from '../world/player-body.mjs';
+import {intersectSelection} from '../world/selection.mjs';
 
 const {halfWidth: HALF, height: HEIGHT, eye: EYE} = PLAYER;
 export {HEIGHT, EYE};
@@ -125,6 +126,21 @@ export class Movement {
     }
   }
 
+  fly(position, dx, dy, dz, dt, recordStep) {
+    this.fall = 0;
+    this.grounded = false;
+    this.medium = null;
+    if (!dx && !dy && !dz) return;
+    const steps = Math.max(1, Math.ceil(dt / .016));
+    const time = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      this.axis(position, 'y', dy * time);
+      this.axis(position, 'x', dx * time);
+      this.axis(position, 'z', dz * time);
+      recordStep?.(position);
+    }
+  }
+
   vertical(position, step) {
     const hit = this.axis(position, 'y', this.fall * step);
     this.grounded = hit && this.fall < 0;
@@ -132,35 +148,11 @@ export class Movement {
   }
 }
 
-function intersect(origin, direction, box, x, y, z) {
-  const starts = [x + box.x0, y + box.y0, z + box.z0];
-  const ends = [x + box.x1, y + box.y1, z + box.z1];
-  let entry = -Infinity, exit = Infinity, face = -1;
-  for (let i = 0; i < 3; i++) {
-    if (Math.abs(direction[i]) < 1e-9) {
-      if (origin[i] < starts[i] || origin[i] > ends[i]) return null;
-      continue;
-    }
-    const low = (starts[i] - origin[i]) / direction[i];
-    const high = (ends[i] - origin[i]) / direction[i];
-    if (Math.min(low, high) > entry) {
-      entry = Math.min(low, high);
-      face = 2 * i + Number(low > high);
-    }
-    exit = Math.min(exit, Math.max(low, high));
-    if (entry > exit) return null;
-  }
-  if (exit < 0 || entry > 6 || face < 0) return null;
-  const length = Math.max(0, entry);
-  const offset = [0, 0, 0];
-  offset[face >> 1] = face & 1 ? 1 : -1;
-  return {length, offset};
-}
-
 export function pick(world, origin, direction) {
   const min = origin.map((value, axis) => Math.floor(Math.min(value, value + direction[axis] * 6)));
   const max = origin.map((value, axis) => Math.floor(Math.max(value, value + direction[axis] * 6)));
   let best = null;
+  let selectedBoxes;
   for (let y = min[1] - 1; y <= max[1]; y++) {
     for (let z = min[2] - 1; z <= max[2] + 1; z++) {
       for (let x = min[0] - 1; x <= max[0] + 1; x++) {
@@ -169,13 +161,21 @@ export function pick(world, origin, direction) {
         const boxes = extractedModel(world.models, cell)?.selection
           ?? shapeFor(cell, (dx, dy, dz) => world.cellAt(x + dx, y + dy, z + dz));
         for (const box of boxes) {
-          const result = intersect(origin, direction, box, x, y, z);
+          const result = intersectSelection(origin, direction, box, x, y, z);
           if (!result || (best && result.length >= best.length)) continue;
           const hit = origin.map((value, axis) => value + direction[axis] * result.length);
           best = {x, y, z, cell, length: result.length, offset: result.offset, hit: {x: hit[0], y: hit[1], z: hit[2]}};
+          if (Number.isInteger(box.partSlot)) {
+            best.partSlot = box.partSlot;
+            selectedBoxes = boxes;
+          }
         }
       }
     }
+  }
+  if (best?.partSlot !== undefined) {
+    best.part = best.cell.parts.find(part => part.slot === best.partSlot);
+    best.boxes = selectedBoxes.filter(box => box.partSlot === best.partSlot);
   }
   return best;
 }

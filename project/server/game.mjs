@@ -3,9 +3,11 @@ import { displayObject, cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
+import { isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockRemoval } from '../world/microblocks.mjs';
 import { POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
 
-const actions = new Set(['place', 'remove', 'copy', 'interact']);
+const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
+const actions = new Set(['place', 'remove', 'copy', 'interact', ...partActions]);
 const axes = ['x', 'y', 'z'];
 const MOVEMENT_GRACE = 0.24;
 const RUN_SPEED = 9;
@@ -24,6 +26,8 @@ function trailPoint(input) {
 }
 
 const samePoint = (left, right) => axes.every(axis => left[axis] === right[axis]);
+const slotNumber = value => Number.isInteger(value) && value >= 0 && value < 29;
+const publicPart = ({slot, shape, material}) => ({slot, shape, material});
 
 function normalizeAction(body) {
   if (typeof body.requestId !== 'string' || !REQUEST_ID.test(body.requestId)) throw new RequestError(400, 'invalid_request_id');
@@ -43,6 +47,21 @@ function normalizeAction(body) {
     if (typeof body.cell !== 'string' || body.cell.length > 128) throw new RequestError(400, 'invalid_cell');
     input.cell = body.cell;
     if (body.against !== undefined) input.against = point(body.against, true);
+  }
+  if (partActions.has(body.type)) {
+    if (!input.hit) throw new RequestError(400, 'invalid_coordinates');
+    if (body.type === 'place_part') {
+      if (!isMicroPart(body.part)) throw new RequestError(400, 'invalid_part');
+      input.part = publicPart(body.part);
+      input.against = point(body.against, true);
+      if (body.against.partSlot !== undefined) {
+        if (!slotNumber(body.against.partSlot)) throw new RequestError(400, 'invalid_part');
+        input.against.partSlot = body.against.partSlot;
+      }
+    } else {
+      if (!slotNumber(body.partSlot)) throw new RequestError(400, 'invalid_part');
+      input.partSlot = body.partSlot;
+    }
   }
   return input;
 }
@@ -77,15 +96,20 @@ export function createGame(base, store, geometry, {
 
   function getCurrent(x, y, z) {
     const edit = mechanicCells.get(cellAddress(x, y, z)) ?? store.getEdit(x, y, z);
-    if (edit) return { x, y, z, cell: edit.cell, object: editObject(edit), revision: edit.revision };
+    if (edit) return { x, y, z, cell: edit.cell, object: editObject(edit), revision: edit.revision,
+      ...(edit.parts && {parts: edit.parts}) };
     const original = base.getCell(x, y, z);
     return { x, y, z, cell: original.key === 'air' ? null : original.key, object: original.object, revision: 0 };
   }
 
+  function cellView(current) {
+    const {cell, object} = current;
+    return {key: cell, object, parts: current.parts ?? base.manifest.compositions?.[cell]?.parts};
+  }
+
   const physical = physics(base, geometry, (x, y, z) => {
-    const { cell, object } = getCurrent(x, y, z);
-    const parts = base.manifest.compositions?.[cell]?.parts;
-    return cell === null ? null : { key: cell, object, parts };
+    const current = getCurrent(x, y, z);
+    return current.cell === null ? null : cellView(current);
   });
 
   function playerAt(player) {
@@ -165,6 +189,71 @@ export function createGame(base, store, geometry, {
     return candidates.some(([ax, ay, az]) => physical.visible(position, ax, ay, az, input.hit));
   }
 
+  function writeMicroParts(current, ownedParts, placed) {
+    const {x, y, z} = current;
+    const revision = store.nextRevision();
+    const parts = ownedParts.map(publicPart);
+    const cell = parts.length ? microblockKey : null;
+    const change = {x, y, z, cell, object: null, revision, parts};
+    store.writeEdit(change, originalAt(x, y, z), null, ownedParts);
+    const effects = placed ? [{type: 'sound', sound: 'block.place', cell, position: [x, y, z], material: placed.material}] : [];
+    return {worldRevision: revision, changes: [change], effects};
+  }
+
+  function editMicroParts(player, input, current) {
+    const {x, y, z, type, hit} = input;
+    const view = cellView(current);
+    const isMultipart = isMicroblockCell(view);
+    const position = playerAt(player);
+    if (type === 'copy_part') {
+      const part = view.parts?.find(({slot}) => slot === input.partSlot);
+      if (!part || !isMicroPart(part)) throw new RequestError(409, 'part_missing');
+      if (!physical.visiblePart(position, x, y, z, part.slot, hit)) throw new RequestError(403, 'outside_reach');
+      return {worldRevision: store.worldRevision(), changes: [], effects: [], part: publicPart(part)};
+    }
+
+    if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
+    const original = base.getCell(x, y, z).key;
+    if ((!isMultipart && (current.cell !== null || original !== 'air')) ||
+        (isMultipart && original !== 'air' && !isMicroblockCell({key: original, parts: base.manifest.compositions?.[original]?.parts}))) {
+      throw new RequestError(409, 'incompatible_part');
+    }
+    const parts = view.parts ?? [];
+    // Copies placed by the older whole-cell API inherit their proven owner on the first part edit.
+    const storedParts = store.getMicroParts(x, y, z);
+    const owner = original === 'air' && current.cell !== null ? store.getEditOwner(x, y, z) : null;
+    const owned = storedParts ?? parts.map(part => ({...publicPart(part), owner}));
+
+    if (type === 'remove_part') {
+      const part = owned.find(({slot}) => slot === input.partSlot);
+      if (!part) throw new RequestError(409, 'part_missing');
+      if (part.owner !== player) throw new RequestError(403, 'part_not_owned');
+      if (!physical.visiblePart(position, x, y, z, part.slot, hit)) throw new RequestError(403, 'outside_reach');
+      const next = microblockRemoval(parts, part.slot, {
+        mayReshape: slot => owned.some(remaining => remaining.slot === slot && remaining.owner === player),
+      });
+      if (!next) throw new RequestError(409, 'incompatible_part');
+      if (next.reshaped && playerOverlaps(x, y, z, {key: microblockKey, parts: next.parts}, player)) {
+        throw new RequestError(409, 'occupied');
+      }
+      return writeMicroParts(current, owned.filter(({slot}) => slot !== part.slot));
+    }
+
+    const against = input.against;
+    const anchor = physical.targetAtHit(position, against.x, against.y, against.z, hit);
+    const sameCell = samePoint(input, against);
+    if (!anchor || against.partSlot !== anchor.partSlot || (sameCell && against.partSlot === undefined) ||
+        (!sameCell && !axes.every((axis, index) => input[axis] === against[axis] + anchor.face[index]))) {
+      throw new RequestError(403, 'outside_reach');
+    }
+    const added = microblockAddition(parts, input.part);
+    if (!added) throw new RequestError(409, 'incompatible_part');
+    const next = {key: microblockKey, object: null, parts: added.parts};
+    if (playerOverlaps(x, y, z, next, player)) throw new RequestError(409, 'occupied');
+    const nextOwners = [...owned, {...input.part, owner: player}].sort((a, b) => a.slot - b.slot);
+    return writeMicroParts(current, nextOwners, input.part);
+  }
+
   function execute(player, input) {
     const { x, y, z, type } = input;
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
@@ -172,9 +261,14 @@ export function createGame(base, store, geometry, {
     if (input.expectedRevision !== current.revision) {
       throw new RequestError(409, 'stale_cell', { current: { ...current, object: displayObject(current.object) }, worldRevision: store.worldRevision() });
     }
+    if (partActions.has(type)) return editMicroParts(player, input, current);
     if (type === 'place') {
       if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
       if (!base.catalog.has(input.cell) || input.cell === 'air') throw new RequestError(400, 'unknown_cell_type');
+      if (!allowRemoval && (input.cell === microblockKey ||
+          isMicroblockCell({key: input.cell, parts: base.manifest.compositions?.[input.cell]?.parts}))) {
+        throw new RequestError(409, 'part_required');
+      }
       if (current.cell !== null) throw new RequestError(409, 'occupied');
       if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
       if (!placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
@@ -189,6 +283,10 @@ export function createGame(base, store, geometry, {
 
     if (type === 'remove' && reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
     if (current.cell === null) throw new RequestError(409, 'empty_cell');
+    if ((type === 'remove' || type === 'copy') &&
+        (current.parts || (!allowRemoval && isMicroblockCell(cellView(current))))) {
+      throw new RequestError(409, 'part_required');
+    }
     if (type === 'remove' && !allowRemoval) {
       if (store.getEditOwner(x, y, z) !== player || base.getCell(x, y, z).key !== 'air') {
         throw new RequestError(403, 'block_not_owned');
