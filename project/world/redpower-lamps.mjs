@@ -1,6 +1,10 @@
 const colors = [0xffffff,12608256,11868853,7308529,0xbfbf00,7074048,15812213,0x535353,
   0x939393,34695,6160576,1250240,5187328,558848,10620678,0x1f1f1f];
 
+// BlockExtended uses the vanilla block bounds when TileShapedLamp supplies no collision box.
+// Use the default cube seen in server movement without the old singleton's picking side effects.
+export const shapedLampCollision = Object.freeze([Object.freeze({x0:0, y0:0, z0:0, x1:1, y1:1, z1:1})]);
+
 function rotate(x, y, z, rotation) {
   switch (rotation) {
     case 1: return [x, 1 - y, 1 - z];
@@ -40,6 +44,5 @@ export function redPowerLamp(catalog, data) {
     return {positions:rotated, uv, mode:group === 2 ? 'glow' : 'cutout',
       tint:group === 0 ? 0xffffff : lit ? color : dark(color), emissive:group !== 0 && lit};
   });
-  const collision = [lampBounds(data)];
-  return {family:'redpower', surfaces, collision, selection:collision};
+  return {family:'redpower', surfaces, collision:shapedLampCollision, selection:[lampBounds(data)]};
 }

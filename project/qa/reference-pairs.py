@@ -41,6 +41,14 @@ TITLES = {
     "west-cellar-hatch-up": "Открытый люк западного подвала",
     "attic-hatch-up": "Открытый люк под чердаком",
     "upper-attic": "Чердак с выставленной камерой",
+    "cover-detail": "Порог из микроблоков RedPower",
+    "cover-threshold": "Ответвление за порогом RedPower",
+    "restored-lamp-approach": "Подход к фигурному светильнику RedPower",
+    "restored-lamp-room": "Точка обзора над светильником RedPower",
+    "restored-lamp-fixture": "Интерьер у светильника RedPower",
+    "cake-branch": "Точка обзора над тортом",
+    "rp-insulated-wall": "Внутренний угол провода RedPower",
+    "rp-insulated-outer-corner-west": "Внешний угол провода RedPower",
 }
 BACKGROUND = "#151e22"
 MUTED = "#bcc7ca"

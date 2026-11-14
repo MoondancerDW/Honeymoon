@@ -33,6 +33,20 @@ test('cannot step into a full block or under a low ceiling', () => {
   assert.ok(blocked.x <= -.28 && Math.abs(blocked.y - 1) < .002);
 });
 
+test('a RedPower cover blocks the half-block step into a low ceiling', () => {
+  const cover = {key:'cover:750:0:tread', parts:[{slot:0, shape:0, material:2}]};
+  const position = walk([['0,1,0',cover], ['0,3,0','legacy:35:4']]);
+  assert.ok(Math.abs(position.x + .3) < .002);
+  assert.ok(Math.abs(position.y - 1) < .002);
+});
+
+test('a ceiling on the approach clips the step to the height available above a cover', () => {
+  const cover = {key:'cover:750:0:tread', parts:[{slot:0, shape:0, material:2}]};
+  const position = walk([['0,1,0',cover], ['-1,3,0','legacy:35:4'], ['0,3,0','legacy:35:4']]);
+  assert.ok(position.x > .6);
+  assert.ok(Math.abs(position.y - 1.125) < .002);
+});
+
 test('uses the original standing height and width when checking clearance', () => {
   const movement = new Movement(worldFor(new Map([['0,3,0','legacy:1:0'], ['1,1,0','legacy:1:0']])));
   assert.equal(movement.blocked(.5, 1.19, .5), false);

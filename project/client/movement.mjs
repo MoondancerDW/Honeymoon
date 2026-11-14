@@ -65,7 +65,21 @@ export class Movement {
     if (!(this.grounded && !this.medium) && !swimOut) return true;
     const partial = position[axis];
     const feet = position.y;
-    // Test clearance during the lift before trying the horizontal step.
+    if (!swimOut) {
+      // The original player attempts one half-block step, clipped by the
+      // ceiling on the approach side, then keeps the farther horizontal move.
+      position[axis] = before;
+      this.axis(position, 'y', .5);
+      const clipped = this.axis(position, axis, amount);
+      if (Math.abs(position[axis] - before) <= Math.abs(partial - before)) {
+        position.y = feet;
+        position[axis] = partial;
+        return true;
+      }
+      this.axis(position, 'y', -.5);
+      return clipped;
+    }
+    // Try short lifts when climbing out of water.
     for (let lift = .125; lift <= .5; lift += .125) {
       const raised = feet + lift;
       if (this.blocked(position.x, raised, position.z)) return true;

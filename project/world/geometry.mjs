@@ -2,6 +2,7 @@ import {hasHatchRung, westCellarLadder} from './west-cellar.mjs';
 
 import {connectedTubeMesh, tubeCore} from './redpower-tubes.mjs';
 import {wirePanels, wireSelection} from './redpower-wires.mjs';
+import {shapedLampCollision} from './redpower-lamps.mjs';
 
 export const ATLAS_GRID = 64;
 export const TILE_SIZE = 16;
@@ -935,6 +936,7 @@ const solidCache = new WeakMap();
 export function collisionFor(cell, neighbors) {
   const [id, meta] = unpack(cell);
   if (id === 765) return frameCollision;
+  if (id === 768) return shapedLampCollision;
   if (id === 117) return brewingStandCollision;
   if (id === 92) {
     const [cake] = shapeFor(cell);

@@ -20,11 +20,10 @@ function layer() {
   return {positions: [], colors: [], lightLevels: [], uvs: [], indices: []};
 }
 
-function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1) {
+function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding = .25 / TILE_SIZE) {
   const start = out.positions.length / 3;
   const u0 = (tile % ATLAS_GRID) / ATLAS_GRID;
   const v0 = 1 - Math.floor(tile / ATLAS_GRID) / ATLAS_GRID;
-  const padding = .25 / TILE_SIZE;
   const scale = 1 - 2 * padding;
   const r = Math.round((tint >> 16 & 255) * shade);
   const g = Math.round((tint >> 8 & 255) * shade);
@@ -91,7 +90,10 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
       if (box.redPowerAxes) {
         local = [];
         for (const [i, component] of box.redPowerAxes.entries()) {
-          local[Math.abs(component) - 1] = component > 0 ? point[i] : 1 - point[i];
+          // RenderContext.setSideUV insets each cropped face, preserving the
+          // atlas texel at the edge of a narrow RedPower trace.
+          const inset = point[i] - (box.redPowerOffset?.[i] ?? 0) + (point[i] === box[MIN[i]] ? .001 : -.001);
+          local[Math.abs(component) - 1] = component > 0 ? inset : 1 - inset;
         }
       }
       horizontal = local[localAxis === 2 ? 0 : 2];
@@ -120,7 +122,8 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
       corners.push(point.map((value, i) => value + origin[i]));
     }
   }
-  quad(out, corners, tile, uv, brightness, box.tintFaces?.[face] ?? box.tint, shade);
+  quad(out, corners, tile, uv, brightness, box.tintFaces?.[face] ?? box.tint, shade,
+    box.redPowerAxes ? 0 : undefined);
 }
 
 function fullCube(box) {
@@ -219,7 +222,7 @@ function precise({indices, light, objects, connectedTextures, chiselConnectedTex
           for (let f = 0; f < 6; f++) {
             const axis = f >> 1;
             const adjacent = at + FACES[f][axis] * STRIDE[axis];
-            const onEdge = box.angle === undefined && (f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0);
+            const onEdge = box.angle === undefined && !box.redPowerOffset && (f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0);
             if (water && (onEdge || f === 3) && waterKey(cells[indices[adjacent]])) continue;
             if (onEdge) {
               const neighbor = shape(adjacent)?.full;

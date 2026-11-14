@@ -45,7 +45,7 @@ function readModels(directory) {
   return models;
 }
 
-function makeWorld(directory, modelDirectory, extended = false) {
+export function makeWorld(directory, modelDirectory, extended = false) {
   const manifest = JSON.parse(readFileSync(join(directory, 'world.json'), 'utf8'));
   const models = readModels(modelDirectory);
   const { minX, maxX, minY, maxY, minZ, maxZ } = manifest.bounds;
@@ -573,7 +573,7 @@ function foliageNearSpawn(world, survey, physical) {
   return canopies;
 }
 
-function cameraAt(node, target) {
+export function cameraAt(node, target) {
   const dx = target[0] + .5 - node.x, dz = target[2] + .5 - node.z;
   const dy = target[1] + .5 - (node.y + PLAYER.eye);
   return { yaw: Math.round(Math.atan2(-dx, dz) * 180 / Math.PI), pitch: Math.round(Math.atan2(-dy, Math.hypot(dx, dz)) * 180 / Math.PI) };
@@ -912,7 +912,7 @@ function main(args) {
   console.log(JSON.stringify({ output, scope: result.scope, counts: result.counts }, null, 2));
 }
 
-function nativeTsv(route) {
+export function nativeTsv(route) {
   const actions = Map.groupBy(route.actions, action => action.pathIndex);
   const traversal = new Map((route.movementSegments ?? []).map(segment => [segment.pathIndex, segment.samples]));
   return route.feet.flatMap((feet, pathIndex) => [
