@@ -16,6 +16,7 @@ import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselPlacementAtHit} from '../world/chisel-surface.mjs';
 import {positionBatch} from './position-packet.mjs';
+import {supportsFarTerrain} from './far-terrain.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -915,7 +916,7 @@ function streamNearby(chunks, scenery) {
 
   function updateArea() {
     const x = Math.floor(position.x / 16), z = Math.floor(position.z / 16);
-    const radius = Math.min(view.requestedDistance, 8) + 1;
+    const radius = view.detailedDistance + 1;
     if (area?.x === x && area.z === z && area.radius === radius) return;
     area = {x, z, radius};
     view.streamAround(x, z, radius);
@@ -992,15 +993,18 @@ async function start() {
   confirmedPosition = positionTuple(position);
   movement = new Movement(world);
   view = new Display(surface, world, session.body.dayTick);
+  if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
   if (session.body.seat) setSeat(session.body.seat, p);
   if (session.body.time) view.setWorldTime(session.body.time);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
   updateCamera();
   const available = new Set([4, ...(manifest.terrain || []).map(ring => ring.radius)]);
   if (manifest.chunkPalettes) available.add(8);
+  if (supportsFarTerrain(manifest)) available.add(24);
   const distance = element('distance');
   for (const option of distance.options) option.disabled = !available.has(Number(option.value));
-  if (manifest.visualRadius > 8 && available.has(16)) distance.value = '16';
+  if (available.has(24)) distance.value = '24';
+  else if (manifest.visualRadius > 8 && available.has(16)) distance.value = '16';
   if (!available.has(Number(distance.value))) distance.value = '4';
   await Promise.all([view.loadTextures(), refresh()]);
   await view.prepareGraphics();
@@ -1013,6 +1017,7 @@ async function start() {
       flying, chiseling, chiselMaterial, movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
+    setOcclusion: enabled => view.setOcclusion(enabled),
     target: () => selection && {...selection},
     placement: () => placement && {...placement},
     setDistance: distance => {

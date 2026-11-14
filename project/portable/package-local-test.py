@@ -30,7 +30,7 @@ def build(output, node, node_license, generated):
             for source in ("client", "server", "world"):
                 add_tree(archive, PROJECT / source, source, lambda path: path.suffix in {".mjs", ".html", ".css", ".json"}
                          and not path.name.endswith(".test.mjs"))
-            for family in ("world", "textures", "models", "sounds"):
+            for family in ("world", "textures", "models", "sounds", "lod"):
                 add_tree(archive, generated / family, f"generated/{family}")
             catalog = generated / "creative" / "catalog.json"
             if catalog.is_file():

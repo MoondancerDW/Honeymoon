@@ -8,6 +8,7 @@ import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { createChat } from './chat.mjs';
+import { loadLodAssets, serveLodTile } from './lod-assets.mjs';
 import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
 import { MAX_PROFILE_BODY, profileChanges, publicProfile } from './presence-profile.mjs';
@@ -161,6 +162,9 @@ export function createHoneymoonServer({
 } = {}) {
   const models = {};
   const creative = readCreativeCatalog(generated, project);
+  const lod = base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
+  const publicWorld = base.publicManifest ?? base.manifest;
+  const manifest = lod ? {...publicWorld, lod:lod.descriptor} : publicWorld;
   const sounds = statSync(join(generated, 'sounds', 'sounds.json'), {throwIfNoEntry: false})?.isFile() ?? false;
   for (const family of modelFamilies) {
     try {
@@ -348,7 +352,11 @@ export function createHoneymoonServer({
       return;
     }
     if (path === '/generated/world/world.json') {
-      return serveWorld(request, response, path, () => base.publicManifest ?? base.manifest);
+      return serveWorld(request, response, path, () => manifest);
+    }
+    if (path.startsWith('/generated/lod/')) {
+      if (await serveLodTile(lod, request, response, path, acceptsGzip(request.headers['accept-encoding']))) return;
+      throw new RequestError(404, 'not_found');
     }
     const chunk = path.match(/^\/generated\/world\/chunks\/(-?\d+)\.(-?\d+)\.json$/);
     if (chunk) {

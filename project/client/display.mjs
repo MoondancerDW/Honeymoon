@@ -5,6 +5,8 @@ import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 import {itemFrameModel} from '../world/item-frames.mjs';
 import {RemotePlayers} from './remote-players.mjs';
 import {clockTick} from '../world/world-time.mjs';
+import {SectionVisibility} from './section-visibility.mjs';
+import {FarTerrain, supportsFarTerrain} from './far-terrain.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -74,6 +76,7 @@ function quadGeometry(quads, light, shade) {
 export class Display {
   constructor(container, world, dayTick = 6000) {
     this.world = world;
+    this.sectionVisibility = new SectionVisibility();
     this.container = container;
     this.scene = new THREE.Scene();
     this.scene.matrixWorldAutoUpdate = false;
@@ -96,6 +99,9 @@ export class Display {
     this.scene.add(this.visualEntities);
     this.entityLights = new Map();
     this.chunkEntities = new Map();
+    this.exactChunks = new Set();
+    this.preciseLevels = new Map();
+    this.completedChunks = new Set();
     this.camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
     this.players = new RemotePlayers(this.scene, this.camera);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
@@ -191,6 +197,7 @@ export class Display {
       return Object.entries(materialsFor(texture, 26 / 255)).map(([mode, material]) => [`${family}:${mode}`, material]);
     }));
     this.materials = {...materialsFor(map), ...Object.fromEntries(additional.flat())};
+    if (supportsFarTerrain(this.world.manifest)) this.farTerrain = new FarTerrain(this,map);
     this.materials.pane = new THREE.MeshBasicMaterial({map, vertexColors: true, alphaTest: .47});
     this.useLightmap(this.materials.pane);
     if (this.world.models?.redpower) {
@@ -216,6 +223,11 @@ export class Display {
     geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(12).fill(255), 3, true));
     geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(new Uint16Array(4).fill(240), 1));
     const line = this.outline.clone();
+    const farMeshes = this.farTerrain?.warmup() ?? [];
+    for (const mesh of farMeshes) {
+      mesh.position.z = -2;
+      warmup.add(mesh);
+    }
     line.visible = true;
     line.position.z = -2;
     warmup.add(line, this.sky.clone());
@@ -256,6 +268,7 @@ export class Display {
     } finally {
       this.renderer.setScissorTest(false);
       geometry.dispose();
+      for (const mesh of farMeshes) mesh.geometry.dispose();
       sign.geometry.dispose();
       sign.material.map.dispose();
     }
@@ -347,6 +360,7 @@ export class Display {
     const hasData = chunk?.sections.has(cy);
     if (!hasData && !edit && !this.groups.has(id)) return;
     const version = ++this.nextSectionVersion;
+    if (edit) this.sectionVisibility.invalidate(id);
     this.versions.set(id, version);
     this.pending.set(id, {id, cx, cy, cz, version, type: 'precise', edit, visualOnly: chunk?.visualOnly});
   }
@@ -362,6 +376,7 @@ export class Display {
         this.remeshAdjacentSections(change.x, change.y, change.z);
       }
     }
+    this.preciseLevels.set(chunkKey(chunk.x,chunk.z),levels);
     for (const cy of levels) {
       this.schedule(chunk.x, cy, chunk.z, !chunk.sections.has(cy));
       for (const [dx, dz] of [[-1,0], [1,0], [0,-1], [0,1]]) this.schedule(chunk.x + dx, cy, chunk.z + dz);
@@ -381,15 +396,21 @@ export class Display {
         const meshes = [];
         group.traverse(node => { if (node.isMesh) meshes.push(node); });
         this.chunkEntities.set(chunkKey(chunk.x, chunk.z), group);
+        group.visible = this.isPreciseVisible(chunk.x,chunk.z);
         this.uploads.push({meshes, object:group, parent:chunk.visualOnly ? this.visualEntities : this.scene});
       }
     }
+    this.updateChunkVisibility(chunk.x,chunk.z);
   }
 
   removeChunks(chunks) {
     const removedEntities = new Set();
     for (const {x, z} of chunks) {
       const key = chunkKey(x, z);
+      this.preciseLevels.delete(key);
+      this.completedChunks.delete(key);
+      this.exactChunks.delete(key);
+      this.farTerrain?.chunkChanged(x,z);
       const entities = this.chunkEntities.get(key);
       if (entities) {
         removedEntities.add(entities);
@@ -398,6 +419,7 @@ export class Display {
       }
       for (let y = 0; y < 16; y++) {
         const id = sectionKey(x, y, z);
+        this.sectionVisibility.invalidate(id);
         const group = this.groups.get(id);
         if (group) this.discardGroup(group);
         this.groups.delete(id);
@@ -425,6 +447,50 @@ export class Display {
 
   streamAround(x, z, radius) {
     this.streamArea = {x, z, radius};
+    if (this.farTerrain?.active) {
+      this.farTerrain.move(x,z);
+      for (const chunk of this.world.chunks.values()) this.updateChunkVisibility(chunk.x,chunk.z);
+    }
+  }
+
+  get detailedDistance() {
+    return this.requestedDistance === 24 ? 4 : Math.min(this.requestedDistance,8);
+  }
+
+  isPreciseVisible(x,z) {
+    if (!this.farTerrain?.active || !this.streamArea) return !this.world.chunks.get(chunkKey(x,z))?.visualOnly || this.requestedDistance > 4;
+    if (!this.farTerrain.hasChunk(x,z)) return true;
+    return this.exactChunks.has(chunkKey(x,z));
+  }
+
+  updateChunkVisibility(x,z) {
+    const key = chunkKey(x,z);
+    const levels = this.preciseLevels.get(key);
+    if (!levels) return;
+    let changed = false;
+    if (this.farTerrain?.active && this.streamArea) {
+      if (!this.completedChunks.has(key) && [...levels].every(y => this.installedVersions.has(sectionKey(x,y,z)))) {
+        this.completedChunks.add(key);
+      }
+      const exact = Math.max(Math.abs(x-this.streamArea.x),Math.abs(z-this.streamArea.z)) <= this.detailedDistance &&
+        this.completedChunks.has(key);
+      if (exact !== this.exactChunks.has(key)) {
+        if (exact) this.exactChunks.add(key);
+        else this.exactChunks.delete(key);
+        changed = true;
+      }
+    }
+    const visible = this.isPreciseVisible(x,z);
+    for (let y = 0; y < 16; y++) {
+      const group = this.groups.get(sectionKey(x,y,z));
+      if (!group) continue;
+      group.userData.preciseVisible = visible;
+      group.visible = visible;
+      if (this.sectionVisibility.enabled) this.sectionVisibility.dirty = true;
+    }
+    const entities = this.chunkEntities.get(key);
+    if (entities) entities.visible = visible;
+    if (changed) this.farTerrain?.chunkChanged(x,z);
   }
 
   remeshLighting(sections) {
@@ -470,12 +536,16 @@ export class Display {
   }
 
   async setDistance(distance) {
+    if (distance === 24 && !this.farTerrain) return;
     this.requestedDistance = distance;
+    this.farTerrain?.setActive(distance === 24);
+    this.exactChunks.clear();
+    if (this.farTerrain?.active && this.streamArea) this.farTerrain.move(this.streamArea.x,this.streamArea.z);
     this.visualEntities.visible = distance > 4;
     for (const [id, group] of this.groups) {
       if (id.startsWith('lod:')) group.visible = Number(id.split(':')[1]) <= distance;
-      else if (group.userData.visualOnly) group.visible = distance > 4;
     }
+    for (const chunk of this.world.chunks.values()) this.updateChunkVisibility(chunk.x,chunk.z);
     for (const [id] of this.pending) {
       if (id.startsWith('lod:') && Number(id.split(':')[1]) > distance) this.pending.delete(id);
     }
@@ -508,6 +578,35 @@ export class Display {
         this.versions.set(id, 1);
         this.pending.set(id, {id, type: 'coarse', version: 1, radius, stride: step, cx: gx * 4, cy: 0, cz: gz * 4});
       }
+    }
+  }
+
+  setOcclusion(enabled) {
+    const visibility = this.sectionVisibility;
+    if (!visibility.setEnabled(enabled) || !enabled) return;
+    for (const chunk of this.world.chunks.values()) {
+      const levels = this.preciseLevels.get(chunkKey(chunk.x,chunk.z)) ?? chunk.sections.keys();
+      for (const y of levels) {
+        const id = sectionKey(chunk.x,y,chunk.z);
+        if (!this.pending.has(id)) this.schedule(chunk.x,y,chunk.z);
+      }
+    }
+  }
+
+  updateOcclusion(now) {
+    const visibility = this.sectionVisibility;
+    if (!visibility.update(this.camera.position,this.streamArea?.radius ?? this.detailedDistance + 1,now)) return;
+    visibility.culled = 0;
+    visibility.total = 0;
+    for (const [id,group] of this.groups) {
+      if (id.startsWith('lod:')) continue;
+      const {preciseVisible,fitForOcclusion,sectionCoords,visualOnly} = group.userData;
+      const visible = preciseVisible ?? (!visualOnly || this.requestedDistance > 4);
+      const seen = !visibility.enabled || !fitForOcclusion || visibility.visible(...sectionCoords);
+      group.visible = visible && seen;
+      if (!visible) continue;
+      visibility.total++;
+      if (!seen) visibility.culled++;
     }
   }
 
@@ -597,6 +696,8 @@ export class Display {
     } else {
       group.position.set(...coords.map(value => value * 16));
       group.userData.visualOnly = this.world.chunks.get(chunkKey(coords[0], coords[2]))?.visualOnly === true;
+      group.userData.sectionCoords = coords;
+      group.userData.fitForOcclusion = result.fitsSection === true;
     }
     for (const [mode, data] of Object.entries(result.layers)) {
       const geometry = new THREE.BufferGeometry();
@@ -615,7 +716,8 @@ export class Display {
       group.add(mesh);
     }
     this.uploads.push({meshes:group.children.slice(), object:group, parent:this.scene,
-      result:{id:result.id, version:result.version, elapsed:result.elapsed}});
+      result:{id:result.id, version:result.version, elapsed:result.elapsed,
+        visibility:result.visibility, visibilityClassified:result.visibilityClassified}});
   }
 
   discardGroup(group) {
@@ -650,6 +752,12 @@ export class Display {
       : !object.userData.visualOnly || this.requestedDistance > 4;
     this.groups.set(id, object);
     this.installedVersions.set(id, result.version);
+    if (!id.startsWith('lod:')) {
+      if (result.visibilityClassified) this.sectionVisibility.install(id,result.visibility);
+      if (this.sectionVisibility.enabled) this.sectionVisibility.dirty = true;
+      const [x,,z] = id.split(',').map(Number);
+      this.updateChunkVisibility(x,z);
+    }
     const edit = this.visibleEdits.get(id);
     if (edit) {
       this.lastEditRender = {revision: edit.revision, ms: performance.now() - edit.received};
@@ -667,7 +775,7 @@ export class Display {
     try {
       while (this.uploads.length && count < 30 && performance.now() < deadline) {
         const job = this.uploads[0];
-        if (job.result && this.versions.get(job.result.id) !== job.result.version) {
+        if (job.result && this.versions.get(job.result.id) !== job.result.version || job.far && !this.farTerrain.isQueued(job.far)) {
           this.discardGroup(job.object);
           this.uploads.shift();
           continue;
@@ -679,10 +787,11 @@ export class Display {
         if (count && bytes + size > byteLimit) break;
         const staging = new THREE.Mesh(data, mesh.material);
         staging.frustumCulled = false;
+        if (job.far) staging.onBeforeRender = mesh.onBeforeRender;
         staged.push({data, ...data.drawRange});
         data.setDrawRange(0, 0);
         this.uploadScene.add(staging);
-        if (mesh.userData.sign || !job.result) this.renderer.initTexture(mesh.material.map);
+        if (mesh.userData.sign || !job.result && !job.far) this.renderer.initTexture(mesh.material.map);
         job.meshes.shift();
         bytes += size;
         count++;
@@ -705,7 +814,10 @@ export class Display {
       this.uploadScene.clear();
       for (const {data, start, count} of staged) data.setDrawRange(start, count);
     }
-    for (const job of finished) this.install(job);
+    for (const job of finished) {
+      this.install(job);
+      if (job.far) this.farTerrain.install(job.far);
+    }
   }
 
   neighborsLoaded({cx, cz}) {
@@ -781,6 +893,7 @@ export class Display {
           this.workerCatalogs.set(worker, this.world.palette.length);
         }
         worker.postMessage({id: job.id, type: job.type, version: job.version, paletteAppend,
+          collectVisibility:this.sectionVisibility.enabled,
           atlasRows: this.atlasRows, connectedTextures: this.connectedTextures,
           chiselConnectedTextures: this.chiselConnectedTextures, carpentryModel: this.carpentryModel, ...halo},
           [halo.indices.buffer, halo.light.buffer]);
@@ -820,6 +933,7 @@ export class Display {
     if (playing && interval > 36) this.nextBackgroundUpload = Math.max(this.nextBackgroundUpload, now + 44);
     const edit = this.visibleEdits.size > 0;
     const stream = !playing || edit || now >= this.nextBackgroundUpload || !turning && now - this.lastBackgroundUpload >= 140;
+    this.farTerrain?.step(now,stream);
     if (this.materials && !this.workerFailure && stream) {
       const deadline = performance.now() + (playing ? 2 : 4);
       while (this.ready.length && this.uploads.length < 32 && performance.now() < deadline) {
@@ -857,6 +971,7 @@ export class Display {
     if (foreground || now >= (this.nextIdleRender ?? 0)) {
       this.sky.position.copy(this.camera.position);
       this.sky.updateMatrixWorld();
+      this.updateOcclusion(now);
       this.renderer.render(this.scene, this.camera);
       this.nextIdleRender = now + 100;
     }
@@ -877,7 +992,8 @@ export class Display {
       }
     }
     return {calls: render.calls, triangles: render.triangles, geometries: memory.geometries, textures: memory.textures,
-      preciseBytes, coarseBytes, preciseTriangles, coarseTriangles,
+      occlusion:this.sectionVisibility.statistics(),
+      preciseBytes, coarseBytes, preciseTriangles, coarseTriangles, farTerrain:this.farTerrain?.stats(),
       pending: this.pendingWork,
       loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
   }

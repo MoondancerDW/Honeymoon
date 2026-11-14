@@ -5,6 +5,7 @@ import {coverShade, FACE_SHADE} from './lighting.mjs';
 import {extractedModel, isJammyConnectableSeat} from '/world/extracted-models.mjs';
 import {crossSpriteCorners} from '/world/cross-sprites.mjs';
 import {isOpaqueFullVoxels, voxelFaces} from '/world/voxel-chisel.mjs';
+import {buildSectionVisibility, isOcclusionBlock, markOcclusionBlock} from './section-visibility.mjs';
 
 const {shapeFor, ATLAS_GRID, TILE_SIZE, FACES} = geometry;
 const SIDE = 18;
@@ -184,7 +185,7 @@ function makeShape(key, at, cell, neighbors, edited) {
 }
 
 function precise({indices, light, objects, microblocks, sculpted, connectedTextures, chiselConnectedTextures,
-  palette = cells, compositions: definitions = compositions}) {
+  palette = cells, compositions: definitions = compositions, collectVisibility = false}) {
   const layers = {opaque: layer(), cutout: layer(), blend: layer()};
   const indexedObjects = new Map(objects);
   const editedParts = new Map(microblocks);
@@ -192,6 +193,8 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
   const hasSculptures = voxelCells.size > 0;
   const rendered = new Map();
   const signs = [];
+  const occlusionCells = collectVisibility ? new Uint8Array(16 ** 3) : null;
+  let opaqueCells = 0;
   function cell(at) {
     const key = palette[indices[at]];
     if (!key || key === 'air') return null;
@@ -227,7 +230,15 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
           }
           if (!editedParts.get(at)?.length) continue;
         }
-        const {boxes, model, atlasModel} = shape(at);
+        const blockShape = shape(at);
+        const {boxes, model, atlasModel} = blockShape;
+        if (occlusionCells && !voxels && !editedParts.has(at)) {
+          blockShape.occludes ??= boxes.length === 1 && isOcclusionBlock(blockShape.full);
+          if (blockShape.occludes) {
+            markOcclusionBlock(occlusionCells, x, y, z);
+            opaqueCells++;
+          }
+        }
         if (atlasModel) {
           for (const surface of atlasModel) modelQuad(layers.cutout, surface, origin, light[at], ATLAS_GRID / atlasRows);
           continue;
@@ -310,7 +321,8 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
       }
     }
   }
-  return {layers, signs};
+  const visibility = occlusionCells ? buildSectionVisibility(occlusionCells, opaqueCells) : null;
+  return {layers, signs, visibility};
 }
 
 function coarse({chunks, origin, stride}) {
@@ -361,8 +373,9 @@ self.onmessage = ({data}) => {
   carpentryModel = data.carpentryModel === true;
   const start = performance.now();
   try {
-    const {layers, signs} = data.type === 'precise' ? precise(data) : coarse(data);
+    const {layers, signs, visibility} = data.type === 'precise' ? precise(data) : coarse(data);
     const transfers = [];
+    let fitsSection = !signs.length;
     for (const [mode, out] of Object.entries(layers)) {
       if (!out.indices.length) {
         delete layers[mode];
@@ -374,9 +387,16 @@ self.onmessage = ({data}) => {
       out.lightLevels = new Uint16Array(out.lightLevels);
       out.indices = out.positions.length / 3 <= 65535 ? new Uint16Array(out.indices) : new Uint32Array(out.indices);
       out.bounds = boundingSphere(out.positions);
+      fitsSection &&= out.bounds.fitsSection;
       transfers.push(out.positions.buffer, out.uvs.buffer, out.colors.buffer, out.lightLevels.buffer, out.indices.buffer);
     }
-    self.postMessage({id: data.id, version: data.version, layers, signs, elapsed: performance.now() - start}, transfers);
+    if (visibility) {
+      transfers.push(visibility.links.buffer);
+      if (visibility.cells) transfers.push(visibility.cells.buffer);
+    }
+    self.postMessage({id: data.id, version: data.version, layers, signs, visibility, fitsSection,
+      visibilityClassified: data.collectVisibility === true,
+      elapsed: performance.now() - start}, transfers);
   } catch (error) {
     self.postMessage({id: data.id, version: data.version, error: error.stack || String(error)});
   }
@@ -392,5 +412,5 @@ function boundingSphere(positions) {
   }
   const center = min.map((value, axis) => (value + max[axis]) / 2);
   const radius = Math.hypot(...max.map((value, axis) => value - center[axis]));
-  return {center, radius};
+  return {center, radius, fitsSection:min.every((value, axis) => value >= 0 && max[axis] <= 16)};
 }

@@ -21,12 +21,25 @@ const percentile = (values, p) => values[Math.max(0, Math.ceil(values.length * p
 const report = {hash:base.hash, browser:null, gpu:null, cases:[]};
 const errors = [];
 const corrections = [];
+const lodBenchmark = process.env.HONEYMOON_BENCH_LOD === '1';
+const occlusion = process.env.HONEYMOON_BENCH_OCCLUSION === '1';
+const settled = lodBenchmark || process.env.HONEYMOON_BENCH_SETTLED === '1';
 const samples = [
   {id:'walk-spawn', feet:base.manifest.spawn, travel:8, walk:true},
   {id:'city-flight', feet:[-175, 115, 39], travel:18},
   {id:'forest-and-castle-flight', feet:[-1720, 125, 166], yaw:-Math.PI / 2, pitch:-.24, travel:18},
   {id:'eastern-slope-flight', feet:[560, 240, -667], travel:13},
+  {id:'mine-turn', feet:[612.5,44,667.5], yaw:206.6*Math.PI/180, pitch:-14.3*Math.PI/180, travel:0, walk:true},
+  {id:'castle-long-approach', feet:[-1900, 145, 166], yaw:-Math.PI / 2, pitch:-.15, travel:16},
 ];
+
+function frameSummary(intervals) {
+  const values = intervals.toSorted((a,b) => a-b);
+  if (!values.length) return null;
+  return {count:values.length, meanFps:round(1000 * values.length / values.reduce((a,b) => a+b,0)),
+    p50ms:round(percentile(values,.50)),p95ms:round(percentile(values,.95)),p99ms:round(percentile(values,.99)),
+    maxMs:round(values.at(-1)), over50ms:values.filter(ms => ms > 50).length};
+}
 
 async function windowsProcesses(ids) {
   assert.ok(ids.length && ids.every(value => Number.isInteger(value) && value > 0));
@@ -70,7 +83,7 @@ async function measure(browser, cdp, sample, width, height, distance) {
     await tab.send('Performance.enable');
     server.server.listen(0,'127.0.0.1');
     await once(server.server,'listening');
-    await page.goto(`http://127.0.0.1:${server.server.address().port}`);
+    await page.goto(`http://127.0.0.1:${server.server.address().port}/${occlusion ? '?occlusion=1' : ''}`);
     await page.locator('#play').click({timeout:90_000});
     await page.waitForFunction(() => document.pointerLockElement && globalThis.honeymoon?.stats().playable);
     if (!sample.walk) {
@@ -84,26 +97,28 @@ async function measure(browser, cdp, sample, width, height, distance) {
       }
     }
     await page.evaluate(distance => honeymoon.setDistance(distance), distance);
+    if (occlusion) await page.evaluate(() => honeymoon.setOcclusion(true));
     const render = await page.evaluate(() => {
       const gl = document.querySelector('canvas').getContext('webgl2');
       const debug = gl.getExtension('WEBGL_debug_renderer_info');
       return debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
     });
     await page.evaluate(({yaw,pitch}) => honeymoon.look(yaw,pitch),{yaw:sample.yaw ?? 0,pitch:sample.pitch ?? 0});
-    // The walk and flight should exercise loading while playing. At the most
-    // distant setting, hundreds of background meshes may still be queued.
-    await page.waitForFunction(() => {
-      const {streaming, residentChunks} = honeymoon.stats();
-      return streaming && residentChunks >= 40;
-    }, undefined, {timeout:35_000,polling:250});
+    await page.waitForFunction(({settled,distance,occlusion}) => {
+      const {streaming, residentChunks, farTerrain, occlusion:visibility} = honeymoon.stats();
+      if (occlusion && (!visibility?.enabled || !visibility.classifiedSections)) return false;
+      if (!settled) return streaming && residentChunks >= 40;
+      return streaming?.ready && (distance !== 24 || farTerrain?.active && farTerrain.ready && farTerrain.packs > 0);
+    }, {settled,distance,occlusion}, {timeout:150_000,polling:250});
     const initial = await page.evaluate(() => honeymoon.stats());
     const before = await memory(cdp, tab);
     const serverBefore = process.memoryUsage();
     await page.evaluate(() => {
-      const values = [];
+      const values = {travel:[],turns:[]};
+      window.cityBenchmarkPhase = 'travel';
       let previous = performance.now();
       const track = current => {
-        values.push(current - previous);
+        values[window.cityBenchmarkPhase].push(current - previous);
         previous = current;
         window.cityBenchmarkFrame = requestAnimationFrame(track);
       };
@@ -112,13 +127,16 @@ async function measure(browser, cdp, sample, width, height, distance) {
     });
     const start = performance.now();
     const traveling = (async () => {
-      await page.keyboard.down('KeyW');
-      try { await page.waitForTimeout(sample.travel * 1000); }
-      finally { await page.keyboard.up('KeyW'); }
-      for (let turn = 0; turn < 10; turn++) {
-        const yaw = (sample.yaw ?? 0) + (turn % 2 ? .73 : -.73);
+      if (sample.travel) {
+        await page.keyboard.down('KeyW');
+        try { await page.waitForTimeout(sample.travel * 1000); }
+        finally { await page.keyboard.up('KeyW'); }
+      }
+      await page.evaluate(() => { window.cityBenchmarkPhase = 'turns'; });
+      for (let turn = 0; turn < 12; turn++) {
+        const yaw = (sample.yaw ?? 0) + (turn % 2 ? 1.32 : -1.32);
         await page.evaluate(yaw => honeymoon.look(yaw,-.09),yaw);
-        await page.waitForTimeout(160);
+        await page.waitForTimeout(sample.travel ? 220 : 550);
       }
     })();
     const memoryDuring = [];
@@ -129,26 +147,29 @@ async function measure(browser, cdp, sample, width, height, distance) {
         if (active) memoryDuring.push(await memory(cdp, tab));
       }
     })()]);
-    const intervals = await page.evaluate(() => {
+    const timings = await page.evaluate(() => {
       cancelAnimationFrame(window.cityBenchmarkFrame);
-      return window.cityBenchmarkValues.slice(1).sort((a,b) => a-b);
+      window.cityBenchmarkValues.travel.shift();
+      return window.cityBenchmarkValues;
     });
+    const intervals = [...timings.travel,...timings.turns];
     const duration = (performance.now() - start) / 1000;
     const after = await memory(cdp, tab);
     const serverAfter = process.memoryUsage();
     const final = await page.evaluate(() => honeymoon.stats());
     const traveled = Math.hypot(final.position.x - initial.position.x, final.position.z - initial.position.z);
     assert.ok(intervals.length > 100, `${sample.id}, only ${intervals.length} frames`);
-    assert.ok(traveled > (sample.walk ? 4 : 18), `${sample.id} traveled ${round(traveled)} blocks from ${JSON.stringify(initial.position)} to ${JSON.stringify(final.position)}`);
+    if (sample.travel) assert.ok(traveled > (sample.walk ? 4 : 18), `${sample.id} traveled ${round(traveled)} blocks from ${JSON.stringify(initial.position)} to ${JSON.stringify(final.position)}`);
     assert.equal(final.movementSync.errors - initial.movementSync.errors, 0, sample.id);
+    await page.evaluate(({yaw,pitch}) => honeymoon.look(yaw,pitch),{yaw:sample.yaw ?? 0,pitch:sample.pitch ?? 0});
     await page.screenshot({path:join(output,`${sample.id}-${height}-${distance}.png`)});
-    return {place:sample.id, resolution:`${width}×${height}`, distance, render,
+    return {place:sample.id, resolution:`${width}×${height}`, distance, render, settled, occlusion,
       startupMs:round(initial.playable), seconds:round(duration), from:initial.position, to:final.position,
       chunksFetched:final.chunksLoaded - initial.chunksLoaded, residentChunks:final.residentChunks,
       triangles:final.triangles, drawCalls:final.calls, meshBufferMiB:mib(final.preciseBytes),
-      frames:{count:intervals.length, meanFps:round(1000 * intervals.length / intervals.reduce((a,b) => a+b,0)),
-        p50ms:round(percentile(intervals,.50)),p95ms:round(percentile(intervals,.95)),p99ms:round(percentile(intervals,.99)),
-        maxMs:round(intervals.at(-1)), over50ms:intervals.filter(ms => ms > 50).length},
+      lodStart:initial.farTerrain, lodEnd:final.farTerrain, occlusionEnd:final.occlusion,
+      frames:frameSummary(intervals), movingFrames:sample.travel ? frameSummary(timings.travel) : null,
+      turnFrames:frameSummary(timings.turns),
       memory:{before,after,peakWorkingSetMiB:Math.max(before.workingSetMiB,after.workingSetMiB,...memoryDuring.map(row => row.workingSetMiB)),
         peakPrivateCommittedMiB:Math.max(before.privateCommittedMiB,after.privateCommittedMiB,...memoryDuring.map(row => row.privateCommittedMiB)),
         peakTabJSHeapMiB:Math.max(before.tabJSHeapMiB,after.tabJSHeapMiB,...memoryDuring.map(row => row.tabJSHeapMiB)),
@@ -168,11 +189,15 @@ try {
   report.browser = browser.version();
   const cdp = await browser.newBrowserCDPSession();
   report.gpu = (await cdp.send('SystemInfo.getInfo')).gpu;
-  for (const [width,height,distance,routes] of [
+  const cases = lodBenchmark ? [
+    [1280,720,4,[samples[0],samples[1],samples[5],samples[4]]],
+    [1280,720,24,[samples[0],samples[1],samples[5],samples[4]]],
+  ] : [
     [1280,720,4,[samples[0],samples[1]]],
     [1280,720,8,samples],
     [1920,1080,8,[samples[1],samples[2]]],
-  ]) for (const sample of routes) {
+  ];
+  for (const [width,height,distance,routes] of cases) for (const sample of routes) {
     if (selected.length && !selected.includes(`${sample.id}:${height}:${distance}`)) continue;
     const test = await measure(browser,cdp,sample,width,height,distance);
     report.cases.push(test);

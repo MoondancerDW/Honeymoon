@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { gzipSync } from 'node:zlib';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { loadBase } from './base.mjs';
@@ -24,13 +25,13 @@ function makeWorkspace() {
   return mkdtempSync(join(work, 'server-test-'));
 }
 
-function writeFixture(directory, { hash = 'original', reorder = false, block = 'legacy:1:0', buildCell = 'air' } = {}) {
+function writeFixture(directory, { hash = 'original', reorder = false, block = 'legacy:1:0', buildCell = 'air', chunkPalettes = false } = {}) {
   const palette = reorder ? ['air', 'legacy:4:0', 'legacy:1:0'] : ['air', 'legacy:1:0', 'legacy:4:0'];
   palette.push('legacy:219:0');
   const manifest = {
     schemaVersion: 1, importVersion: 1, contentHash: hash,
     bounds: { minX: 0, maxX: 15, minY: 0, maxY: 15, minZ: 0, maxZ: 15 },
-    spawn: [8.5, 1, 8.5], palette, chunks: [[0, 0]], compositions: {},
+    spawn: [8.5, 1, 8.5], palette, chunks: [[0, 0]], compositions: {}, ...(chunkPalettes && {chunkPalettes}),
   };
   const section = Buffer.alloc(8192);
   for (let index = 0; index < 256; index++) section.writeUInt16LE(palette.indexOf('legacy:1:0'), index * 2);
@@ -45,6 +46,7 @@ function writeFixture(directory, { hash = 'original', reorder = false, block = '
   writeFileSync(join(directory, 'world.json'), JSON.stringify(manifest));
   writeFileSync(join(directory, 'chunks', '0.0.json'), JSON.stringify({
     x: 0, z: 0, sections: [{ y: 0, indices: section.toString('base64') }], objects, entities: [],
+    ...(chunkPalettes && {palette, compositions:{}}),
   }));
   return loadBase(directory);
 }
@@ -68,6 +70,39 @@ async function request(app, path, { cookie, payload, headers } = {}) {
 function command(type, requestId, fields = {}) {
   return { type, requestId, x: 8, y: 1, z: 10, expectedRevision: 0, ...fields };
 }
+
+test('the full city advertises and serves versioned prebuilt terrain without changing detailed chunks', async t => {
+  const directory = makeWorkspace();
+  t.after(() => rmSync(directory, {recursive:true, force:true}));
+  const base = writeFixture(directory, {hash:'c'.repeat(64), chunkPalettes:true});
+  const assetHash = 'e'.repeat(64);
+  const lod = join(directory, 'lod');
+  mkdirSync(lod);
+  writeFileSync(join(lod,'manifest.json'), JSON.stringify({schemaVersion:1, contentHash:base.hash,
+    assetHash, maxDistance:24, tileChunks:4, regions:[[-1,0]]}));
+  const original = Buffer.from('HLOD for an exact binary response');
+  writeFileSync(join(lod,'-1.0.bin'), original);
+  writeFileSync(join(lod,'-1.0.bin.gz'), gzipSync(original));
+  const app = await start(base, ':memory:', {generated:directory});
+  t.after(() => app.close());
+  const address = `${app.url}/generated/lod/${assetHash}/-1.0.bin`;
+  const world = await request(app,'/generated/world/world.json');
+  assert.deepEqual(world.data.lod, {version:1, contentHash:assetHash, maxDistance:24, tileChunks:4});
+  const plain = await fetch(address,{headers:{'Accept-Encoding':'identity'}});
+  assert.equal(plain.status, 200);
+  assert.equal(plain.headers.get('content-encoding'), null);
+  assert.match(plain.headers.get('cache-control'), /immutable/);
+  assert.deepEqual(Buffer.from(await plain.arrayBuffer()), original);
+  const compressed = await fetch(address,{headers:{'Accept-Encoding':'gzip'}});
+  assert.equal(compressed.headers.get('content-encoding'), 'gzip');
+  assert.deepEqual(Buffer.from(await compressed.arrayBuffer()), original);
+  const head = await fetch(address,{method:'HEAD',headers:{'Accept-Encoding':'identity'}});
+  assert.equal(Number(head.headers.get('content-length')),original.length);
+  assert.equal(await head.text(), '');
+  assert.equal((await request(app,`/generated/lod/${base.hash}/-1.0.bin`)).status,404);
+  assert.equal((await request(app,`/generated/lod/${assetHash}/1.0.bin`)).status,404);
+  assert.equal((await request(app,'/generated/world/chunks/0.0.json')).status,200);
+});
 
 async function events(app, cookie) {
   const response = await fetch(`${app.url}/api/events?since=0`, { headers: { Cookie: cookie } });

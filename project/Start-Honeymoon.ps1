@@ -74,6 +74,12 @@ try {
         & $pythonPath -B world/sounds.py
         if ($LASTEXITCODE) { throw 'Sound extraction failed.' }
     }
+    $lodManifest = 'generated/lod/manifest.json'
+    $lod = if (Test-Path -LiteralPath $lodManifest) { Get-Content -Raw -LiteralPath $lodManifest | ConvertFrom-Json }
+    if ($importRequired -or $lod.schemaVersion -ne 1 -or $lod.contentHash -ne $world.contentHash -or !$lod.assetHash) {
+        & $nodePath import/lod.mjs --world 'generated/world' --out 'generated/lod'
+        if ($LASTEXITCODE) { throw 'Far terrain build failed.' }
+    }
     & $nodePath server/index.mjs
     exit $LASTEXITCODE
 } finally {
