@@ -1,16 +1,15 @@
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { crc32, inflate } from 'node:zlib';
+import { maxSkinBytes, skinSizes } from '../world/pony-skins.mjs';
 import { RequestError } from './errors.mjs';
 
-export const MAX_SKIN_BYTES = 192 * 1024;
-export const MAX_PROFILE_BODY = Math.ceil(MAX_SKIN_BYTES / 3) * 4 + 1024;
+export const MAX_PROFILE_BODY = Math.ceil(maxSkinBytes / 3) * 4 + 1024;
 const MAX_PNG_CHUNKS = 512;
 const stages = ['IHDR', 'PLTE', 'IDAT', 'IEND'];
 const colorDepths = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] };
 const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
 const colorChunks = { gAMA: 4, cHRM: 32, sRGB: 1 };
-const dimensions = new Set(['64x32', '64x64', '128x64', '256x128']);
 const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const inflatePng = promisify(inflate);
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -35,7 +34,7 @@ function scanlineLayout(width, height, bits, interlaced) {
 async function readSkin(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) throw invalidSkin();
   const original = Buffer.from(value, 'base64');
-  if (original.length > MAX_SKIN_BYTES) throw new RequestError(413, 'skin_too_large');
+  if (original.length > maxSkinBytes) throw new RequestError(413, 'skin_too_large');
   if (!original.subarray(0, signature.length).equals(signature)) throw invalidSkin();
   const retained = [signature];
   const imageData = [];
@@ -46,7 +45,14 @@ async function readSkin(value) {
     if (chunks >= MAX_PNG_CHUNKS || start + 12 > original.length) throw invalidSkin();
     const size = original.readUInt32BE(start), end = start + 12 + size;
     const name = original.toString('latin1', start + 4, start + 8);
-    if (end > original.length || !/^[A-Za-z]{2}[A-Z][A-Za-z]$/.test(name) ||
+    if (end > original.length) throw invalidSkin();
+    if (stage === 3) {
+      // Some legacy skin editors append text with a broken CRC after IEND. Discard it without interpreting it.
+      if (name !== 'tEXt') throw invalidSkin();
+      start = end;
+      continue;
+    }
+    if (!/^[A-Za-z]{2}[A-Z][A-Za-z]$/.test(name) ||
         crc32(original.subarray(start + 4, end - 4)) !== original.readUInt32BE(end - 4)) throw invalidSkin();
     const data = original.subarray(start + 8, end - 4);
     const nextStage = stages.indexOf(name);
@@ -57,7 +63,7 @@ async function readSkin(value) {
       if (name === 'IHDR') {
         if (size !== 13) throw invalidSkin();
         const width = data.readUInt32BE(0), height = data.readUInt32BE(4);
-        if (!dimensions.has(`${width}x${height}`)) throw new RequestError(400, 'invalid_skin_size');
+        if (!skinSizes.includes(`${width}x${height}`)) throw new RequestError(400, 'invalid_skin_size');
         bitDepth = data[8];
         colorType = data[9];
         if (!colorDepths[colorType]?.includes(bitDepth) || data[10] !== 0 || data[11] !== 0 || data[12] > 1) throw invalidSkin();
@@ -70,7 +76,7 @@ async function readSkin(value) {
       } else if (name === 'IDAT') {
         if (colorType === 3 && !paletteEntries) throw invalidSkin();
         imageData.push(data);
-      } else if (size !== 0 || end !== original.length || !imageData.length) throw invalidSkin();
+      } else if (size !== 0 || !imageData.length) throw invalidSkin();
       retained.push(original.subarray(start, end));
     } else if (name === 'tRNS') {
       const transparencySize = colorType === 0 ? size === 2 : colorType === 2 ? size === 6 : colorType === 3 && size > 0 && size <= paletteEntries;

@@ -6,6 +6,9 @@ const tails = new Map([[0x8a6b7f, 1], [0x534b76, 2], [0x468e88, 3], [0x425844, 4
 const sizes = new Map([[0xffbe53, 'small'], [0xce3254, 'large'], [0x2a3c78, 'tall']]);
 const manes = new Map([[0x280000, 1], [0x0a0000, 2], [0x140000, 3], [0x1e0000, 4]]);
 
+export const skinSizes = ['64x32', '64x64', '128x64', '256x128', '512x256'];
+export const maxSkinBytes = 576 * 1024;
+
 export function ponySkinHeight(width, height) {
   const scale = width / 64;
   if (!Number.isInteger(scale) || scale < 1 || scale > 16) return 0;

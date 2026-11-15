@@ -8,10 +8,11 @@ import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
 
 const output = process.argv[2] ?? 'work/seating/browser';
-const source = loadBase('generated/world');
+const generated = process.env.HONEYMOON_GENERATED ?? 'generated';
+const source = loadBase(join(generated,'world'));
 const spawn = [-31.5, 65, -61.5];
 const base = {...source, manifest:{...source.manifest, spawn}};
-const app = createHoneymoonServer({base, geometry, state:':memory:'});
+const app = createHoneymoonServer({base, geometry, generated, state:':memory:'});
 const chair = {x:-34, y:65, z:-61};
 const lamp = {x:-36, y:67, z:-61};
 const facing = {yaw:0, pitch:0};
@@ -68,9 +69,15 @@ try {
   const observer = await enter('Наблюдатель');
   await guest.waitForFunction(() => honeymoon.players().length === 1);
   await guest.bringToFront();
+  await faceCell(guest,chair,{x:-33.5,y:66,z:-60.5});
+  const seatRequests = [];
+  guest.on('request', request => { if (request.url().endsWith('/api/seat')) seatRequests.push(request); });
+  await rightClick(guest);
+  assert.equal((await inspect(guest)).seat,null);
+  assert.equal(seatRequests.length,0);
   const hit = await faceCell(guest,chair,{x:-33.5,y:66,z:-60.5});
   const seatedResponse = guest.waitForResponse(response => response.url().endsWith('/api/seat'));
-  await rightClick(guest);
+  await guest.keyboard.press('KeyE');
   const seated = await seatedResponse;
   assert.equal(seated.status(),200,await seated.text());
   await guest.waitForFunction(() => honeymoon.stats().seat);
@@ -99,12 +106,16 @@ try {
   await observer.screenshot({path:join(output,'sitting-pony.png')});
 
   await guest.bringToFront();
-  const standingResponse = guest.waitForResponse(response => response.url().endsWith('/api/seat'));
   await rightClick(guest);
+  assert.ok((await inspect(guest)).seat);
+  assert.equal(seatRequests.length,1);
+  const standingResponse = guest.waitForResponse(response => response.url().endsWith('/api/seat'));
+  await guest.keyboard.press('KeyE');
   const standing = await standingResponse;
   assert.equal(standing.status(),200,await standing.text());
   await guest.waitForFunction(() => honeymoon.stats().seat === null);
-  assert.deepEqual((await inspect(guest)).position,{x:spawn[0],y:spawn[1],z:spawn[2]});
+  const afterStand = (await inspect(guest)).position;
+  assert.ok(spawn.every((coordinate,index) => Math.abs(coordinate - Object.values(afterStand)[index]) < 1e-4), JSON.stringify(afterStand));
   await observer.waitForFunction(() => honeymoon.players().length === 1 && honeymoon.players()[0].motion !== 'sit');
 
   await faceCell(guest,lamp,{x:-35.5,y:67.55,z:-60.685});
@@ -115,6 +126,7 @@ try {
   await rightClick(guest);
   await guest.waitForTimeout(300);
   assert.equal(interactions.length,0);
+  await faceCell(guest,lamp,{x:-35.5,y:67.55,z:-60.685});
   const eResponse = guest.waitForResponse(response => response.url().endsWith('/api/action') &&
     response.request().postDataJSON()?.type === 'interact');
   await guest.keyboard.press('KeyE');
@@ -124,7 +136,7 @@ try {
   assert.equal(interactions.length,1);
 
   const result = {browser:browser.version(), chair, position:afterSit.position, seatedAngles:visiblePony.legAngles,
-    sameSeatDenied:duplicate.body.error, walkingAndFlightLocked:true, stoodByRightClick:true, lampByKeyE:true,
+    sameSeatDenied:duplicate.body.error, walkingAndFlightLocked:true, satAndStoodByKeyE:true, rightClickDidNotUse:true, lampByKeyE:true,
     correctionCount:(await inspect(guest)).movementSync.corrections, errors};
   assert.equal(result.correctionCount,0,JSON.stringify(result));
   assert.deepEqual(errors,[]);

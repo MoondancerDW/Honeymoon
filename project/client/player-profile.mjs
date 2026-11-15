@@ -1,6 +1,8 @@
-const skinDescription = 'PNG 64×32, 64×64, 128×64 или 256×128';
-const acceptedSizes = new Set(['64x32', '64x64', '128x64', '256x128']);
-const maxSkinBytes = 192 * 1024;
+import { maxSkinBytes, skinSizes } from '../world/pony-skins.mjs';
+
+const sizeLabels = skinSizes.map(size => size.replace('x', '×'));
+export const skinDescription = `PNG ${sizeLabels.slice(0, -1).join(', ')} или ${sizeLabels.at(-1)}`;
+export const skinTooLarge = `Размер скина превышает ${maxSkinBytes / 1024} КБ`;
 const nicknameCharacters = /^[\p{L}\p{M}\p{N}_ -]+$/u;
 
 export class PlayerProfile {
@@ -56,13 +58,14 @@ export class PlayerProfile {
     this.reading = true;
     this.status.textContent = 'Проверяем скин…';
     try {
-      if (file.size > maxSkinBytes || file.size < 33) throw new Error(skinDescription);
+      if (file.size > maxSkinBytes) throw new Error(skinTooLarge);
+      if (file.size < 33) throw new Error(skinDescription);
       const bytes = await file.arrayBuffer();
       if (version !== this.skinVersion) return;
       const png = new DataView(bytes);
       const size = `${png.getUint32(16)}x${png.getUint32(20)}`;
       if (png.getUint32(0) !== 0x89504e47 || png.getUint32(4) !== 0x0d0a1a0a ||
-          png.getUint32(12) !== 0x49484452 || !acceptedSizes.has(size)) throw new Error(skinDescription);
+          png.getUint32(12) !== 0x49484452 || !skinSizes.includes(size)) throw new Error(skinDescription);
       const chunks = [];
       const pixels = new Uint8Array(bytes);
       for (let offset = 0; offset < pixels.length; offset += 8192) {

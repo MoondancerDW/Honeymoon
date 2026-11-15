@@ -346,6 +346,7 @@ function coarse({chunks, origin, stride}) {
       for (let i = 0; i < indices.length; i++) {
         if (!indices[i]) continue;
         const key = palette[indices[i]];
+        if (!key || key === 'legacy:750:0' || key.startsWith('cover-material:')) continue;
         if (!representatives.has(key)) representatives.set(key, shapeFor(key)[0] || null);
         const shape = representatives.get(key);
         if (!shape || shape.faces.every(tile => tile < 0)) continue;

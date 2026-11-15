@@ -109,7 +109,7 @@ async function sit(name,feet,cell,hit,expected,cart = false) {
     },cell);
   }
   const result = page.waitForResponse(response => response.url().endsWith('/api/seat'));
-  await page.mouse.click(640,360,{button:'right'});
+  await page.keyboard.press('KeyE');
   const response = await result;
   assert.equal(response.status(),200,await response.text());
   await page.waitForFunction(() => {
@@ -124,7 +124,7 @@ async function sit(name,feet,cell,hit,expected,cart = false) {
   assert.ok(front.distance > 1 && front.avatar.visible);
   await camera('first');
   await camera('back');
-  await page.mouse.click(640,360,{button:'right'});
+  await page.keyboard.press('KeyE');
   await page.waitForFunction(() => honeymoon.stats().seat === null);
   report.seats.push({name,cell,...seated,front});
 }

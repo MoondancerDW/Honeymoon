@@ -2,16 +2,16 @@ import {Display} from './display.mjs';
 import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickMinecart} from './movement.mjs';
 import {World, chunkKey, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
-import {PlayerProfile} from './player-profile.mjs';
+import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
 import {createSocialHud} from './social-hud.mjs';
 import {createCreativeMenu} from './creative-menu.mjs';
-import {blockState} from '../world/block-interactions.mjs';
+import {blockState, jammyUseSound} from '../world/block-interactions.mjs';
 import {seatFor, SEATED_EYE} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
 import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
-import {ATLAS_GRID, TILE_SIZE, chiselMaterialShape, coverBoxes, creativeIcon} from '../world/geometry.mjs';
+import {ATLAS_GRID, TILE_SIZE, chiselMaterialShape, coverBoxes, creativeIcon, signFor} from '../world/geometry.mjs';
 import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselPlacementAtHit, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
@@ -33,6 +33,10 @@ const microHint = element('micro-hint');
 const touchRotate = element('touch-rotate');
 const chiselHint = element('chisel-hint');
 const touchChisel = element('touch-chisel');
+const signEditor = element('sign-editor');
+const signFields = [...element('sign-form').querySelectorAll('input')];
+const signStatus = element('sign-status');
+const signSave = element('sign-save');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const heading = {yaw: 0, pitch: -.045};
@@ -55,6 +59,7 @@ const positionTrail = [];
 let playing = false, jump = false, lastFrame = 0, nextPositionSync = 0, timer;
 let flying = false;
 let seat = null, seatPending = false, seatEpoch = 0;
+let signTarget;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
@@ -81,7 +86,7 @@ function resume() {
 const social = createSocialHud({post, notice, pause, resume, teleport});
 const creative = createCreativeMenu({load:loadCreative, choose:chooseCreative,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
-const menuOpen = () => social.isOpen() || creative.isOpen();
+const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open;
 
 async function loadCreative() {
   const catalog = await json('/generated/creative/catalog.json');
@@ -167,11 +172,14 @@ const messages = {
   no_interaction: 'С этим объектом нельзя взаимодействовать',
   not_a_seat: 'На этот блок нельзя сесть', seat_taken: 'Место уже занято',
   seat_blocked: 'Над сиденьем недостаточно места',
+  invalid_sign_face: 'Табличку можно поставить сверху или сбоку блока',
+  invalid_sign_text: 'Каждая строка должна содержать до 80 символов без переноса',
+  not_a_sign: 'Здесь больше нет таблички',
   invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
   nickname_locked: 'Ник уже сохранён для этой сессии',
   invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
-  invalid_skin_size: 'Размер PNG должен быть 64×32, 64×64, 128×64 или 256×128',
-  skin_too_large: 'Размер скина превышает 192 КБ'
+  invalid_skin_size: skinDescription,
+  skin_too_large: skinTooLarge
 };
 
 async function post(path, payload, signal) {
@@ -180,6 +188,15 @@ async function post(path, payload, signal) {
   });
   const body = await response.json();
   return {ok: response.ok, body};
+}
+
+function requestId() {
+  return [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join('');
+}
+
+async function postAction(request) {
+  try { return await post('action', request); }
+  catch { return post('action', request); }
 }
 
 function effects(data) {
@@ -360,9 +377,7 @@ async function teleport(coordinates) {
   }
 }
 
-async function rightClick(buildInstead = false) {
-  if (!playing || acting || resetting) return;
-  if (!seat && (buildInstead || (!seatTarget && !seatFor(selection?.cell, world.models)))) return action('place');
+async function toggleSeat() {
   const {x, y, z, hit, entity} = seatTarget ?? selection ?? {};
   const target = seat ? undefined : {x, y, z, hit, ...(entity && {entity})};
   acting = true;
@@ -380,6 +395,58 @@ async function rightClick(buildInstead = false) {
     seatPending = false;
     acting = false;
   }
+}
+
+function interact(sneaking = false) {
+  if (!playing || acting || resetting || menuOpen()) return;
+  if (seat || seatTarget) return toggleSeat();
+  const cell = selection?.cell;
+  if (seatFor(cell, world.models) && !(sneaking && jammyUseSound(...blockState(cell)))) return toggleSeat();
+  const sign = signFor(cell);
+  if (!sign) return action('interact', sneaking);
+  const {x, y, z, hit} = selection;
+  const expectedRevision = world.revisionAt(x, y, z);
+  if (!expectedRevision) { notice('Исходную табличку карты нельзя редактировать'); return; }
+  signTarget = {x, y, z, hit, expectedRevision};
+  signFields.forEach((field, index) => { field.value = sign.lines[index]; });
+  signStatus.textContent = '';
+  signEditor.showModal();
+  pause();
+  signFields[0].focus();
+}
+
+function closeSign() {
+  if (acting) return;
+  signEditor.close();
+  signTarget = undefined;
+  resume();
+}
+
+async function saveSign(event) {
+  event.preventDefault();
+  if (!signTarget || acting || resetting) return;
+  const request = {requestId:requestId(), type:'edit_sign', ...signTarget, lines:signFields.map(field => field.value)};
+  signStatus.textContent = '';
+  signSave.disabled = true;
+  acting = true;
+  try {
+    if (!await flushPosition()) { signStatus.textContent = messages.movement_blocked; return; }
+    const {ok, body} = await postAction(request);
+    if (!ok) {
+      if (body.current) changes([body.current], body.worldRevision);
+      signStatus.textContent = body.error === 'stale_cell' ? 'Табличка изменилась. Закройте редактор и откройте её снова.' :
+        messages[body.error] || 'Не удалось сохранить текст';
+      return;
+    }
+    changes(body.changes, body.worldRevision);
+  } catch {
+    signStatus.textContent = 'Связь с сервером прервалась';
+    return;
+  } finally {
+    acting = false;
+    signSave.disabled = false;
+  }
+  closeSign();
 }
 
 function positionPacket(lastStep) {
@@ -622,7 +689,7 @@ async function action(type, sneaking = false) {
     }
     if (heldPart && type === 'place') type = 'place_part';
   }
-  const request = {requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join(''), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
+  const request = {requestId: requestId(), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
   if (type === 'copy_part' || type === 'remove_part') request.partSlot = target.partSlot;
   if (type === 'copy_voxel' || type === 'remove_voxel') {
     request.voxel = target.voxel ?? chiselVoxelAtHit(target, target.hit, target.offset, target.cell.voxels, cell);
@@ -640,6 +707,7 @@ async function action(type, sneaking = false) {
     request.y += target.offset[1];
     request.z += target.offset[2];
     request.cell = clipboard;
+    request.yaw = heading.yaw;
     if (fromCreative) request.creative = true;
     if (heldCreativeItem) request.creativeItem = heldCreativeItem.key;
     if (heldSofa) {
@@ -671,9 +739,7 @@ async function action(type, sneaking = false) {
     if (pendingPlacement) movement.pendingPlacement = pendingPlacement;
     if (!await flushPosition()) { notice(messages.movement_blocked); return; }
     if (pendingPlacement && overlapsPlacement(position, pendingPlacement)) { notice(messages.occupied); return; }
-    let result;
-    try { result = await post('action', request); }
-    catch { result = await post('action', request); }
+    const result = await postAction(request);
     if (!result.ok) {
       if (result.body.current) changes([result.body.current], result.body.worldRevision);
       notice(messages[result.body.error] || result.body.error || 'Действие отклонено');
@@ -743,10 +809,12 @@ function tick(now) {
   view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat);
   updateSelection();
   updatePlacement(selection);
-  const selected = seatTarget ? 'Вагонетка · ПКМ сесть' : selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
+  const selected = seatTarget ? 'Вагонетка · E — сесть' : selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
+  const interaction = !seat && !seatTarget && (seatFor(selection?.cell, world.models) ? 'E — сесть' :
+    selection && signFor(selection.cell) && world.revisionAt(selection.x, selection.y, selection.z) ? 'E — редактировать' : '');
   const held = chiseling ? labelFor(chiselMaterial) : heldCreativeItem?.name ?? (heldPart ? partLabel(heldPart) : labelFor(clipboard));
-  const status = [selected, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
+  const status = [selected, interaction, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
   const coordinates = `X ${position.x.toFixed(2)}  Y ${position.y.toFixed(2)}  Z ${position.z.toFixed(2)}`;
   if (coordinateStatus.textContent !== coordinates) coordinateStatus.textContent = coordinates;
@@ -811,6 +879,7 @@ function bindControls() {
     if (!touchMode && playing && !menuOpen()) look(event.movementX, event.movementY);
   });
   document.addEventListener('keydown', event => {
+    if (signEditor.open) return;
     if (event.code === 'F5' && playing && !menuOpen()) {
       event.preventDefault();
       if (!event.repeat) {
@@ -837,17 +906,23 @@ function bindControls() {
     if (event.code === 'KeyX') clearHeld();
     if (event.code === 'KeyQ') action('copy');
     if (event.code === 'KeyR') cyclePlacement();
-    if (event.code === 'KeyE') action('interact', event.shiftKey);
+    if (event.code === 'KeyE') {
+      event.preventDefault();
+      interact(event.shiftKey);
+    }
   });
   document.addEventListener('keyup', event => { keys.delete(event.code); social.keyup(event); });
   window.addEventListener('blur', () => { keys.clear(); social.blur(); });
   canvas.addEventListener('mousedown', event => {
     if (!playing || touchMode || menuOpen()) return;
-    if (event.button === 2) rightClick(event.shiftKey);
+    if (event.button === 2) action('place');
     if (event.button === 0) action('remove');
     if (event.button === 1) action('copy');
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
+  element('sign-form').addEventListener('submit', saveSign);
+  element('sign-cancel').addEventListener('click', closeSign);
+  signEditor.addEventListener('cancel', event => { event.preventDefault(); closeSign(); });
 
   let finger, fingerX, fingerY;
   canvas.addEventListener('pointerdown', event => {
@@ -881,8 +956,9 @@ function bindControls() {
     stick.x = stick.z = 0;
     nub.style.transform = '';
   });
-  element('touch-place').addEventListener('click', () => rightClick());
-  for (const [id, command] of [['touch-copy','copy'], ['touch-use','interact'], ['touch-remove','remove']]) {
+  element('touch-place').addEventListener('click', () => action('place'));
+  element('touch-use').addEventListener('click', () => interact());
+  for (const [id, command] of [['touch-copy','copy'], ['touch-remove','remove']]) {
     element(id).addEventListener('click', () => action(command));
   }
   touchRotate.addEventListener('click', cyclePlacement);

@@ -17,11 +17,12 @@ import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxe
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
-const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', ...partActions, ...voxelActions]);
+const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', 'edit_sign', ...partActions, ...voxelActions]);
 const axes = ['x', 'y', 'z'];
 const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 const bedDirections = [[0,1], [-1,0], [0,-1], [1,0]];
 const pairedBlocks = new Set([26, 64, 71]);
+const signBlocks = new Set([63, 68]);
 const MOVEMENT_GRACE = 0.24;
 const RUN_SPEED = FLIGHT_SPRINT_SPEED + 1;
 const MAX_ACTIVE_IDLE_MS = 30000;
@@ -53,13 +54,20 @@ function normalizeAction(body) {
   }
   if (body.hit !== undefined) input.hit = point(body.hit);
   if (body.type === 'remove_microblocks' && !input.hit) throw new RequestError(400, 'invalid_coordinates');
-  if (body.type === 'interact' && body.yaw !== undefined) {
+  if ((body.type === 'interact' || body.type === 'place') && body.yaw !== undefined) {
     if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
     input.yaw = body.yaw % (2 * Math.PI);
   }
   if (body.type === 'interact' && body.sneaking !== undefined) {
     if (typeof body.sneaking !== 'boolean') throw new RequestError(400, 'invalid_modifier');
     if (body.sneaking) input.sneaking = true;
+  }
+  if (body.type === 'edit_sign') {
+    if (!Array.isArray(body.lines) || body.lines.length !== 4 ||
+        body.lines.some(line => typeof line !== 'string' || line.length > 80 || /[\u0000-\u001f\u007f]/.test(line))) {
+      throw new RequestError(400, 'invalid_sign_text');
+    }
+    input.lines = body.lines;
   }
   if (body.type === 'place') {
     if (typeof body.cell !== 'string' || body.cell.length > 128) throw new RequestError(400, 'invalid_cell');
@@ -116,6 +124,11 @@ function normalizeAction(body) {
   return input;
 }
 
+function signObject(position, lines, original) {
+  const text = Object.fromEntries(lines.map((line, index) => [`Text${index + 1}`, line]));
+  return {type:'Sign', position, key:`tile:${position.join(':')}`, data:{...original?.data, ...text}};
+}
+
 function newCreativeObject(key, position, input, item) {
   const [id, meta] = blockState(key);
   let type = jammyAppliance(id, meta) ? 'JammyAppliance' : id === 2255 ? 'WeaponCaseTile' : null;
@@ -157,6 +170,10 @@ export function createGame(base, store, geometry, {
     const [id] = blockState(key);
     for (const variant of relatedBlockStates(key)) catalog.add(variant);
     if (pairedBlocks.has(id)) for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(id, meta));
+  }
+  if ([...catalog].some(key => signBlocks.has(blockState(key)[0]))) {
+    for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(63, meta));
+    for (let meta = 2; meta <= 5; meta++) catalog.add(blockKey(68, meta));
   }
   const reserved = (x, y, z) => mechanics.some(module => module.reserved?.(x, y, z));
   const spawnProtected = (x, y, z) => x === Math.floor(sx) && z === Math.floor(sz)
@@ -412,6 +429,22 @@ export function createGame(base, store, geometry, {
     return {cell, companion:{...second, cell:other, object:null}, paired:true};
   }
 
+  function placeSign(player, current, input) {
+    const {x, y, z, against, hit} = input;
+    const face = against ? signalSides.findIndex(offset => axes.every((axis, index) => input[axis] - against[axis] === offset[index])) : undefined;
+    const orient = input.creative || input.yaw !== undefined;
+    if (orient && face === 0) throw new RequestError(409, 'invalid_sign_face');
+    if (face === -1 || (!against && hit)) throw new RequestError(403, 'outside_reach');
+    const standing = input.yaw === undefined ? blockState(input.cell)[1] : -Math.round(input.yaw * 8 / Math.PI) & 15;
+    const cell = !orient ? input.cell : face === 1 ? blockKey(63, standing) : face >= 2 ? blockKey(68, face) : input.cell;
+    const position = [x, y, z];
+    const copied = input.creative ? null : store.getClipboard(player);
+    const original = copied?.cell === input.cell ? copied.object : null;
+    const object = original ? (geometry.placementObject ? geometry.placementObject(cell, original, position) :
+      {...original, position, key:`tile:${position.join(':')}`}) : signObject(position, ['', '', '', '']);
+    return writeCell(player, current, cell, object);
+  }
+
   function placedCompanion(current) {
     const {x, y, z} = current;
     const [id, meta] = blockState(current);
@@ -640,6 +673,7 @@ export function createGame(base, store, geometry, {
       if (current.cell !== null) throw new RequestError(409, 'occupied');
       if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
       if (!placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
+      if (signBlocks.has(blockState(input.cell)[0])) return placeSign(player, current, input);
       const actual = input.creative ? creativePlacement(input, current, player) : input;
       const copied = input.creative ? null : store.getClipboard(player);
       const copiedObject = input.creative || item ? newCreativeObject(actual.cell, [x, y, z], input, item) :
@@ -666,6 +700,12 @@ export function createGame(base, store, geometry, {
       }
     }
     if (!physical.visible(playerSight(player), x, y, z, input.hit)) throw new RequestError(403, 'outside_reach');
+    if (type === 'edit_sign') {
+      if (!signBlocks.has(blockState(current)[0])) throw new RequestError(409, 'not_a_sign');
+      if (!store.getEditOwner(x, y, z) || reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
+      const change = {...current, object:signObject([x, y, z], input.lines, current.object)};
+      return writePlan({}, {cells:[change]});
+    }
     if (type === 'interact') {
       for (const module of mechanics) {
         const plan = module.prepareInteraction?.(moduleContext(module, player, { x, y, z, current, input }));

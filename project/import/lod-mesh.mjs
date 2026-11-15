@@ -40,22 +40,18 @@ export function makeMaterials() {
     return byStyle.get(key);
   }
 
-  function get(key, definitions) {
+  function get(key) {
     if (key.startsWith('cover:')) {
-      const parts = definitions[key]?.parts;
-      // Slabs and panels are the building shell. Tiny strips, hollow covers,
-      // fixtures and free-standing wiring are below the useful detail of a tile.
-      const panel = parts?.find(part => part.slot === 1 && part.shape < 3) ??
-        parts?.find(part => part.slot < 6 && part.shape < 3) ?? parts?.find(part => part.slot < 6);
-      if (!panel) return 0;
-      key = 'cover-material:' + panel.material;
+      // Sample the underlying block without any attached RedPower covers.
+      const [, id, meta] = key.split(':', 3);
+      key = `legacy:${id}:${meta}`;
     }
+    if (key === 'legacy:750:0' || key.startsWith('cover-material:')) return 0;
     if (byKey.has(key)) return byKey.get(key);
     const id = Number(key.split(':')[1]);
-    const covering = key.startsWith('cover-material:');
-    const fluid = !covering && (id === 8 || id === 9);
-    const kind = covering ? CONSTRUCTION : fluid ? LIQUID : leaves.has(id) ? LEAVES : natural.has(id) ? NATURAL : CONSTRUCTION;
-    const boxes = tiny.has(id) && !covering ? [] : shapeFor(key);
+    const fluid = id === 8 || id === 9;
+    const kind = fluid ? LIQUID : leaves.has(id) ? LEAVES : natural.has(id) ? NATURAL : CONSTRUCTION;
+    const boxes = tiny.has(id) ? [] : shapeFor(key);
     let shape, largest = 0;
     for (const box of boxes) {
       const volume = (box.x1-box.x0) * (box.y1-box.y0) * (box.z1-box.z0);
@@ -93,7 +89,7 @@ function lightAt(section, index) {
 }
 
 export function sampleChunk(chunk, catalog) {
-  const entries = chunk.palette.map(key => catalog.get(key, chunk.compositions ?? {}));
+  const entries = chunk.palette.map(catalog.get);
   const samplePlane = CHUNK_SIDE ** 2;
   const grid = new Uint16Array(samplePlane * 128);
   const occupancy = new Uint8Array(samplePlane * 128);

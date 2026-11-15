@@ -128,7 +128,7 @@ test('Reimports all 64 real chunks reproducibly with exact negative-coordinate s
     const terrain = JSON.parse(readFileSync(join(out, 'terrain-8.json')));
     assert.equal(terrain.innerRadius, 6);
     assert.equal(terrain.chunks.length, 112);
-    assert.ok(terrain.palette.some((key) => key.startsWith('cover-material:')));
+    assert.ok(!terrain.palette.some((key) => key === 'legacy:750:0' || key.startsWith('cover-material:')));
     for (const { x, z, levels } of terrain.chunks) {
       assert.ok(x < -6 || x >= 6 || z < -6 || z >= 6);
       for (const { indices } of levels) assert.equal(Buffer.from(indices, 'base64').length, 128);

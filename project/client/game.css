@@ -130,6 +130,20 @@ button:disabled { cursor: wait; opacity: .45; }
 
 #creative-toggle { pointer-events: auto; background: var(--glass); padding: .42rem .65rem; font-size: inherit; }
 #creative-toggle:hover { background: #38535c; }
+#sign-editor {
+  width: min(26rem, 90vw);
+  padding: 1.25rem;
+  color: inherit;
+  background: #172730;
+  border: 1px solid var(--line);
+  border-radius: .65rem;
+}
+#sign-editor::backdrop { background: #091319a6; }
+#sign-form { display: grid; gap: .55rem; }
+#sign-title { margin: 0 0 .35rem; font-size: 1.2rem; }
+#sign-form input { width: 100%; padding: .45rem .6rem; background: var(--glass); border: 1px solid var(--line); border-radius: .35rem; }
+#sign-status:empty { display: none; }
+.sign-actions { display: flex; justify-content: flex-end; gap: .55rem; margin-top: .3rem; }
 #creative-menu {
   width: min(65rem, 96vw);
   height: min(48rem, 91dvh);

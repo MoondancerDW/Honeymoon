@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {buildRegion,makeMaterials,sampleChunk} from './lod-mesh.mjs';
 import {LOD_VERSION,WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
-import {tiles} from '../world/geometry.mjs';
+import {shapeFor, tiles} from '../world/geometry.mjs';
 
 const air = 'air';
 const rock = 'legacy:1:0';
@@ -56,6 +56,19 @@ test('admits a one-block masonry tower and omits geometry inside sealed air', ()
   const geometry = faces(content);
   assert.ok(geometry.some(face => face.tile===54 && face.face===3 && face.y===16));
   assert.ok(geometry.every(face => face.y>=8));
+});
+
+test('ignores standalone covers and attached microblock panels only in simplified terrain', () => {
+  const cover = 'cover:750:0:test';
+  const coveredFrame = 'cover:768:0:test';
+  const parts = [{slot:1, shape:0, material:28}];
+  const simplified = supplied(0,0,(x,y) => y < 8 ? 1 : x < 4 ? 2 : x < 8 ? 3 : x < 12 ? 4 : 5,
+    [air, rock, cover, 'legacy:750:0', 'cover-material:28', coveredFrame]);
+  simplified.compositions[cover] = {parts};
+  simplified.compositions[coveredFrame] = {parts};
+  const bareFrame = supplied(0,0,(x,y) => y < 8 ? 1 : x < 12 ? 0 : 2,[air,rock,'legacy:768:0']);
+  assert.deepEqual(pack([simplified],0,0).content, pack([bareFrame],0,0).content);
+  assert.ok(shapeFor({key:cover, parts}).some(box => box.partSlot === 1));
 });
 
 test('keeps a one-block grass course above stone in the sampled terrain', () => {

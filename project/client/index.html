@@ -43,7 +43,7 @@
             <input id="pony-skin" type="file" accept="image/png,.png" disabled>
             <button id="clear-skin" type="button" hidden>Сбросить</button>
           </div>
-          <span id="skin-status" class="skin-status" role="status">PNG 64×32, 64×64, 128×64 или 256×128</span>
+          <span id="skin-status" class="skin-status" role="status"></span>
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
         <small id="entry-help">WASD — ходьба · Пробел — прыжок · Shift — ускорение · F — полёт · F5 — камера · I — блоки · V — резец · B — размер резца · X — сброс выбора · G — телепорт · Esc — пауза</small>
@@ -94,6 +94,20 @@
         <button id="creative-retry" type="button" hidden>Повторить загрузку</button>
       </div>
     </dialog>
+    <dialog id="sign-editor" aria-labelledby="sign-title">
+      <form id="sign-form">
+        <h2 id="sign-title">Текст таблички</h2>
+        <input type="text" aria-label="Строка 1" maxlength="80" autocomplete="off">
+        <input type="text" aria-label="Строка 2" maxlength="80" autocomplete="off">
+        <input type="text" aria-label="Строка 3" maxlength="80" autocomplete="off">
+        <input type="text" aria-label="Строка 4" maxlength="80" autocomplete="off">
+        <span id="sign-status" role="status"></span>
+        <div class="sign-actions">
+          <button id="sign-cancel" type="button">Отмена</button>
+          <button id="sign-save" type="submit">Сохранить</button>
+        </div>
+      </form>
+    </dialog>
     <div id="touch" aria-label="Сенсорное управление">
       <div id="stick"><i></i></div>
       <div class="touch-actions">
@@ -113,8 +127,8 @@
       <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
       <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · Q взять материал</span>
       <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift ×2</span>
-      <span id="seat-status" role="status" hidden>Сидите · ПКМ встать</span>
-      <span id="keys">ЛКМ — сломать блок игрока · ПКМ — поставить / сесть · E — действие · Q — копировать · F5 — камера · F — полёт · V — резец</span>
+      <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
+      <span id="keys">ЛКМ — сломать блок игрока · ПКМ — поставить · E — действие / сесть / встать · Q — копировать · F5 — камера · F — полёт · V — резец</span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>

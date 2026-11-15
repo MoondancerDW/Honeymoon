@@ -33,8 +33,8 @@ function skin(width = 64, height = 32, { text, pixels, trailingBytes } = {}) {
     chunk('IDAT', trailingBytes ? Buffer.concat([imageData, trailingBytes]) : imageData), chunk('IEND', Buffer.alloc(0))]);
 }
 
-test('skins accept four layouts and discard private PNG metadata with bounded decompression', async () => {
-  for (const [width, height] of [[64,32], [64,64], [128,64], [256,128]]) {
+test('skins accept supported layouts and discard private PNG metadata with bounded decompression', async () => {
+  for (const [width, height] of [[64,32], [64,64], [128,64], [256,128], [512,256]]) {
     const encoded = skin(width, height, {text:'Author\0Not part of the skin'});
     const result = await profileChanges({skin:encoded.toString('base64')});
     assert.deepEqual(result.skin.png, skin(width, height));
@@ -53,6 +53,16 @@ test('skins accept four layouts and discard private PNG metadata with bounded de
   await assert.rejects(profileChanges({skin:trailingData}), {code:'invalid_skin'});
   await assert.rejects(profileChanges({nickname:' _- '}), {code:'invalid_nickname'});
   assert.equal((await profileChanges({nickname:'  Искра\u0301  '})).nickname, 'Искра\u0301');
+});
+
+test('a legacy editor can append text after IEND without sharing it', async () => {
+  const png = skin(256, 128);
+  const text = chunk('tEXt', Buffer.from('Author\0Private'));
+  text[text.length - 1] ^= 1;
+  const result = await profileChanges({skin:Buffer.concat([png, text]).toString('base64')});
+  assert.deepEqual(result.skin.png, png);
+  await assert.rejects(profileChanges({skin:Buffer.concat([png, png]).toString('base64')}), {code:'invalid_skin'});
+  await assert.rejects(profileChanges({skin:Buffer.concat([png, text.subarray(0, -1)]).toString('base64')}), {code:'invalid_skin'});
 });
 
 test('presence batches updates and drops expired connections while preserving a short reconnect', () => {

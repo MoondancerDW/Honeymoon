@@ -1247,6 +1247,16 @@ function wallBounds(links, top) {
 
 export function selectionFor(cell, neighbors) {
   const [id, meta] = unpack(cell);
+  if (id === 63) {
+    const angle = meta * Math.PI / 8;
+    const cos = Math.abs(Math.cos(angle));
+    const sin = Math.abs(Math.sin(angle));
+    return standingSignMesh(cell).map(({x0, x1, y0, y1, z0, z1}) => {
+      const x = ((x1 - x0) * cos + (z1 - z0) * sin) / 2;
+      const z = ((x1 - x0) * sin + (z1 - z0) * cos) / 2;
+      return box([.5 - x, y0, .5 - z, .5 + x, y1, .5 + z], tiles.sign, GROUND_DECOR);
+    });
+  }
   if (isCandle(id)) return candleSelection(id, meta);
   if (isFence(id)) return [box(barrierBounds(barrierLinks(id, neighbors), .375, .625, 1), fenceTile(id))];
   if (id === 139) return [box(wallBounds(barrierLinks(id, neighbors)), wallTile(meta))];

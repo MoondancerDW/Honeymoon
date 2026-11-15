@@ -66,8 +66,7 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
     if (!sampled.has(key)) {
       const chunk = JSON.parse(readFileSync(join(world,'chunks',`${key}.json`),'utf8'));
       if (chunk.x!==x || chunk.z!==z) throw new Error(`Unexpected coordinates in chunk ${key}`);
-      sampled.set(key,{z,chunk:sampleChunk({ ...chunk, palette:chunk.palette ?? manifest.palette,
-        compositions:chunk.compositions ?? manifest.compositions },catalog)});
+      sampled.set(key,{z,chunk:sampleChunk({ ...chunk, palette:chunk.palette ?? manifest.palette },catalog)});
     }
     return sampled.get(key).chunk;
   }
