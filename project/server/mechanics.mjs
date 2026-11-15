@@ -310,6 +310,7 @@ function makeControls(base, geometry) {
           continue;
         }
         if ((id === 64 || id === 71 || manualHatch(id)) && !due.has(key) && powered === inputPower(prior)) continue;
+        if (id === 27 && prior.block(point)[0] === 27 && powered === inputPower(prior)) continue;
         applyReceiver(context, current, cell, id, meta, powered, due.has(key));
       }
     }
@@ -317,7 +318,10 @@ function makeControls(base, geometry) {
 
   function applyReceiver(context, current, cell, id, meta, powered, due) {
     const point = pointOf(cell);
-    if (id === 64 || id === 71 || manualHatch(id)) {
+    if (id === 27) {
+      const next = (meta & 7) | (powered ? 8 : 0);
+      if (next !== meta) current.put(metaChanged(cell, id, next));
+    } else if (id === 64 || id === 71 || manualHatch(id)) {
       const result = manualHatch(id) ? hatchCell(cell, id, meta, powered, context.playerOverlaps)
         : doorCells(cell, current.get, context.playerOverlaps, powered);
       if (result?.blocked) current.schedule(point, id, 100);

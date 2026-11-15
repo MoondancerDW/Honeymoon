@@ -36,10 +36,39 @@ export class World {
     this.palette = manifest.palette.slice();
     this.indices = new Map(this.palette.map((key, index) => [key, index]));
     this.chunks = new Map();
+    this.minecarts = new Map();
+    this.minecartSnapshotTime = undefined;
     this.overrides = new Map();
     this.overridesByChunk = new Map();
     this.blockLightOverrides = new Map();
     this.pendingLights = new Map();
+  }
+
+  setMinecarts(entities, now) {
+    const duration = Math.min(150, Math.max(50, now - (this.minecartSnapshotTime ?? now - 100)));
+    this.minecartSnapshotTime = now;
+    const next = new Map();
+    for (const target of entities) {
+      const existing = this.minecarts.get(target.key)?.entity;
+      const previous = existing && Math.hypot(...target.position.map((value, axis) => value - existing.position[axis])) < 3
+        ? existing : target;
+      const position = [...previous.position];
+      const rotation = [previous.data.Rotation?.[0] ?? 0, previous.data.Rotation?.[1] ?? 0];
+      const targetYaw = target.data.Rotation?.[0] ?? 0;
+      const yawOffset = ((targetYaw - rotation[0] + 540) % 360 + 360) % 360 - 180;
+      const entity = {...target, position:[...position], data:{...target.data, Rotation:[...rotation]}};
+      next.set(target.key, {entity, position, rotation, target, yawOffset, at:now, duration});
+    }
+    this.minecarts = next;
+  }
+
+  stepMinecarts(now) {
+    for (const {entity, position, rotation, target, yawOffset, at, duration} of this.minecarts.values()) {
+      const progress = Math.min(1, Math.max(0, (now - at) / duration));
+      for (let axis = 0; axis < 3; axis++) entity.position[axis] = position[axis] + (target.position[axis] - position[axis]) * progress;
+      entity.data.Rotation[0] = rotation[0] + yawOffset * progress;
+      entity.data.Rotation[1] = rotation[1] + ((target.data.Rotation?.[1] ?? 0) - rotation[1]) * progress;
+    }
   }
 
   addChunk(chunk, visualOnly = false) {

@@ -18,7 +18,7 @@ export function railShape(id, meta) {
     return [x, 1 / 16 + Number(slope && firstEdge === raisesFirstEdge), z];
   });
   return {
-    x0: 0, y0: 0, z0: 0, x1: 1, y1: meta >= 2 && meta <= 5 ? 5 / 8 : 1 / 8, z1: 1,
+    x0: 0, y0: 0, z0: 0, x1: 1, y1: slope ? 5 / 8 : 1 / 8, z1: 1,
     faces: Array(6).fill(tile), mode: 'cutout', solid: false,
     kind: 'rail', corners, uv: cornersUv,
   };

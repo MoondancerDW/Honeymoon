@@ -30,6 +30,7 @@ export function relatedBlockStates(key) {
   const [id, meta] = blockState(key);
   if (((id === 64 || id === 71) && meta < 8) || id === 96) return [blockKey(id, meta ^ 4)];
   if (id === 107) return [blockKey(id, meta ^ 4), blockKey(id, meta ^ 2), blockKey(id, meta ^ 6)];
+  if (id === 27) return [blockKey(id, meta ^ 8)];
   if (id === 69 || buttonDuration(id)) return [blockKey(id, meta ^ 8)];
   if (pressurePlate(id)) return [blockKey(id, meta ^ 1)];
   if (id === 55) return Array.from({length: 16}, (_, power) => blockKey(id, power));

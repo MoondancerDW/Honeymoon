@@ -93,7 +93,7 @@ test('imported passenger cart seats one player through water and rejects forged 
   const delta = [4.5 - eye[0],1.25 - eye[1],2.5 - eye[2]];
   const length = Math.hypot(...delta);
   const direction = delta.map(value => value / length);
-  const distance = minecartHit(raw,eye,direction);
+  const distance = minecartHit(displayEntity(raw),eye,direction);
   assert.ok(Number.isFinite(distance));
   const [x,y,z] = eye.map((value,i) => value + distance * direction[i]);
   const target = {x:4,y:1,z:2,entity:raw.key,hit:{x,y,z}};
@@ -103,8 +103,8 @@ test('imported passenger cart seats one player through water and rejects forged 
   wall = true;
   assert.throws(() => game.sit(one,target,pose),{code:'outside_reach'});
   wall = false;
-  assert.deepEqual(game.sit(one,target,pose).seat,minecartSeat(raw,pose.yaw));
+  assert.deepEqual(game.sit(one,target,pose).seat,{...minecartSeat(raw,pose.yaw),entity:raw.key});
   assert.throws(() => game.sit(two,target,pose),{code:'seat_taken'});
   assert.deepEqual(game.sit(one,undefined,pose),{seat:null,position:spawn});
-  assert.deepEqual(game.sit(two,target,pose).seat,minecartSeat(raw,pose.yaw));
+  assert.deepEqual(game.sit(two,target,pose).seat,{...minecartSeat(raw,pose.yaw),entity:raw.key});
 });

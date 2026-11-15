@@ -231,6 +231,12 @@ export function createHoneymoonServer({
     game.didCommit({ player, ...output });
   }
 
+  function broadcastMinecarts() {
+    for (const {player,response,minecarts} of streams) {
+      if (minecarts) writeEvent(response,'minecarts',game.minecartSnapshot(player));
+    }
+  }
+
   async function dispatch(request, response) {
     const url = new URL(request.url, 'http://localhost');
     const path = url.pathname;
@@ -275,7 +281,10 @@ export function createHoneymoonServer({
       }
       if (path === '/api/presence') {
         if (method === 'POST') {
-          const pose = readPose(await readBody(request));
+          const body = await readBody(request);
+          const pose = readPose(body);
+          if (body.cartDrive !== undefined && ![-1,0,1].includes(body.cartDrive)) throw new RequestError(400,'invalid_pose');
+          game.driveMinecart(player,pose,body.cartDrive);
           const {position, seat} = game.session(player);
           presence.join(player, position, game.poseFor(player, pose));
           return json(response, 200, {ok:true, position, seat});
@@ -323,6 +332,7 @@ export function createHoneymoonServer({
         if (!result.replay && result.status === 200) {
           afterCommit?.(request, response, result.output);
           broadcast(player, result.output);
+          if (result.output.minecart || result.output.removedMinecart) broadcastMinecarts();
         }
         if (!response.destroyed) json(response, result.status, result.output);
         return;
@@ -335,7 +345,8 @@ export function createHoneymoonServer({
           'Cache-Control': 'no-cache, no-transform',
           'X-Accel-Buffering': 'no',
         });
-        const stream = { player, response, social: url.searchParams.get('social') === '1' };
+        const stream = { player, response, social: url.searchParams.get('social') === '1',
+          minecarts: url.searchParams.get('minecarts') === '1' };
         streams.add(stream);
         game.touch(player);
         response.on('close', () => {
@@ -351,6 +362,7 @@ export function createHoneymoonServer({
           writeEvent(response, 'chat-history', {entries:chat.history()});
           writeEvent(response, 'world-time', worldTime.snapshot());
         }
+        if (stream.minecarts) writeEvent(response,'minecarts',game.minecartSnapshot(player));
         return;
       }
       throw new RequestError(404, 'not_found');
@@ -413,6 +425,11 @@ export function createHoneymoonServer({
     try {
       const result = game.advance();
       if (result?.changes.length || result?.effects.length) broadcast(null, result);
+      const riders = game.advanceMinecarts();
+      if (riders) {
+        for (const {player,position,pose} of riders) presence.update(player,position,pose);
+        broadcastMinecarts();
+      }
     } catch (error) {
       console.error(error);
     }
@@ -434,6 +451,7 @@ export function createHoneymoonServer({
         });
         server.closeAllConnections();
       });
+      game.flushMinecarts();
       store.close();
     },
   };

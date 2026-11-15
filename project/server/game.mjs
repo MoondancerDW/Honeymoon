@@ -3,21 +3,24 @@ import { displayObject, cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
+import { createMinecarts } from './minecarts.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
 import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
+import { orientedRail, railFor } from '../world/rails.mjs';
 import { blockKey, blockState, jammyAppliance, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
-import { shapedLampData } from '../world/creative-items.mjs';
+import { CREATIVE_MINECART_KEY, shapedLampData } from '../world/creative-items.mjs';
 import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush,
   VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
-const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', 'edit_sign', ...partActions, ...voxelActions]);
+const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', 'edit_sign',
+  'place_minecart', 'remove_minecart', ...partActions, ...voxelActions]);
 const axes = ['x', 'y', 'z'];
 const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 const bedDirections = [[0,1], [-1,0], [0,-1], [1,0]];
@@ -47,14 +50,22 @@ function normalizeAction(body) {
   if (!actions.has(body.type)) throw new RequestError(400, 'unknown_action');
   if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw new RequestError(400, 'invalid_revision');
   const input = { type: body.type, ...point(body, true), expectedRevision: body.expectedRevision };
-  if (body.creativeItem !== undefined) {
+  if (body.type === 'place_minecart') {
+    if (body.creativeItem !== CREATIVE_MINECART_KEY) throw new RequestError(400, 'unknown_cell_type');
+    input.creativeItem = body.creativeItem;
+  } else if (body.creativeItem !== undefined) {
     if (!['place','place_part'].includes(body.type) || typeof body.creativeItem !== 'string' ||
         !/^creative:(?:750|753|768):\d{1,5}$/.test(body.creativeItem)) throw new RequestError(400, 'unknown_cell_type');
     input.creativeItem = body.creativeItem;
   }
   if (body.hit !== undefined) input.hit = point(body.hit);
+  if (body.type === 'remove_minecart') {
+    if (typeof body.entity !== 'string' || body.entity.length > 160) throw new RequestError(400,'not_a_minecart');
+    input.entity = body.entity;
+  }
+  if (body.type.endsWith('_minecart') && !input.hit) throw new RequestError(400,'invalid_coordinates');
   if (body.type === 'remove_microblocks' && !input.hit) throw new RequestError(400, 'invalid_coordinates');
-  if ((body.type === 'interact' || body.type === 'place') && body.yaw !== undefined) {
+  if ((body.type === 'interact' || body.type === 'place' || body.type === 'place_minecart') && body.yaw !== undefined) {
     if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
     input.yaw = body.yaw % (2 * Math.PI);
   }
@@ -165,7 +176,7 @@ export function createGame(base, store, geometry, {
   const catalog = new Set([...(base.catalog ?? []), ...creativeBlocks]);
   catalog.add('legacy:9:0');
   catalog.add('legacy:11:0');
-  for (const item of creativeItems.values()) catalog.add(item.blockKey);
+  for (const item of creativeItems.values()) if (item.blockKey) catalog.add(item.blockKey);
   for (const key of creativeBlocks) {
     const [id] = blockState(key);
     for (const variant of relatedBlockStates(key)) catalog.add(variant);
@@ -217,6 +228,18 @@ export function createGame(base, store, geometry, {
     const current = getCurrent(x, y, z);
     return current.cell === null ? null : cellView(current);
   });
+  const carts = createMinecarts({
+    base,store,clock,cellAt:getCurrent,
+    solidAt:(x,y,z) => (geometry.collisionFor ?? geometry.shapeFor)(cellView(getCurrent(x,y,z)))
+      .some(box => box.solid !== false && box.x0 < .5 && box.x1 > .5 && box.z0 < .5 && box.z1 > .5),
+    canMove(entity,rider,track,rail) {
+      const [x,y,z] = entity.position;
+      const feet = {x,y:y - 3 / 16,z};
+      const raised = rail.ends.find(end => end[1] === 1);
+      const ignored = raised ? [{x:track.x + raised[0] * 2 - 1,y:track.y,z:track.z + raised[2] * 2 - 1}] : [];
+      return bodyWithinMap(feet) && !physical.collides(feet,rider ? SEATED_HEIGHT : .44,ignored);
+    },
+  });
 
   function playerAt(player) {
     return positions.get(player)?.position ?? spawn;
@@ -258,10 +281,17 @@ export function createGame(base, store, geometry, {
     const offsets = [[-Math.round(Math.sin(yaw)), -Math.round(Math.cos(yaw))], [1, 0], [-1, 0], [0, 1], [0, -1]];
     const nearby = offsets.flatMap(([dx, dz]) => [y, y + .5, y + 1].map(level =>
       ({x:x + dx, y:level, z:z + dz})));
-    const position = [prior, ...nearby].find(standable) ?? spawn;
-    seats.delete(player);
+    const stillNearby = !seat.ridden || Math.hypot(prior.x - x,prior.y - y,prior.z - z) < 2;
+    const position = [...(stillNearby ? [prior] : []), ...nearby, {x,y,z}].find(standable) ?? spawn;
+    releaseSeat(player);
     movePlayer(player, position);
     return position;
+  }
+
+  function releaseSeat(player) {
+    const entity = seats.get(player)?.entity;
+    if (entity) carts.steering(entity,0);
+    seats.delete(player);
   }
 
   function takeSeat(player, previous, anchor, blocks, entity) {
@@ -273,22 +303,32 @@ export function createGame(base, store, geometry, {
     return {seat:anchor, position};
   }
 
-  function sitInMinecart(player, previous, pose, address, hit, key) {
-    const eye = [previous.x, previous.y + PLAYER.eye, previous.z];
+  function visibleMinecart(player, address, hit, key, missing) {
+    const position = playerSight(player);
+    const eye = [position.x, position.y + (position.eye ?? PLAYER.eye), position.z];
     const target = [hit.x, hit.y, hit.z];
     const delta = target.map((value,axis) => value - eye[axis]);
     const distance = Math.hypot(...delta);
     if (distance > 6 || distance < .00001) throw new RequestError(403, 'outside_reach');
-    const entity = typeof key === 'string' && key.length <= 160 ? base.getEntity?.(address.x, address.z, key) : null;
-    if (!isRideableMinecart(entity) || !axes.every((axis,i) => Math.floor(entity.position[i]) === address[axis])) {
-      throw new RequestError(409, 'not_a_seat');
-    }
-    const closest = minecartHit(entity, eye, delta.map(value => value / distance), distance + .002);
-    if (Math.abs(closest - distance) > .002 || !physical.visiblePoint(eye, target)) {
+    const entity = typeof key === 'string' && key.length <= 160 ? carts.current(address.x,address.z,key) : null;
+    if (!isRideableMinecart(entity)) throw new RequestError(409,missing);
+    const poses = carts.recent(entity).filter(pose => axes.every((axis,index) => Math.floor(pose.position[index]) === address[axis]));
+    if (!poses.length) throw new RequestError(409,missing);
+    const direction = delta.map(value => value / distance);
+    if (!physical.visiblePoint(eye,target) || !poses.some(pose =>
+      Math.abs(minecartHit(pose,eye,direction,distance + .08) - distance) <= .08)) {
       throw new RequestError(403, 'outside_reach');
     }
+    return entity;
+  }
+
+  function sitInMinecart(player, previous, pose, address, hit, key) {
+    const entity = visibleMinecart(player,address,hit,key,'not_a_seat');
     if ([...seats.values()].some(seat => seat.entity === entity.key)) throw new RequestError(409, 'seat_taken');
-    return takeSeat(player, previous, minecartSeat(entity, pose.yaw), [], entity.key);
+    const result = takeSeat(player, previous, {...minecartSeat(entity, pose.yaw),entity:entity.key}, [], entity.key);
+    carts.board(entity);
+    seats.get(player).pose = pose;
+    return result;
   }
 
   function sit(player, target, pose) {
@@ -379,14 +419,15 @@ export function createGame(base, store, geometry, {
     }
   }
 
-  function writeCell(player, {x, y, z}, cell, object, companion) {
+  function writeCell(player, {x, y, z}, cell, object, companion, adjusted = []) {
     const change = { x, y, z, cell, object };
-    const changed = companion ? [change, companion] : [change];
+    const replaced = companion ? [change, companion] : [change];
+    const changed = [...replaced, ...adjusted];
     for (const item of changed) {
       checkAdjacentCollisions(player, item, {key:item.cell ?? 'air', object:item.object,
         parts:base.manifest.compositions?.[item.cell]?.parts});
     }
-    const placement = cell === null ? undefined : {keys:new Set(changed.map(item => cellAddress(item.x, item.y, item.z))), player};
+    const placement = cell === null ? undefined : {keys:new Set(replaced.map(item => cellAddress(item.x, item.y, item.z))), player};
     const effects = cell === null ? [] : [{type: 'sound', sound: 'block.place', cell, position: [x, y, z]}];
     for (const module of mechanics) {
       const plan = module.prepareBlockChange?.(moduleContext(module, player, {change, changed}));
@@ -443,6 +484,56 @@ export function createGame(base, store, geometry, {
     const object = original ? (geometry.placementObject ? geometry.placementObject(cell, original, position) :
       {...original, position, key:`tile:${position.join(':')}`}) : signObject(position, ['', '', '', '']);
     return writeCell(player, current, cell, object);
+  }
+
+  function railSupport(x, y, z) {
+    const get = (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz));
+    return geometry.collisionFor(get(0, 0, 0), get).some(box =>
+      box.y1 >= 1 && box.x0 <= .5 && box.x1 >= .5 && box.z0 <= .5 && box.z1 >= .5);
+  }
+
+  function orientRail({x, y, z}, track, read, preferred, flexible = false) {
+    return orientedRail(track, (dx, rise, dz) => {
+      const nx = x + dx, nz = z + dz, height = y + rise;
+      if (rise && !railSupport(nx, height - 1, nz)) return false;
+      return [height, height - 1].some(level => {
+        const other = railFor(read(nx, level, nz));
+        if (!other) return false;
+        const edge = [.5 - dx * .5, height - level, .5 - dz * .5];
+        if (other.ends.some(end => end.every((value, index) => edge[index] === value))) return true;
+        return flexible && Boolean(store.getEditOwner(nx, level, nz)) &&
+          (level === height || railSupport(x, y - 1, z));
+      });
+    }, preferred);
+  }
+
+  function updateRailNeighbors(current, replacement) {
+    const {x, y, z} = current;
+    const staged = new Map([[cellAddress(x, y, z), {...current, cell:replacement}]]);
+    const read = (rx, ry, rz) => staged.get(cellAddress(rx, ry, rz)) ?? getCurrent(rx, ry, rz);
+    const changes = [];
+    for (const [dx, , dz] of signalSides.slice(2)) {
+      for (let level = y - 1; level <= y + 1; level++) {
+        const near = read(x + dx, level, z + dz);
+        const rail = railFor(near);
+        if (!rail || !store.getEditOwner(near.x, near.y, near.z) || reserved(near.x, near.y, near.z)) continue;
+        const cell = orientRail(near, rail, read, rail.shape);
+        if (cell === near.cell) continue;
+        const change = {...near, cell};
+        changes.push(change);
+        staged.set(cellAddress(near.x, near.y, near.z), change);
+      }
+    }
+    return changes;
+  }
+
+  function placeRail(player, current, input, rail) {
+    const {x, y, z, yaw} = input;
+    if (!railSupport(x, y - 1, z)) throw new RequestError(409, 'rail_needs_support');
+    const preferred = yaw === undefined ? Number(rail.ends[0][0] !== rail.ends[1][0]) :
+      Number(Math.abs(Math.sin(yaw)) > Math.abs(Math.cos(yaw)));
+    const cell = orientRail(current, rail, getCurrent, preferred, true);
+    return writeCell(player, current, cell, null, undefined, updateRailNeighbors(current, cell));
   }
 
   function placedCompanion(current) {
@@ -647,12 +738,26 @@ export function createGame(base, store, geometry, {
     return writeVoxels(player, current, writeVoxelBrush(voxels, voxelRemovalBrush(current.voxels, voxel, size), null));
   }
 
-  function execute(player, input) {
+  function execute(player, input, transport) {
     const { x, y, z, type } = input;
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
+    if (type === 'remove_minecart') {
+      const entity = visibleMinecart(player,input,input.hit,input.entity,'not_a_minecart');
+      if ([...seats.values()].some(seat => seat.entity === entity.key)) throw new RequestError(409,'seat_taken');
+      carts.remove(entity.key);
+      return {worldRevision:store.worldRevision(),changes:[],effects:[],removedMinecart:entity.key};
+    }
     const current = getCurrent(x, y, z);
     if (input.expectedRevision !== current.revision) {
       throw new RequestError(409, 'stale_cell', {current:publicChange(current), worldRevision:store.worldRevision()});
+    }
+    if (type === 'place_minecart') {
+      if (creativeItems.get(input.creativeItem)?.kind !== 'minecart') throw new RequestError(400,'unknown_cell_type');
+      const rail = railFor(current);
+      if (!rail) throw new RequestError(409,'minecart_requires_rail');
+      if (!physical.targetAtHit(playerSight(player),x,y,z,input.hit)) throw new RequestError(403,'outside_reach');
+      transport.placed = carts.place(input,rail);
+      return {worldRevision:store.worldRevision(),changes:[],effects:[],minecart:transport.placed.entity};
     }
     if (partActions.has(type)) return editMicroParts(player, input, current);
     if (voxelActions.has(type)) return editVoxels(player, input, current);
@@ -674,6 +779,8 @@ export function createGame(base, store, geometry, {
       if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
       if (!placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
       if (signBlocks.has(blockState(input.cell)[0])) return placeSign(player, current, input);
+      const rail = railFor(input.cell);
+      if (rail) return placeRail(player, current, input, rail);
       const actual = input.creative ? creativePlacement(input, current, player) : input;
       const copied = input.creative ? null : store.getClipboard(player);
       const copiedObject = input.creative || item ? newCreativeObject(actual.cell, [x, y, z], input, item) :
@@ -719,13 +826,15 @@ export function createGame(base, store, geometry, {
       store.putClipboard(player, { cell: current.cell, object });
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
     }
-    return writeCell(player, current, null, null, placedCompanion(current));
+    const adjusted = railFor(current) ? updateRailNeighbors(current, null) : [];
+    return writeCell(player, current, null, null, placedCompanion(current), adjusted);
   }
 
   function action(player, body) {
     const input = normalizeAction(body);
     const encoded = JSON.stringify(input);
     const { requestId } = body;
+    const transport = {};
     const result = store.atomic(() => {
       const receipt = store.getReceipt(player, requestId);
       if (receipt) {
@@ -738,7 +847,7 @@ export function createGame(base, store, geometry, {
       // A rejected action can record a receipt, but may never leave partial writes.
       store.db.exec('SAVEPOINT action');
       try {
-        output = execute(player, input);
+        output = execute(player, input, transport);
       } catch (error) {
         store.db.exec('ROLLBACK TO action');
         if (!(error instanceof RequestError)) throw error;
@@ -749,7 +858,10 @@ export function createGame(base, store, geometry, {
       store.putReceipt(player, requestId, encoded, status, output);
       return { status, output, replay: false };
     });
-    if (!result.replay && result.status === 200 && result.output.changes.length) refreshMechanicCells();
+    if (!result.replay && result.status === 200) {
+      if (result.output.changes.length) refreshMechanicCells();
+      carts.accept(transport.placed,result.output.removedMinecart);
+    }
     return result;
   }
 
@@ -773,7 +885,7 @@ export function createGame(base, store, geometry, {
     }
     if (physical.collides(target)) throw new RequestError(409, 'teleport_blocked');
     const entry = enterPosition(player, target, playerAt(player));
-    seats.delete(player);
+    releaseSeat(player);
     movePlayer(player, target);
     return {...entry, seat:null};
   }
@@ -856,6 +968,25 @@ export function createGame(base, store, geometry, {
     return {changes, effects: results.flatMap(result => result.effects), worldRevision: store.worldRevision()};
   }
 
+  function advanceMinecarts() {
+    const riders = new Map([...seats].filter(([,seat]) => seat.entity)
+      .map(([player,seat]) => [seat.entity,{player,yaw:seat.anchor.yaw}]));
+    const updates = [];
+    const changed = carts.advance(riders,(player,entity) => {
+      const seat = seats.get(player);
+      let position;
+      if (entity) {
+        const anchor = {...minecartSeat(entity,seat.anchor.yaw),entity:entity.key};
+        seat.anchor = anchor;
+        seat.ridden = true;
+        position = {x:anchor.x,y:anchor.y,z:anchor.z};
+        movePlayer(player,position);
+      } else position = leaveSeat(player);
+      updates.push({player,position,pose:poseFor(player,seat.pose)});
+    });
+    return changed ? updates : null;
+  }
+
   const descriptions = player => diagnostic?.describe(player) ?? null;
 
   return {
@@ -863,6 +994,17 @@ export function createGame(base, store, geometry, {
     position,
     teleport,
     advance,
+    advanceMinecarts,
+    driveMinecart(player,pose,direction) {
+      const seat = seats.get(player);
+      if (!seat?.entity) return;
+      seat.pose = pose;
+      if (direction !== undefined) carts.steering(seat.entity,direction);
+    },
+    minecartSnapshot(player) {
+      return {entities:carts.snapshot(),position:playerAt(player),seat:publicSeat(player)};
+    },
+    flushMinecarts: carts.flush,
     sit,
     leaveSeat,
     poseFor,
@@ -871,7 +1013,7 @@ export function createGame(base, store, geometry, {
       if (entry) entry.seen = clock();
     },
     respawn(player) {
-      seats.delete(player);
+      releaseSeat(player);
       movePlayer(player, spawn);
       return { position: spawn, seat:null, effects: [], worldRevision: store.worldRevision() };
     },

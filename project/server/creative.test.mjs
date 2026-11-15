@@ -4,12 +4,23 @@ import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
+import {readCreativeCatalog} from './creative-catalog.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import * as geometry from '../world/geometry.mjs';
-import {creativeMicroblock} from '../world/creative-items.mjs';
+import {CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
 import {guidedMicroblock} from '../world/microblocks.mjs';
 
 const fixture = fileURLToPath(new URL('../work/', import.meta.url));
+
+test('creative catalog supplies the transport items when the generated catalog is missing', () => {
+  const {catalog, placeable, items} = readCreativeCatalog(join(fixture, 'missing-creative-catalog'));
+  const rails = catalog.entries.filter(entry => /^legacy:(27|28|66):/.test(entry.key));
+  assert.deepEqual(rails.map(entry => entry.key), ['legacy:66:0', 'legacy:27:0', 'legacy:28:0']);
+  assert.ok(rails.every(entry => entry.placeable && placeable.has(entry.key)));
+  assert.equal(items.get(CREATIVE_MINECART_KEY)?.kind, 'minecart');
+  assert.equal(items.get(CREATIVE_MINECART_KEY)?.blockKey, undefined);
+  assert.ok(placeable.has('legacy:1:0'));
+});
 
 test('creative places registered off-map states with normal ownership, and builds real doors and beds', async t => {
   mkdirSync(fixture, {recursive:true});
@@ -19,7 +30,8 @@ test('creative places registered off-map states with normal ownership, and build
   const lamp = {key:'creative:768:53', blockKey:'legacy:768:0', kind:'shaped-lamp', damage:53};
   const cover = {key:'creative:750:0', blockKey:'legacy:750:0', kind:'microblock', damage:0, coverData:65536};
   entries.push(lamp, cover);
-  writeFileSync(join(generated, 'creative', 'catalog.json'), JSON.stringify({schemaVersion:1, entries}));
+  const captured = [...entries, {key:'legacy:27:0'}, {key:'legacy:27:9'}, {key:'legacy:66:8'}];
+  writeFileSync(join(generated, 'creative', 'catalog.json'), JSON.stringify({schemaVersion:1, entries:captured}));
   const base = {manifest:{spawn:[8.5,1,8.5], bounds:{minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15},
     compositions:{}, palette:['air','legacy:1:0']}, hash:'creative-a', catalog:new Set(['air','legacy:1:0']),
     getCell:(x,y,z) => x === 9 && y === 1 && z === 6 ? {key:'legacy:63:0', object:null} :
@@ -45,7 +57,11 @@ test('creative places registered off-map states with normal ownership, and build
   }
   const a = await guest(), b = await guest();
   const response = await fetch(url + '/generated/creative/catalog.json');
-  assert.deepEqual((await response.json()).entries, entries);
+  const served = (await response.json()).entries;
+  assert.deepEqual(served.slice(0, entries.length), entries);
+  const transport = served.slice(entries.length);
+  assert.deepEqual(transport.map(entry => entry.key), ['legacy:66:0', 'legacy:27:0', 'legacy:28:0', CREATIVE_MINECART_KEY]);
+  assert.ok(transport.every(entry => entry.placeable && entry.category === 'redstone'));
   let seq = 0;
   async function command(cookie, type, point, fields) {
     const [x,y,z] = point;

@@ -11,6 +11,7 @@ import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../w
 import {jammyBenchState} from '../world/jammy-benches.mjs';
 import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
+import {minecartSeat} from '../world/minecarts.mjs';
 import {ATLAS_GRID, TILE_SIZE, chiselMaterialShape, coverBoxes, creativeIcon, signFor} from '../world/geometry.mjs';
 import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
@@ -99,17 +100,34 @@ function chooseCreative(entry) {
   heldVersion++;
   fromCreative = true;
   heldCreativeItem = entry.kind ? entry : null;
-  clipboard = entry.kind === 'microblock' ? null : entry.blockKey ?? entry.key;
+  clipboard = entry.kind === 'microblock' || entry.kind === 'minecart' ? null : entry.blockKey ?? entry.key;
   heldSofa = isJammyConnectableSeat(world.models?.jammy, clipboard) ? {} : null;
   sofaTurns = 0;
   chiselMaterial = isChiselMaterial(clipboard) ? chiselMaterialKey(clipboard) : null;
   if (chiseling) toggleChisel();
   setHeldPart(entry.kind === 'microblock' ? creativeMicroblock(entry) : null);
-  notice(`В руке · ${entry.name}`);
+  notice(entry.kind === 'minecart' ? 'Вагонетка в руке · ПКМ по рельсам' : `В руке · ${entry.name}`);
   return true;
 }
 
 async function drawCreativeIcon(entry, canvas) {
+  if (entry.kind === 'minecart') {
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#333a44';
+    context.fillRect(3, 8, 26, 7);
+    context.fillRect(7, 21, 6, 5);
+    context.fillRect(19, 21, 6, 5);
+    context.fillStyle = '#aeb3bc';
+    context.beginPath();
+    context.moveTo(3, 11);
+    context.lineTo(29, 11);
+    context.lineTo(25, 22);
+    context.lineTo(7, 22);
+    context.fill();
+    context.fillStyle = '#d3d8df';
+    context.fillRect(3, 9, 26, 2);
+    return true;
+  }
   const model = entry.kind === 'microblock' ? {part:creativeMicroblock(entry)} :
     entry.kind === 'shaped-lamp' ? {data:shapedLampData(entry.damage), lit:Boolean(entry.damage & 16)} : undefined;
   const info = creativeIcon({...entry, ...model, key:entry.blockKey ?? entry.key});
@@ -175,6 +193,10 @@ const messages = {
   invalid_sign_face: 'Табличку можно поставить сверху или сбоку блока',
   invalid_sign_text: 'Каждая строка должна содержать до 80 символов без переноса',
   not_a_sign: 'Здесь больше нет таблички',
+  rail_needs_support: 'Рельсам нужна опора снизу',
+  minecart_requires_rail: 'Поставьте вагонетку на рельсы',
+  not_a_minecart: 'Здесь больше нет вагонетки',
+  minecart_limit: 'Достигнут предел числа вагонеток',
   invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
   nickname_locked: 'Ник уже сохранён для этой сессии',
   invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
@@ -229,7 +251,7 @@ async function refresh() {
 }
 
 function stream() {
-  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1');
+  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1');
   feed.addEventListener('open', () => { presenceDirty = true; });
   feed.addEventListener('presence', event => {
     const {players, selfOnline} = JSON.parse(event.data);
@@ -237,6 +259,14 @@ function stream() {
     social.roster(players, selfOnline && profile.confirmed);
   });
   feed.addEventListener('presence-motion', event => view.players.update(JSON.parse(event.data).players));
+  feed.addEventListener('minecarts', event => {
+    const {entities, seat:reportedSeat, position:feet} = JSON.parse(event.data);
+    world.setMinecarts(entities, performance.now());
+    if (seat?.entity && !seatPending && !resetting && feet) {
+      if (reportedSeat?.entity === seat.entity) confirmedPosition = positionTuple(feet);
+      else setSeat(reportedSeat, feet);
+    }
+  });
   feed.addEventListener('chat-history', event => social.history(JSON.parse(event.data).entries));
   feed.addEventListener('chat', event => social.message(JSON.parse(event.data)));
   feed.addEventListener('world-time', event => {
@@ -266,7 +296,11 @@ function playerPose() {
 function sendPresence(now) {
   if (!entered || presenceRequest || now < nextPresence || feed?.readyState !== EventSource.OPEN) return;
   const pose = playerPose();
+  if (seat?.entity) {
+    pose.cartDrive = playing && !menuOpen() ? Math.sign(forwardInput()) : 0;
+  }
   const changed = !lastSentPose || pose.motion !== lastSentPose.motion ||
+    pose.cartDrive !== lastSentPose.cartDrive || Boolean(pose.cartDrive) ||
     Math.abs(pose.yaw - lastSentPose.yaw) > .03 || Math.abs(pose.pitch - lastSentPose.pitch) > .03;
   if (!presenceDirty && !changed) return;
   nextPresence = now + positionInterval;
@@ -287,6 +321,10 @@ function updateCamera() {
 
 function sprinting() {
   return keys.has('ShiftLeft') || keys.has('ShiftRight');
+}
+
+function forwardInput() {
+  return Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) - stick.z;
 }
 
 function look(dx, dy, sensitivity = .0023) {
@@ -347,7 +385,10 @@ function setSeat(next, feet) {
   seat = next;
   setAuthoritativePosition(feet);
   game.classList.toggle('seated', Boolean(seat));
-  element('seat-status').hidden = !seat;
+  const status = element('seat-status');
+  status.hidden = !seat;
+  status.textContent = seat?.entity ? (touchMode ? 'Вагонетка · стик — движение · Действие — встать' :
+    'Вагонетка · W/S — движение · E — встать') : 'Сидите · E — встать';
   if (seat) {
     setFlight(false);
     heading.yaw = seat.yaw;
@@ -654,26 +695,34 @@ function updateSelection() {
   const {x,y,z} = position;
   const {yaw,pitch} = heading;
   const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,chiselSize,seat];
-  if (selectionInputs && stamp.every((value, index) => value === selectionInputs[index])) return;
+  const changed = !selectionInputs || stamp.some((value, index) => value !== selectionInputs[index]);
+  if (!changed && !world.minecarts.size && !seatTarget) return;
   selectionInputs = stamp;
   const cp = Math.cos(pitch);
   const origin = [x,y + (seat ? SEATED_EYE : EYE),z];
   const direction = [-Math.sin(yaw) * cp,Math.sin(pitch),-Math.cos(yaw) * cp];
-  selection = pick(world, origin, direction, chiseling);
+  if (changed) selection = pick(world, origin, direction, chiseling);
   seatTarget = pickMinecart(world, origin, direction, selection);
-  if (chiseling && chiselSize === 2 && selection?.voxel !== undefined) {
+  if (changed && chiseling && chiselSize === 2 && selection?.voxel !== undefined) {
     selection.chiselSize = chiselSize;
     selection.boxes = [voxelRemovalBrush(selection.cell.voxels, selection.voxel, chiselSize).box];
   }
 }
 
 async function action(type, sneaking = false) {
-  if (!selection || acting || resetting || !playing) return;
-  const target = selection;
+  if (acting || resetting || !playing) return;
+  const placingCart = type === 'place' && heldCreativeItem?.kind === 'minecart';
+  const removingCart = type === 'remove' && !chiseling && seatTarget;
+  const target = removingCart || selection;
+  if (!target) return;
   const selectedVersion = heldVersion;
   const cell = getKey(target.cell);
   let pendingPlacement;
-  if (chiseling && target.part && type === 'remove') {
+  if (placingCart) {
+    type = 'place_minecart';
+  } else if (removingCart) {
+    type = 'remove_minecart';
+  } else if (chiseling && target.part && type === 'remove') {
     type = 'remove_part';
   } else if (chiseling && type !== 'interact') {
     if (target.voxel === undefined && !(type === 'place' && target.partSlot !== undefined)) {
@@ -690,6 +739,8 @@ async function action(type, sneaking = false) {
     if (heldPart && type === 'place') type = 'place_part';
   }
   const request = {requestId: requestId(), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
+  if (placingCart) Object.assign(request, {creativeItem:heldCreativeItem.key, yaw:heading.yaw});
+  if (removingCart) request.entity = target.entity;
   if (type === 'copy_part' || type === 'remove_part') request.partSlot = target.partSlot;
   if (type === 'copy_voxel' || type === 'remove_voxel') {
     request.voxel = target.voxel ?? chiselVoxelAtHit(target, target.hit, target.offset, target.cell.voxels, cell);
@@ -782,9 +833,18 @@ async function action(type, sneaking = false) {
 function tick(now) {
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
   lastFrame = now;
+  world.stepMinecarts(now);
+  const cart = seat?.entity && world.minecarts.get(seat.entity)?.entity;
+  if (cart && !resetting) {
+    const anchor = minecartSeat(cart, seat.yaw);
+    const turn = anchor.yaw - seat.yaw;
+    heading.yaw += Math.atan2(Math.sin(turn), Math.cos(turn));
+    Object.assign(position, {x:anchor.x, y:anchor.y, z:anchor.z});
+    Object.assign(seat, anchor);
+  }
   if (playing && !menuOpen() && !seat && !seatPending) {
     const startX = position.x, startZ = position.z;
-    const forward = Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) - stick.z;
+    const forward = forwardInput();
     const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + stick.x;
     const descending = flying ? keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC') : sprinting();
     const vertical = flying ? Number(keys.has('Space')) - Number(descending) : 0;
@@ -805,6 +865,7 @@ function tick(now) {
   if (!resetting && now >= nextPositionSync && !acting) syncPosition();
   if (!sync || presenceDirty) sendPresence(now);
   updateCamera();
+  view.updateMinecarts();
   view.players.frame(now, dt);
   view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat);
   updateSelection();

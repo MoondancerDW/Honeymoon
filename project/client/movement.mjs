@@ -50,20 +50,27 @@ export function pickMinecart(world, origin, direction, block) {
   const chunk = (n, offset) => Math.floor((n + offset) / 16);
   const endX = origin[0] + direction[0] * 6, endZ = origin[2] + direction[2] * 6;
   let target = null, nearest = 6;
+  const consider = entity => {
+    const [cx, cy, cz] = entity.position.map(Math.floor);
+    const distance = minecartHit(entity, origin, direction, nearest);
+    if (distance >= nearest) return;
+    nearest = distance;
+    const [hx, hy, hz] = origin.map((n,axis) => n + direction[axis] * distance);
+    target = {x:cx,y:cy,z:cz,entity:entity.key,hit:{x:hx,y:hy,z:hz}};
+  };
   for (let z = chunk(Math.min(origin[2], endZ),-1); z <= chunk(Math.max(origin[2], endZ),1); z++) {
     for (let x = chunk(Math.min(origin[0], endX),-1); x <= chunk(Math.max(origin[0], endX),1); x++) {
       const source = world.chunks?.get(`${x},${z}`);
       if (!source || source.visualOnly) continue;
       if (!cartsByChunk.has(source)) cartsByChunk.set(source,(source.entities ?? []).filter(isRideableMinecart));
       for (const entity of cartsByChunk.get(source)) {
-        const distance = minecartHit(entity, origin, direction, nearest);
-        if (distance >= nearest) continue;
-        nearest = distance;
-        const [cx, cy, cz] = entity.position.map(Math.floor);
-        const [hx, hy, hz] = origin.map((n,axis) => n + direction[axis] * distance);
-        target = {x:cx,y:cy,z:cz,entity:entity.key,hit:{x:hx,y:hy,z:hz}};
+        if (!world.minecarts?.has(entity.key)) consider(entity);
       }
     }
+  }
+  for (const {entity} of world.minecarts?.values() ?? []) {
+    const [x, , z] = entity.position;
+    if (Math.abs(x - origin[0]) <= 7 && Math.abs(z - origin[2]) <= 7 && world.hasChunk(x,z)) consider(entity);
   }
   if (target && block?.length < nearest && (pick(world,origin,direction,false,true)?.length ?? Infinity) < nearest) return null;
   return target;

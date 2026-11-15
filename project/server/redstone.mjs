@@ -13,7 +13,7 @@ const NOT_NORMAL_CUBE = new Set([
   8, 9, 10, 11, 18, 20, 30, 52, 54, 55, 64, 65, 69, 70, 71, 72, 75, 76, 77, 79, 85, 90, 92,
   93, 94, 95, 96, 101, 102, 107, 113, 116, 117, 118, 120, 122, 130, 138, 139, 143, 145, 750, 765, 768,
 ]);
-const receiverIds = new Set([25, 64, 71, 75, 76, 93, 94, 96, 107, 123, 124, 756, 757, 758, 759, 768]);
+const receiverIds = new Set([25, 27, 64, 71, 75, 76, 93, 94, 96, 107, 123, 124, 756, 757, 758, 759, 768]);
 
 function cellView(cell, compositions) {
   return {key: cell?.cell ?? 'air', object: cell?.object, parts: compositions?.[cell?.cell]?.parts};
@@ -45,7 +45,7 @@ export function redstone(getCell, geometry, compositions) {
       const neighbor = offset(point, delta);
       const [id, meta] = block(neighbor);
       if (repeater(id)) return ((dial[meta & 3] - 2) >> 1) === (direction >> 1);
-      if (id === 55 || id === 69 || buttonDuration(id) || pressurePlate(id) || torch(id)) return true;
+      if (id === 27 || id === 55 || id === 69 || buttonDuration(id) || pressurePlate(id) || torch(id)) return true;
       return cube(neighbor)
         ? !cube(above) && block(offset(neighbor, signalSides[1]))[0] === 55
         : block(offset(neighbor, signalSides[0]))[0] === 55;

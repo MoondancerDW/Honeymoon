@@ -3,7 +3,7 @@ import {chunkKey, sectionKey, json} from './world-data.mjs';
 import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
 import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 import {itemFrameModel} from '../world/item-frames.mjs';
-import {isRideableMinecart, minecartQuads, minecartRotation} from '../world/minecarts.mjs';
+import {isRideableMinecart, minecartQuads, minecartRotation, minecartTilt} from '../world/minecarts.mjs';
 import {RemotePlayers} from './remote-players.mjs';
 import {createPonyAvatar} from './pony-avatar.mjs';
 import {cameraClearance} from './movement.mjs';
@@ -104,6 +104,8 @@ export class Display {
     this.visualEntities.visible = false;
     this.scene.add(this.visualEntities);
     this.entityLights = new Map();
+    this.importedMinecarts = new Map();
+    this.movingMinecarts = new Map();
     this.chunkEntities = new Map();
     this.exactChunks = new Set();
     this.preciseLevels = new Map();
@@ -474,7 +476,13 @@ export class Display {
       const group = new THREE.Group();
       for (const entity of chunk.entities) {
         const object = this.makeEntity(entity);
-        if (object) group.add(object);
+        if (!object) continue;
+        if (isRideableMinecart(entity)) {
+          object.userData.minecartKey = entity.key;
+          object.visible = !this.world.minecarts.has(entity.key);
+          this.importedMinecarts.set(entity.key, object);
+        }
+        group.add(object);
       }
       if (group.children.length) {
         const meshes = [];
@@ -499,6 +507,7 @@ export class Display {
       if (entities) {
         removedEntities.add(entities);
         this.chunkEntities.delete(key);
+        for (const object of entities.children) this.importedMinecarts.delete(object.userData.minecartKey);
         this.discardGroup(entities);
       }
       for (let y = 0; y < 16; y++) {
@@ -747,9 +756,44 @@ export class Display {
     const light = this.world.lightAt(...position);
     const mesh = new THREE.Mesh(quadGeometry(minecartQuads,light,255),this.minecartMaterial);
     mesh.position.set(...entity.position);
-    mesh.rotation.y = minecartRotation(entity);
+    mesh.rotation.set(0,minecartRotation(entity),minecartTilt(entity),'YXZ');
     this.trackEntityLight(mesh,position);
     return mesh;
+  }
+
+  updateMinecarts() {
+    const carts = this.world.minecarts;
+    for (const [key, mesh] of this.importedMinecarts) mesh.visible = !carts.has(key);
+    const visible = new Set();
+    for (const {entity} of carts.values()) {
+      const [x,y,z] = entity.position.map(Math.floor);
+      if (!this.world.chunks.has(chunkKey(x >> 4,z >> 4)) || !this.isPreciseVisible(x >> 4,z >> 4)) continue;
+      visible.add(entity.key);
+      let mesh = this.movingMinecarts.get(entity.key);
+      if (!mesh) {
+        mesh = this.makeMinecart(entity);
+        this.movingMinecarts.set(entity.key,mesh);
+        this.scene.add(mesh);
+      }
+      const previous = this.entityLights.get(mesh.userData.lightSection)?.get(mesh)?.position;
+      if (!previous || previous[0] !== x || previous[1] !== y || previous[2] !== z) {
+        const lights = this.entityLights.get(mesh.userData.lightSection);
+        lights?.delete(mesh);
+        if (lights?.size === 0) this.entityLights.delete(mesh.userData.lightSection);
+        this.trackEntityLight(mesh,[x,y,z]);
+        const light = mesh.geometry.getAttribute('legacyLightLevel');
+        light.array.fill(this.world.lightAt(x,y,z));
+        light.needsUpdate = true;
+      }
+      mesh.position.set(...entity.position);
+      mesh.rotation.set(0,minecartRotation(entity),minecartTilt(entity),'YXZ');
+      mesh.updateMatrixWorld();
+    }
+    for (const [key, mesh] of this.movingMinecarts) {
+      if (visible.has(key)) continue;
+      this.discardGroup(mesh);
+      this.movingMinecarts.delete(key);
+    }
   }
 
   makeItemFrame(entity) {

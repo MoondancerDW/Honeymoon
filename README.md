@@ -7,9 +7,9 @@ Honeymoon. Здесь можно ходить, летать, строить из
 Правки сохраняются и видны другим гостевым сессиям.
 
 - [Подготовка и запуск](project/README.md)
-- [Готовая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-skins-signs/Honeymoon-Skins-and-Signs-Windows-x64.zip)
-- [Архив браузерного клиента и Node.js-сервера](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-skins-signs/honeymoon-browser-client.zip)
-- [Тестовый релиз со скинами и табличками](https://github.com/MoondancerDW/Honeymoon/releases/tag/pc-test-skins-signs)
+- [Готовая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-railway-update/Honeymoon-Railway-Update-Windows-x64.zip)
+- [Архив браузерного клиента и Node.js-сервера](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-railway-update/honeymoon-browser-client.zip)
+- [Тестовый релиз с вагонетками](https://github.com/MoondancerDW/Honeymoon/releases/tag/pc-test-railway-update)
 - [Манифест исходного клиента Minecraft](project/legacy/README.md)
 - [Проверки, визуальные замены и замеры](project/REPORT.md)
 - [Архивы карты Equestria](https://github.com/MoondancerDW/Honeymoon/releases/tag/equestria-source)

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import * as geometry from '../world/geometry.mjs';
 import { blockKey, relatedBlockStates } from '../world/block-interactions.mjs';
+import { railFor, railPoint, railTangent } from '../world/rails.mjs';
 import { extractedModel } from '../world/extracted-models.mjs';
 import { cellAddress, loadBase } from './base.mjs';
 import { createGame } from './game.mjs';
@@ -30,6 +31,62 @@ function gameFor(base, store, clock) {
 function command(requestId, [x, y, z], expectedRevision = 0) {
   return {type: 'interact', requestId, x, y, z, expectedRevision};
 }
+
+test('placed rails connect at corners and height changes while matching legacy track endpoints', t => {
+  const base = fixture([[8, 1, 5, 1, 0], [8, 2, 3, 1, 0], [6, 1, 4, 66, 0]]);
+  base.catalog.add('legacy:66:0');
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const game = gameFor(base, store, () => 0);
+  const player = store.createPlayer().id;
+  game.session(player);
+  let index = 0;
+  const place = (x, y, z, yaw = 0, against = {x, y:y - 1, z}) => game.action(player, {
+    type:'place', requestId:`place-rail-${++index}`, x, y, z, against, expectedRevision:0, cell:'legacy:66:0', yaw,
+    hit:{x:against.x + .5, y:against.y + 1, z:against.z + .5},
+  });
+  function placed(result) {
+    assert.equal(result.status, 200, JSON.stringify(result.output));
+    return result.output.changes;
+  }
+  assert.equal(placed(place(4, 1, 6, Math.PI / 2))[0].cell, 'legacy:66:1');
+  assert.equal(placed(place(5, 1, 6))[0].cell, 'legacy:66:1');
+  const corner = placed(place(5, 1, 7)).find(cell => cell.x === 5 && cell.z === 6);
+  assert.equal(corner.cell, 'legacy:66:7');
+  const bend = railFor(corner);
+  assert.ok(Math.abs(Math.hypot(...railPoint(bend, .5).map((value, axis) => value - [0, 0, 1][axis])) - .5) < 1e-12);
+  assert.ok(railTangent(bend, 0)[2] < -.999);
+  assert.ok(railTangent(bend, 1)[0] < -.999);
+
+  placed(place(6, 1, 5));
+  placed(place(7, 1, 5));
+  const ascent = placed(place(8, 2, 5)).find(cell => cell.x === 7 && cell.y === 1 && cell.z === 5);
+  assert.equal(ascent.cell, 'legacy:66:2');
+  assert.deepEqual(railPoint(railFor(ascent), 1), [1, 1, .5]);
+  assert.ok(!store.getEdit(6, 1, 4));
+  assert.equal(place(8, 2, 4, 0, {x:8, y:2, z:3}).output.error, 'rail_needs_support');
+});
+
+test('a neighboring lever powers and brakes a player-placed powered rail', t => {
+  const lever = [6, 1, 3];
+  const base = fixture([[...lever, 69, 5]]);
+  base.catalog.add('legacy:27:0');
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const game = gameFor(base, store, () => 0);
+  const player = store.createPlayer().id;
+  game.session(player);
+  const place = game.action(player, {...command('place-powered-track', [6, 1, 4]), type:'place',
+    cell:'legacy:27:0', against:{x:6, y:0, z:4}});
+  assert.equal(place.status, 200, JSON.stringify(place.output));
+  assert.equal(railFor(store.getEdit(6, 1, 4)).powered, false);
+  const on = game.action(player, command('power-track', lever));
+  assert.ok(on.output.changes.some(cell => cell.cell === 'legacy:27:8'));
+  assert.equal(railFor(store.getEdit(6, 1, 4)).powered, true);
+  const off = game.action(player, command('brake-track', lever, on.output.worldRevision));
+  assert.ok(off.output.changes.some(cell => cell.cell === 'legacy:27:0'));
+  assert.equal(railFor(store.getEdit(6, 1, 4)).powered, false);
+});
 
 test('a double chest opens both halves, preserves inventory and respects an obstructed lid', t => {
   const left = [4, 1, 6], right = [5, 1, 6], blocked = [7, 1, 6];

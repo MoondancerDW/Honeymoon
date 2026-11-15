@@ -10,6 +10,11 @@ export function minecartRotation(entity) {
   return Math.PI - (Number.isFinite(yaw) ? yaw * Math.PI / 180 : 0);
 }
 
+export function minecartTilt(entity) {
+  const tilt = entity.data?.Rotation?.[1];
+  return Number.isFinite(tilt) ? tilt * Math.PI / 180 : 0;
+}
+
 // Minecraft 1.4.7 model and its original 64×32 atlas, in 1/16-block units.
 const parts = [
   {size:[20,16,2], offset:[-10,-8,-1], pivot:[0,4,0], uv:[0,10], pitch:Math.PI/2},
@@ -56,8 +61,14 @@ export const minecartQuads = models.flatMap(({quads}) => quads);
 
 export function minecartHit(entity, origin, direction, range = 6) {
   const yaw = minecartRotation(entity);
-  const ray = rotateMinecart(origin.map((n,axis) => n - entity.position[axis]),-yaw);
-  const forward = rotateMinecart(direction,-yaw);
+  const tilt = -minecartTilt(entity);
+  const sin = Math.sin(tilt), cos = Math.cos(tilt);
+  const local = vector => {
+    const [x,y,z] = rotateMinecart(vector,-yaw);
+    return [x*cos-y*sin,x*sin+y*cos,z];
+  };
+  const ray = local(origin.map((n,axis) => n - entity.position[axis]));
+  const forward = local(direction);
   let distance = Infinity;
   for (const {box} of models) {
     const hit = intersectSelection(ray,forward,box,0,0,0,range);
