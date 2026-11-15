@@ -83,12 +83,18 @@ const sampling = `
     vec2 uv = (cell + clamp(within, vec2(.03125), vec2(.96875))) / grid;
     vec2 midUv = (cell + (1.0 + within * 4.0) / 6.0) / grid;
     vec2 meanUv = (cell + .5) / grid;
-    if (footprint >= .66) return texture2D(terrainAverage, meanUv);
-    vec4 detail = texture2D(source, uv);
-    if (footprint <= .065) return detail;
-    vec4 mid = texture2D(terrainMid, midUv);
-    vec4 low = mix(mid, texture2D(terrainAverage, meanUv), smoothstep(.24, .66, footprint));
-    return mix(detail, low, smoothstep(.065, .21, footprint));
+    vec4 result = vec4(0.0);
+    if (footprint >= .66) {
+      result = texture2D(terrainAverage, meanUv);
+    } else {
+      result = texture2D(source, uv);
+      if (footprint > .065) {
+        vec4 mid = texture2D(terrainMid, midUv);
+        vec4 low = mix(mid, texture2D(terrainAverage, meanUv), smoothstep(.24, .66, footprint));
+        result = mix(result, low, smoothstep(.065, .21, footprint));
+      }
+    }
+    return result;
   }
 
   float terrainFootprint(vec2 uv) {

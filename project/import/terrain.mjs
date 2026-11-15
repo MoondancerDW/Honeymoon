@@ -1,10 +1,12 @@
 import { statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sectionBlocks } from './nbt.mjs';
+import { coverParts, sectionBlocks } from './nbt.mjs';
+import { fullCoverMaterial } from '../world/cover-plane.mjs';
 
 const STEP = 4;
 const LEVEL_CELLS = 64;
 const MIN_OCCUPANCY = 3;
+const COVER_MATERIAL_BASE = 65536;
 const RING_RADII = [8, 16, 32];
 const FINE_DECORATION = new Set([
   6, 27, 28, 30, 31, 32, 37, 38, 39, 40, 50, 51, 55, 59, 63, 65, 66, 68, 69, 70,
@@ -13,11 +15,11 @@ const FINE_DECORATION = new Set([
 
 export const terrainRadii = [0, ...RING_RADII];
 
-function coarseSection(section, palette, indexByKey) {
+function coarseSection(section, coverPlanes, palette, indexByKey) {
   const { blocks, variants } = sectionBlocks(section);
   const coarse = Buffer.alloc(LEVEL_CELLS * 2);
-  const counts = new Uint8Array(65536);
-  const keys = new Uint16Array(64);
+  const counts = new Uint8Array(COVER_MATERIAL_BASE + 256);
+  const keys = new Uint32Array(64);
   let occupiedCells = 0;
   for (let cy = 0; cy < 4; cy += 1) {
     for (let cz = 0; cz < 4; cz += 1) {
@@ -30,8 +32,9 @@ function coarseSection(section, palette, indexByKey) {
             for (let dx = 0; dx < STEP; dx += 1) {
               const index = row + dx;
               const id = blocks[index];
-              if (id === 0 || FINE_DECORATION.has(id) || (id === 750 && variants[index] === 0)) continue;
-              const key = id * 16 + variants[index];
+              const plane = coverPlanes.get(section.Y * 4096 + index);
+              if (plane === undefined && (id === 0 || FINE_DECORATION.has(id) || (id === 750 && variants[index] === 0))) continue;
+              const key = plane === undefined ? id * 16 + variants[index] : COVER_MATERIAL_BASE + plane;
               occupancy += 1;
               if (counts[key] === 0) {
                 keys[keyCount] = key;
@@ -48,9 +51,10 @@ function coarseSection(section, palette, indexByKey) {
           if (counts[key] > counts[bestKey] || (counts[key] === counts[bestKey] && key < bestKey)) bestKey = key;
         }
         for (let index = 0; index < keyCount; index += 1) counts[keys[index]] = 0;
-        if (occupancy < MIN_OCCUPANCY) continue;
+        if (occupancy < MIN_OCCUPANCY && bestKey < COVER_MATERIAL_BASE) continue;
 
-        const name = `legacy:${bestKey >> 4}:${bestKey & 15}`;
+        const name = bestKey < COVER_MATERIAL_BASE
+          ? `legacy:${bestKey >> 4}:${bestKey & 15}` : `full-cover-material:${bestKey - COVER_MATERIAL_BASE}`;
         if (!indexByKey.has(name)) {
           if (palette.length >= 65536) throw new Error('Terrain palette exceeds uint16');
           indexByKey.set(name, palette.length);
@@ -64,11 +68,16 @@ function coarseSection(section, palette, indexByKey) {
   return occupiedCells ? { y: section.Y, indices: coarse.toString('base64'), occupiedCells } : null;
 }
 
-function scanCompositions(level, compositions) {
+function scanCovers(level, compositions, collectPlanes) {
+  const result = new Map();
   for (const tile of level.TileEntities ?? []) {
-    if (tile.id !== 'Covers' || !Buffer.isBuffer(tile.cvs) || !Number.isInteger(tile.cvm)) continue;
-    compositions.add(`${tile.cvm}:${tile.cvs.toString('hex')}`);
+    if (!Buffer.isBuffer(tile.cvs) || !Number.isInteger(tile.cvm)) continue;
+    if (tile.id === 'Covers') compositions.add(`${tile.cvm}:${tile.cvs.toString('hex')}`);
+    if (!collectPlanes || ![tile.x,tile.y,tile.z].every(Number.isInteger)) continue;
+    const material = fullCoverMaterial(coverParts(tile)?.parts, tile.id === 'RPFrame');
+    if (material !== undefined) result.set((tile.x & 15) + (tile.z & 15) * 16 + tile.y * 256, material);
   }
+  return result;
 }
 
 export function writeTerrainRings(output, maxRadius, loadChunk, detailRadius) {
@@ -91,11 +100,11 @@ export function writeTerrainRings(output, maxRadius, loadChunk, detailRadius) {
           if (!inner) missingChunks.push([x, z]);
           continue;
         }
-        scanCompositions(level, compositions);
+        const coverPlanes = scanCovers(level, compositions, !inner);
         if (inner) continue;
         const levels = [];
         for (const section of [...(level.Sections ?? [])].sort((left, right) => left.Y - right.Y)) {
-          const coarse = coarseSection(section, palette, indexByKey);
+          const coarse = coarseSection(section, coverPlanes, palette, indexByKey);
           if (!coarse) continue;
           occupiedCells += coarse.occupiedCells;
           levels.push({ y: coarse.y, indices: coarse.indices });

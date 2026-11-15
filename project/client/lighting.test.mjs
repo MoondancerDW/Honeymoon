@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { FACE_SHADE, coverShade, legacyLight, linearByte, sunlightAt, writeLightmap } from './lighting.mjs';
+import { FACE_SHADE, contactShade, coverShade, legacyLight, linearByte, sunlightAt, writeLightmap } from './lighting.mjs';
 import { World } from './world-data.mjs';
 import { filledVoxels, voxelKey, writeVoxel } from '../world/voxel-chisel.mjs';
 import { lightChanged } from './block-light.mjs';
@@ -48,13 +48,20 @@ test('legacy lighting keeps shaded interiors and the warm block-light curve', ()
 
 test('native day cycle dims sky light without scaling block light', () => {
   assert.equal(sunlightAt(6000), 1);
-  assert.equal(sunlightAt(18000), .2);
-  assert.equal(sunlightAt(18000 + 24000), .2);
+  assert.equal(sunlightAt(18000), .16);
+  assert.equal(sunlightAt(18000 + 24000), .16);
   const light = new Uint8Array(16 * 17 * 4);
   writeLightmap(light, sunlightAt(18000));
   assert.ok(light[240 * 4] < 100);
   assert.deepEqual([...light.slice(8 * 4, 8 * 4 + 3)], legacyLight(8));
   assert.deepEqual([...light.slice(256 * 4, 256 * 4 + 4)], [255,255,255,255]);
+});
+
+test('contact shade preserves exposed corners and increases beside solid blocks', () => {
+  assert.equal(contactShade(false, false, false), 1);
+  assert.equal(contactShade(true, false, false), contactShade(false, false, true));
+  assert.ok(contactShade(true, false, false) > contactShade(true, false, true));
+  assert.equal(contactShade(true, true, false), contactShade(true, true, true));
 });
 
 test('a sculpture only changes block lighting when its cell opens or closes', () => {

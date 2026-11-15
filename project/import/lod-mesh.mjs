@@ -1,4 +1,5 @@
 import {shapeFor, FACES} from '../world/geometry.mjs';
+import {fullCoverMaterial} from '../world/cover-plane.mjs';
 import {FACE_SHADE} from '../client/lighting.mjs';
 import {LOD_VERSION, WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
 
@@ -25,6 +26,7 @@ function faceStyle(shape, face, fluid, daylight, useFallback) {
 
 export function makeMaterials() {
   const byKey = new Map([['air', 0]]);
+  const byComposition = new Map();
   const byStyle = new Map();
   const materials = [null];
   const styles = [null];
@@ -40,18 +42,14 @@ export function makeMaterials() {
     return byStyle.get(key);
   }
 
-  function get(key) {
-    if (key.startsWith('cover:')) {
-      // Sample the underlying block without any attached RedPower covers.
-      const [, id, meta] = key.split(':', 3);
-      key = `legacy:${id}:${meta}`;
-    }
-    if (key === 'legacy:750:0' || key.startsWith('cover-material:')) return 0;
+  function materialFor(key) {
+    if (key === 'legacy:750:0') return 0;
     if (byKey.has(key)) return byKey.get(key);
     const id = Number(key.split(':')[1]);
-    const fluid = id === 8 || id === 9;
-    const kind = fluid ? LIQUID : leaves.has(id) ? LEAVES : natural.has(id) ? NATURAL : CONSTRUCTION;
-    const boxes = tiny.has(id) ? [] : shapeFor(key);
+    const cover = key.startsWith('cover-material:');
+    const fluid = !cover && (id === 8 || id === 9);
+    const kind = cover ? CONSTRUCTION : fluid ? LIQUID : leaves.has(id) ? LEAVES : natural.has(id) ? NATURAL : CONSTRUCTION;
+    const boxes = !cover && tiny.has(id) ? [] : shapeFor(key);
     let shape, largest = 0;
     for (const box of boxes) {
       const volume = (box.x1-box.x0) * (box.y1-box.y0) * (box.z1-box.z0);
@@ -67,6 +65,16 @@ export function makeMaterials() {
     byKey.set(key, slot);
     materials.push({kind, sides:FACES.map((_,face) => styleFor(shape,face,fluid,240,true)), shape});
     return slot;
+  }
+
+  function get(key, compositions) {
+    if (!key.startsWith('cover:')) return key.startsWith('cover-material:') ? 0 : materialFor(key);
+    if (!byComposition.has(key)) {
+      const [, id, meta] = key.split(':', 3);
+      const cover = fullCoverMaterial(compositions?.[key]?.parts, id === '765');
+      byComposition.set(key, materialFor(cover === undefined ? `legacy:${id}:${meta}` : `cover-material:${cover}`));
+    }
+    return byComposition.get(key);
   }
 
   return {get,materials,styles,styleFor};
@@ -89,7 +97,7 @@ function lightAt(section, index) {
 }
 
 export function sampleChunk(chunk, catalog) {
-  const entries = chunk.palette.map(catalog.get);
+  const entries = chunk.palette.map(key => catalog.get(key, chunk.compositions));
   const samplePlane = CHUNK_SIDE ** 2;
   const grid = new Uint16Array(samplePlane * 128);
   const occupancy = new Uint8Array(samplePlane * 128);

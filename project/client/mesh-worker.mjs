@@ -1,7 +1,7 @@
 import * as geometry from '/world/geometry.mjs';
 import {decodeIndices} from './world-data.mjs';
 import {CHISEL_FANTASY, chiselFantasyQuarters, glassTexture, paneTexture} from '/world/connected-textures.mjs';
-import {coverShade, FACE_SHADE} from './lighting.mjs';
+import {contactShade, coverShade, FACE_SHADE} from './lighting.mjs';
 import {extractedModel, isJammyConnectableSeat} from '/world/extracted-models.mjs';
 import {crossSpriteCorners} from '/world/cross-sprites.mjs';
 import {isOpaqueFullVoxels, voxelFaces} from '/world/voxel-chisel.mjs';
@@ -26,7 +26,7 @@ function layer() {
   return {positions: [], colors: [], lightLevels: [], uvs: [], indices: []};
 }
 
-function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding = .25 / TILE_SIZE) {
+function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding = .25 / TILE_SIZE, shadow) {
   const start = out.positions.length / 3;
   if (tile >= ATLAS_GRID * atlasRows) tile = geometry.tiles.unknown;
   const u0 = (tile % ATLAS_GRID) / ATLAS_GRID;
@@ -37,12 +37,15 @@ function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding
   const b = Math.round((tint & 255) * shade);
   for (let i = 0; i < 4; i++) {
     out.positions.push(...corners[i]);
-    out.colors.push(r, g, b);
+    if (shadow) out.colors.push(Math.round(r * shadow[i]), Math.round(g * shadow[i]), Math.round(b * shadow[i]));
+    else out.colors.push(r, g, b);
     out.lightLevels.push(light);
     if (tile === null) out.uvs.push(uv[i][0],1-uv[i][1]);
     else out.uvs.push(u0 + (padding + scale * uv[i][0]) / ATLAS_GRID, v0 - (padding + scale * uv[i][1]) / atlasRows);
   }
-  out.indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
+  if (shadow && shadow[0] + shadow[2] > shadow[1] + shadow[3]) {
+    out.indices.push(start, start + 1, start + 3, start + 1, start + 2, start + 3);
+  } else out.indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
 }
 
 function modelQuad(out, {positions, uv, emissive, tint = 0xffffff}, origin, light, vScale = 1) {
@@ -71,7 +74,7 @@ const FIRE_UV = [0,.5].map(offset => FULL_UV.map(([u,v]) => [offset + (u === 0 ?
 const AXES = [[2, 1], [1, 2], [0, 2], [2, 0], [1, 0], [0, 1]];
 const UV_AXES = [[2, 1], [2, 1], [0, 2], [0, 2], [0, 1], [0, 1]];
 
-function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], shade = 1, quarter = -1) {
+function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], shade = 1, quarter = -1, shadow) {
   if (!Number.isInteger(tile) || tile < 0) return;
   const axis = face >> 1;
   const outward = face & 1;
@@ -136,8 +139,16 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
       corners.push(point.map((value, i) => value + origin[i]));
     }
   }
+  let vertexShade = shadow;
+  if (shadow && quarter >= 0) {
+    const [a, b, c, d] = shadow;
+    vertexShade = corners.map(point => {
+      const u = point[uAxis] - origin[uAxis], v = point[vAxis] - origin[vAxis];
+      return (a + (b - a) * u) * (1 - v) + (d + (c - d) * u) * v;
+    });
+  }
   quad(out, corners, tile, uv, brightness, box.tintFaces?.[face] ?? box.tint, shade,
-    box.redPowerAxes ? 0 : undefined);
+    box.redPowerAxes ? 0 : undefined, vertexShade);
 }
 
 function fullCube(box) {
@@ -212,6 +223,27 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
     if (!indices[at] || hasSculptures && voxelCells.has(at) && !editedParts.has(at)) return null;
     if (!rendered.has(at)) rendered.set(at, makeShape(palette[indices[at]], at, cell(at), cell, editedParts.has(at)));
     return rendered.get(at);
+  }
+  const shadowCells = new Uint8Array(indices.length);
+  function castsContactShade(at) {
+    if (!indices[at]) return false;
+    if (!shadowCells[at]) {
+      const block = shape(at);
+      const solid = block?.boxes.length === 1 && isOcclusionBlock(block.full) ||
+        hasSculptures && isOpaqueFullVoxels(voxelCells.get(at));
+      shadowCells[at] = solid ? 2 : 1;
+    }
+    return shadowCells[at] === 2;
+  }
+  function faceShadow(adjacent, face) {
+    const [uAxis, vAxis] = AXES[face];
+    const u = STRIDE[uAxis], v = STRIDE[vAxis];
+    const u0 = castsContactShade(adjacent - u), u1 = castsContactShade(adjacent + u);
+    const v0 = castsContactShade(adjacent - v), v1 = castsContactShade(adjacent + v);
+    const a = castsContactShade(adjacent - u - v), b = castsContactShade(adjacent + u - v);
+    const c = castsContactShade(adjacent + u + v), d = castsContactShade(adjacent - u + v);
+    if (!(u0 || u1 || v0 || v1 || a || b || c || d)) return;
+    return [contactShade(u0,v0,a), contactShade(u1,v0,b), contactShade(u1,v1,c), contactShade(u0,v1,d)];
   }
   for (let y = 0; y < 16; y++) {
     for (let z = 0; z < 16; z++) {
@@ -316,16 +348,18 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             const brightness = box.emissive ? 256 : box.redPowerLocalShade || box.chestLightOffset
               ? light[at + (lightOffset ? lightOffset[0] + lightOffset[2] * SIDE : 0)] : packed;
             const shade = box.emissive ? 1 : box.redPowerLocalShade?.[f] ?? FACE_SHADE[f] * (cover ? coverShade(light[adjacent]) : 1);
+            const shadow = onEdge && box === blockShape.full && box.mode === 'opaque' && !box.emissive
+              ? faceShadow(adjacent, f) : undefined;
             if (chisel) {
               const tiles = chiselFantasyQuarters(f, neighbors);
               for (let quarter = 0; quarter < tiles.length; quarter++) {
-                faceQuad(out, box, f, origin, brightness, tiles[quarter], shade, quarter);
+                faceQuad(out, box, f, origin, brightness, tiles[quarter], shade, quarter, shadow);
               }
               continue;
             }
             let tile = box.faces[f];
             if (glass) tile = glassTexture(f, neighbors, Number(blockKey.slice(10))) ?? tile;
-            faceQuad(out, box, f, origin, brightness, tile, shade);
+            faceQuad(out, box, f, origin, brightness, tile, shade, -1, shadow);
           }
         }
       }
@@ -347,7 +381,9 @@ function coarse({chunks, origin, stride}) {
         if (!indices[i]) continue;
         const key = palette[indices[i]];
         if (!key || key === 'legacy:750:0' || key.startsWith('cover-material:')) continue;
-        if (!representatives.has(key)) representatives.set(key, shapeFor(key)[0] || null);
+        if (!representatives.has(key)) {
+          representatives.set(key, shapeFor(key.replace(/^full-cover-material:/, 'cover-material:'))[0] ?? null);
+        }
         const shape = representatives.get(key);
         if (!shape || shape.faces.every(tile => tile < 0)) continue;
         const x = chunk.x * 16 + (i & 3) * stride;

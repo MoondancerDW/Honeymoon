@@ -7,14 +7,13 @@ const teleportErrors = {
   not_online:'Сначала войдите в мир',
   action_pending:'Дождитесь завершения текущего действия',
 };
+const historyLimit = 100;
 
 export function createSocialHud({post, notice, pause, resume, teleport}) {
   const byId = id => document.getElementById(id);
   const chat = byId('chat');
-  const channels = {
-    global:{log:byId('chat-log'), seen:new Set(), label:'Глобальный'},
-    local:{log:byId('local-chat-log'), seen:new Set(), label:'Локальный · 18 блоков'},
-  };
+  const log = byId('chat-log');
+  const seen = new Set();
   const channelButton = byId('chat-channel');
   const chatForm = byId('chat-form');
   const chatInput = byId('chat-input');
@@ -28,32 +27,45 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
   const online = byId('online');
   const names = byId('online-names');
   let panel, onlineVisible = false, connected = false, players = [], clockText, writingTime = false;
+  let peers = [];
   let channel = 'global';
 
-  function entry({id, kind, nickname, text, channel:target = 'global'}, recent) {
-    const {log, seen} = channels[target] ?? channels.global;
+  function entry({id, kind, nickname, newNickname, text, channel:target = 'global'}, recent) {
     if (seen.has(id)) return;
+    const follow = panel !== 'chat' || log.scrollHeight - log.clientHeight - log.scrollTop < 8;
     seen.add(id);
     const row = document.createElement('li');
     row.dataset.messageId = id;
+    if (target === 'global') {
+      const marker = document.createElement('span');
+      marker.className = 'chat-global';
+      marker.textContent = '[G] ';
+      row.append(marker);
+    }
     if (kind === 'message') {
       const sender = document.createElement('strong');
       sender.textContent = nickname;
       row.append(sender, document.createTextNode(`  ${text}`));
     } else {
       row.className = 'chat-status';
-      row.textContent = `${nickname} ${kind === 'join' ? 'входит в игру' : 'выходит из игры'}`;
+      const changes = kind === 'rename' ? `сменил ник на ${newNickname}` :
+        kind === 'join' ? 'входит в игру' : 'выходит из игры';
+      row.append(document.createTextNode(`${nickname} ${changes}`));
     }
     if (recent) {
       row.classList.add('recent');
-      setTimeout(() => row.classList.remove('recent'), 8500);
+      setTimeout(() => row.classList.add('fading'), 6500);
+      setTimeout(() => row.classList.remove('recent', 'fading'), 8500);
     }
-    log.append(row);
-    if (log.childElementCount > 60) {
+    let previous = log.lastElementChild;
+    while (previous && Number(previous.dataset.messageId) > id) previous = previous.previousElementSibling;
+    if (previous) previous.after(row);
+    else log.prepend(row);
+    if (log.childElementCount > historyLimit) {
       seen.delete(Number(log.firstElementChild.dataset.messageId));
       log.firstElementChild.remove();
     }
-    log.scrollTop = log.scrollHeight;
+    if (follow) log.scrollTop = log.scrollHeight;
   }
 
   function close(continuePlaying = true) {
@@ -76,13 +88,26 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
     if (panel === 'clock') clockInput.value = clockText;
     const input = panel === 'chat' ? chatInput : panel === 'clock' ? clockInput : coordinateInputs[0][1];
     input.focus();
-    const {log} = channels[channel];
-    log.scrollTop = log.scrollHeight;
+    if (panel === 'chat') log.scrollTop = log.scrollHeight;
   }
 
   function showOnline(active) {
     onlineVisible = active;
     online.hidden = !active;
+  }
+
+  function roster(others, self) {
+    peers = others;
+    players = [...(self ? [self] : []), ...peers].map(({nickname}) => nickname)
+      .sort((a, b) => a.localeCompare(b, 'ru'));
+    connected = Boolean(self);
+    byId('online-count').textContent = String(players.length);
+    names.replaceChildren(...players.map(nick => {
+      const item = document.createElement('li');
+      item.textContent = nick;
+      return item;
+    }));
+    clockButton.disabled = byId('chat-toggle').disabled = teleportButton.disabled = !connected;
   }
 
   async function submit(path, payload, fallback) {
@@ -107,18 +132,13 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
     send.disabled = false;
     if (message) {
       entry(message, true);
-      if (channel === destination && chatInput.value.trim() === text) chatInput.value = '';
+      if (chatInput.value.trim() === text) chatInput.value = '';
     }
   });
   byId('chat-toggle').addEventListener('click', () => open('chat'));
   channelButton.addEventListener('click', () => {
-    const next = channel === 'global' ? 'local' : 'global';
-    channels[channel].log.hidden = true;
-    channel = next;
-    const {log, label} = channels[channel];
-    log.hidden = false;
-    log.scrollTop = log.scrollHeight;
-    channelButton.textContent = label;
+    channel = channel === 'global' ? 'local' : 'global';
+    channelButton.textContent = channel === 'global' ? 'Всем' : 'Рядом · 18 блоков';
     channelButton.setAttribute('aria-pressed', String(channel === 'local'));
     chatInput.focus();
   });
@@ -166,7 +186,7 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
         showOnline(true);
         return true;
       }
-      const next = {KeyT:'chat', KeyK:'clock', KeyG:'teleport'}[event.code];
+      const next = {KeyT:'chat', Enter:'chat', NumpadEnter:'chat', KeyK:'clock', KeyG:'teleport'}[event.code];
       if (!event.repeat && next) {
         event.preventDefault();
         open(next);
@@ -178,22 +198,9 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
       if (event.code === 'Tab' && onlineVisible) { event.preventDefault(); showOnline(false); }
     },
     blur() { showOnline(false); },
-    roster(peers, self) {
-      players = [...(self ? [self] : []), ...peers].map(({nickname}) => nickname)
-        .sort((a, b) => a.localeCompare(b, 'ru'));
-      connected = Boolean(self);
-      byId('online-count').textContent = String(players.length);
-      names.replaceChildren(...players.map(nick => {
-        const item = document.createElement('li');
-        item.textContent = nick;
-        return item;
-      }));
-      clockButton.disabled = byId('chat-toggle').disabled = teleportButton.disabled = !connected;
-    },
+    roster,
+    profileUpdated(profile) { if (connected) roster(peers, profile); },
     history(list) {
-      const {log, seen} = channels.global;
-      log.replaceChildren();
-      seen.clear();
       for (const message of list) entry(message, false);
     },
     message(message) { entry(message, true); },

@@ -37,7 +37,7 @@ async function joinPlayer(nickname) {
   await page.locator('#nickname').fill(nickname);
   await page.locator('#play').click();
   await page.waitForFunction(nick => honeymoon.online().includes(nick), nickname, {timeout:20000});
-  assert.equal(await page.locator('#nickname').evaluate(input => input.readOnly), true);
+  assert.equal(await page.locator('#nickname').evaluate(input => input.readOnly), false);
   return page;
 }
 
@@ -130,20 +130,44 @@ try {
   await last.locator('#chat-input').press('Enter');
   await first.waitForFunction(() => document.querySelector('#chat-log').textContent.includes('Пони-8  Привет, все восемь! <b>текст</b>'));
   assert.equal(await first.locator('#chat-log b').count(), 0);
+  const global = last.locator('#chat-log li').filter({hasText:'Привет, все восемь!'});
+  assert.equal((await global.locator('.chat-global').textContent()).trim(), '[G]');
   await last.locator('#chat-channel').click();
   assert.equal(await last.locator('#chat-channel').getAttribute('aria-pressed'), 'true');
-  assert.equal(await last.locator('#local-chat-log').evaluate(log => log.hidden), false);
-  assert.equal(await last.locator('#chat-log').evaluate(log => log.hidden), true);
+  assert.equal(await global.isVisible(), true);
   await last.locator('#chat-input').fill('Эту фразу слышно рядом');
   await last.locator('#chat-input').press('Enter');
-  await last.locator('#local-chat-log li').filter({hasText:'Эту фразу слышно рядом'}).waitFor({state:'visible'});
-  await first.waitForFunction(() => document.querySelector('#local-chat-log').textContent.includes('Пони-8  Эту фразу слышно рядом'));
-  assert.doesNotMatch(await first.locator('#chat-log').textContent(), /Эту фразу слышно рядом/);
+  const local = last.locator('#chat-log li').filter({hasText:'Эту фразу слышно рядом'});
+  await local.waitFor({state:'visible'});
+  assert.equal(await local.locator('.chat-global').count(), 0);
+  await first.waitForFunction(() => document.querySelector('#chat-log').textContent.includes('Пони-8  Эту фразу слышно рядом'));
   await last.locator('#chat-channel').click();
   assert.equal(await last.locator('#chat-channel').getAttribute('aria-pressed'), 'false');
   await last.locator('#chat-close').click();
   await last.waitForFunction(() => document.pointerLockElement);
-  report.chat = {remoteMessage:true, escapedHTML:true, localMessage:true, channelToggle:true, resumed:true};
+  await local.waitFor({state:'hidden',timeout:11000});
+  await last.keyboard.press('Enter');
+  assert.equal(await global.isVisible(), true);
+  assert.equal(await local.isVisible(), true);
+  await Promise.all(clients.map(({page}, group) => page.evaluate(async group => {
+    for (let i = 0; i < 3; i++) {
+      const result = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({text:`Проверка прокрутки ${group + 1}.${i + 1}`})});
+      if (!result.ok) throw new Error(`Chat scroll fixture: ${result.status}`);
+    }
+  }, group)));
+  await last.waitForFunction(() => [...document.querySelectorAll('#chat-log li')]
+    .filter(row => row.textContent.includes('Проверка прокрутки')).length === 24);
+  const chatLog = last.locator('#chat-log');
+  const end = await chatLog.evaluate(log => log.scrollTop);
+  assert.ok(end > 0);
+  await chatLog.hover();
+  await last.mouse.wheel(0, -500);
+  await last.waitForFunction(end => document.querySelector('#chat-log').scrollTop < end, end);
+  await last.locator('#chat-close').click();
+  await last.waitForFunction(() => document.pointerLockElement);
+  report.chat = {remoteMessage:true, escapedHTML:true, localMessage:true, channelToggle:true, fadeAndRestore:true,
+    scrolled:true, resumed:true};
 
   stage = 'coordinate teleport';
   const home = await last.evaluate(() => honeymoon.stats().position);
@@ -183,11 +207,20 @@ try {
   await last.locator('#clock-close').click();
   report.clock = {remoteFreeze:true, remoteSet:true, remoteResume:true};
 
+  stage = 'rename profile';
+  await last.evaluate(() => document.exitPointerLock());
+  await last.locator('#nickname').fill('Новое имя');
+  await last.locator('#play').click();
+  await first.waitForFunction(() => honeymoon.online().includes('Новое имя'));
+  const rename = first.locator('#chat-log li').filter({hasText:'Пони-8 сменил ник на Новое имя'});
+  assert.equal((await rename.locator('.chat-global').textContent()).trim(), '[G]');
+  report.chat.rename = true;
+
   stage = 'logout notification';
   assert.match(await last.locator('#coords').textContent(), /X -?\d+\.\d\d\s+Y -?\d+\.\d\d\s+Z -?\d+\.\d\d/);
   await clients.at(-1).context.close();
   await first.waitForFunction(() => honeymoon.online().length === 7 &&
-    document.querySelector('#chat-log').textContent.includes('Пони-8 выходит из игры'));
+    document.querySelector('#chat-log').textContent.includes('Новое имя выходит из игры'));
   assert.ok((await first.locator('#chat-log').textContent()).includes('Пони-8 входит в игру'));
   report.chat.joinAndLeave = true;
   report.corrections = await Promise.all(clients.filter(client => !client.protocol && !client.page.isClosed())

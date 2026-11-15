@@ -17,7 +17,7 @@
       <div class="tools">
         <span id="player-name" hidden></span>
         <button id="clock-toggle" type="button" aria-label="Игровое время (K)" disabled>12:00</button>
-        <button id="chat-toggle" type="button" title="Чат · T" disabled>Чат</button>
+        <button id="chat-toggle" type="button" title="Чат · T / Enter" disabled>Чат</button>
         <label class="distance" for="distance">Горизонт
           <select id="distance">
             <option value="4">4 чанка</option><option value="8" selected>8 чанков</option>
@@ -55,10 +55,9 @@
       <ul id="online-names"></ul>
     </aside>
     <section id="chat" aria-label="Чат">
-      <ul id="chat-log" class="chat-log" role="log" aria-label="Глобальный чат" aria-live="polite"></ul>
-      <ul id="local-chat-log" class="chat-log" role="log" aria-label="Локальный чат" aria-live="polite" hidden></ul>
+      <ul id="chat-log" class="chat-log" role="log" aria-label="История чата" aria-live="polite" tabindex="0"></ul>
       <form id="chat-form" hidden>
-        <button id="chat-channel" type="button" aria-pressed="false" title="Переключить глобальный и локальный чат">Глобальный</button>
+        <button id="chat-channel" type="button" aria-pressed="false" title="Кому отправлять сообщения">Всем</button>
         <input id="chat-input" autocomplete="off" aria-label="Сообщение" placeholder="Сообщение…" maxlength="480">
         <button id="chat-send" type="submit">Отправить</button>
         <button id="chat-close" type="button">Закрыть</button>

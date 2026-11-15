@@ -147,6 +147,20 @@ export function sectionBlocks(section) {
   return { blocks, variants };
 }
 
+export function coverParts(tile) {
+  if (!Number.isInteger(tile.cvm) || !Buffer.isBuffer(tile.cvs)) return null;
+  const mask = tile.cvm & (tile.id === 'RPFrame' ? 0x3f : 0x1fffffff);
+  const parts = [];
+  for (let slot = 0; slot < 29; slot++) {
+    if (((mask >>> slot) & 1) === 0) continue;
+    const offset = parts.length * 2;
+    if (offset + 1 >= tile.cvs.length) break;
+    parts.push({slot, material:tile.cvs[offset], shape:tile.cvs[offset + 1]});
+  }
+  const expectedLength = mask.toString(2).replaceAll('0', '').length * 2;
+  return {parts, malformed:expectedLength !== tile.cvs.length};
+}
+
 export function canonicalJson(value) {
   if (Buffer.isBuffer(value)) return JSON.stringify({ $nbt: 'bytes', base64: value.toString('base64') });
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;

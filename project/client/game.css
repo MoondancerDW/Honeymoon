@@ -69,9 +69,11 @@ button:disabled { cursor: wait; opacity: .45; }
 .chat-log li { align-self: flex-start; max-width: 100%; overflow-wrap: anywhere; font-size: .86rem; }
 #chat:not(.expanded) li { display: none; }
 .playing #chat:not(.expanded) li.recent { display: block; padding: .24rem .4rem; border-radius: .25rem; background: var(--glass); }
+.playing #chat:not(.expanded) li.recent.fading { opacity: 0; transition: opacity 2s ease; }
 .playing #chat:not(.expanded) li.recent:has(~ .recent ~ .recent ~ .recent ~ .recent) { display: none; }
 #chat.expanded .chat-log { max-height: min(36vh, 19rem); overflow-y: auto; margin-bottom: .55rem; }
 .chat-log strong, .chat-status { color: var(--gold); }
+.chat-log .chat-global { color: #8bef94; font-weight: 700; }
 #chat-channel[aria-pressed="true"] { color: var(--gold); border-color: var(--gold); }
 #chat-form:not([hidden]) { display: flex; flex-wrap: wrap; gap: .38rem; }
 #chat-input { flex: 1 1 9rem; min-width: 0; }
@@ -84,6 +86,23 @@ button:disabled { cursor: wait; opacity: .45; }
 #aim::after { width: 1px; height: 13px; }
 .entry { position: absolute; inset: 0; display: grid; place-items: center; background: #12232c61; }
 .entry[hidden] { display: none; }
+#game.paused .entry {
+  inset: clamp(4.25rem, 20vh, 9rem) auto auto max(.75rem, env(safe-area-inset-left));
+  display: block;
+  background: none;
+}
+#game.paused .entry[hidden] { display: none; }
+#game.paused .panel {
+  width: min(17rem, calc(100vw - 1.5rem));
+  padding: .95rem 1rem;
+  text-align: left;
+  max-height: 72vh;
+  overflow-y: auto;
+}
+#game.paused .panel h1, #game.paused #entry-help { display: none; }
+#game.paused #loading { min-height: 0; margin: 0 0 .75rem; font-weight: 600; }
+#game.paused .profile { margin-bottom: .75rem; }
+#game.paused #play { min-width: 0; width: 100%; }
 .panel {
   width: min(92vw, 28rem);
   padding: 2rem 1.7rem 1.55rem;

@@ -17,7 +17,7 @@ const invalidSkin = () => new RequestError(400, 'invalid_skin');
 
 export function publicProfile(player, { nickname, skinHash } = {}) {
   const id = hash(`pony:${player}`).slice(0, 24);
-  return { id, nickname: nickname ?? `Игрок ${id.slice(0, 5)}`, nicknameLocked: Boolean(nickname),
+  return { id, nickname: nickname ?? `Игрок ${id.slice(0, 5)}`, nicknameChosen: Boolean(nickname),
     skin: skinHash ? `/skins/${skinHash}.png` : null };
 }
 

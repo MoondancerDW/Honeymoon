@@ -14,6 +14,7 @@ export class PlayerProfile {
     this.label = label;
     this.notify = notify;
     this.skinVersion = 0;
+    nickname.title = 'Изменение ника появится в общем чате';
     skin.addEventListener('change', () => this.chooseSkin(skin.files[0]));
     clear.addEventListener('click', () => {
       this.skinVersion++;
@@ -34,8 +35,6 @@ export class PlayerProfile {
 
   setSaving(saving) {
     this.nickname.disabled = this.skin.disabled = this.clear.disabled = saving;
-    this.nickname.readOnly = this.confirmed.nicknameLocked;
-    this.nickname.title = this.nickname.readOnly ? 'Ник сохранён для этой сессии' : 'Ник можно выбрать один раз';
   }
 
   showSelection() {
@@ -88,8 +87,8 @@ export class PlayerProfile {
   changes() {
     if (this.reading) throw new Error('Подождите, скин ещё загружается');
     const pending = {};
-    if (!this.confirmed.nicknameLocked) {
-      const nick = this.nickname.value.trim().normalize('NFC');
+    const nick = this.nickname.value.trim().normalize('NFC');
+    if (!this.confirmed.nicknameChosen || nick !== this.confirmed.nickname) {
       const length = [...nick].length;
       if (length < 2 || length > 24 || !nicknameCharacters.test(nick) || !/[\p{L}\p{N}]/u.test(nick)) {
         this.nickname.focus();
@@ -103,7 +102,7 @@ export class PlayerProfile {
 
   saved(profile, changes) {
     this.confirmed = profile;
-    if (profile.nicknameLocked) this.nickname.value = profile.nickname;
+    this.nickname.value = profile.nickname;
     if (this.pendingSkin === changes.skin) {
       this.pendingSkin = undefined;
       this.skin.value = '';

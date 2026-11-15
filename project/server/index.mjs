@@ -187,17 +187,20 @@ export function createHoneymoonServer({
   }
   const streams = new Set();
   const worldTime = createWorldTime(store);
-  const chat = createChat((entry, origin) => {
-    if (entry.channel === 'local') {
-      sendSocial('chat', entry, player => {
-        const point = presence.onlinePosition(player);
+  const chat = createChat({
+    store,
+    publish: (entry, audience) => sendSocial('chat', entry, player => !audience || audience.includes(player)),
+    recipients(origin) {
+      return [...streams].filter(({player, social}) => {
+        const point = social && presence.onlinePosition(player);
         return point && Math.hypot(point.x - origin.x, point.y - origin.y, point.z - origin.z) <= 18;
-      });
-    } else sendSocial('chat', entry);
+      }).map(({player}) => player);
+    },
   });
   const presence = createPresence({ store, send: writeEvent, onVisibility(profile, online, player) {
     if (!online) game.leaveSeat(player);
-    chat.playerStatus(profile, online);
+    try { chat.playerStatus(profile, online); }
+    catch (error) { console.error(error); }
   } });
   const serveWorld = serveWorldJson();
   const session = player => {
@@ -256,7 +259,7 @@ export function createHoneymoonServer({
       if (!player) throw new RequestError(401, 'session_required');
       if (path === '/api/chat' && method === 'POST') {
         const body = await readBody(request);
-        return json(response, 200, chat.message(presence.onlineProfile(player), body, presence.onlinePosition(player)));
+        return json(response, 200, chat.message(presence.onlineProfile(player), body, player, presence.onlinePosition(player)));
       }
       if (path === '/api/time' && method === 'POST') {
         const body = await readBody(request);
@@ -268,15 +271,14 @@ export function createHoneymoonServer({
       if (path === '/api/profile' && method === 'POST') {
         const updates = await profileChanges(await readBody(request, MAX_PROFILE_BODY));
         const saved = store.getProfile(player);
-        if (saved?.nickname && updates.nickname !== undefined && updates.nickname !== saved.nickname) {
-          throw new RequestError(409, 'nickname_locked', {profile:publicProfile(player, saved)});
-        }
         if (updates.nickname === saved?.nickname) delete updates.nickname;
         if (updates.skin !== undefined && (updates.skin?.hash ?? null) === (saved?.skinHash ?? null)) delete updates.skin;
         const different = updates.nickname !== undefined || updates.skin !== undefined;
-        if (different) store.updateProfile(player, updates);
+        const renamed = different && store.updateProfile(player, updates,
+          saved?.nickname ?? presence.onlineProfile(player)?.nickname);
         const profile = publicProfile(player, different ? store.getProfile(player) : saved);
         if (different) presence.profile(player, profile);
+        if (renamed) sendSocial('chat', renamed);
         return json(response, 200, profile);
       }
       if (path === '/api/presence') {
@@ -359,7 +361,7 @@ export function createHoneymoonServer({
         writeEvent(response, kind, { worldRevision: revision, contentHash: game.contentHash }, revision);
         if (presenceEntry) presence.connect(stream, presenceEntry);
         if (stream.social) {
-          writeEvent(response, 'chat-history', {entries:chat.history()});
+          writeEvent(response, 'chat-history', {entries:chat.history(player)});
           writeEvent(response, 'world-time', worldTime.snapshot());
         }
         if (stream.minecarts) writeEvent(response,'minecarts',game.minecartSnapshot(player));

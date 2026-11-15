@@ -2,6 +2,11 @@
 // Each byte holds saved sky light in the high nibble and block light in the low nibble.
 export const FACE_SHADE = Object.freeze([.6, .6, .5, 1, .8, .8]);
 
+export function contactShade(sideU, sideV, corner) {
+  const covered = sideU && sideV ? 3 : Number(sideU) + Number(sideV) + Number(corner);
+  return 1 - covered * .105;
+}
+
 function level(nibble) {
   const value = nibble / 15;
   return value / (4 - 3 * value);
@@ -28,7 +33,7 @@ export function celestialAngle(tick) {
 }
 
 export function sunlightAt(tick) {
-  return .2 + .8 * Math.max(0, Math.min(1, 2 * Math.cos(Math.PI * 2 * celestialAngle(tick)) + .2));
+  return .16 + .84 * Math.max(0, Math.min(1, 2 * Math.cos(Math.PI * 2 * celestialAngle(tick)) + .2));
 }
 
 export function writeLightmap(target, sun) {

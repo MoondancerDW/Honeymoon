@@ -198,7 +198,6 @@ const messages = {
   not_a_minecart: 'Здесь больше нет вагонетки',
   minecart_limit: 'Достигнут предел числа вагонеток',
   invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
-  nickname_locked: 'Ник уже сохранён для этой сессии',
   invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
   invalid_skin_size: skinDescription,
   skin_too_large: skinTooLarge
@@ -346,6 +345,7 @@ function setPlaying(active) {
   }
   audio.setPlaying(active);
   game.classList.toggle('playing', active);
+  game.classList.toggle('paused', !active && entered);
   entry.hidden = active;
   if (!active) {
     keys.clear();
@@ -373,6 +373,7 @@ function recordPosition(feet) {
 
 function setAuthoritativePosition(feet) {
   Object.assign(position, feet);
+  view?.viewBob.reset();
   confirmedPosition = positionTuple(feet);
   positionTrail.length = 0;
   pendingPosition = null;
@@ -864,6 +865,11 @@ function tick(now) {
   } else horizontalSpeed = 0;
   if (!resetting && now >= nextPositionSync && !acting) syncPosition();
   if (!sync || presenceDirty) sendPresence(now);
+  if (playing && !menuOpen() && !seat && !flying) {
+    view.viewBob.step(horizontalSpeed * dt, dt, movement.grounded && !movement.medium, movement.fall);
+  } else {
+    view.viewBob.step(0, dt, true, 0);
+  }
   updateCamera();
   view.updateMinecarts();
   view.players.frame(now, dt);
@@ -905,10 +911,10 @@ function bindControls() {
       profile.setSaving(true);
       post('profile', pending, AbortSignal.timeout(5000)).then(({ok, body}) => {
         if (!ok) {
-          if (body.error === 'nickname_locked' && body.profile) profile.initialize(body.profile);
           throw new Error(messages[body.error] || 'Не удалось сохранить профиль');
         }
         profile.saved(body, pending);
+        social.profileUpdated(profile.confirmed);
         view.setLocalSkin(profile.confirmed.skin);
         if (playing) {
           entered = true;

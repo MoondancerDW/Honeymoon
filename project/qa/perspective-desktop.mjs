@@ -44,7 +44,7 @@ async function chooseSkin(name, marker) {
   await page.locator('#pony-skin').setInputFiles({name,mimeType:'image/png',buffer:skin(marker)});
   await page.waitForFunction(name => document.querySelector('#skin-status').textContent === name,name);
   await page.locator('#play').click();
-  await page.waitForFunction(() => document.querySelector('#entry').hidden && document.querySelector('#nickname').readOnly);
+  await page.waitForFunction(() => document.querySelector('#entry').hidden);
 }
 
 async function camera(mode, image) {

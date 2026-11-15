@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { gunzipSync } from 'node:zlib';
-import { canonicalJson, readNbt, readRegionChunk, sectionBlocks } from './nbt.mjs';
+import { canonicalJson, coverParts, readNbt, readRegionChunk, sectionBlocks } from './nbt.mjs';
 import { terrainRadii, writeTerrainRings } from './terrain.mjs';
 
 const PROJECT = fileURLToPath(new URL('../', import.meta.url));
@@ -47,21 +47,13 @@ function countTypes(counts, items) {
 }
 
 function partData(tile, id, meta) {
-  if (!Number.isInteger(tile.cvm) || !Buffer.isBuffer(tile.cvs)) return null;
-  const mask = tile.cvm & (tile.id === 'RPFrame' ? 0x3f : 0x1fffffff);
-  const parts = [];
-  for (let slot = 0; slot < 29; slot += 1) {
-    if (((mask >>> slot) & 1) === 0) continue;
-    const offset = parts.length * 2;
-    if (offset + 1 >= tile.cvs.length) break;
-    parts.push({ slot, material: tile.cvs[offset], shape: tile.cvs[offset + 1] });
-  }
+  const covers = coverParts(tile);
+  if (!covers) return null;
   const cvm = tile.cvm;
   const cvs = tile.cvs.toString('base64');
   const identity = { id, meta, type: tile.id, cvm, cvs };
   const key = `cover:${id}:${meta}:${sha256(canonicalJson(identity))}`;
-  const expectedLength = mask.toString(2).replaceAll('0', '').length * 2;
-  return { key, definition: { ...identity, parts, malformed: expectedLength !== tile.cvs.length } };
+  return { key, definition: { ...identity, ...covers } };
 }
 
 function makeObjects(level) {

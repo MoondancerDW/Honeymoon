@@ -2,7 +2,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { publicMicroPart } from '../world/microblocks.mjs';
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
+const chatHistoryLimit = 100;
 
 export function transaction(db, run) {
   db.exec('BEGIN IMMEDIATE');
@@ -90,6 +91,9 @@ function migrate(db) {
         nickname TEXT, skin_hash TEXT, skin_png BLOB
       ) STRICT;
       CREATE INDEX IF NOT EXISTS profiles_by_skin_hash ON player_profiles(skin_hash) WHERE skin_hash IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS chat_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT NOT NULL, recipients TEXT
+      ) STRICT;
       PRAGMA user_version = ${SCHEMA_VERSION};
     `);
   });
@@ -115,7 +119,7 @@ export function openStore(filename) {
   const addPlayer = statement('INSERT INTO players(id,token_hash) VALUES (?,?)');
   const readProfile = statement('SELECT nickname,skin_hash AS skinHash FROM player_profiles WHERE player=?');
   const writeNickname = statement(`INSERT INTO player_profiles(player,nickname) VALUES (?,?)
-    ON CONFLICT(player) DO UPDATE SET nickname=excluded.nickname WHERE player_profiles.nickname IS NULL`);
+    ON CONFLICT(player) DO UPDATE SET nickname=excluded.nickname`);
   const writeSkin = statement(`INSERT INTO player_profiles(player,skin_hash,skin_png) VALUES (?,?,?)
     ON CONFLICT(player) DO UPDATE SET skin_hash=excluded.skin_hash,skin_png=excluded.skin_png`);
   const readSkin = statement('SELECT skin_png AS png FROM player_profiles WHERE skin_hash=? LIMIT 1');
@@ -140,6 +144,17 @@ export function openStore(filename) {
   const updateOriginal = statement('UPDATE edits SET original=?,quarantined=? WHERE x=? AND y=? AND z=?');
   const insertConflict = statement('INSERT OR REPLACE INTO rebase_conflicts VALUES (?,?,?,?,?,?,?,?)');
   const listConflicts = statement('SELECT * FROM rebase_conflicts WHERE base_hash=? ORDER BY x,y,z');
+
+  const writeChat = statement('INSERT INTO chat_entries(message,recipients) VALUES (?,?) RETURNING id');
+  const listChat = statement(`SELECT id, message FROM chat_entries
+    WHERE recipients IS NULL OR EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) ORDER BY id`);
+  const trimChat = statement('DELETE FROM chat_entries WHERE id <= (SELECT id FROM chat_entries ORDER BY id DESC LIMIT 1 OFFSET ?)');
+
+  function appendChat(message, recipients = null) {
+    const {id} = writeChat.get(JSON.stringify(message), recipients && JSON.stringify(recipients));
+    trimChat.run(chatHistoryLimit);
+    return {id, ...message};
+  }
 
   const worldRevision = () => Number(readMeta.get('world_revision').value);
   const partsCache = new Map();
@@ -196,12 +211,17 @@ export function openStore(filename) {
     getProfile(player) {
       return readProfile.get(player);
     },
-    updateProfile(player, { nickname, skin }) {
-      transaction(db, () => {
+    updateProfile(player, { nickname, skin }, previousNickname) {
+      return transaction(db, () => {
         if (nickname !== undefined) writeNickname.run(player, nickname);
         if (skin !== undefined) writeSkin.run(player, skin?.hash ?? null, skin?.png ?? null);
+        if (nickname !== undefined && previousNickname && nickname !== previousNickname) {
+          return appendChat({kind:'rename', nickname:previousNickname, newNickname:nickname, channel:'global'});
+        }
       });
     },
+    chatHistory: player => listChat.all(player).map(({id, message}) => ({id, ...JSON.parse(message)})),
+    recordChat: (message, recipients) => transaction(db, () => appendChat(message, recipients)),
     getSkin(hash) {
       return readSkin.get(hash)?.png ?? null;
     },

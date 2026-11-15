@@ -1,6 +1,6 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {FLIGHT_SPRINT_SPEED, PLAYER} from '../world/player-body.mjs';
-import {createPonyAvatar} from './pony-avatar.mjs';
+import {createPonyAvatar, createPonyFacing} from './pony-avatar.mjs';
 
 const maxVisibleDistance = 96;
 const corner = Math.PI * 2;
@@ -44,18 +44,13 @@ function setProfile(player, {nickname, skin}) {
   }
 }
 
-function setPose(player, pose, now) {
+function setPose(player, pose) {
   const {x, y, z} = pose.position;
-  const step = Math.hypot(x - player.target.x, z - player.target.z);
-  const elapsed = Math.max(.08, (now - player.updated) / 1000);
-  if (step > .001) player.speed = Math.min(FLIGHT_SPRINT_SPEED, step / elapsed);
-  if (pose.motion === 'idle' || pose.motion === 'sit') player.speed = 0;
   if (player.object.position.distanceToSquared(player.target.set(x, y, z)) > 64) player.object.position.copy(player.target);
   player.yaw = pose.yaw;
   player.lookYaw = pose.lookYaw ?? pose.yaw;
   player.pitch = pose.pitch;
   player.motion = pose.motion;
-  player.updated = now;
 }
 
 export class RemotePlayers {
@@ -76,7 +71,6 @@ export class RemotePlayers {
       this.scene.remove(player.object);
       this.entries.delete(id);
     }
-    const now = performance.now();
     for (const profile of profiles) {
       if (!this.entries.has(profile.id)) {
         const avatar = createPonyAvatar();
@@ -88,20 +82,19 @@ export class RemotePlayers {
         object.rotation.y = profile.yaw;
         object.visible = false;
         this.scene.add(object);
-        this.entries.set(profile.id, {avatar, object, label, target:object.position.clone(), speed:0,
-          drawnPitch:profile.pitch, updated:now});
+        this.entries.set(profile.id, {avatar, object, label, target:object.position.clone(), facing:createPonyFacing(),
+          drawnPitch:profile.pitch, drawnLookYaw:profile.lookYaw ?? profile.yaw});
       }
       const player = this.entries.get(profile.id);
       setProfile(player, profile);
-      setPose(player, profile, now);
+      setPose(player, profile);
     }
   }
 
   update(poses) {
-    const now = performance.now();
     for (const pose of poses) {
       const player = this.entries.get(pose.id);
-      if (player) setPose(player, pose, now);
+      if (player) setPose(player, pose);
     }
   }
 
@@ -114,14 +107,18 @@ export class RemotePlayers {
         Math.hypot(target.x - eye.x, target.z - eye.z) < .4;
       const distance = eye.distanceToSquared(target);
       object.visible = distance < maxVisibleDistance ** 2 && !overlapsCamera;
+      const {x, z} = object.position;
       object.position.lerp(target, mix);
-      object.rotation.y += angleBetween(object.rotation.y, player.yaw) * mix;
+      player.drawnLookYaw += angleBetween(player.drawnLookYaw, player.lookYaw) * mix;
+      const facing = player.facing(object.position, player.drawnLookYaw, dt, player.motion === 'sit' ? player.yaw : undefined);
+      object.rotation.y = facing.bodyYaw;
       if (!object.visible) continue;
       player.label.position.y = player.avatar.labelHeight + .55 * Math.max(0, target.y - eye.y) /
         Math.max(1, Math.sqrt(distance));
       player.drawnPitch += (player.pitch - player.drawnPitch) * mix;
-      player.avatar.animate({time: now / 1000, dt, speed: player.speed, pitch: player.drawnPitch,
-        yawOffset: angleBetween(player.yaw, player.lookYaw),
+      const speed = dt > 0 ? Math.min(FLIGHT_SPRINT_SPEED, Math.hypot(object.position.x - x, object.position.z - z) / dt) : 0;
+      player.avatar.animate({time: now / 1000, dt, speed, pitch: player.drawnPitch,
+        yawOffset:facing.yawOffset, strideDirection:facing.strideDirection,
         motion: player.motion === 'air' ? 'jump' : player.motion});
       object.updateMatrixWorld(true);
     }
@@ -137,7 +134,7 @@ export class RemotePlayers {
       let meshCount = 0;
       player.avatar.object.traverse(mesh => { if (mesh.isMesh && mesh.visible) meshCount++; });
       return {...player.avatar.inspect(), id, nickname:player.nickname, skin:player.skin, position:{x:target.x, y:target.y, z:target.z},
-        yaw:player.yaw, pitch:player.pitch, motion:player.motion, visible:object.visible, meshCount,
+        yaw:player.yaw, bodyYaw:object.rotation.y, pitch:player.pitch, motion:player.motion, visible:object.visible, meshCount,
         onScreen:object.visible && Math.abs(x) <= 1 && Math.abs(y) <= 1 && z >= -1 && z <= 1};
     });
   }

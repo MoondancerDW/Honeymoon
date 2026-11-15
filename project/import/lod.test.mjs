@@ -3,6 +3,7 @@ import test from 'node:test';
 import {buildRegion,makeMaterials,sampleChunk} from './lod-mesh.mjs';
 import {LOD_VERSION,WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
 import {shapeFor, tiles} from '../world/geometry.mjs';
+import {fullCoverMaterial} from '../world/cover-plane.mjs';
 
 const air = 'air';
 const rock = 'legacy:1:0';
@@ -58,10 +59,10 @@ test('admits a one-block masonry tower and omits geometry inside sealed air', ()
   assert.ok(geometry.every(face => face.y>=8));
 });
 
-test('ignores standalone covers and attached microblock panels only in simplified terrain', () => {
+test('ignores partial standalone covers and retains the underlying attached frame in simplified terrain', () => {
   const cover = 'cover:750:0:test';
   const coveredFrame = 'cover:768:0:test';
-  const parts = [{slot:1, shape:0, material:28}];
+  const parts = [{slot:1, shape:3, material:28}];
   const simplified = supplied(0,0,(x,y) => y < 8 ? 1 : x < 4 ? 2 : x < 8 ? 3 : x < 12 ? 4 : 5,
     [air, rock, cover, 'legacy:750:0', 'cover-material:28', coveredFrame]);
   simplified.compositions[cover] = {parts};
@@ -69,6 +70,26 @@ test('ignores standalone covers and attached microblock panels only in simplifie
   const bareFrame = supplied(0,0,(x,y) => y < 8 ? 1 : x < 12 ? 0 : 2,[air,rock,'legacy:768:0']);
   assert.deepEqual(pack([simplified],0,0).content, pack([bareFrame],0,0).content);
   assert.ok(shapeFor({key:cover, parts}).some(box => box.partSlot === 1));
+});
+
+test('restores only complete cover faces, including a union of mixed materials on the same plane', () => {
+  const cover = 'cover:750:0:test';
+  const slab = {slot:1, shape:3, material:28};
+  const center = {slot:29, material:1, bounds:[[2,7,2,6,8,6]]};
+  assert.equal(fullCoverMaterial([slab]), undefined);
+  assert.equal(fullCoverMaterial([{...slab, shape:0}]), 28);
+  assert.equal(fullCoverMaterial([slab, center]), 28);
+  assert.equal(fullCoverMaterial([slab, {...center, bounds:[[2,6,2,6,7,6]]}]), undefined);
+
+  const tinyRoof = supplied(0,0,(x,y,z) => y < 8 ? 1 : x === 8 && y === 8 && z === 8 ? 2 : 0,
+    [air, rock, cover]);
+  tinyRoof.compositions[cover] = {parts:[slab,center]};
+  const {content} = pack([tinyRoof],0,0);
+  const tile = shapeFor('cover-material:28')[0].faces[3];
+  assert.ok(faces(content).some(face => face.tile === tile && face.face === 3 && face.y === 10));
+  tinyRoof.compositions[cover] = {parts:[slab]};
+  const partial = pack([tinyRoof],0,0).content;
+  assert.ok(faces(partial).every(face => face.tile !== tile));
 });
 
 test('keeps a one-block grass course above stone in the sampled terrain', () => {

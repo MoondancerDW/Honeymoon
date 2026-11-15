@@ -5,13 +5,15 @@ import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 import {itemFrameModel} from '../world/item-frames.mjs';
 import {isRideableMinecart, minecartQuads, minecartRotation, minecartTilt} from '../world/minecarts.mjs';
 import {RemotePlayers} from './remote-players.mjs';
-import {createPonyAvatar} from './pony-avatar.mjs';
+import {createPonyAvatar, createPonyFacing} from './pony-avatar.mjs';
 import {cameraClearance} from './movement.mjs';
 import {clockTick} from '../world/world-time.mjs';
 import {SectionVisibility} from './section-visibility.mjs';
 import {FarTerrain, supportsFarTerrain} from './far-terrain.mjs';
 import {FIRE_FRAMES, FIRE_SIZE, FIRE_STEP_MS, fireSpriteSheet} from '../world/fire-animation.mjs';
 import {addTerrainFilter, terrainFilter} from './terrain-filter.mjs';
+import {ViewBobbing} from './view-bobbing.mjs';
+import {PonyShadows} from './pony-shadows.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -97,8 +99,8 @@ export class Display {
     this.lightmap.magFilter = this.lightmap.minFilter = THREE.NearestFilter;
     this.dayHorizon = new THREE.Color('#95aad5');
     this.dayZenith = new THREE.Color('#84abfc');
-    this.nightHorizon = new THREE.Color('#10182b');
-    this.nightZenith = new THREE.Color('#05091a');
+    this.nightHorizon = new THREE.Color('#0c1326');
+    this.nightZenith = new THREE.Color('#040716');
     this.updateSky(dayTick);
     this.visualEntities = new THREE.Group();
     this.visualEntities.visible = false;
@@ -111,10 +113,12 @@ export class Display {
     this.preciseLevels = new Map();
     this.completedChunks = new Set();
     this.camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
+    this.viewBob = new ViewBobbing();
     this.perspective = 0;
     this.cameraDistance = .1;
     this.localSkin = null;
     this.players = new RemotePlayers(this.scene, this.camera);
+    this.ponyShadows = new PonyShadows(this.scene, this.world);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -352,10 +356,11 @@ export class Display {
       this.lightmap.needsUpdate = true;
       this.lastSun = sun;
     }
-    const {zenith, horizon, sunDirection, night} = this.sky.material.uniforms;
+    const {zenith, horizon, sunDirection, cloudOffset, night} = this.sky.material.uniforms;
     zenith.value.copy(this.nightZenith).lerp(this.dayZenith, sky);
     horizon.value.copy(this.nightHorizon).lerp(this.dayHorizon, sky);
     sunDirection.value.set(-Math.sin(angle), Math.cos(angle) * .96, Math.cos(angle) * -.28);
+    cloudOffset.value.set(Math.sin(angle) * 1.3, (1 - Math.cos(angle)) * .6);
     night.value = 1 - sky;
     this.scene.fog.color.copy(horizon.value);
   }
@@ -387,6 +392,11 @@ export class Display {
     if (this.perspective === 0) {
       this.cameraDistance = .1;
       this.camera.translateZ(this.cameraDistance);
+      const bob = this.viewBob.sample();
+      this.camera.rotateX(bob.pitch);
+      this.camera.rotateZ(bob.roll);
+      this.camera.translateX(bob.x);
+      this.camera.translateY(bob.y);
     } else {
       const sign = front ? -1 : 1;
       const direction = [sign * Math.sin(yaw) * Math.cos(pitch), -sign * Math.sin(pitch),
@@ -404,6 +414,8 @@ export class Display {
   }
 
   updateLocalAvatar(now, dt, position, pose, speed, seat) {
+    this.localPonyFacing ??= createPonyFacing();
+    const facing = this.localPonyFacing(position, pose.yaw, dt, seat?.yaw);
     if (this.perspective === 0) {
       if (this.localAvatar) this.localAvatar.object.visible = false;
       return;
@@ -416,10 +428,9 @@ export class Display {
     const {object} = this.localAvatar;
     object.visible = this.cameraDistance > .36;
     object.position.set(position.x, position.y, position.z);
-    object.rotation.y = seat?.yaw ?? pose.yaw;
-    const headYaw = pose.yaw - object.rotation.y;
+    object.rotation.y = facing.bodyYaw;
     this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion,
-      yawOffset:Math.atan2(Math.sin(headYaw), Math.cos(headYaw))});
+      yawOffset:facing.yawOffset, strideDirection:facing.strideDirection});
     object.updateMatrixWorld(true);
   }
 
@@ -465,7 +476,9 @@ export class Display {
     this.preciseLevels.set(chunkKey(chunk.x,chunk.z),levels);
     for (const cy of levels) {
       this.schedule(chunk.x, cy, chunk.z, !chunk.sections.has(cy));
-      for (const [dx, dz] of [[-1,0], [1,0], [0,-1], [0,1]]) this.schedule(chunk.x + dx, cy, chunk.z + dz);
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        if (dx || dz) this.schedule(chunk.x + dx, cy, chunk.z + dz);
+      }
       const indices = chunk.sections.get(cy)?.indices;
       if (!indices || fantasy === undefined || fantasy < 0) continue;
       for (let index = indices.indexOf(fantasy); index >= 0; index = indices.indexOf(fantasy, index + 1)) {
@@ -614,15 +627,7 @@ export class Display {
     for (let zz = (z - 1) >> 4; zz <= (z + 1) >> 4; zz++) {
       for (let yy = (y - 1) >> 4; yy <= (y + 1) >> 4; yy++) {
         for (let xx = (x - 1) >> 4; xx <= (x + 1) >> 4; xx++) {
-          const axes = Number(xx !== cx) + Number(yy !== cy) + Number(zz !== cz);
-          if (axes === 1 || axes > 1 && this.chiselConnectedTextures) {
-            this.schedule(xx, yy, zz, edit);
-          } else if (axes === 2 && yy !== cy) {
-            // Pane strips inspect horizontal neighbors one level above and below.
-            const cell = this.world.cellAt(x + Math.sign(xx - cx), y + Math.sign(yy - cy), z + Math.sign(zz - cz));
-            const key = typeof cell === 'string' ? cell : cell?.key;
-            if (/^legacy:10[12]:/.test(key ?? '')) this.schedule(xx, yy, zz, edit);
-          }
+          if (xx !== cx || yy !== cy || zz !== cz) this.schedule(xx, yy, zz, edit);
         }
       }
     }
@@ -1131,6 +1136,15 @@ export class Display {
       if (this.fireTexture) this.fireTexture.offset.y = (Math.floor(now / FIRE_STEP_MS) % FIRE_FRAMES) / FIRE_FRAMES;
       this.sky.position.copy(this.camera.position);
       this.sky.updateMatrixWorld();
+      const ponies = [...this.players.entries.values()];
+      if (this.localAvatar) ponies.push({object:this.localAvatar.object, avatar:this.localAvatar});
+      for (const {object,avatar} of ponies) {
+        if (!object.visible) continue;
+        const {x,y,z} = object.position;
+        const offset = 4 * this.world.lightAt(Math.floor(x), Math.floor(y + .85), Math.floor(z));
+        avatar.setLight(this.lightBytes[offset] << 16 | this.lightBytes[offset + 1] << 8 | this.lightBytes[offset + 2]);
+      }
+      this.ponyShadows.update(ponies.map(pony => pony.object), this.camera.position);
       this.updateOcclusion(now);
       this.renderer.render(this.scene, this.camera);
       this.nextIdleRender = now + 100;
@@ -1167,6 +1181,7 @@ function createSky() {
       zenith: {value: new THREE.Color('#84abfc')},
       horizon: {value: new THREE.Color('#95aad5')},
       sunDirection: {value: new THREE.Vector3(0, 1, 0)},
+      cloudOffset: {value: new THREE.Vector2()},
       night: {value: 0},
       sunColor: {value: new THREE.Color('#fff7cf')},
       moonColor: {value: new THREE.Color('#dce8f9')},
@@ -1182,12 +1197,22 @@ function createSky() {
       uniform vec3 zenith;
       uniform vec3 horizon;
       uniform vec3 sunDirection;
+      uniform vec2 cloudOffset;
       uniform vec3 sunColor;
       uniform vec3 moonColor;
       uniform float night;
       varying vec3 skyDirection;
       float hash(vec2 cell) {
         return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      float noise(vec2 p) {
+        vec2 cell = floor(p), f = fract(p);
+        vec2 blend = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(cell), hash(cell + vec2(1, 0)), blend.x),
+          mix(hash(cell + vec2(0, 1)), hash(cell + vec2(1, 1)), blend.x), blend.y);
+      }
+      float clouds(vec2 p) {
+        return .57 * noise(p) + .28 * noise(p * 2.03 + 11.7) + .15 * noise(p * 4.11 + 23.4);
       }
       float disk(float distanceToCenter, float radius) {
         float edge = max(fwidth(distanceToCenter), .0003);
@@ -1213,6 +1238,14 @@ function createSky() {
         float moon = length(ray + sunDirection);
         skyColor = mix(skyColor, sunColor, horizonMask * (.18 * exp(-34.0 * sun) + .8 * disk(sun, .032)));
         skyColor = mix(skyColor, moonColor, horizonMask * (.11 * exp(-38.0 * moon) + .87 * disk(moon, .026)));
+        if (sunDirection.y > 0.0 && ray.y > .06) {
+          vec2 p = ray.xz / (ray.y + .27) * 3.2 + cloudOffset + vec2(7.8, 5.1);
+          float field = clouds(p * vec2(.8, 1.15));
+          float alpha = smoothstep(.53, .67, field) * smoothstep(.06, .24, ray.y) * smoothstep(0.0, .2, sunDirection.y);
+          float diffuse = min(1.0, smoothstep(.54, .76, field) + .18 * exp(-4.0 * sun));
+          vec3 cloudColor = mix(vec3(.66, .73, .82), vec3(.99, .96, .91), diffuse);
+          skyColor = mix(skyColor, cloudColor, min(.88, alpha));
+        }
         gl_FragColor = vec4(skyColor, 1.0);
         #include <colorspace_fragment>
       }
