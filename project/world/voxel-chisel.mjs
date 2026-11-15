@@ -32,6 +32,24 @@ export function voxelBox(index) {
   return voxelBounds(low, low.map(value => value + 1));
 }
 
+export function voxelBrush(index, size) {
+  if (!isIndex(index) || (size !== 1 && size !== 2)) throw new RangeError('Invalid chisel brush');
+  const low = voxelCoordinate(index).map(value => value - value % size);
+  const high = low.map(value => value + size);
+  const indices = [];
+  for (let y = low[1]; y < high[1]; y++) {
+    for (let z = low[2]; z < high[2]; z++) {
+      for (let x = low[0]; x < high[0]; x++) indices.push(voxelIndex(x, y, z));
+    }
+  }
+  return {indices, box:voxelBounds(low, high)};
+}
+
+export function voxelRemovalBrush(voxels, index, size) {
+  const brush = voxelBrush(index, size);
+  return size === 2 && voxels && !voxels.quarters?.includes(brush.indices[0]) ? voxelBrush(index, 1) : brush;
+}
+
 function voxelState(samples, materials) {
   const shapes = materials.map(chiselMaterialShape);
   const count = samples.reduce((n, value) => n + Number(value !== 0), 0);
@@ -108,10 +126,14 @@ export function voxelFluidAt(voxels, x, y, z) {
 }
 
 export function writeVoxel(voxels, index, material) {
-  if (!isIndex(index) || material !== null && !isChiselMaterial(material)) throw new RangeError('Invalid chisel edit');
+  return writeVoxelBrush(voxels, voxelBrush(index, 1), material);
+}
+
+export function writeVoxelBrush(voxels, brush, material) {
+  if (material !== null && !isChiselMaterial(material)) throw new RangeError('Invalid chisel edit');
   const input = voxels ? decodeVoxels(voxels) : null;
   if (voxels && !input) throw new RangeError('Invalid chisel volume');
-  if ((voxels?.materials?.[(input?.[index] ?? 0) - 1] ?? null) === material) return voxels ?? null;
+  if (brush.indices.every(index => (voxels?.materials?.[(input?.[index] ?? 0) - 1] ?? null) === material)) return voxels ?? null;
   const materials = voxels ? voxels.materials.slice() : [];
   let value = 0;
   if (material !== null) {
@@ -120,8 +142,15 @@ export function writeVoxel(voxels, index, material) {
   }
   const samples = value > 255 && input instanceof Uint8Array ? Uint16Array.from(input) :
     input?.slice() ?? new Uint8Array(VOXEL_COUNT);
-  samples[index] = value;
-  return encodeVoxels(samples, materials);
+  for (const index of brush.indices) samples[index] = value;
+  const result = encodeVoxels(samples, materials);
+  if (!result) return null;
+  // One quarter placement occupies eight samples. A precise cut separates that group.
+  const changedGroups = new Set(brush.indices.map(index => voxelBrush(index, 2).indices[0]));
+  const quarters = (voxels?.quarters ?? []).filter(index => !changedGroups.has(index));
+  if (material !== null && brush.indices.length === 8) quarters.push(brush.indices[0]);
+  if (quarters.length) result.quarters = quarters.sort((a, b) => a - b);
+  return result;
 }
 
 function inwardVoxel(cell, hit, face, voxels) {

@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {chromium} from 'playwright-core';
 import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
-import {voxelCoordinate, voxelMaterialAt} from '../world/voxel-chisel.mjs';
+import {voxelBrush, voxelCoordinate, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 
 const output = process.argv[2] ?? 'work/chisel-fluids';
 const external = process.env.HONEYMOON_TEST_URL;
@@ -30,6 +30,7 @@ try {
   await page.goto(url);
   await page.locator('#play').click({timeout:90000});
   await page.waitForFunction(() => document.pointerLockElement && !document.querySelector('#creative-toggle').disabled);
+  assert.equal(await page.evaluate(() => honeymoon.perspective().mode),'first');
 
   async function aim({x,y,z}, [dx,dy,dz], material) {
     await page.evaluate(([x,y,z]) => {
@@ -92,6 +93,25 @@ try {
   const removed = (await action('remove_voxel',() => click('left'))).changes[0];
   assert.deepEqual(removed.voxels.materials,[lava]);
   assert.equal(voxelMaterialAt(removed.voxels,added[0].voxel),null);
+
+  const waterCell = sources[0][1];
+  await aim(waterCell,[.5,geometry.shapeFor(water)[0].y1,.5],water);
+  await action('copy_voxel',() => page.keyboard.press('KeyQ'));
+  await page.keyboard.press('KeyB');
+  assert.equal(await page.evaluate(() => honeymoon.stats().chiselSize),2);
+  await aim(below(destination),positions[0]);
+  const quarter = (await action('place_voxel',() => click('right'))).changes[0];
+  const {indices} = voxelBrush(added[0].voxel,2);
+  assert.deepEqual(quarter.voxels.quarters,[indices[0]]);
+  assert.ok(indices.every(index => voxelMaterialAt(quarter.voxels,index) === water));
+  await aim(destination,[(x+.5)/8,.25,(z+.5)/8],water);
+  await page.screenshot({path:join(output,'first-person-quarter.png')});
+  await page.keyboard.press('KeyB');
+  assert.equal(await page.evaluate(() => honeymoon.stats().chiselSize),1);
+  await page.keyboard.press('KeyX');
+  assert.equal(await page.evaluate(() => honeymoon.stats().chiseling),false);
+  const cleared = (await action('remove_microblocks',() => click('left'))).changes[0];
+  assert.equal(cleared.cell,null);
   report.corrections = await page.evaluate(() => honeymoon.stats().movementSync.corrections);
   assert.equal(report.corrections,0);
   assert.deepEqual(report.errors,[]);

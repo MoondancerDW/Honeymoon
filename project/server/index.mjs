@@ -187,7 +187,14 @@ export function createHoneymoonServer({
   }
   const streams = new Set();
   const worldTime = createWorldTime(store);
-  const chat = createChat(entry => sendSocial('chat', entry));
+  const chat = createChat((entry, origin) => {
+    if (entry.channel === 'local') {
+      sendSocial('chat', entry, player => {
+        const point = presence.onlinePosition(player);
+        return point && Math.hypot(point.x - origin.x, point.y - origin.y, point.z - origin.z) <= 18;
+      });
+    } else sendSocial('chat', entry);
+  });
   const presence = createPresence({ store, send: writeEvent, onVisibility(profile, online, player) {
     if (!online) game.leaveSeat(player);
     chat.playerStatus(profile, online);
@@ -206,8 +213,8 @@ export function createHoneymoonServer({
     }
   }
 
-  function sendSocial(name, data) {
-    for (const stream of streams) if (stream.social) writeEvent(stream.response, name, data);
+  function sendSocial(name, data, receives = () => true) {
+    for (const stream of streams) if (stream.social && receives(stream.player)) writeEvent(stream.response, name, data);
   }
 
   function broadcast(player, output) {
@@ -243,7 +250,7 @@ export function createHoneymoonServer({
       if (!player) throw new RequestError(401, 'session_required');
       if (path === '/api/chat' && method === 'POST') {
         const body = await readBody(request);
-        return json(response, 200, chat.message(presence.onlineProfile(player), body));
+        return json(response, 200, chat.message(presence.onlineProfile(player), body, presence.onlinePosition(player)));
       }
       if (path === '/api/time' && method === 'POST') {
         const body = await readBody(request);
@@ -255,6 +262,9 @@ export function createHoneymoonServer({
       if (path === '/api/profile' && method === 'POST') {
         const updates = await profileChanges(await readBody(request, MAX_PROFILE_BODY));
         const saved = store.getProfile(player);
+        if (saved?.nickname && updates.nickname !== undefined && updates.nickname !== saved.nickname) {
+          throw new RequestError(409, 'nickname_locked', {profile:publicProfile(player, saved)});
+        }
         if (updates.nickname === saved?.nickname) delete updates.nickname;
         if (updates.skin !== undefined && (updates.skin?.hash ?? null) === (saved?.skinHash ?? null)) delete updates.skin;
         const different = updates.nickname !== undefined || updates.skin !== undefined;
@@ -298,6 +308,14 @@ export function createHoneymoonServer({
         await readBody(request);
         const result = game.respawn(player);
         presence.update(player, result.position, {yaw:0, pitch:0, motion:'idle'});
+        return json(response, 200, result);
+      }
+      if (path === '/api/teleport' && method === 'POST') {
+        const body = await readBody(request);
+        if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
+        const result = game.teleport(player, body);
+        presence.update(player, result.position, {yaw:0, pitch:0, motion:'idle'});
+        if (result.changes.length || result.effects.length) broadcast(player, result);
         return json(response, 200, result);
       }
       if (path === '/api/action' && method === 'POST') {

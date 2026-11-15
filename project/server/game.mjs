@@ -6,23 +6,24 @@ import { PLAYER, physics } from './physics.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
-import { POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
+import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
+import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
 import { blockKey, blockState, jammyAppliance, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
 import { shapedLampData } from '../world/creative-items.mjs';
-import { isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt,
-  VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxel } from '../world/voxel-chisel.mjs';
+import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush,
+  VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
-const actions = new Set(['place', 'remove', 'copy', 'interact', ...partActions, ...voxelActions]);
+const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', ...partActions, ...voxelActions]);
 const axes = ['x', 'y', 'z'];
 const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 const bedDirections = [[0,1], [-1,0], [0,-1], [1,0]];
 const pairedBlocks = new Set([26, 64, 71]);
 const MOVEMENT_GRACE = 0.24;
-const RUN_SPEED = 9;
+const RUN_SPEED = FLIGHT_SPRINT_SPEED + 1;
 const MAX_ACTIVE_IDLE_MS = 30000;
 const REQUEST_ID = /^[A-Za-z0-9_-]{8,100}$/;
 
@@ -51,6 +52,7 @@ function normalizeAction(body) {
     input.creativeItem = body.creativeItem;
   }
   if (body.hit !== undefined) input.hit = point(body.hit);
+  if (body.type === 'remove_microblocks' && !input.hit) throw new RequestError(400, 'invalid_coordinates');
   if (body.type === 'interact' && body.yaw !== undefined) {
     if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
     input.yaw = body.yaw % (2 * Math.PI);
@@ -97,6 +99,10 @@ function normalizeAction(body) {
       throw new RequestError(400, 'invalid_voxel');
     }
     input.voxel = body.voxel;
+    if (body.type !== 'copy_voxel' && body.size !== undefined) {
+      if (body.size !== 1 && body.size !== 2) throw new RequestError(400, 'invalid_voxel');
+      if (body.size === 2) input.size = 2;
+    }
     if (body.type === 'place_voxel') {
       if (typeof body.material !== 'string' || body.material.length > 128) throw new RequestError(400, 'invalid_material');
       input.material = body.material;
@@ -241,6 +247,33 @@ export function createGame(base, store, geometry, {
     return position;
   }
 
+  function takeSeat(player, previous, anchor, blocks, entity) {
+    const {x, y, z} = anchor;
+    const position = {x, y, z};
+    if (physical.collides(position, SEATED_HEIGHT, blocks)) throw new RequestError(409, 'seat_blocked');
+    seats.set(player, {anchor, blocks, previous, entity});
+    movePlayer(player, position);
+    return {seat:anchor, position};
+  }
+
+  function sitInMinecart(player, previous, pose, address, hit, key) {
+    const eye = [previous.x, previous.y + PLAYER.eye, previous.z];
+    const target = [hit.x, hit.y, hit.z];
+    const delta = target.map((value,axis) => value - eye[axis]);
+    const distance = Math.hypot(...delta);
+    if (distance > 6 || distance < .00001) throw new RequestError(403, 'outside_reach');
+    const entity = typeof key === 'string' && key.length <= 160 ? base.getEntity?.(address.x, address.z, key) : null;
+    if (!isRideableMinecart(entity) || !axes.every((axis,i) => Math.floor(entity.position[i]) === address[axis])) {
+      throw new RequestError(409, 'not_a_seat');
+    }
+    const closest = minecartHit(entity, eye, delta.map(value => value / distance), distance + .002);
+    if (Math.abs(closest - distance) > .002 || !physical.visiblePoint(eye, target)) {
+      throw new RequestError(403, 'outside_reach');
+    }
+    if ([...seats.values()].some(seat => seat.entity === entity.key)) throw new RequestError(409, 'seat_taken');
+    return takeSeat(player, previous, minecartSeat(entity, pose.yaw), [], entity.key);
+  }
+
   function sit(player, target, pose) {
     const previous = playerAt(player);
     const existing = publicSeat(player);
@@ -252,6 +285,7 @@ export function createGame(base, store, geometry, {
     const hit = point(target.hit);
     const {x, y, z} = address;
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
+    if (target.entity !== undefined) return sitInMinecart(player, previous, pose, address, hit, target.entity);
     const current = getCurrent(x, y, z);
     const profile = seatFor(cellView(current), models, pose.yaw,
       (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz)));
@@ -260,12 +294,7 @@ export function createGame(base, store, geometry, {
     const other = profile.bed ? bedMate(current, address, getCurrent) : null;
     const blocks = other ? [address, other] : [address];
     if (blocks.some(block => seatsAt(block.x, block.y, block.z))) throw new RequestError(409, 'seat_taken');
-    const position = {x:x + .5, y:y + profile.height, z:z + .5};
-    if (physical.collides(position, SEATED_HEIGHT, blocks)) throw new RequestError(409, 'seat_blocked');
-    const anchor = {...position, yaw:profile.yaw};
-    seats.set(player, {anchor, blocks, previous});
-    movePlayer(player, position);
-    return {seat:anchor, position};
+    return takeSeat(player, previous, {x:x + .5, y:y + profile.height, z:z + .5, yaw:profile.yaw}, blocks);
   }
 
   function activePositions(player, position) {
@@ -383,7 +412,7 @@ export function createGame(base, store, geometry, {
     return {cell, companion:{...second, cell:other, object:null}, paired:true};
   }
 
-  function ownedCompanion(player, current) {
+  function placedCompanion(current) {
     const {x, y, z} = current;
     const [id, meta] = blockState(current);
     let mate;
@@ -393,7 +422,7 @@ export function createGame(base, store, geometry, {
       const [otherId, otherMeta] = blockState(other);
       if (id === otherId && Boolean(meta & 8) !== Boolean(otherMeta & 8)) mate = other;
     }
-    if (!mate || store.getEditOwner(mate.x, mate.y, mate.z) !== player ||
+    if (!mate || !store.getEditOwner(mate.x, mate.y, mate.z) ||
         base.getCell(mate.x, mate.y, mate.z).key !== 'air') return undefined;
     if (seatsAt(mate.x, mate.y, mate.z)) throw new RequestError(409, 'seat_taken');
     return {x:mate.x, y:mate.y, z:mate.z, cell:null, object:null};
@@ -403,12 +432,32 @@ export function createGame(base, store, geometry, {
     const {x, y, z} = current;
     const revision = store.nextRevision();
     const parts = ownedParts.map(publicMicroPart);
-    const cell = parts.length ? microblockKey : voxels ? voxelKey : null;
-    const change = {x, y, z, cell, object: null, revision, ...(parts.length || !voxels ? {parts} : {}), ...(voxels && {voxels})};
+    const original = !voxels && parts.length && ownedParts.every(part => !part.owner) ? base.getCell(x, y, z) : null;
+    const restored = original?.key === 'air' ? null : original;
+    const cell = parts.length ? (restored?.key ?? microblockKey) : voxels ? voxelKey : null;
+    const change = {x, y, z, cell, object:restored?.object ?? null, revision,
+      ...(parts.length || !voxels ? {parts} : {}), ...(voxels && {voxels})};
     const owner = voxels ? store.getEditOwner(x, y, z) : null;
     store.writeEdit(change, originalAt(x, y, z), owner, parts.length || !voxels ? ownedParts : null);
     const effects = placed ? [{type: 'sound', sound: 'block.place', cell, position: [x, y, z], material: placed.material}] : [];
-    return {worldRevision: revision, changes: [change], effects};
+    return {worldRevision: revision, changes: [publicChange(change)], effects};
+  }
+
+  function microParts(current) {
+    const {x, y, z} = current;
+    const owner = base.getCell(x, y, z).key === 'air' ? store.getEditOwner(x, y, z) : null;
+    return store.getMicroParts(x, y, z) ?? (cellView(current).parts ?? []).map(part => ({...publicMicroPart(part), owner}));
+  }
+
+  function removeMicroblocks(player, input, current) {
+    const {x, y, z, hit} = input;
+    if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
+    if (!physical.targetAtHit(playerSight(player), x, y, z, hit, true)) throw new RequestError(403, 'outside_reach');
+    const parts = microParts(current);
+    const remaining = parts.filter(part => !part.owner);
+    const clearVoxels = current.voxels && store.getEditOwner(x, y, z);
+    if (remaining.length === parts.length && !clearVoxels) throw new RequestError(403, 'part_not_owned');
+    return writeMicroParts(current, remaining, null, clearVoxels ? null : current.voxels);
   }
 
   function editMicroParts(player, input, current) {
@@ -437,17 +486,15 @@ export function createGame(base, store, geometry, {
     }
     const parts = view.parts ?? [];
     // Copies placed by the older whole-cell API inherit their proven owner on the first part edit.
-    const storedParts = store.getMicroParts(x, y, z);
-    const owner = original === 'air' && current.cell !== null ? store.getEditOwner(x, y, z) : null;
-    const owned = storedParts ?? parts.map(part => ({...publicMicroPart(part), owner}));
+    const owned = microParts(current);
 
     if (type === 'remove_part') {
       const part = owned.find(({slot}) => slot === input.partSlot);
       if (!part) throw new RequestError(409, 'part_missing');
-      if (part.owner !== player) throw new RequestError(403, 'part_not_owned');
+      if (!part.owner) throw new RequestError(403, 'part_not_owned');
       if (!physical.visiblePart(position, x, y, z, part.slot, hit)) throw new RequestError(403, 'outside_reach');
       const next = microblockRemoval(parts, part.slot, {
-        mayReshape: slot => owned.some(remaining => remaining.slot === slot && remaining.owner === player),
+        mayReshape: slot => owned.some(remaining => remaining.slot === slot && remaining.owner),
       });
       if (!next || partBoxesOverlapVoxels(next.boxes, current.voxels)) throw new RequestError(409, 'incompatible_part');
       if (next.reshaped && playerOverlaps(x, y, z, {key: microblockKey, parts: next.parts}, player)) {
@@ -484,11 +531,11 @@ export function createGame(base, store, geometry, {
     return isChiselMaterial(cell.cell) && catalog.has(chiselMaterialKey(cell.cell));
   }
 
-  function checkVoxelOwner(player, {x, y, z, cell}) {
+  function checkVoxelEditable({x, y, z, cell}) {
     if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
     const original = base.getCell(x, y, z).key;
     if ((original !== 'air' && !isMicroblockCell({key:original, parts:base.manifest.compositions?.[original]?.parts})) ||
-        (cell !== null && store.getEditOwner(x, y, z) !== player)) {
+        (cell !== null && !store.getEditOwner(x, y, z))) {
       throw new RequestError(403, 'voxel_not_owned');
     }
   }
@@ -503,12 +550,11 @@ export function createGame(base, store, geometry, {
     const effects = material ? [{type: 'sound', sound: 'block.place', cell: voxelKey,
       position: [x, y, z], voxelMaterial: material}] : [];
     if (parts?.length) {
+      const owned = microParts(current);
+      if (!voxels) return writeMicroParts(current, owned, null, null);
       const revision = store.nextRevision();
-      const stored = store.getMicroParts(x, y, z);
-      const owner = store.getEditOwner(x, y, z);
-      const owned = stored ?? parts.map(part => ({...publicMicroPart(part), owner}));
       const combined = {...change, parts, revision};
-      store.writeEdit(combined, originalAt(x, y, z), voxels ? player : null, owned);
+      store.writeEdit(combined, originalAt(x, y, z), player, owned);
       return {worldRevision: revision, changes: [combined], effects};
     }
     // Re-evaluate neighbours if chiselling converts an ordinary solid block.
@@ -522,11 +568,11 @@ export function createGame(base, store, geometry, {
   }
 
   function editVoxels(player, input, current) {
-    const {x, y, z, type, hit, voxel} = input;
+    const {x, y, z, type, hit, voxel, size = 1} = input;
     const position = playerSight(player);
     if (type === 'place_voxel') {
       const multipart = isMicroblockCell(cellView(current));
-      if (!multipart || current.voxels) checkVoxelOwner(player, current);
+      if (!multipart || current.voxels) checkVoxelEditable(current);
       else if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
       if (!chiselMaterial({cell: input.material})) throw new RequestError(400, 'invalid_material');
       const material = chiselMaterialKey(input.material);
@@ -539,20 +585,21 @@ export function createGame(base, store, geometry, {
       const next = chiselPlacementAtHit(against, surface.hit, surface.face,
         surface.partSlot === undefined ? anchor.voxels : undefined, surface.partSlot);
       if (!next || !samePoint(next, input) || next.voxel !== voxel) throw new RequestError(403, 'outside_reach');
-      if (voxelMaterialAt(current.voxels, voxel)) throw new RequestError(409, 'occupied');
+      const brush = voxelBrush(voxel, size);
+      if (brush.indices.some(index => voxelMaterialAt(current.voxels, index))) throw new RequestError(409, 'occupied');
       const materials = current.voxels?.materials;
       if (materials?.length >= VOXEL_MATERIAL_LIMIT && !materials.includes(material)) {
         throw new RequestError(409, 'voxel_material_limit');
       }
-      const box = voxelBox(voxel);
+      const {box} = brush;
       if (multipart && partBoxesOverlapBox(coverBoxes(cellView(current).parts), box)) throw new RequestError(409, 'occupied');
       if (chiselMaterialShape(material).solid && activePositions(player).some(feet => physical.overlapsBox(feet, x, y, z, box))) {
         throw new RequestError(409, 'occupied');
       }
-      return writeVoxels(player, current, writeVoxel(current.voxels, voxel, material), material);
+      return writeVoxels(player, current, writeVoxelBrush(current.voxels, brush, material), material);
     }
 
-    if (type === 'remove_voxel') checkVoxelOwner(player, current);
+    if (type === 'remove_voxel') checkVoxelEditable(current);
     if (!current.voxels && !chiselMaterial(current)) throw new RequestError(409, 'invalid_material');
     const surface = physical.targetAtHit(position, x, y, z, hit, true);
     if (!surface || surface.partSlot !== undefined ||
@@ -564,7 +611,7 @@ export function createGame(base, store, geometry, {
     if (type === 'copy_voxel') return {worldRevision: store.worldRevision(), changes: [], effects: [], material};
     const voxels = current.voxels ?? chiselSourceVolume(current.cell, geometry.shapeFor(cellView(current),
       (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz))));
-    return writeVoxels(player, current, writeVoxel(voxels, voxel, null));
+    return writeVoxels(player, current, writeVoxelBrush(voxels, voxelRemovalBrush(current.voxels, voxel, size), null));
   }
 
   function execute(player, input) {
@@ -576,6 +623,7 @@ export function createGame(base, store, geometry, {
     }
     if (partActions.has(type)) return editMicroParts(player, input, current);
     if (voxelActions.has(type)) return editVoxels(player, input, current);
+    if (type === 'remove_microblocks') return removeMicroblocks(player, input, current);
     if (type === 'place') {
       if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
       const item = input.creativeItem && creativeItems.get(input.creativeItem);
@@ -613,7 +661,7 @@ export function createGame(base, store, geometry, {
       throw new RequestError(409, 'part_required');
     }
     if (type === 'remove' && !allowRemoval) {
-      if (store.getEditOwner(x, y, z) !== player || base.getCell(x, y, z).key !== 'air') {
+      if (!store.getEditOwner(x, y, z) || base.getCell(x, y, z).key !== 'air') {
         throw new RequestError(403, 'block_not_owned');
       }
     }
@@ -631,7 +679,7 @@ export function createGame(base, store, geometry, {
       store.putClipboard(player, { cell: current.cell, object });
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
     }
-    return writeCell(player, current, null, null, ownedCompanion(player, current));
+    return writeCell(player, current, null, null, placedCompanion(current));
   }
 
   function action(player, body) {
@@ -665,6 +713,46 @@ export function createGame(base, store, geometry, {
     return result;
   }
 
+  function bodyWithinMap({x, y, z}) {
+    const bounds = base.manifest.bounds;
+    return x - PLAYER.halfWidth >= bounds.minX && x + PLAYER.halfWidth <= bounds.maxX + 1
+      && z - PLAYER.halfWidth >= bounds.minZ && z + PLAYER.halfWidth <= bounds.maxZ + 1
+      && y >= bounds.minY && y + PLAYER.height <= bounds.maxY + 1;
+  }
+
+  function teleport(player, body) {
+    const target = point(body);
+    if (!bodyWithinMap(target)) throw new RequestError(403, 'outside_playable_area');
+    if (base.hasPlayableChunk) {
+      const chunk = value => Math.floor(value / 16);
+      for (const x of [chunk(target.x - PLAYER.halfWidth), chunk(target.x + PLAYER.halfWidth - 1e-6)]) {
+        for (const z of [chunk(target.z - PLAYER.halfWidth), chunk(target.z + PLAYER.halfWidth - 1e-6)]) {
+          if (!base.hasPlayableChunk(x, z)) throw new RequestError(403, 'outside_playable_area');
+        }
+      }
+    }
+    if (physical.collides(target)) throw new RequestError(409, 'teleport_blocked');
+    const entry = enterPosition(player, target, playerAt(player));
+    seats.delete(player);
+    movePlayer(player, target);
+    return {...entry, seat:null};
+  }
+
+  function enterPosition(player, position, previous) {
+    const results = store.atomic(() => {
+      const entries = [];
+      for (const module of mechanics) {
+        const plan = module.prepareEntry?.(moduleContext(module, player, { position, previous }));
+        if (plan) entries.push(writePlan(module, plan));
+      }
+      return entries;
+    });
+    const effects = results.flatMap(result => result.effects);
+    const changes = results.flatMap(result => result.changes);
+    if (changes.length) refreshMechanicCells();
+    return { position, effects, changes, worldRevision: store.worldRevision() };
+  }
+
   function position(player, body) {
     const target = point(body);
     const previous = playerAt(player);
@@ -675,12 +763,8 @@ export function createGame(base, store, geometry, {
     const now = clock();
     const old = positions.get(player);
     const elapsed = Math.min(0.65, (now - (old?.updated ?? now - 100)) / 1000);
-    const budget = Math.min(1.5, (old?.budget ?? 1) + elapsed * RUN_SPEED);
-    const bounds = base.manifest.bounds;
+    const budget = Math.min(POSITION_BATCH_LIMIT + .4, (old?.budget ?? 1) + elapsed * RUN_SPEED);
     const hasTrail = body.trail !== undefined || body.from !== undefined;
-    const inBounds = ({ x, y, z }) => x - PLAYER.halfWidth >= bounds.minX && x + PLAYER.halfWidth <= bounds.maxX + 1
-      && z - PLAYER.halfWidth >= bounds.minZ && z + PLAYER.halfWidth <= bounds.maxZ + 1
-      && y >= bounds.minY && y + PLAYER.height <= bounds.maxY + 1;
     const reject = () => {
       throw new RequestError(409, 'movement_blocked', { position: previous });
     };
@@ -707,7 +791,7 @@ export function createGame(base, store, geometry, {
     for (const step of steps) {
       const planar = Math.hypot(step.x - from.x, step.z - from.z);
       const vertical = step.y - from.y;
-      if (!inBounds(step) || hasTrail && (planar > .12 || Math.abs(vertical) > .55)) reject();
+      if (!bodyWithinMap(step) || hasTrail && (planar > POSITION_STEP_LIMIT || Math.abs(vertical) > .55)) reject();
       distance += Math.hypot(planar, Math.max(vertical, 0));
       drop += Math.max(-vertical, 0);
       if (distance > budget + MOVEMENT_GRACE || drop > 6) reject();
@@ -715,19 +799,9 @@ export function createGame(base, store, geometry, {
     }
     if (!(hasTrail ? physical.movementTrailAllowed(previous, steps) : physical.movementAllowed(previous, target))) reject();
 
-    const results = store.atomic(() => {
-      const entries = [];
-      for (const module of mechanics) {
-        const plan = module.prepareEntry?.(moduleContext(module, player, { position: target, previous }));
-        if (plan) entries.push(writePlan(module, plan));
-      }
-      return entries;
-    });
-    const effects = results.flatMap(result => result.effects);
-    const changes = results.flatMap(result => result.changes);
-    if (changes.length) refreshMechanicCells();
+    const entry = enterPosition(player, target, previous);
     positions.set(player, { position: target, updated: now, budget: budget - distance, requestId });
-    return { position: target, effects, changes, worldRevision: store.worldRevision() };
+    return entry;
   }
 
   function advance() {
@@ -747,6 +821,7 @@ export function createGame(base, store, geometry, {
   return {
     action,
     position,
+    teleport,
     advance,
     sit,
     leaveSeat,

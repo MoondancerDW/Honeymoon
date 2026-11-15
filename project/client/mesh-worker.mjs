@@ -39,7 +39,8 @@ function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding
     out.positions.push(...corners[i]);
     out.colors.push(r, g, b);
     out.lightLevels.push(light);
-    out.uvs.push(u0 + (padding + scale * uv[i][0]) / ATLAS_GRID, v0 - (padding + scale * uv[i][1]) / atlasRows);
+    if (tile === null) out.uvs.push(uv[i][0],1-uv[i][1]);
+    else out.uvs.push(u0 + (padding + scale * uv[i][0]) / ATLAS_GRID, v0 - (padding + scale * uv[i][1]) / atlasRows);
   }
   out.indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
 }
@@ -64,6 +65,7 @@ function modelQuad(out, {positions, uv, emissive, tint = 0xffffff}, origin, ligh
 }
 
 const FULL_UV = [[0, 1], [1, 1], [1, 0], [0, 0]];
+const FIRE_UV = [0,.5].map(offset => FULL_UV.map(([u,v]) => [offset + (u === 0 ? .25 : 15.75) / 32,v === 0 ? .25 / 16 : 15.75 / 16]));
 
 // Each face uses tangent axes whose cross product points outward.
 const AXES = [[2, 1], [1, 2], [0, 2], [2, 0], [1, 0], [0, 1]];
@@ -225,7 +227,8 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             const axis = face >> 1;
             const boundary = face & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0;
             const packed = light[boundary ? next(face) : at];
-            faceQuad(layers[box.mode] ?? layers.opaque, box, face, origin, box.emissive ? 256 : packed,
+            const out = box.fluid === 'water' ? layers.water ??= layer() : layers[box.mode] ?? layers.opaque;
+            faceQuad(out, box, face, origin, box.emissive ? 256 : packed,
               box.faces[face], box.emissive ? 1 : FACE_SHADE[face]);
           }
           if (!editedParts.get(at)?.length) continue;
@@ -265,7 +268,14 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
         }
         for (const box of boxes) {
           const pane = box.mode === 'pane';
-          const out = pane ? layers.pane ??= layer() : layers[box.mode] || layers.opaque;
+          if (box.mode === 'fire') {
+            const fire = layers.fire ??= layer();
+            for (const [index,corners] of crossSpriteCorners(box,origin).entries()) {
+              quad(fire,corners,null,FIRE_UV[index],256);
+            }
+            continue;
+          }
+          const out = pane ? layers.pane ??= layer() : water ? layers.water ??= layer() : layers[box.mode] || layers.opaque;
           if (box.kind === 'rail') {
             const corners = box.corners.map(([dx, dy, dz]) => [x + dx, y + dy, z + dz]);
             quad(out, corners, box.faces[0], box.uv, light[at]);

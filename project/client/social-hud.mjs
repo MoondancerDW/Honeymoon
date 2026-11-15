@@ -1,21 +1,37 @@
 import {formatClock, tickFromTime} from '../world/world-time.mjs';
 
-export function createSocialHud({post, notice, pause, resume}) {
+const teleportErrors = {
+  invalid_coordinates:'Введите числовые координаты X, Y и Z',
+  outside_playable_area:'Координаты за пределами карты',
+  teleport_blocked:'В выбранной точке недостаточно места',
+  not_online:'Сначала войдите в мир',
+  action_pending:'Дождитесь завершения текущего действия',
+};
+
+export function createSocialHud({post, notice, pause, resume, teleport}) {
   const byId = id => document.getElementById(id);
   const chat = byId('chat');
-  const log = byId('chat-log');
+  const channels = {
+    global:{log:byId('chat-log'), seen:new Set(), label:'Глобальный'},
+    local:{log:byId('local-chat-log'), seen:new Set(), label:'Локальный · 18 блоков'},
+  };
+  const channelButton = byId('chat-channel');
   const chatForm = byId('chat-form');
   const chatInput = byId('chat-input');
   const clockButton = byId('clock-toggle');
   const clockForm = byId('clock-form');
   const clockInput = byId('clock-input');
   const frozen = byId('clock-frozen');
+  const teleportButton = byId('teleport-toggle');
+  const teleportForm = byId('teleport-form');
+  const coordinateInputs = ['x','y','z'].map(axis => [axis, byId(`teleport-${axis}`)]);
   const online = byId('online');
   const names = byId('online-names');
-  const seen = new Set();
   let panel, onlineVisible = false, connected = false, players = [], clockText, writingTime = false;
+  let channel = 'global';
 
-  function entry({id, kind, nickname, text}, recent) {
+  function entry({id, kind, nickname, text, channel:target = 'global'}, recent) {
+    const {log, seen} = channels[target] ?? channels.global;
     if (seen.has(id)) return;
     seen.add(id);
     const row = document.createElement('li');
@@ -44,7 +60,7 @@ export function createSocialHud({post, notice, pause, resume}) {
     if (!panel) return;
     panel = null;
     chat.classList.remove('expanded');
-    chatForm.hidden = clockForm.hidden = true;
+    chatForm.hidden = clockForm.hidden = teleportForm.hidden = true;
     if (continuePlaying) resume();
   }
 
@@ -56,9 +72,11 @@ export function createSocialHud({post, notice, pause, resume}) {
     chat.classList.toggle('expanded', panel === 'chat');
     chatForm.hidden = panel !== 'chat';
     clockForm.hidden = panel !== 'clock';
+    teleportForm.hidden = panel !== 'teleport';
     if (panel === 'clock') clockInput.value = clockText;
-    const input = panel === 'chat' ? chatInput : clockInput;
+    const input = panel === 'chat' ? chatInput : panel === 'clock' ? clockInput : coordinateInputs[0][1];
     input.focus();
+    const {log} = channels[channel];
     log.scrollTop = log.scrollHeight;
   }
 
@@ -84,17 +102,31 @@ export function createSocialHud({post, notice, pause, resume}) {
     const send = byId('chat-send');
     if (send.disabled) return;
     send.disabled = true;
-    const message = await submit('chat', {text}, 'Введите сообщение длиной до 240 символов');
+    const destination = channel;
+    const message = await submit('chat', {text, channel:destination}, 'Введите сообщение длиной до 240 символов');
     send.disabled = false;
     if (message) {
       entry(message, true);
-      if (chatInput.value.trim() === text) chatInput.value = '';
+      if (channel === destination && chatInput.value.trim() === text) chatInput.value = '';
     }
   });
   byId('chat-toggle').addEventListener('click', () => open('chat'));
+  channelButton.addEventListener('click', () => {
+    const next = channel === 'global' ? 'local' : 'global';
+    channels[channel].log.hidden = true;
+    channel = next;
+    const {log, label} = channels[channel];
+    log.hidden = false;
+    log.scrollTop = log.scrollHeight;
+    channelButton.textContent = label;
+    channelButton.setAttribute('aria-pressed', String(channel === 'local'));
+    chatInput.focus();
+  });
   clockButton.addEventListener('click', () => open('clock'));
+  teleportButton.addEventListener('click', () => open('teleport'));
   byId('chat-close').addEventListener('click', () => close());
   byId('clock-close').addEventListener('click', () => close());
+  byId('teleport-close').addEventListener('click', () => close());
   clockForm.addEventListener('submit', async event => {
     event.preventDefault();
     const tick = tickFromTime(clockInput.value);
@@ -102,6 +134,22 @@ export function createSocialHud({post, notice, pause, resume}) {
     writingTime = true;
     await submit('time', {tick, frozen:frozen.checked}, 'Не удалось применить время');
     writingTime = false;
+  });
+  teleportForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const send = byId('teleport-send');
+    if (send.disabled) return;
+    const target = Object.fromEntries(coordinateInputs.map(([axis, input]) => [axis, input.valueAsNumber]));
+    if (!Object.values(target).every(Number.isFinite)) return;
+    send.disabled = true;
+    try {
+      const {ok, body} = await teleport(target);
+      notice(ok ? 'Телепорт выполнен' : teleportErrors[body.error] ?? 'Не удалось телепортироваться');
+    } catch {
+      notice('Связь с сервером прервана');
+    } finally {
+      send.disabled = false;
+    }
   });
 
   return {
@@ -118,9 +166,10 @@ export function createSocialHud({post, notice, pause, resume}) {
         showOnline(true);
         return true;
       }
-      if (!event.repeat && ['KeyT','KeyK'].includes(event.code)) {
+      const next = {KeyT:'chat', KeyK:'clock', KeyG:'teleport'}[event.code];
+      if (!event.repeat && next) {
         event.preventDefault();
-        open(event.code === 'KeyT' ? 'chat' : 'clock');
+        open(next);
         return true;
       }
       return false;
@@ -139,9 +188,10 @@ export function createSocialHud({post, notice, pause, resume}) {
         item.textContent = nick;
         return item;
       }));
-      clockButton.disabled = byId('chat-toggle').disabled = !connected;
+      clockButton.disabled = byId('chat-toggle').disabled = teleportButton.disabled = !connected;
     },
     history(list) {
+      const {log, seen} = channels.global;
       log.replaceChildren();
       seen.clear();
       for (const message of list) entry(message, false);

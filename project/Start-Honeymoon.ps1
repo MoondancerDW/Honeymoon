@@ -41,7 +41,8 @@ try {
     $atlasVersion = if (Test-Path -LiteralPath $atlasMetadata) {
         (Get-Content -Raw -LiteralPath $atlasMetadata | ConvertFrom-Json).schemaVersion
     }
-    if ($atlasVersion -ne 11 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png')) {
+    if ($atlasVersion -ne 11 -or !(Test-Path -LiteralPath 'generated\textures\atlas.png') -or
+        !(Test-Path -LiteralPath 'generated\textures\minecart.png')) {
         & $pythonPath -B world/textures.py
         if ($LASTEXITCODE) { throw 'Texture extraction failed. Install Pillow from world/requirements.txt.' }
     }
@@ -76,7 +77,7 @@ try {
     }
     $lodManifest = 'generated/lod/manifest.json'
     $lod = if (Test-Path -LiteralPath $lodManifest) { Get-Content -Raw -LiteralPath $lodManifest | ConvertFrom-Json }
-    if ($importRequired -or $lod.schemaVersion -ne 1 -or $lod.contentHash -ne $world.contentHash -or !$lod.assetHash) {
+    if ($importRequired -or $lod.schemaVersion -ne 2 -or $lod.contentHash -ne $world.contentHash -or !$lod.assetHash) {
         & $nodePath import/lod.mjs --world 'generated/world' --out 'generated/lod'
         if ($LASTEXITCODE) { throw 'Far terrain build failed.' }
     }

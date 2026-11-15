@@ -1,5 +1,6 @@
 import * as THREE from '/vendor/three/three.module.js';
-import {farVisibilityMask} from './far-tile-format.mjs';
+import {farVisibilityMask,supportedLodVersion} from './far-tile-format.mjs';
+import {terrainFilterShader} from './terrain-filter.mjs';
 
 const PACK_CHUNKS = 4;
 const PACK_BLOCKS = PACK_CHUNKS * 16;
@@ -13,63 +14,16 @@ const corners = new Float32Array([0,0,0, 1,0,0, 1,1,0, 0,1,0]);
 const triangles = new Uint16Array([0,1,2, 0,2,3]);
 
 export function supportsFarTerrain({lod}) {
-  return lod?.version === 1 && lod.tileChunks === PACK_CHUNKS && lod.maxDistance === FAR_RADIUS &&
+  return supportedLodVersion(lod?.version) && lod.tileChunks === PACK_CHUNKS && lod.maxDistance === FAR_RADIUS &&
     /^[0-9a-f]{64}$/.test(lod.contentHash ?? '');
-}
-
-// Filter every input tile in isolation so distant windows and leaves cannot
-// pull black from transparent texels or colors from neighboring atlas tiles.
-function farAtlas(image, rows) {
-  const columns = 64, block = 4;
-  const width = columns * block, height = rows * block;
-  const canvas = document.createElement('canvas');
-  canvas.width = image.width;
-  canvas.height = image.height;
-  const context = canvas.getContext('2d',{willReadFrequently:true});
-  context.drawImage(image,0,0);
-  const input = context.getImageData(0,0,image.width,image.height).data;
-  const bytes = new Uint8Array(width * height * 4);
-  const averages = new Uint8Array(columns * rows * 4);
-  for (let z=0; z<rows; z++) for (let x=0; x<columns; x++) {
-    const tile = x+z*columns;
-    const r = new Uint32Array(16), g = new Uint32Array(16), b = new Uint32Array(16), a = new Uint16Array(16);
-    let red=0, green=0, blue=0, alpha=0;
-    for (let py=0; py<16; py++) for (let px=0; px<16; px++) {
-      const offset = ((z * 16 + py) * image.width + x * 16 + px) * 4;
-      const at = (px >> 2) + (py >> 2)*4;
-      const weight = input[offset+3];
-      r[at] += input[offset]*weight; g[at] += input[offset+1]*weight; b[at] += input[offset+2]*weight; a[at] += weight;
-    }
-    for (let index=0; index<16; index++) {
-      red+=r[index]; green+=g[index]; blue+=b[index]; alpha+=a[index];
-    }
-    const average = [red/Math.max(1,alpha),green/Math.max(1,alpha),blue/Math.max(1,alpha),alpha/256];
-    const averageAt = (x+(rows-1-z)*columns)*4;
-    averages.set(average,averageAt);
-    for (let index=0; index<16; index++) {
-      const denominator = a[index] + 2040;
-      const offset = (x*4+(index&3)+(height-1-(z*4+(index>>2)))*width)*4;
-      bytes[offset] = (r[index]+average[0]*2040)/denominator;
-      bytes[offset+1] = (g[index]+average[1]*2040)/denominator;
-      bytes[offset+2] = (b[index]+average[2]*2040)/denominator;
-      bytes[offset+3] = a[index]/16;
-    }
-  }
-  const atlas = new THREE.DataTexture(bytes,width,height);
-  const average = new THREE.DataTexture(averages,columns,rows);
-  atlas.magFilter = atlas.minFilter = THREE.LinearFilter;
-  for (const texture of [atlas,average]) {
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.needsUpdate = true;
-  }
-  return {atlas,average};
 }
 
 function farMaterial(textures, lightmap, rows, water) {
   const uniforms = {
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
-    atlas:{value:textures.atlas}, average:{value:textures.average}, lightmap:{value:lightmap},
-    rows:{value:rows}, visibilityMask:{value:65535},
+    atlas:{value:textures.source}, terrainMid:{value:textures.mid}, terrainAverage:{value:textures.average},
+    terrainWater:{value:textures.water},
+    lightmap:{value:lightmap}, terrainRows:{value:rows}, visibilityMask:{value:65535}, heightScale:{value:1},
   };
   return new THREE.ShaderMaterial({uniforms, fog:true, transparent:water, depthWrite:!water,
     side:water ? THREE.DoubleSide : THREE.FrontSide,
@@ -80,6 +34,7 @@ function farMaterial(textures, lightmap, rows, water) {
       attribute vec3 faceColor;
       attribute float faceLight;
       uniform float visibilityMask;
+      uniform float heightScale;
       uniform sampler2D lightmap;
       varying vec2 localUv;
       varying float tile;
@@ -97,6 +52,7 @@ function farMaterial(textures, lightmap, rows, water) {
         float face = mod(faceSurface.y, 8.0);
         vec2 extent = faceSize * position.xy;
         vec3 point = faceOrigin;
+        point.y /= heightScale;
         if (face < .5) point.zy += extent;
         else if (face < 1.5) point.yz += extent;
         else if (face < 2.5) point.xz += extent;
@@ -114,20 +70,18 @@ function farMaterial(textures, lightmap, rows, water) {
         #include <fog_vertex>
       }`,
     fragmentShader:`
+      ${water ? 'uniform sampler2D terrainWater;' : terrainFilterShader}
       uniform sampler2D atlas;
-      uniform sampler2D average;
-      uniform float rows;
       varying vec2 localUv;
       varying float tile;
       varying vec3 tint;
       #include <fog_pars_fragment>
       void main() {
-        vec2 uv = mix(vec2(.125), vec2(.875), fract(localUv));
-        vec2 cell = vec2(mod(tile,64.0),floor(tile / 64.0));
-        vec2 atlasUv = vec2((mod(tile, 64.0) + uv.x) / 64.0, 1.0 - (floor(tile / 64.0) + uv.y) / rows);
-        vec2 meanUv = vec2((cell.x + .5) / 64.0, 1.0 - (cell.y + .5) / rows);
-        float detail = 1.0 - smoothstep(.18, .53, max(length(dFdx(localUv)),length(dFdy(localUv))));
-        vec4 color = mix(texture2D(average,meanUv),texture2D(atlas,atlasUv),detail);
+        ${water ? 'vec4 color = texture2D(terrainWater,vec2(localUv.x,-localUv.y));' : `
+        float tileIndex = floor(tile + .5);
+        vec2 cell = vec2(mod(tileIndex,64.0),terrainRows - 1.0 - floor(tileIndex / 64.0));
+        vec2 within = vec2(fract(localUv.x),1.0 - fract(localUv.y));
+        vec4 color = terrainSample(atlas,cell,within,terrainFootprint(localUv));`}
         gl_FragColor = vec4(color.rgb * tint, ${water ? 'color.a' : '1.0'});
         #include <colorspace_fragment>
         #include <fog_fragment>
@@ -136,7 +90,7 @@ function farMaterial(textures, lightmap, rows, water) {
 }
 
 function meshFor(layer, material, region) {
-  const {count,offset,span,surface,color,light,minY,maxY} = layer;
+  const {count,offset,span,surface,color,light,minY,maxY,heightScale = 1} = layer;
   const geometry = new THREE.InstancedBufferGeometry();
   geometry.setAttribute('position',new THREE.BufferAttribute(corners,3));
   geometry.setAttribute('faceOrigin',new THREE.InstancedBufferAttribute(offset,3));
@@ -151,21 +105,21 @@ function meshFor(layer, material, region) {
   const mesh = new THREE.Mesh(geometry,material);
   mesh.onBeforeRender = () => {
     material.uniforms.visibilityMask.value = region.mask;
+    material.uniforms.heightScale.value = heightScale;
     material.uniformsNeedUpdate = true;
   };
   return mesh;
 }
 
 export class FarTerrain {
-  constructor(display, map) {
+  constructor(display, textures) {
     this.display = display;
     const {lod,bounds} = display.world.manifest;
     this.lod = lod;
     this.bounds = {minX:Math.floor(bounds.minX / PACK_BLOCKS),maxX:Math.floor(bounds.maxX / PACK_BLOCKS),
       minZ:Math.floor(bounds.minZ / PACK_BLOCKS),maxZ:Math.floor(bounds.maxZ / PACK_BLOCKS)};
-    this.textures = farAtlas(map.image,display.atlasRows);
-    this.materials = [farMaterial(this.textures,display.lightmap,display.atlasRows,false),
-      farMaterial(this.textures,display.lightmap,display.atlasRows,true)];
+    this.materials = [farMaterial(textures,display.lightmap,display.atlasRows,false),
+      farMaterial(textures,display.lightmap,display.atlasRows,true)];
     this.packs = new Map();
     this.pending = new Map();
     this.failed = new Map();

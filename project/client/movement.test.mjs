@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Movement } from './movement.mjs';
+import {cameraClearance, movementSpeed, Movement, pick, pickMinecart} from './movement.mjs';
+import {POSITION_STEP_LIMIT} from '../world/player-body.mjs';
 
 const manifest = {bounds:{minX:-8,maxX:8,minY:0,maxY:15,minZ:-8,maxZ:8}};
 function worldFor(obstacles) {
@@ -104,4 +105,36 @@ test('flight hovers, uses physical colliders and records each movement step', ()
   const {y} = position;
   movement.update(position, 0, 0, false, .05);
   assert.ok(position.y < y);
+});
+
+test('sprint accelerates ground movement by 40 percent and flying by 100 percent', () => {
+  const flight = movementSpeed({flying:true});
+  assert.equal(movementSpeed(),3.8);
+  assert.equal(movementSpeed({sprint:true}),5.1 * 1.4);
+  assert.equal(movementSpeed({flying:true, sprint:true}), flight * 2);
+  assert.ok(movementSpeed({flying:true, sprint:true}) * .016 < POSITION_STEP_LIMIT);
+});
+
+test('third-person camera stays four blocks away in open space and stops at near obstacles', () => {
+  const world = worldFor(new Map([
+    ['0,2,2','legacy:20:0'], ['0,2,-3','legacy:1:0'], ['0,2,1','legacy:9:0'],
+  ]));
+  const eye = [.5,2.62,0];
+  assert.equal(cameraClearance(world,eye,[1,0,0]),4);
+  assert.equal(cameraClearance(world,eye,[0,0,1]),1.9);
+  assert.equal(cameraClearance(world,eye,[0,0,-1]),1.9);
+  assert.ok(Math.abs(cameraClearance(world,[.5,2.62,1.95],[0,0,-1]) - 3.85) < 1e-9);
+});
+
+test('passenger cart pointing follows the model through water and stops at solid walls', () => {
+  const cells = new Map([['2,2,0','legacy:9:0']]);
+  const world = worldFor(cells);
+  const entities = [{type:'Minecart',position:[3.5,2.35,.5],key:'cart',data:{Type:0,Rotation:[90]}}];
+  world.chunks = new Map([['0,0',{entities}]]);
+  const origin = [.5,2.5,.5], direction = [1,0,0];
+  const block = () => pick(world,origin,direction);
+  assert.equal(block().x,2);
+  assert.equal(pickMinecart(world,origin,direction,block())?.entity,'cart');
+  cells.set('2,2,0','legacy:1:0');
+  assert.equal(pickMinecart(world,origin,direction,block()),null);
 });

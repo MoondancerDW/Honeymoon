@@ -5,6 +5,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {gzipSync} from 'node:zlib';
 import {buildRegion,makeMaterials,sampleChunk,TILE_CHUNKS} from './lod-mesh.mjs';
+import {LOD_VERSION} from '../client/far-tile-format.mjs';
 
 const DEFAULT_WORLD = fileURLToPath(new URL('../generated/world',import.meta.url));
 const DEFAULT_OUTPUT = fileURLToPath(new URL('../generated/lod',import.meta.url));
@@ -73,7 +74,7 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
 
   let quadCount = 0, bytes = 0, compressedBytes = 0, done = 0;
   const hash = createHash('sha256');
-  hash.update(`HLOD:1:${TILE_CHUNKS}:24:${contentHash}\n`);
+  hash.update(`HLOD:${LOD_VERSION}:${TILE_CHUNKS}:24:${contentHash}\n`);
   try {
     let row;
     for (const [x,z] of regions) {
@@ -93,7 +94,7 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
       compressedBytes += compressed.length;
       if (++done%64===0) progress({done,total:regions.length,quadCount,bytes,compressedBytes});
     }
-    const metadata = {schemaVersion:1,contentHash,assetHash:hash.digest('hex'),maxDistance:24,tileChunks:TILE_CHUNKS,
+    const metadata = {schemaVersion:LOD_VERSION,contentHash,assetHash:hash.digest('hex'),maxDistance:24,tileChunks:TILE_CHUNKS,
       regions,quadCount,bytes,compressedBytes};
     writeFileSync(join(data,'manifest.json'),JSON.stringify(metadata)+'\n');
     if (existsSync(out)) {

@@ -1,6 +1,7 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {ponyModels} from '../world/pony-model-data.mjs';
 import {defaultPonyPixels, ponySkinHeight, readPonySkin} from '../world/pony-skins.mjs';
+import {GROUND_SPRINT_SPEED, WALK_SPEED} from '../world/player-body.mjs';
 
 const LEG_NAMES = ['frontRight', 'frontLeft', 'hindRight', 'hindLeft'];
 const TAU = Math.PI * 2;
@@ -247,7 +248,8 @@ export function createPonyAvatar() {
     motion = nextMotion === 'air' ? 'jump' : nextMotion;
     const elapsed = THREE.MathUtils.clamp(dt, 0, 0.1);
     const fade = 1 - Math.exp(-elapsed * 14);
-    const groundSpeed = motion === 'walk' ? THREE.MathUtils.clamp(speed / 4.3, 0, 1) : 0;
+    const groundSpeed = motion === 'run' ? THREE.MathUtils.clamp(speed / GROUND_SPRINT_SPEED, 0, 1)
+      : motion === 'walk' ? THREE.MathUtils.clamp(speed / WALK_SPEED, 0, 1) * .72 : 0;
     run += (groundSpeed - run) * fade;
     flight += (Number(motion === 'fly') - flight) * fade;
     airborne += (Number(motion === 'jump') - airborne) * fade;

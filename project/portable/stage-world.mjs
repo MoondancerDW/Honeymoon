@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {displayEntity, displayObject} from '../server/base.mjs';
+import {isRideableMinecart} from '../world/minecarts.mjs';
 
 const [sourceArg, outputArg] = process.argv.slice(2);
 if (!sourceArg || !outputArg) throw new Error('Usage: node portable/stage-world.mjs SOURCE_WORLD NEW_OUTPUT_WORLD');
@@ -14,7 +15,8 @@ for (const [x,z] of [...manifest.chunks,...(manifest.visualChunks ?? [])]) {
   const name = `${x}.${z}.json`;
   const chunk = JSON.parse(readFileSync(join(source,'chunks',name),'utf8'));
   chunk.objects = chunk.objects.map(displayObject);
-  chunk.entities = chunk.entities.filter(({type}) => type === 'Painting' || type === 'ItemFrame').map(displayEntity);
+  chunk.entities = chunk.entities.filter(entity => entity.type === 'Painting' || entity.type === 'ItemFrame' ||
+    isRideableMinecart(entity)).map(displayEntity);
   const data = JSON.stringify(chunk) + '\n';
   if (manifest.chunkHash?.[name]) manifest.chunkHash[name] = createHash('sha256').update(data).digest('hex');
   writeFileSync(join(output,'chunks',name),data);

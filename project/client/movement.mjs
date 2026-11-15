@@ -1,8 +1,9 @@
 import * as geometry from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {movementMedium} from '../world/block-movement.mjs';
-import {PLAYER} from '../world/player-body.mjs';
+import {FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, PLAYER, WALK_SPEED} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
+import {isRideableMinecart, minecartHit} from '../world/minecarts.mjs';
 import {isChiselMaterial, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 
@@ -10,6 +11,64 @@ const {halfWidth: HALF, height: HEIGHT, eye: EYE} = PLAYER;
 const {collisionFor} = geometry;
 export {HEIGHT, EYE};
 const EPSILON = .00001;
+const CAMERA_OFFSET = 4;
+const CAMERA_RADIUS = .1;
+const cartsByChunk = new WeakMap();
+
+export function movementSpeed({flying = false, sprint = false} = {}) {
+  if (flying) return sprint ? FLIGHT_SPRINT_SPEED : FLIGHT_SPEED;
+  return sprint ? GROUND_SPRINT_SPEED : WALK_SPEED;
+}
+
+export function cameraClearance(world, origin, direction, distance = CAMERA_OFFSET) {
+  const min = origin.map((value, axis) => Math.floor(Math.min(value, value + direction[axis] * distance) - CAMERA_RADIUS));
+  const max = origin.map((value, axis) => Math.floor(Math.max(value, value + direction[axis] * distance) + CAMERA_RADIUS));
+  let nearest = distance;
+  for (let y = min[1] - 1; y <= max[1]; y++) {
+    for (let z = min[2] - 1; z <= max[2] + 1; z++) {
+      for (let x = min[0] - 1; x <= max[0] + 1; x++) {
+        const cell = world.cellAt(x, y, z);
+        if (!cell) continue;
+        const neighbors = (dx, dy, dz) => world.cellAt(x + dx, y + dy, z + dz);
+        const boxes = extractedModel(world.models, cell, neighbors)?.collision ?? collisionFor(cell, neighbors);
+        for (const box of boxes) {
+          const padded = {x0:box.x0 - CAMERA_RADIUS, y0:box.y0 - CAMERA_RADIUS, z0:box.z0 - CAMERA_RADIUS,
+            x1:box.x1 + CAMERA_RADIUS, y1:box.y1 + CAMERA_RADIUS, z1:box.z1 + CAMERA_RADIUS};
+          const hit = intersectSelection(origin, direction, padded, x, y, z, nearest);
+          if (!hit) continue;
+          // The eye can be within the camera margin while moving the camera away from a wall.
+          if (hit.length === 0 && !intersectSelection(origin, direction, box, x, y, z, nearest)) continue;
+          nearest = hit.length;
+        }
+      }
+    }
+  }
+  return nearest;
+}
+
+export function pickMinecart(world, origin, direction, block) {
+  const chunk = (n, offset) => Math.floor((n + offset) / 16);
+  const endX = origin[0] + direction[0] * 6, endZ = origin[2] + direction[2] * 6;
+  let target = null, nearest = 6;
+  for (let z = chunk(Math.min(origin[2], endZ),-1); z <= chunk(Math.max(origin[2], endZ),1); z++) {
+    for (let x = chunk(Math.min(origin[0], endX),-1); x <= chunk(Math.max(origin[0], endX),1); x++) {
+      const source = world.chunks?.get(`${x},${z}`);
+      if (!source || source.visualOnly) continue;
+      if (!cartsByChunk.has(source)) cartsByChunk.set(source,(source.entities ?? []).filter(isRideableMinecart));
+      for (const entity of cartsByChunk.get(source)) {
+        const distance = minecartHit(entity, origin, direction, nearest);
+        if (distance >= nearest) continue;
+        nearest = distance;
+        const [cx, cy, cz] = entity.position.map(Math.floor);
+        const [hx, hy, hz] = origin.map((n,axis) => n + direction[axis] * distance);
+        target = {x:cx,y:cy,z:cz,entity:entity.key,hit:{x:hx,y:hy,z:hz}};
+      }
+    }
+  }
+  if (target && block?.length < nearest && (pick(world,origin,direction,false,true)?.length ?? Infinity) < nearest) return null;
+  return target;
+}
+
 export function overlapsPlacement(position, placement) {
   const {x, y, z} = position;
   const {x: cx, y: cy, z: cz, boxes} = placement;
@@ -161,7 +220,7 @@ export class Movement {
   }
 }
 
-export function pick(world, origin, direction, chiseling = false) {
+export function pick(world, origin, direction, chiseling = false, solidOnly = false) {
   const min = origin.map((value, axis) => Math.floor(Math.min(value, value + direction[axis] * 6)));
   const max = origin.map((value, axis) => Math.floor(Math.max(value, value + direction[axis] * 6)));
   let best = null;
@@ -176,6 +235,7 @@ export function pick(world, origin, direction, chiseling = false) {
         const boxes = extractedModel(world.models, cell, neighbors)?.selection
           ?? (geometry.selectionFor ?? geometry.shapeFor)(cell, neighbors);
         for (const box of boxes) {
+          if (solidOnly && box.solid === false) continue;
           const result = intersectSelection(origin, direction, box, x, y, z, 6, chiseling && box.solid === false);
           if (!result) continue;
           const solid = box.solid !== false;

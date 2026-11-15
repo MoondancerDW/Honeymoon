@@ -115,7 +115,7 @@ export function openStore(filename) {
   const addPlayer = statement('INSERT INTO players(id,token_hash) VALUES (?,?)');
   const readProfile = statement('SELECT nickname,skin_hash AS skinHash FROM player_profiles WHERE player=?');
   const writeNickname = statement(`INSERT INTO player_profiles(player,nickname) VALUES (?,?)
-    ON CONFLICT(player) DO UPDATE SET nickname=excluded.nickname`);
+    ON CONFLICT(player) DO UPDATE SET nickname=excluded.nickname WHERE player_profiles.nickname IS NULL`);
   const writeSkin = statement(`INSERT INTO player_profiles(player,skin_hash,skin_png) VALUES (?,?,?)
     ON CONFLICT(player) DO UPDATE SET skin_hash=excluded.skin_hash,skin_png=excluded.skin_png`);
   const readSkin = statement('SELECT skin_png AS png FROM player_profiles WHERE skin_hash=? LIMIT 1');

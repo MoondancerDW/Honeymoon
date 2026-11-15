@@ -99,14 +99,14 @@ const base = {
 };
 const geometry = {shapeFor:()=>[], collisionFor:()=>[]};
 
-async function eventFeed(url, cookie, signal) {
-  const response = await fetch(url + '/api/events?since=0&presence=1', {headers:{Cookie:cookie}, signal});
+async function eventFeed(url, cookie, signal, social = false) {
+  const response = await fetch(url + '/api/events?since=0&presence=1' + (social ? '&social=1' : ''), {headers:{Cookie:cookie}, signal});
   assert.equal(response.status, 200);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffered = '';
   return {
-    async next(name) {
+    async next(name, accepts = () => true) {
       while (true) {
         while (!buffered.includes('\n\n')) {
           const {value,done} = await reader.read();
@@ -117,7 +117,8 @@ async function eventFeed(url, cookie, signal) {
         const frame = buffered.slice(0, end);
         buffered = buffered.slice(end + 2);
         if (frame.includes('event: ' + name + '\n')) {
-          return {revision:/^id: (.+)$/m.exec(frame)?.[1], data:JSON.parse(/^data: (.+)$/m.exec(frame)[1])};
+          const data = JSON.parse(/^data: (.+)$/m.exec(frame)[1]);
+          if (accepts(data)) return {revision:/^id: (.+)$/m.exec(frame)?.[1], data};
         }
       }
     },
@@ -157,6 +158,9 @@ test('independent cookies share profiles and only confirmed movement, and retain
   const chosen = await post('profile',{nickname:' Лунный Ветер ',skin:skin().toString('base64')}, b.cookie);
   assert.equal(chosen.status,200);
   assert.equal(chosen.data.nickname,'Лунный Ветер');
+  assert.equal(chosen.data.nicknameLocked,true);
+  assert.equal((await post('profile',{nickname:'Другой ник'}, b.cookie)).data.error,'nickname_locked');
+  assert.equal((await post('session',{},a.cookie)).data.profile.nicknameLocked,false);
   assert.match(chosen.data.skin, /^\/skins\/[a-f0-9]{64}\.png$/);
   const image = await fetch(url + chosen.data.skin);
   assert.equal(image.status,200);
@@ -184,8 +188,78 @@ test('independent cookies share profiles and only confirmed movement, and retain
   await start();
   const reloaded = await post('session',{},b.cookie);
   assert.deepEqual(reloaded.data.profile,chosen.data);
+  const skinChanged = await post('profile',{skin:skin(64,64).toString('base64')},b.cookie);
+  assert.equal(skinChanged.data.nickname,chosen.data.nickname);
+  assert.notEqual(skinChanged.data.skin,chosen.data.skin);
+  assert.equal((await post('profile',{skin:null},b.cookie)).data.skin,null);
+  assert.equal((await post('profile',{skin:skin().toString('base64')},b.cookie)).data.skin,chosen.data.skin);
   assert.equal((await post('profile',{skin:null},b.cookie)).data.skin,null);
   assert.equal((await fetch(url + chosen.data.skin)).status,404);
+});
+
+test('teleport validates body and playable chunks, and local chat uses confirmed three-dimensional distance', {timeout:12000}, async t => {
+  const solid = {key:'legacy:1:0', object:null};
+  const app = createHoneymoonServer({state:':memory:', base:{
+    ...base,
+    getCell: (x,y,z) => x === 13 && y === 1 && z === 8 ? solid : air,
+    hasPlayableChunk:(x,z) => !(x === 1 && z === 1),
+  }, geometry:{
+    ...geometry,
+    collisionFor: ({key}) => key === solid.key ? [{x0:0, y0:0, z0:0, x1:1, y1:1, z1:1}] : [],
+  }});
+  t.after(() => app.close());
+  app.server.listen(0,'127.0.0.1');
+  await once(app.server,'listening');
+  const url = `http://127.0.0.1:${app.server.address().port}`;
+  const signal = AbortSignal.timeout(9000);
+  async function post(method, body, cookie, forwarded = '192.0.2.1') {
+    const response = await fetch(`${url}/api/${method}`, {method:'POST', headers:{
+      'Content-Type':'application/json', 'X-Forwarded-For':forwarded, ...(cookie && {Cookie:cookie}),
+    }, body:JSON.stringify(body), signal});
+    return {status:response.status, data:await response.json(), cookie:response.headers.get('Set-Cookie')?.split(';')[0]};
+  }
+  async function player(nickname) {
+    const {cookie} = await post('session',{});
+    assert.equal((await post('profile',{nickname},cookie)).data.nickname,nickname);
+    const feed = await eventFeed(url,cookie,signal,true);
+    assert.equal((await post('presence',{yaw:0,pitch:0},cookie)).status,200);
+    await feed.next('presence', event => event.selfOnline);
+    return {cookie,feed};
+  }
+  const sender = await player('Отправитель');
+  const near = await player('Восемнадцать');
+  const far = await player('Далеко');
+  assert.equal((await post('session',{},near.cookie,'203.0.113.2')).data.profile.nickname,'Восемнадцать');
+  for (const [target, error] of [
+    [{...point,x:'8'}, 'invalid_coordinates'],
+    [{...point,x:100}, 'outside_playable_area'],
+    [{...point,x:16,z:20}, 'outside_playable_area'],
+    [{...point,y:31}, 'outside_playable_area'],
+    [{...point,x:13.5}, 'teleport_blocked'],
+  ]) assert.equal((await post('teleport',target,sender.cookie)).data.error,error);
+  assert.deepEqual((await post('session',{},sender.cookie)).data.position,point);
+  const edgePosition = {...point,x:26.5};
+  const arrived = await post('teleport',edgePosition,near.cookie);
+  assert.equal(arrived.status,200);
+  assert.deepEqual(arrived.data.position,edgePosition);
+  assert.equal(arrived.data.seat,null);
+  assert.equal((await post('teleport',{...edgePosition,y:1.1},far.cookie)).status,200);
+  const local = 'Слышно рядом';
+  const global = 'Слышно везде';
+  assert.equal((await post('chat',{text:local,channel:'local'},sender.cookie)).data.channel,'local');
+  assert.equal((await post('chat',{text:global,channel:'global'},sender.cookie)).data.channel,'global');
+  const nextMessage = feed => feed.next('chat', entry => entry.kind === 'message');
+  assert.equal((await nextMessage(sender.feed)).data.text,local);
+  assert.equal((await nextMessage(near.feed)).data.text,local);
+  assert.equal((await nextMessage(far.feed)).data.text,global);
+  await far.feed.close();
+  const reconnect = await eventFeed(url,far.cookie,signal,true);
+  const {data} = await reconnect.next('chat-history');
+  assert.ok(data.entries.some(entry => entry.text === global));
+  assert.ok(!data.entries.some(entry => entry.text === local));
+  await reconnect.close();
+  await near.feed.close();
+  await sender.feed.close();
 });
 
 function resolveTestPath(directory) {

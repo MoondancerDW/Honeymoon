@@ -26,8 +26,14 @@ export class PlayerProfile {
   initialize(profile) {
     this.confirmed = profile;
     this.nickname.value = profile.nickname;
-    this.nickname.disabled = this.skin.disabled = false;
+    this.setSaving(false);
     this.showSelection();
+  }
+
+  setSaving(saving) {
+    this.nickname.disabled = this.skin.disabled = this.clear.disabled = saving;
+    this.nickname.readOnly = this.confirmed.nicknameLocked;
+    this.nickname.title = this.nickname.readOnly ? 'Ник сохранён для этой сессии' : 'Ник можно выбрать один раз';
   }
 
   showSelection() {
@@ -77,24 +83,24 @@ export class PlayerProfile {
   }
 
   changes() {
-    const nick = this.nickname.value.trim().normalize('NFC');
-    const length = Array.from(nick).length;
     if (this.reading) throw new Error('Подождите, скин ещё загружается');
-    if (length < 2 || length > 24 || !nicknameCharacters.test(nick) || !/[\p{L}\p{N}]/u.test(nick)) {
-      this.nickname.focus();
-      throw new Error('Ник от 2 до 24 символов. Подойдут буквы, цифры, пробел, тире и подчёркивание');
-    }
     const pending = {};
-    if (nick !== this.confirmed.nickname) pending.nickname = nick;
+    if (!this.confirmed.nicknameLocked) {
+      const nick = this.nickname.value.trim().normalize('NFC');
+      const length = [...nick].length;
+      if (length < 2 || length > 24 || !nicknameCharacters.test(nick) || !/[\p{L}\p{N}]/u.test(nick)) {
+        this.nickname.focus();
+        throw new Error('Ник от 2 до 24 символов. Подойдут буквы, цифры, пробел, тире и подчёркивание');
+      }
+      pending.nickname = nick;
+    }
     if (this.pendingSkin !== undefined) pending.skin = this.pendingSkin;
     return pending;
   }
 
   saved(profile, changes) {
     this.confirmed = profile;
-    if (changes.nickname !== undefined && this.nickname.value.trim().normalize('NFC') === changes.nickname) {
-      this.nickname.value = profile.nickname;
-    }
+    if (profile.nicknameLocked) this.nickname.value = profile.nickname;
     if (this.pendingSkin === changes.skin) {
       this.pendingSkin = undefined;
       this.skin.value = '';

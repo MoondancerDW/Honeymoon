@@ -2,13 +2,14 @@
 
 Карта Equestria и самостоятельная браузерная игра на основе района
 Honeymoon. Здесь можно ходить, летать, строить из блоков и микроблоков RedPower
-и редактировать свои блоки резцом. Ломать можно только свои детали и блоки.
+и редактировать постройки резцом. Ломать можно блоки и детали, установленные
+игроками. Исходная карта защищена.
 Правки сохраняются и видны другим гостевым сессиям.
 
 - [Подготовка и запуск](project/README.md)
-- [Готовая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-horizon24/Honeymoon-Horizon24-Windows-x64.zip)
-- [Архив браузерного клиента и Node.js-сервера](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-horizon24/honeymoon-browser-client.zip)
-- [Релиз «Горизонт 24 чанка»](https://github.com/MoondancerDW/Honeymoon/releases/tag/pc-test-horizon24)
+- [Готовая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-player-update/Honeymoon-Player-Update-Windows-x64.zip)
+- [Архив браузерного клиента и Node.js-сервера](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-player-update/honeymoon-browser-client.zip)
+- [Тестовый релиз с новой камерой](https://github.com/MoondancerDW/Honeymoon/releases/tag/pc-test-player-update)
 - [Манифест исходного клиента Minecraft](project/legacy/README.md)
 - [Проверки, визуальные замены и замеры](project/REPORT.md)
 - [Архивы карты Equestria](https://github.com/MoondancerDW/Honeymoon/releases/tag/equestria-source)

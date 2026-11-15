@@ -115,7 +115,7 @@ export function physics(base, geometry, getCell) {
     return true;
   }
 
-  function firstHit(origin, target) {
+  function firstHit(origin, target, solidOnly = false) {
     const delta = target.map((value, axis) => value - origin[axis]);
     const min = target.map((value, axis) => Math.floor(Math.min(origin[axis], value) - epsilon));
     const max = target.map((value, axis) => Math.floor(Math.max(origin[axis], value) + epsilon));
@@ -126,6 +126,7 @@ export function physics(base, geometry, getCell) {
         for (let x = min[0] - 1; x <= max[0] + 1; x++) {
           if (rayBox(origin, delta, [x - 0.125, y, z - 0.125], [x + 1.125, y + 1.5, z + 1.125]) > closest) continue;
           for (const box of boxesAt(selection, x, y, z)) {
+            if (solidOnly && box.solid === false) continue;
             const distance = rayBox(origin, delta, [x + box.x0, y + box.y0, z + box.z0], [x + box.x1, y + box.y1, z + box.z1]);
             if (distance >= closest) continue;
             closest = distance;
@@ -153,6 +154,10 @@ export function physics(base, geometry, getCell) {
       const cell = firstHit(origin, end);
       return cell?.[0] === x && cell[1] === y && cell[2] === z;
     });
+  }
+
+  function visiblePoint(origin, target) {
+    return firstHit(origin, target, true) === null;
   }
 
   function targetAtHit(position, x, y, z, hit, chiseling = false) {
@@ -201,6 +206,7 @@ export function physics(base, geometry, getCell) {
     movementAllowed,
     movementTrailAllowed,
     visible,
+    visiblePoint,
     visiblePart,
     targetAtHit,
     overlapsBox: (position, x, y, z, box) => overlapsPlayer(position, box, x, y, z),

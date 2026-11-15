@@ -1,7 +1,7 @@
 import { RequestError } from './errors.mjs';
 import { publicProfile } from './presence-profile.mjs';
 
-const poses = new Set(['idle', 'walk', 'air', 'fly', 'swim', 'sit']);
+const poses = new Set(['idle', 'walk', 'run', 'air', 'fly', 'swim', 'sit']);
 const reconnectGrace = 2000;
 const maxEntries = 128;
 
@@ -53,6 +53,7 @@ export function createPresence({ store, send, onVisibility, now = Date.now }) {
   function update(player, position, pose) {
     const entry = players.get(player);
     if (!entry?.position) return;
+    entry.confirmedPosition = position;
     const next = roundPosition(position);
     const previous = entry.position;
     let dirty = previous.x !== next.x || previous.y !== next.y || previous.z !== next.z;
@@ -71,6 +72,10 @@ export function createPresence({ store, send, onVisibility, now = Date.now }) {
     onlineProfile(player) {
       const entry = players.get(player);
       return entry?.visible && entry.profile;
+    },
+    onlinePosition(player) {
+      const entry = players.get(player);
+      return entry?.visible ? entry.confirmedPosition : undefined;
     },
     connect(stream, entry) {
       listeners.add(stream);
@@ -95,6 +100,7 @@ export function createPresence({ store, send, onVisibility, now = Date.now }) {
       if (!entry.connections && !entry.visible) entry.until = now() + reconnectGrace;
       if (!entry.position) {
         entry.position = roundPosition(position);
+        entry.confirmedPosition = position;
         entry.yaw = 0;
         entry.pitch = 0;
         entry.motion = 'idle';
@@ -107,6 +113,7 @@ export function createPresence({ store, send, onVisibility, now = Date.now }) {
       if (!entry) return;
       visibility(player, entry, false);
       entry.position = undefined;
+      entry.confirmedPosition = undefined;
       entry.seq = undefined;
     },
     update,

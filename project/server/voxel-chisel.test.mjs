@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import {test} from 'node:test';
 import * as geometry from '../world/geometry.mjs';
-import {decodeVoxels, voxelIndex, voxelKey, voxelMaterialAt} from '../world/voxel-chisel.mjs';
+import {decodeVoxels, voxelBrush, voxelIndex, voxelKey, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import {chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 
@@ -77,8 +77,7 @@ test('copies flowing liquids off their real surface and keeps editable static ei
   }
   const remove = command('remove_voxel','remove-water-eighth',cube,revision,
     {voxel:voxelIndex(2,0,2), hit:{x:8.3125,y:1.125,z:10.3125}});
-  assert.equal((await post('action',remove,b)).body.error,'voxel_not_owned');
-  const removed = await post('action',remove,a);
+  const removed = await post('action',remove,b);
   assert.equal(removed.status,200,JSON.stringify(removed));
   assert.deepEqual(removed.body.changes[0].voxels.materials,['legacy:11:0']);
 });
@@ -129,7 +128,6 @@ test('voxel edits preserve ownership, material, revision and exact hit through s
   const parentRevision = ordinary.body.worldRevision;
   const carve = command('remove_voxel','carve-parent-block',cube,parentRevision,{voxel:target,hit:top});
   assert.equal((await edit(a,{...carve,x:10,expectedRevision:0,requestId:'protect-original'})).body.error,'voxel_not_owned');
-  assert.equal((await edit(b,carve)).body.error,'voxel_not_owned');
   assert.equal((await edit(a,{...carve,voxel:target+1,requestId:'protect-hidden-subcell'})).body.error,'outside_reach');
   const carved = await edit(a,carve);
   assert.equal(carved.status,200,JSON.stringify(carved.body));
@@ -147,8 +145,7 @@ test('voxel edits preserve ownership, material, revision and exact hit through s
     material:planks,against:cube,voxel:target,hit:{x:top.x,y:1.98,z:10.375},
   });
   assert.equal((await edit(a,{...fill,requestId:'reject-wrong-placement',voxel:target-1})).body.error,'outside_reach');
-  assert.equal((await edit(b,fill)).body.error,'voxel_not_owned');
-  const filled = await edit(a,fill);
+  const filled = await edit(b,fill);
   assert.equal(filled.status,200,JSON.stringify(filled.body));
   assert.equal(voxelMaterialAt(filled.body.changes[0].voxels,target),planks);
   assert.deepEqual(filled.body.effects[0].voxelMaterial,planks);
@@ -159,7 +156,6 @@ test('voxel edits preserve ownership, material, revision and exact hit through s
   const snapshot = await request('world',undefined,a);
   assert.deepEqual(snapshot.body.overrides.find(cell => cell.x === cube.x && cell.z === cube.z),filled.body.changes[0]);
   const updated = {...carve,expectedRevision:filled.body.worldRevision,requestId:'owned-after-restart'};
-  assert.equal((await edit(b,updated)).body.error,'voxel_not_owned');
   assert.equal((await edit(a,updated)).status,200);
 
   const putSmall = command('place_voxel','place-small-piece',small,0,{
@@ -178,6 +174,19 @@ test('voxel edits preserve ownership, material, revision and exact hit through s
   }));
   assert.equal(lastRemoved.status,200,JSON.stringify(lastRemoved.body));
   assert.deepEqual(lastRemoved.body.changes,[{...small,cell:null,object:null,revision:lastRemoved.body.worldRevision}]);
+
+  const quarter = await edit(a,{...putSmall,size:2,requestId:'place-quarter-detail',expectedRevision:lastRemoved.body.worldRevision});
+  assert.equal(quarter.status,200,JSON.stringify(quarter.body));
+  const quarterState = quarter.body.changes[0].voxels;
+  const {indices} = voxelBrush(smallTarget,2);
+  assert.deepEqual(quarterState.quarters,[indices[0]]);
+  assert.deepEqual(indices.map(index => voxelMaterialAt(quarterState,index)),Array(8).fill(planks));
+  await restart();
+  const erased = await edit(b,command('remove_voxel','remove-quarter-detail',small,quarter.body.worldRevision,{
+    voxel:voxelIndex(2,1,2),hit:{...smallBottom,y:1.25},size:2,
+  }));
+  assert.equal(erased.status,200,JSON.stringify(erased.body));
+  assert.equal(erased.body.changes[0].cell,null);
 
   await restart(fixture('level-reimported',true));
   assert.equal((await request('world',undefined,a)).body.overrides.some(cell => cell.x === cube.x && cell.z === cube.z),false);

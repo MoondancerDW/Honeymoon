@@ -84,7 +84,7 @@ const TERRAIN = {
   133: 25, 1527: 164, 3217: 1, 3230: tiles.cloud + 17, 3903: 3792,
 };
 const plants = { 6: 15, 30: 11, 31: 39, 32: 55, 37: 13, 38: 12, 39: 29, 40: 28,
-  51: 31, 59: 88, 83: 73, 104: 111, 105: 111, 115: 226, 141: 200, 142: 200 };
+  59: 88, 83: 73, 104: 111, 105: 111, 115: 226, 141: 200, 142: 200 };
 const fruitTiles = {3989: 3267, 4031: 3286, 3983: 3289, 3977: 3292, 4084: 3295, 3965: 3735, 3986: 3738,
   4090:3840, 3950:3843, 3944:3846, 3959:3849, 3995:3852, 3980:3855, 3962:3858};
 const cropStorageTiles = {3823:3604, 3827:3605, 3829:3606, 3835:3607, 3838:3608, 3941:3609,
@@ -932,9 +932,13 @@ function vanillaShape(id, meta, neighbors) {
   if (plants[id] !== undefined) {
     const tile = id === 31 ? [55, 39, 56][meta] ?? 39 : id === 59 ? 88 + (meta & 7)
       : id === 6 ? [15, 63, 79, 30][meta & 3] : plants[id];
-    return cross(tile, id === 30 || id === 51 ? 1 : 0.84, id === 31 ? WARM_GRASS : undefined);
+    return cross(tile, id === 30 ? 1 : 0.84, id === 31 ? WARM_GRASS : undefined);
   }
   switch (id) {
+    case 51: {
+      const [sprite] = cross(31, 1, undefined, .04);
+      return [{...sprite, mode:'fire', emissive:true}];
+    }
     case 2: return [
       box(CUBE, topSides(3, 0, 2), { tintFaces: [null, null, null, WARM_GRASS, null, null] }),
     ];

@@ -1,5 +1,5 @@
 import {Display} from './display.mjs';
-import {Movement, EYE, overlapsPlacement, pick} from './movement.mjs';
+import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickMinecart} from './movement.mjs';
 import {World, chunkKey, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {PlayerProfile} from './player-profile.mjs';
@@ -13,8 +13,8 @@ import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
 import {ATLAS_GRID, TILE_SIZE, chiselMaterialShape, coverBoxes, creativeIcon} from '../world/geometry.mjs';
 import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
-import {isChiselMaterial, voxelBox, voxelKey, voxelMaterialAt, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
-import {chiselMaterialKey, chiselPlacementAtHit} from '../world/chisel-surface.mjs';
+import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
+import {chiselMaterialKey, chiselPlacementAtHit, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 import {positionBatch} from './position-packet.mjs';
 import {supportsFarTerrain} from './far-terrain.mjs';
 
@@ -40,7 +40,7 @@ const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
 let heldPart = null, partRotation = 0, placement = null, placementKey = '';
 let heldSofa = null, sofaTurns = 0;
-let chiseling = false, chiselMaterial = null;
+let chiseling = false, chiselMaterial = null, chiselSize = 1;
 let heldVersion = 0;
 let fromCreative = false;
 let heldCreativeItem = null;
@@ -48,6 +48,7 @@ let creativeAvailable = false;
 const creativeNames = new Map();
 let iconImage;
 let selectionInputs, selectionRevision = 0;
+let seatTarget = null;
 const positionInterval = 130;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 const positionTrail = [];
@@ -77,7 +78,7 @@ function resume() {
   try { Promise.resolve(canvas.requestPointerLock()).catch(() => setPlaying(false)); }
   catch { setPlaying(false); }
 }
-const social = createSocialHud({post, notice, pause, resume});
+const social = createSocialHud({post, notice, pause, resume, teleport});
 const creative = createCreativeMenu({load:loadCreative, choose:chooseCreative,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
 const menuOpen = () => social.isOpen() || creative.isOpen();
@@ -153,12 +154,12 @@ const messages = {
   reserved: 'Это часть контрольной механики', nothing_to_copy: 'Сначала скопируйте блок',
   empty_cell: 'В ячейке нет блока', cannot_interact: 'С этим объектом нельзя взаимодействовать',
   movement_blocked: 'Позиция скорректирована сервером', outside_reach: 'Цель вне досягаемости',
-  block_not_owned: 'Можно ломать только свои блоки', part_not_owned: 'Можно ломать только свои детали',
+  block_not_owned: 'Исходный блок карты защищён', part_not_owned: 'Исходные детали карты защищены',
   part_missing: 'Деталь уже убрана', invalid_part: 'Эта форма или материал недоступны',
   part_required: 'Наведите прицел на отдельную деталь',
   incompatible_part: 'Деталь здесь не помещается',
   voxel_required: 'Нажмите V, чтобы взять резец',
-  voxel_not_owned: 'Резцом можно менять только свои блоки',
+  voxel_not_owned: 'Резцом можно менять блоки, установленные игроками',
   invalid_voxel: 'Наведите прицел на нужную часть блока',
   invalid_material: 'Резец берёт материал с полного блока, жидкости или уже вырезанной части',
   voxel_material_limit: 'В кубе уже слишком много разных материалов',
@@ -167,6 +168,7 @@ const messages = {
   not_a_seat: 'На этот блок нельзя сесть', seat_taken: 'Место уже занято',
   seat_blocked: 'Над сиденьем недостаточно места',
   invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
+  nickname_locked: 'Ник уже сохранён для этой сессии',
   invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
   invalid_skin_size: 'Размер PNG должен быть 64×32, 64×64, 128×64 или 256×128',
   skin_too_large: 'Размер скина превышает 192 КБ'
@@ -239,7 +241,7 @@ function stream() {
 
 function playerPose() {
   const motion = seat ? 'sit' : !playing ? 'idle' : flying ? 'fly' : movement.medium === 'water' ? 'swim' :
-    !movement.grounded && !movement.medium ? 'air' : horizontalSpeed > .15 ? 'walk' : 'idle';
+    !movement.grounded && !movement.medium ? 'air' : horizontalSpeed > .15 ? (sprinting() ? 'run' : 'walk') : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
     seq:Math.round(performance.timeOrigin + performance.now())};
 }
@@ -263,11 +265,11 @@ function sendPresence(now) {
 }
 
 function updateCamera() {
-  view.camera.rotation.order = 'YXZ';
-  view.camera.rotation.set(heading.pitch, heading.yaw, 0, 'YXZ');
-  view.camera.position.set(position.x, position.y + (seat ? SEATED_EYE : EYE), position.z);
-  view.camera.translateZ(.1);
-  view.camera.updateMatrixWorld();
+  view.updateCamera(position, heading, seat ? SEATED_EYE : EYE);
+}
+
+function sprinting() {
+  return keys.has('ShiftLeft') || keys.has('ShiftRight');
 }
 
 function look(dx, dy, sensitivity = .0023) {
@@ -337,11 +339,32 @@ function setSeat(next, feet) {
   presenceDirty = true;
 }
 
+async function teleport(coordinates) {
+  if (resetting || acting || seatPending) return {ok:false, body:{error:'action_pending'}};
+  resetting = true;
+  try {
+    await sync;
+    const result = await post('teleport', coordinates, AbortSignal.timeout(5000));
+    if (result.ok) {
+      setSeat(null, result.body.position);
+      changes(result.body.changes, result.body.worldRevision);
+      effects(result.body);
+      presenceDirty = true;
+      selectionInputs = null;
+      placementKey = '';
+      nearbyStream?.update();
+    }
+    return result;
+  } finally {
+    resetting = false;
+  }
+}
+
 async function rightClick(buildInstead = false) {
   if (!playing || acting || resetting) return;
-  if (!seat && (buildInstead || !seatFor(selection?.cell, world.models))) return action('place');
-  const {x, y, z, hit} = selection ?? {};
-  const target = seat ? undefined : {x, y, z, hit};
+  if (!seat && (buildInstead || (!seatTarget && !seatFor(selection?.cell, world.models)))) return action('place');
+  const {x, y, z, hit, entity} = seatTarget ?? selection ?? {};
+  const target = seat ? undefined : {x, y, z, hit, ...(entity && {entity})};
   acting = true;
   seatPending = true;
   seatEpoch++;
@@ -459,7 +482,7 @@ function updatePlacement(target) {
   const adjacentLoaded = world.hasChunk(x+dx,z+dz);
   const revision = world.revisionAt(x,y,z);
   if (chiseling) {
-    const key = `voxel,${x},${y},${z},${target.voxel},${partSlot},${target.offset},${revision},${adjacentRevision},${adjacentLoaded},` +
+    const key = `voxel,${chiselSize},${x},${y},${z},${target.voxel},${partSlot},${target.offset},${revision},${adjacentRevision},${adjacentLoaded},` +
       `${Math.floor(hit.x * 8)},${Math.floor(hit.y * 8)},${Math.floor(hit.z * 8)}`;
     if (key !== placementKey) {
       placementKey = key;
@@ -485,9 +508,9 @@ function previewVoxel(target) {
   const {minX,maxX,minY,maxY,minZ,maxZ} = world.manifest.bounds;
   if (x < minX || x > maxX || y < minY || y > maxY || z < minZ || z > maxZ || !world.hasChunk(x,z)) return null;
   const old = world.cellAt(x,y,z);
-  const box = voxelBox(voxel);
+  const {box, indices} = voxelBrush(voxel, chiselSize);
   let unavailable = null;
-  if (old && (!old.voxels && !isMicroblockCell(old) || voxelMaterialAt(old.voxels, voxel) ||
+  if (old && (!old.voxels && !isMicroblockCell(old) || indices.some(index => voxelMaterialAt(old.voxels, index)) ||
       old.parts && partBoxesOverlapBox(coverBoxes(old.parts), box))) unavailable = 'occupied';
   else if (old?.voxels?.materials.length >= VOXEL_MATERIAL_LIMIT && !old.voxels.materials.includes(chiselMaterial)) {
     unavailable = 'voxel_material_limit';
@@ -527,6 +550,7 @@ function clearHeld() {
   sofaTurns = 0;
   chiselMaterial = null;
   placement = null;
+  if (chiseling) toggleChisel();
   setHeldPart(null);
   notice('Выбор сброшен');
 }
@@ -537,23 +561,43 @@ function toggleChisel() {
   placementKey = '';
   placement = null;
   chiselHint.hidden = !chiseling;
+  updateChiselHint();
   updatePlacementHints();
   touchChisel.setAttribute('aria-pressed', String(chiseling));
+}
+
+function updateChiselHint() {
+  chiselHint.textContent = `Резец 1/${8 / chiselSize} · B — сменить размер · ЛКМ — убрать · ПКМ — добавить · Q — взять материал`;
+}
+
+function toggleChiselSize() {
+  if (!chiseling || acting) return;
+  chiselSize = chiselSize === 1 ? 2 : 1;
+  placementKey = '';
+  updateChiselHint();
 }
 
 function updateSelection() {
   if (!playing) {
     selection = null;
+    seatTarget = null;
     selectionInputs = null;
     return;
   }
   const {x,y,z} = position;
   const {yaw,pitch} = heading;
-  const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,seat];
+  const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,chiselSize,seat];
   if (selectionInputs && stamp.every((value, index) => value === selectionInputs[index])) return;
   selectionInputs = stamp;
   const cp = Math.cos(pitch);
-  selection = pick(world, [x,y + (seat ? SEATED_EYE : EYE),z], [-Math.sin(yaw) * cp, Math.sin(pitch), -Math.cos(yaw) * cp], chiseling);
+  const origin = [x,y + (seat ? SEATED_EYE : EYE),z];
+  const direction = [-Math.sin(yaw) * cp,Math.sin(pitch),-Math.cos(yaw) * cp];
+  selection = pick(world, origin, direction, chiseling);
+  seatTarget = pickMinecart(world, origin, direction, selection);
+  if (chiseling && chiselSize === 2 && selection?.voxel !== undefined) {
+    selection.chiselSize = chiselSize;
+    selection.boxes = [voxelRemovalBrush(selection.cell.voxels, selection.voxel, chiselSize).box];
+  }
 }
 
 async function action(type, sneaking = false) {
@@ -562,7 +606,9 @@ async function action(type, sneaking = false) {
   const selectedVersion = heldVersion;
   const cell = getKey(target.cell);
   let pendingPlacement;
-  if (chiseling && type !== 'interact') {
+  if (chiseling && target.part && type === 'remove') {
+    type = 'remove_part';
+  } else if (chiseling && type !== 'interact') {
     if (target.voxel === undefined && !(type === 'place' && target.partSlot !== undefined)) {
       notice(messages.invalid_material);
       return;
@@ -571,12 +617,18 @@ async function action(type, sneaking = false) {
     type += '_voxel';
   } else {
     if (target.part && type === 'copy') type = 'copy_part';
-    if (target.part && type === 'remove') type = 'remove_part';
+    if (type === 'remove' && (target.part || target.cell?.voxels)) {
+      type = clipboard || heldPart ? (target.part ? 'remove_part' : 'remove_voxel') : 'remove_microblocks';
+    }
     if (heldPart && type === 'place') type = 'place_part';
   }
   const request = {requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join(''), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
   if (type === 'copy_part' || type === 'remove_part') request.partSlot = target.partSlot;
-  if (type === 'copy_voxel' || type === 'remove_voxel') request.voxel = target.voxel;
+  if (type === 'copy_voxel' || type === 'remove_voxel') {
+    request.voxel = target.voxel ?? chiselVoxelAtHit(target, target.hit, target.offset, target.cell.voxels, cell);
+    if (request.voxel == null) { notice(messages.invalid_voxel); return; }
+  }
+  if (type === 'remove_voxel' || type === 'place_voxel') request.size = chiseling ? chiselSize : 1;
   if (type === 'interact') {
     request.yaw = heading.yaw;
     if (sneaking) request.sneaking = true;
@@ -664,13 +716,13 @@ async function action(type, sneaking = false) {
 function tick(now) {
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
   lastFrame = now;
-  if (playing && !seat && !seatPending) {
+  if (playing && !menuOpen() && !seat && !seatPending) {
     const startX = position.x, startZ = position.z;
     const forward = Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) - stick.z;
     const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + stick.x;
-    const descending = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    const descending = flying ? keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC') : sprinting();
     const vertical = flying ? Number(keys.has('Space')) - Number(descending) : 0;
-    const speed = (flying ? 5.1 : keys.has('ShiftLeft') ? 5.1 : 3.8) / Math.max(1, Math.hypot(forward, strafe, vertical));
+    const speed = movementSpeed({flying, sprint:sprinting()}) / Math.max(1, Math.hypot(forward, strafe, vertical));
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
     if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
       const dx = (-sin * forward + cos * strafe) * speed;
@@ -683,14 +735,15 @@ function tick(now) {
     audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw,
       climbing:movement.medium === 'ladder', swimming:movement.medium === 'water'});
     jump = false;
-  }
+  } else horizontalSpeed = 0;
   if (!resetting && now >= nextPositionSync && !acting) syncPosition();
   if (!sync || presenceDirty) sendPresence(now);
   updateCamera();
   view.players.frame(now, dt);
+  view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat);
   updateSelection();
   updatePlacement(selection);
-  const selected = selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
+  const selected = seatTarget ? 'Вагонетка · ПКМ сесть' : selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
   const held = chiseling ? labelFor(chiselMaterial) : heldCreativeItem?.name ?? (heldPart ? partLabel(heldPart) : labelFor(clipboard));
   const status = [selected, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
@@ -720,10 +773,14 @@ function bindControls() {
     if (Object.keys(pending).length) {
       if (button.disabled) return;
       button.disabled = true;
-      profile.nickname.disabled = profile.skin.disabled = profile.clear.disabled = true;
+      profile.setSaving(true);
       post('profile', pending, AbortSignal.timeout(5000)).then(({ok, body}) => {
-        if (!ok) throw new Error(messages[body.error] || 'Не удалось сохранить профиль');
+        if (!ok) {
+          if (body.error === 'nickname_locked' && body.profile) profile.initialize(body.profile);
+          throw new Error(messages[body.error] || 'Не удалось сохранить профиль');
+        }
         profile.saved(body, pending);
+        view.setLocalSkin(profile.confirmed.skin);
         if (playing) {
           entered = true;
           presenceDirty = true;
@@ -735,7 +792,7 @@ function bindControls() {
         notice(error.message);
       }).finally(() => {
         button.disabled = false;
-        profile.nickname.disabled = profile.skin.disabled = profile.clear.disabled = false;
+        profile.setSaving(false);
       });
     }
     audio.enable();
@@ -754,6 +811,14 @@ function bindControls() {
     if (!touchMode && playing && !menuOpen()) look(event.movementX, event.movementY);
   });
   document.addEventListener('keydown', event => {
+    if (event.code === 'F5' && playing && !menuOpen()) {
+      event.preventDefault();
+      if (!event.repeat) {
+        const mode = view.cyclePerspective();
+        element('aim').style.display = mode === 'front' ? 'none' : '';
+      }
+      return;
+    }
     if (creative.keydown(event) || creative.isOpen()) return;
     if (social.keydown(event, playing)) return;
     if (!playing) return;
@@ -768,6 +833,7 @@ function bindControls() {
     if (event.code === 'Space') jump = true;
     if (event.code === 'KeyF' && !resetting && !seat) setFlight(!flying);
     if (event.code === 'KeyV' && !resetting && !acting) toggleChisel();
+    if (event.code === 'KeyB') toggleChiselSize();
     if (event.code === 'KeyX') clearHeld();
     if (event.code === 'KeyQ') action('copy');
     if (event.code === 'KeyR') cyclePlacement();
@@ -993,6 +1059,7 @@ async function start() {
   confirmedPosition = positionTuple(position);
   movement = new Movement(world);
   view = new Display(surface, world, session.body.dayTick);
+  view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
   if (session.body.seat) setSeat(session.body.seat, p);
   if (session.body.time) view.setWorldTime(session.body.time);
@@ -1014,9 +1081,12 @@ async function start() {
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
       revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
-      flying, chiseling, chiselMaterial, movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
+      flying, chiseling, chiselMaterial, chiselSize, perspective:view.perspectiveView(),
+      movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
+    perspective: () => view.perspectiveView(),
+    localAvatar: () => view.inspectLocalAvatar(),
     setOcclusion: enabled => view.setOcclusion(enabled),
     target: () => selection && {...selection},
     placement: () => placement && {...placement},

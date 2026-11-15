@@ -2,6 +2,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { networkInterfaces } from 'node:os';
 import { parseArgs } from 'node:util';
 import { createHoneymoonServer } from './server/index.mjs';
 import * as geometry from './world/geometry.mjs';
@@ -49,6 +50,13 @@ try {
     if (code) process.exitCode = code;
   } else {
     console.log(`Honeymoon ${url}`);
+    if (values.lan) {
+      for (const [name, addresses] of Object.entries(networkInterfaces())) {
+        for (const address of addresses.filter(item => !item.internal && item.family === 'IPv4')) {
+          console.log(`${name} http://${address.address}:${app.server.address().port}/`);
+        }
+      }
+    }
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, close);
     if (!values['no-browser']) {
       const explorer = spawn('explorer.exe', [url], {stdio:'ignore', windowsHide:true});

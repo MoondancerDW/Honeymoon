@@ -138,16 +138,15 @@ async function exerciseMicroblocks(page, origin) {
     const removable = await targetPart(destination,second) ? second : third;
     assert.ok(await targetPart(destination,removable), 'A placed detail has an exposed face');
     const {hit} = await page.evaluate(() => honeymoon.target());
-    const foreign = await peer.request.post(`${origin}/api/action`, {data:{type:'remove_part', requestId:'qa-foreign-part',
-      ...destination,partSlot:removable.slot,hit,expectedRevision:third.revision}});
-    assert.equal(foreign.status(),403);
-    assert.equal((await foreign.json()).error,'part_not_owned');
     await page.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision >= revision, third.revision);
     await page.screenshot({path:join(output, 'three-parts.png')});
-    const own = await action('remove_part', () => page.mouse.click(640,360,{button:'left'}));
-    assert.equal(own.status,200,JSON.stringify(own.body));
-    assert.deepEqual(own.body.changes[0].parts.map(p => p.slot).sort((a,b) => a-b),
+    const foreign = await peer.request.post(`${origin}/api/action`, {data:{type:'remove_part', requestId:'qa-foreign-part',
+      ...destination,partSlot:removable.slot,hit,expectedRevision:third.revision}});
+    const removed = await foreign.json();
+    assert.equal(foreign.status(),200,JSON.stringify(removed));
+    assert.deepEqual(removed.changes[0].parts.map(p => p.slot).sort((a,b) => a-b),
       [first,second,third].filter(part => part.slot !== removable.slot).map(part => part.slot).sort((a,b) => a-b));
+    await page.waitForFunction(revision => honeymoon.stats().lastEditRender?.revision >= revision,removed.worldRevision);
   } finally { await peer.close(); }
 
   await targeting(315,-23,source,0);
@@ -272,18 +271,24 @@ try {
       assert.ok((await peer.request.post(`${origin}/api/session`, {data:{}})).ok());
       const {x,y,z,revision} = placement;
       const other = await peer.request.post(`${origin}/api/action`, {data:{type:'remove', requestId:'other-owner', x,y,z, expectedRevision:revision}});
-      assert.equal(other.status(), 403);
-      assert.equal((await other.json()).error, 'block_not_owned');
+      const sharedRemoval = await other.json();
+      assert.equal(other.status(), 200, JSON.stringify(sharedRemoval));
+      assert.equal(sharedRemoval.changes[0].cell,null);
+      await page.waitForFunction(revision => honeymoon.stats().revision >= revision,sharedRemoval.worldRevision);
     } finally { await peer.close(); }
     await page.waitForFunction(({x,y,z}) => {
       const hit = honeymoon.target();
-      return hit?.x === x && hit?.y === y && hit?.z === z;
+      return hit?.x === x && hit?.y === y - 1 && hit?.z === z;
     }, placement);
+    const [replaced] = await action(page, page.mouse.down({button:'right'}));
+    await page.mouse.up({button:'right'});
+    assert.equal(replaced.status(),200);
+    await page.waitForFunction(({x,y,z}) => honeymoon.target()?.x === x && honeymoon.target()?.y === y && honeymoon.target()?.z === z, placement);
     const [removed] = await action(page, page.mouse.down({button:'left'}));
     await page.mouse.up({button:'left'});
     assert.equal(removed.status(), 200);
     assert.equal((await removed.json()).changes[0].cell, null);
-    result.breaking = {original:403, otherPlayer:403, owner:200};
+    result.breaking = {original:403, otherPlayer:200, creator:200};
     result.microblocks = await exerciseMicroblocks(page, origin);
     await page.evaluate(() => honeymoon.look(Math.PI / 2, -.12));
 
@@ -303,9 +308,9 @@ try {
     assert.ok(hover.position.x < lift.position.x - 1.4);
     await page.waitForTimeout(220);
     assert.deepEqual((await snapshot(page)).position, hover.position);
-    await page.keyboard.down('ShiftLeft');
+    await page.keyboard.down('ControlLeft');
     try { await page.waitForFunction(y => honeymoon.stats().position.y < y - 1, hover.position.y); }
-    finally { await page.keyboard.up('ShiftLeft'); }
+    finally { await page.keyboard.up('ControlLeft'); }
     await page.keyboard.press('KeyF');
     await page.waitForFunction(() => !honeymoon.stats().flying);
     await page.waitForTimeout(240);

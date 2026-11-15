@@ -23,7 +23,7 @@ def build(output, node, node_license, generated):
     temporary = output.with_suffix(".zip.part")
     try:
         with ZipFile(temporary, "w", compression=ZIP_DEFLATED, compresslevel=6) as archive:
-            for name in ("Start-Honeymoon.cmd", "Start-Internet.cmd", "Launch-Honeymoon.mjs", "ЧИТАЙ-МЕНЯ.txt"):
+            for name in ("Start-Honeymoon.cmd", "Start-Server.cmd", "Start-Internet.cmd", "Launch-Honeymoon.mjs", "ЧИТАЙ-МЕНЯ.txt"):
                 archive.write(PROJECT / "portable" / name, name)
             for name in ("package.json", "README.md"):
                 archive.write(PROJECT / name, name)

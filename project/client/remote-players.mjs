@@ -1,5 +1,5 @@
 import * as THREE from '/vendor/three/three.module.js';
-import {PLAYER} from '../world/player-body.mjs';
+import {FLIGHT_SPRINT_SPEED, PLAYER} from '../world/player-body.mjs';
 import {createPonyAvatar} from './pony-avatar.mjs';
 
 const maxVisibleDistance = 96;
@@ -48,7 +48,7 @@ function setPose(player, pose, now) {
   const {x, y, z} = pose.position;
   const step = Math.hypot(x - player.target.x, z - player.target.z);
   const elapsed = Math.max(.08, (now - player.updated) / 1000);
-  if (step > .001) player.speed = Math.min(6, step / elapsed);
+  if (step > .001) player.speed = Math.min(FLIGHT_SPRINT_SPEED, step / elapsed);
   if (pose.motion === 'idle' || pose.motion === 'sit') player.speed = 0;
   if (player.object.position.distanceToSquared(player.target.set(x, y, z)) > 64) player.object.position.copy(player.target);
   player.yaw = pose.yaw;

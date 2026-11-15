@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relatedBlockStates } from '../world/block-interactions.mjs';
+import { isRideableMinecart } from '../world/minecarts.mjs';
 import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
 
 const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
@@ -91,6 +92,9 @@ export function displayEntity(entity) {
       data.ItemRotation = ItemRotation;
       if (Number.isInteger(Item?.id)) data.Item = {id: Item.id, Damage: Number.isInteger(Item.Damage) ? Item.Damage : 0};
     }
+  } else if (isRideableMinecart(entity)) {
+    data.Type = 0;
+    data.Rotation = [Number.isFinite(entity.data.Rotation?.[0]) ? entity.data.Rotation[0] : 0];
   }
   return { key: entity.key, position: entity.position, type, data };
 }
@@ -111,6 +115,7 @@ export function loadBase(directory) {
   }
 
   const coordinates = new Set([...manifest.chunks, ...(manifest.visualChunks ?? [])].map(([x, z]) => `${x}.${z}`));
+  const playableCoordinates = new Set(manifest.chunks.map(([x, z]) => `${x}.${z}`));
   const chunks = new Map();
   const bounds = manifest.bounds;
   const hash = manifest.contentHash ?? createHash('sha256').update(rawManifest).digest('hex');
@@ -189,5 +194,12 @@ export function loadBase(directory) {
     };
   }
 
-  return { manifest, publicManifest, hash, catalog, inBounds, getCell, publicChunk };
+  function getEntity(x, z, key) {
+    const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
+    return getChunk(cx, cz)?.source.entities.find(entity => entity.key === key);
+  }
+
+  return { manifest, publicManifest, hash, catalog, inBounds, getCell, getEntity, publicChunk,
+    hasPlayableChunk: (x, z) => playableCoordinates.has(`${x}.${z}`),
+  };
 }

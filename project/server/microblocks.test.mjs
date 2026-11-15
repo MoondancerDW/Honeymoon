@@ -126,8 +126,7 @@ test('individual RedPower edits preserve originals and ownership through retries
   const removeBar = command('remove_part', 'remove-others-bar', cell, revision, {
     partSlot: bar.slot, hit: point(8.5, 1.61, 10.375),
   });
-  assert.deepEqual(await edit(userA, removeBar), {status: 403, body: {error: 'part_not_owned'}});
-  const removed = await edit(userB, removeBar);
+  const removed = await edit(userA, removeBar);
   assert.equal(removed.status, 200, JSON.stringify(removed.body));
   assert.deepEqual(removed.body.changes[0].parts, [floor, roof]);
   assert.deepEqual(await edit(userA, originalPart('remove_part', 'remove-source-again', removed.body.worldRevision)), {
@@ -224,12 +223,15 @@ test('puts exact copies and chisel materials in one imported cell and preserves 
   const saved = world.overrides.find(change => change.x === at.x && change.y === at.y && change.z === at.z);
   assert.deepEqual(saved,mixed.body.changes[0]);
   const removeGlass = command('remove_voxel','guided-remove-glass',at,saved.revision,{voxel, hit:{...hit,y:1.5}});
-  assert.equal((await edit(userA,removeGlass)).body.error,'voxel_not_owned');
-  const removed = await edit(userB,removeGlass);
+  const removed = await edit(userA,removeGlass);
   assert.equal(removed.status,200,JSON.stringify(removed.body));
   assert.equal(removed.body.changes[0].voxels,undefined);
   assert.equal(removed.body.changes[0].parts.length,3);
   const removeStack = command('remove_part','guided-remove-panel-30',at,removed.body.worldRevision,{partSlot:30,hit});
-  assert.equal((await edit(userB,removeStack)).body.error,'part_not_owned');
-  assert.equal((await edit(userA,removeStack)).status,200);
+  assert.equal((await edit(userB,removeStack)).status,200);
+  const cleaned = await edit(userB,command('remove_microblocks','remove-player-details',at,removed.body.worldRevision + 1,
+    {hit:{...hit,y:1.25}}));
+  assert.equal(cleaned.status,200,JSON.stringify(cleaned.body));
+  assert.deepEqual(cleaned.body.changes[0].parts,[floor]);
+  assert.equal((await edit(userB,originalPart('remove_part','source-part-protected',cleaned.body.worldRevision))).status,403);
 });

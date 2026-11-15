@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {decodeFarTile, farVisibilityMask} from './far-tile-format.mjs';
+import {decodeFarTile, farVisibilityMask, LOD_VERSION, WATER_HEIGHT_SCALE} from './far-tile-format.mjs';
 
 function sample() {
   const buffer = new ArrayBuffer(104);
@@ -50,4 +50,18 @@ test('far terrain decoder checks shape, version and exact byte length', () => {
   const wrongFace = sample();
   new DataView(wrongFace).setUint8(80,6);
   assert.throws(() => decodeFarTile(wrongFace),/face/);
+});
+
+test('fractional source water heights use the same file size and correct mesh bounds', () => {
+  const buffer = sample();
+  const data = new DataView(buffer);
+  data.setUint16(4,LOD_VERSION,true);
+  data.setUint16(90,64*WATER_HEIGHT_SCALE-1,true);
+  const [land,water] = decodeFarTile(buffer).layers;
+  assert.equal(land.heightScale,1);
+  assert.equal(water.heightScale,9);
+  assert.equal(water.minY,64-1/9);
+  assert.equal(water.maxY,water.minY);
+  data.setUint8(96,128);
+  assert.throws(() => decodeFarTile(buffer),/face/);
 });

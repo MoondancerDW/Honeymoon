@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {buildRegion,makeMaterials,sampleChunk} from './lod-mesh.mjs';
+import {LOD_VERSION,WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
 import {tiles} from '../world/geometry.mjs';
 
 const air = 'air';
@@ -23,8 +24,9 @@ function faces(content, slot = 0) {
   return Array.from({length:count},(_,i) => {
     const at=first+i*16;
     const flags=content[at+8];
-    return {x:content[at],z:content[at+1],y:content.readUInt16LE(at+2),w:content.readUInt16LE(at+4),
-      h:content.readUInt16LE(at+6),face:flags&7,water:Boolean(flags&128),tile:content.readUInt16LE(at+9)};
+    const water = Boolean(flags&128);
+    return {x:content[at],z:content[at+1],y:content.readUInt16LE(at+2)/(water ? WATER_HEIGHT_SCALE : 1),
+      w:content.readUInt16LE(at+4),h:content.readUInt16LE(at+6),face:flags&7,water,tile:content.readUInt16LE(at+9)};
   });
 }
 
@@ -37,7 +39,7 @@ function pack(chunks,minX=0,maxX=1,minZ=0,maxZ=0) {
 test('prebuilds solid tops as one face and excludes cutoff walls and internal boundaries', () => {
   const {content,quads} = pack([supplied(0,0,(_x,y) => Number(y < 8)), supplied(1,0,(_x,y) => Number(y < 8))]);
   assert.equal(content.toString('ascii',0,4),'HLOD');
-  assert.equal(content.readUInt16LE(4),1);
+  assert.equal(content.readUInt16LE(4),LOD_VERSION);
   assert.equal(content.length,72+quads*16);
   assert.equal(quads,2);
   const roof = {x:0,z:0,y:8,w:16,h:16,face:3,water:false,tile:1};
@@ -56,9 +58,33 @@ test('admits a one-block masonry tower and omits geometry inside sealed air', ()
   assert.ok(geometry.every(face => face.y>=8));
 });
 
+test('keeps a one-block grass course above stone in the sampled terrain', () => {
+  const {content} = pack([supplied(0,0,(_x,y) => y < 7 ? 1 : y === 7 ? 2 : 0,
+    [air,rock,'legacy:2:0'])],0,0);
+  assert.deepEqual(faces(content),[{x:0,z:0,y:8,w:16,h:16,face:3,water:false,tile:0}]);
+});
+
 test('marks water faces separately while preserving visible shallow underwater material', () => {
   const {content} = pack([supplied(0,0,(_x,y) => y<4 ? 1 : y<8 ? 3 : 0)],0,0);
   const geometry=faces(content);
-  assert.ok(geometry.some(face => face.water && face.tile===tiles.water && face.face===3 && face.y===8));
+  assert.ok(geometry.some(face => face.water && face.tile===tiles.water && face.face===3 && face.y===7+8/9));
   assert.ok(geometry.some(face => !face.water && face.tile===1 && face.face===3 && face.y===4));
+});
+
+test('keeps a one-block stream in a mixed shore cell at the original flowing levels', () => {
+  const river = (x,y,z) => y < 4 ? 1 : z === 7 && y === 4 ? (x < 8 ? 3 : 4) : 0;
+  const {content} = pack([supplied(0,0,river,[air,rock,masonry,water,'legacy:8:3'])],0,0);
+  assert.deepEqual(faces(content).filter(face => face.water),[
+    {x:0,z:7,y:4+8/9,w:1,h:8,face:3,water:true,tile:tiles.water},
+    {x:8,z:7,y:4+5/9,w:1,h:8,face:3,water:true,tile:tiles.water},
+  ]);
+});
+
+test('one-block wet banks and shallow beds do not cover the lowered water surface', () => {
+  const river = (_x,y,z) => y < 5 ? 1 : y === 5 ? (z === 7 ? 3 : 1) : 0;
+  const {content} = pack([supplied(0,0,river)],0,0);
+  const tops = faces(content).filter(face => face.face === 3);
+  const inStream = tops.filter(face => face.z <= 7 && 7 < face.z+face.w);
+  assert.deepEqual(inStream.map(face => face.y).sort(),[5,5+8/9]);
+  assert.ok(tops.some(face => face.y === 6 && face.z === 6 && face.w === 1));
 });

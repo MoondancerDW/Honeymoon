@@ -23,6 +23,9 @@ const errors = [];
 const corrections = [];
 const lodBenchmark = process.env.HONEYMOON_BENCH_LOD === '1';
 const occlusion = process.env.HONEYMOON_BENCH_OCCLUSION === '1';
+const perspective = process.env.HONEYMOON_BENCH_PERSPECTIVE ?? 'first';
+assert.ok(['first','back'].includes(perspective), 'Set benchmark perspective to first or back');
+const sprint = process.env.HONEYMOON_BENCH_SPRINT === '1';
 const settled = lodBenchmark || process.env.HONEYMOON_BENCH_SETTLED === '1';
 const samples = [
   {id:'walk-spawn', feet:base.manifest.spawn, travel:8, walk:true},
@@ -86,6 +89,8 @@ async function measure(browser, cdp, sample, width, height, distance) {
     await page.goto(`http://127.0.0.1:${server.server.address().port}/${occlusion ? '?occlusion=1' : ''}`);
     await page.locator('#play').click({timeout:90_000});
     await page.waitForFunction(() => document.pointerLockElement && globalThis.honeymoon?.stats().playable);
+    if (perspective === 'back') await page.keyboard.press('F5');
+    await page.waitForFunction(mode => honeymoon.perspective().mode === mode, perspective);
     if (!sample.walk) {
       await page.keyboard.press('KeyF');
       await page.waitForFunction(() => honeymoon.stats().flying);
@@ -128,9 +133,13 @@ async function measure(browser, cdp, sample, width, height, distance) {
     const start = performance.now();
     const traveling = (async () => {
       if (sample.travel) {
+        if (sprint) await page.keyboard.down('ShiftLeft');
         await page.keyboard.down('KeyW');
         try { await page.waitForTimeout(sample.travel * 1000); }
-        finally { await page.keyboard.up('KeyW'); }
+        finally {
+          await page.keyboard.up('KeyW');
+          if (sprint) await page.keyboard.up('ShiftLeft');
+        }
       }
       await page.evaluate(() => { window.cityBenchmarkPhase = 'turns'; });
       for (let turn = 0; turn < 12; turn++) {
@@ -163,7 +172,7 @@ async function measure(browser, cdp, sample, width, height, distance) {
     assert.equal(final.movementSync.errors - initial.movementSync.errors, 0, sample.id);
     await page.evaluate(({yaw,pitch}) => honeymoon.look(yaw,pitch),{yaw:sample.yaw ?? 0,pitch:sample.pitch ?? 0});
     await page.screenshot({path:join(output,`${sample.id}-${height}-${distance}.png`)});
-    return {place:sample.id, resolution:`${width}×${height}`, distance, render, settled, occlusion,
+    return {place:sample.id, resolution:`${width}×${height}`, distance, render, settled, occlusion, perspective, sprint,
       startupMs:round(initial.playable), seconds:round(duration), from:initial.position, to:final.position,
       chunksFetched:final.chunksLoaded - initial.chunksLoaded, residentChunks:final.residentChunks,
       triangles:final.triangles, drawCalls:final.calls, meshBufferMiB:mib(final.preciseBytes),

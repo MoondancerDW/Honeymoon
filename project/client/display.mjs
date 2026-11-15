@@ -3,14 +3,20 @@ import {chunkKey, sectionKey, json} from './world-data.mjs';
 import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
 import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 import {itemFrameModel} from '../world/item-frames.mjs';
+import {isRideableMinecart, minecartQuads, minecartRotation} from '../world/minecarts.mjs';
 import {RemotePlayers} from './remote-players.mjs';
+import {createPonyAvatar} from './pony-avatar.mjs';
+import {cameraClearance} from './movement.mjs';
 import {clockTick} from '../world/world-time.mjs';
 import {SectionVisibility} from './section-visibility.mjs';
 import {FarTerrain, supportsFarTerrain} from './far-terrain.mjs';
+import {FIRE_FRAMES, FIRE_SIZE, FIRE_STEP_MS, fireSpriteSheet} from '../world/fire-animation.mjs';
+import {addTerrainFilter, terrainFilter} from './terrain-filter.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
   1,3,5, 3,7,5, 0,1,4, 1,5,4, 2,6,3, 3,6,7];
+const perspectives = ['first', 'back', 'front'];
 
 function partGeometry(pointsPerBox) {
   const geometry = new THREE.BufferGeometry();
@@ -103,6 +109,9 @@ export class Display {
     this.preciseLevels = new Map();
     this.completedChunks = new Set();
     this.camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
+    this.perspective = 0;
+    this.cameraDistance = .1;
+    this.localSkin = null;
     this.players = new RemotePlayers(this.scene, this.camera);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
@@ -197,9 +206,21 @@ export class Display {
       return Object.entries(materialsFor(texture, 26 / 255)).map(([mode, material]) => [`${family}:${mode}`, material]);
     }));
     this.materials = {...materialsFor(map), ...Object.fromEntries(additional.flat())};
-    if (supportsFarTerrain(this.world.manifest)) this.farTerrain = new FarTerrain(this,map);
+    const textures = terrainFilter(map,this.atlasRows);
+    this.useLightmap(this.materials.opaque,textures);
+    this.useLightmap(this.materials.blend,textures);
+    this.materials.water = this.materials.blend.clone();
+    this.useLightmap(this.materials.water,textures,true);
+    if (supportsFarTerrain(this.world.manifest)) this.farTerrain = new FarTerrain(this,textures);
+    this.fireTexture = new THREE.DataTexture(fireSpriteSheet(),FIRE_SIZE*2,FIRE_SIZE*FIRE_FRAMES);
+    this.fireTexture.colorSpace = THREE.SRGBColorSpace;
+    this.fireTexture.repeat.y = 1 / FIRE_FRAMES;
+    this.fireTexture.needsUpdate = true;
+    this.materials.fire = new THREE.MeshBasicMaterial({map:this.fireTexture, alphaTest:.1, side:THREE.DoubleSide});
     this.materials.pane = new THREE.MeshBasicMaterial({map, vertexColors: true, alphaTest: .47});
     this.useLightmap(this.materials.pane);
+    this.minecartMaterial = new THREE.MeshBasicMaterial({color:'#aeb3bc',vertexColors:true});
+    this.useLightmap(this.minecartMaterial);
     if (this.world.models?.redpower) {
       const glow = new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:.3,
         blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide});
@@ -302,8 +323,10 @@ export class Display {
     if (this.workerFailure) throw this.workerFailure;
   }
 
-  useLightmap(material) {
+  useLightmap(material, textures = null, water = false) {
+    if (textures) material.customProgramCacheKey = () => water ? 'filteredWater' : 'filteredTerrain';
     material.onBeforeCompile = shader => {
+      if (textures) addTerrainFilter(shader,textures,this.atlasRows,water);
       shader.uniforms.honeymoonLightmap = {value:this.lightmap};
       shader.vertexShader = `uniform sampler2D honeymoonLightmap;
         attribute float legacyLightLevel;
@@ -342,6 +365,67 @@ export class Display {
 
   dayTick(now) {
     return this.cycleTime ?? clockTick(this.worldTime, now - this.worldTime.received);
+  }
+
+  cyclePerspective() {
+    this.perspective = (this.perspective + 1) % perspectives.length;
+    return perspectives[this.perspective];
+  }
+
+  perspectiveView() {
+    return {mode:perspectives[this.perspective], distance:this.cameraDistance,
+      position:this.camera.position.toArray()};
+  }
+
+  updateCamera(position, {yaw, pitch}, eyeHeight) {
+    const eyeY = position.y + eyeHeight;
+    const front = this.perspective === 2;
+    this.camera.rotation.set(front ? -pitch : pitch, yaw + (front ? Math.PI : 0), 0, 'YXZ');
+    this.camera.position.set(position.x, eyeY, position.z);
+    if (this.perspective === 0) {
+      this.cameraDistance = .1;
+      this.camera.translateZ(this.cameraDistance);
+    } else {
+      const sign = front ? -1 : 1;
+      const direction = [sign * Math.sin(yaw) * Math.cos(pitch), -sign * Math.sin(pitch),
+        sign * Math.cos(yaw) * Math.cos(pitch)];
+      this.cameraDistance = cameraClearance(this.world, [position.x, eyeY, position.z], direction);
+      this.camera.position.set(position.x + direction[0] * this.cameraDistance,
+        eyeY + direction[1] * this.cameraDistance, position.z + direction[2] * this.cameraDistance);
+    }
+    this.camera.updateMatrixWorld();
+  }
+
+  setLocalSkin(skin) {
+    this.localSkin = skin;
+    this.localAvatar?.setSkin(skin);
+  }
+
+  updateLocalAvatar(now, dt, position, pose, speed, seat) {
+    if (this.perspective === 0) {
+      if (this.localAvatar) this.localAvatar.object.visible = false;
+      return;
+    }
+    if (!this.localAvatar) {
+      this.localAvatar = createPonyAvatar();
+      this.scene.add(this.localAvatar.object);
+      this.localAvatar.setSkin(this.localSkin);
+    }
+    const {object} = this.localAvatar;
+    object.visible = this.cameraDistance > .36;
+    object.position.set(position.x, position.y, position.z);
+    object.rotation.y = seat?.yaw ?? pose.yaw;
+    const headYaw = pose.yaw - object.rotation.y;
+    this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion,
+      yawOffset:Math.atan2(Math.sin(headYaw), Math.cos(headYaw))});
+    object.updateMatrixWorld(true);
+  }
+
+  inspectLocalAvatar() {
+    if (!this.localAvatar) return null;
+    const {object} = this.localAvatar;
+    return {...this.localAvatar.inspect(), skin:this.localSkin, visible:object.visible,
+      yaw:object.rotation.y, position:object.position.toArray()};
   }
 
   resize() {
@@ -618,6 +702,7 @@ export class Display {
 
   makeEntity(entity) {
     if (entity.type === 'ItemFrame') return this.makeItemFrame(entity);
+    if (isRideableMinecart(entity)) return this.makeMinecart(entity);
     if (!this.paint || entity.type !== 'Painting') return;
     const art = paintings[entity.data.Motive];
     const dir = entity.data.Dir ?? entity.data.Direction;
@@ -638,6 +723,32 @@ export class Display {
     this.trackEntityLight(mesh, position);
     mesh.position.set(...entity.position);
     mesh.rotation.y = [0, Math.PI / 2, Math.PI, -Math.PI / 2][dir & 3];
+    return mesh;
+  }
+
+  makeMinecart(entity) {
+    if (!this.minecartTexture) {
+      const url = '/generated/textures/minecart.png';
+      this.minecartTexture = fetch(url).then(response => response.ok ? response.blob() : null).then(async blob => {
+        if (!blob) return;
+        const bitmap = await createImageBitmap(blob,{imageOrientation:'flipY'});
+        const map = new THREE.Texture(bitmap);
+        map.colorSpace = THREE.SRGBColorSpace;
+        map.magFilter = map.minFilter = THREE.NearestFilter;
+        map.generateMipmaps = false;
+        map.wrapS = THREE.RepeatWrapping;
+        map.needsUpdate = true;
+        this.minecartMaterial.map = map;
+        this.minecartMaterial.color.set('white');
+        this.minecartMaterial.needsUpdate = true;
+      }).catch(() => {});
+    }
+    const position = entity.position.map(Math.floor);
+    const light = this.world.lightAt(...position);
+    const mesh = new THREE.Mesh(quadGeometry(minecartQuads,light,255),this.minecartMaterial);
+    mesh.position.set(...entity.position);
+    mesh.rotation.y = minecartRotation(entity);
+    this.trackEntityLight(mesh,position);
     return mesh;
   }
 
@@ -944,7 +1055,11 @@ export class Display {
       this.dispatch(deadline, playing ? 2 : this.workers.length);
       this.lastBackgroundUpload = now;
     }
-    const detail = selection?.voxel !== undefined ? `voxel:${selection.voxel}` : selection?.partSlot;
+    if (this.perspective === 2) {
+      selection = null;
+      placement = null;
+    }
+    const detail = selection?.voxel !== undefined ? `voxel:${selection.voxel}:${selection.chiselSize ?? 1}` : selection?.partSlot;
     this.partOutline.visible = detail !== undefined;
     this.outline.visible = Boolean(selection) && detail === undefined;
     if (this.partOutline.visible) {
@@ -969,6 +1084,7 @@ export class Display {
     }
     // Inactive tabs keep receiving player and world updates while limiting GPU work.
     if (foreground || now >= (this.nextIdleRender ?? 0)) {
+      if (this.fireTexture) this.fireTexture.offset.y = (Math.floor(now / FIRE_STEP_MS) % FIRE_FRAMES) / FIRE_FRAMES;
       this.sky.position.copy(this.camera.position);
       this.sky.updateMatrixWorld();
       this.updateOcclusion(now);

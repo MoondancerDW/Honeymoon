@@ -37,6 +37,7 @@ async function joinPlayer(nickname) {
   await page.locator('#nickname').fill(nickname);
   await page.locator('#play').click();
   await page.waitForFunction(nick => honeymoon.online().includes(nick), nickname, {timeout:20000});
+  assert.equal(await page.locator('#nickname').evaluate(input => input.readOnly), true);
   return page;
 }
 
@@ -129,9 +130,44 @@ try {
   await last.locator('#chat-input').press('Enter');
   await first.waitForFunction(() => document.querySelector('#chat-log').textContent.includes('Пони-8  Привет, все восемь! <b>текст</b>'));
   assert.equal(await first.locator('#chat-log b').count(), 0);
+  await last.locator('#chat-channel').click();
+  assert.equal(await last.locator('#chat-channel').getAttribute('aria-pressed'), 'true');
+  assert.equal(await last.locator('#local-chat-log').evaluate(log => log.hidden), false);
+  assert.equal(await last.locator('#chat-log').evaluate(log => log.hidden), true);
+  await last.locator('#chat-input').fill('Эту фразу слышно рядом');
+  await last.locator('#chat-input').press('Enter');
+  await last.locator('#local-chat-log li').filter({hasText:'Эту фразу слышно рядом'}).waitFor({state:'visible'});
+  await first.waitForFunction(() => document.querySelector('#local-chat-log').textContent.includes('Пони-8  Эту фразу слышно рядом'));
+  assert.doesNotMatch(await first.locator('#chat-log').textContent(), /Эту фразу слышно рядом/);
+  await last.locator('#chat-channel').click();
+  assert.equal(await last.locator('#chat-channel').getAttribute('aria-pressed'), 'false');
   await last.locator('#chat-close').click();
   await last.waitForFunction(() => document.pointerLockElement);
-  report.chat = {remoteMessage:true, escapedHTML:true, resumed:true};
+  report.chat = {remoteMessage:true, escapedHTML:true, localMessage:true, channelToggle:true, resumed:true};
+
+  stage = 'coordinate teleport';
+  const home = await last.evaluate(() => honeymoon.stats().position);
+  await last.keyboard.press('KeyF');
+  await last.waitForFunction(() => honeymoon.stats().flying);
+  await last.keyboard.press('KeyG');
+  await last.locator('#teleport-form').waitFor({state:'visible'});
+  const setDestination = async target => {
+    for (const axis of ['x','y','z']) await last.locator(`#teleport-${axis}`).fill(String(target[axis]));
+    await last.locator('#teleport-send').click();
+    await last.waitForFunction(position => {
+      const actual = honeymoon.stats().position;
+      return Math.hypot(actual.x - position.x, actual.y - position.y, actual.z - position.z) < .04;
+    }, target);
+  };
+  const high = {...home,y:200};
+  await setDestination(high);
+  await first.waitForFunction(y => honeymoon.players().some(player => player.nickname === 'Пони-8' &&
+    Math.abs(player.position.y - y) < .1), high.y);
+  await setDestination(home);
+  await last.locator('#teleport-close').click();
+  await last.waitForFunction(() => document.pointerLockElement);
+  await last.keyboard.press('KeyF');
+  report.teleport = {coordinates:true, peerPosition:true, returned:true};
 
   stage = 'clock controls';
   await setTime(last, '21:45', true);

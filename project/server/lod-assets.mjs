@@ -2,6 +2,7 @@ import {createReadStream, readFileSync} from 'node:fs';
 import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {pipeline} from 'node:stream/promises';
+import {supportedLodVersion} from '../client/far-tile-format.mjs';
 
 const coordinate = point => Array.isArray(point) && point.length === 2 && point.every(Number.isSafeInteger);
 
@@ -16,7 +17,7 @@ export function loadLodAssets(generated, worldHash) {
   }
   const {schemaVersion, contentHash, assetHash, maxDistance, tileChunks, regions} = manifest;
   if (contentHash !== worldHash) return null;
-  if (schemaVersion !== 1 || !/^[a-f0-9]{64}$/.test(contentHash) || !/^[a-f0-9]{64}$/.test(assetHash) || maxDistance !== 24 || tileChunks !== 4 ||
+  if (!supportedLodVersion(schemaVersion) || !/^[a-f0-9]{64}$/.test(contentHash) || !/^[a-f0-9]{64}$/.test(assetHash) || maxDistance !== 24 || tileChunks !== 4 ||
       !Array.isArray(regions) || !regions.length || !regions.every(coordinate)) {
     throw new Error('Invalid far terrain manifest');
   }

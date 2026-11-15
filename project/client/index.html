@@ -27,6 +27,7 @@
         <button id="audio-toggle" type="button" aria-pressed="false" hidden>Звук</button>
         <button id="music-toggle" type="button" aria-pressed="false" hidden>Музыка</button>
         <button id="clear-selection" type="button" title="Сбросить выбранный блок или материал (X)">Сбросить выбор</button>
+        <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled>Телепорт</button>
         <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
       </div>
     </header>
@@ -45,7 +46,7 @@
           <span id="skin-status" class="skin-status" role="status">PNG 64×32, 64×64, 128×64 или 256×128</span>
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
-        <small id="entry-help">WASD — ходьба · Пробел — прыжок · I — блоки · F — полёт · V — резец · X — сброс выбора · Esc — пауза</small>
+        <small id="entry-help">WASD — ходьба · Пробел — прыжок · Shift — ускорение · F — полёт · F5 — камера · I — блоки · V — резец · B — размер резца · X — сброс выбора · G — телепорт · Esc — пауза</small>
       </div>
     </section>
     <div id="toast" role="status" aria-live="polite"></div>
@@ -54,8 +55,10 @@
       <ul id="online-names"></ul>
     </aside>
     <section id="chat" aria-label="Чат">
-      <ul id="chat-log" role="log" aria-live="polite"></ul>
+      <ul id="chat-log" class="chat-log" role="log" aria-label="Глобальный чат" aria-live="polite"></ul>
+      <ul id="local-chat-log" class="chat-log" role="log" aria-label="Локальный чат" aria-live="polite" hidden></ul>
       <form id="chat-form" hidden>
+        <button id="chat-channel" type="button" aria-pressed="false" title="Переключить глобальный и локальный чат">Глобальный</button>
         <input id="chat-input" autocomplete="off" aria-label="Сообщение" placeholder="Сообщение…" maxlength="480">
         <button id="chat-send" type="submit">Отправить</button>
         <button id="chat-close" type="button">Закрыть</button>
@@ -66,6 +69,14 @@
       <input id="clock-input" type="time" required>
       <label><input id="clock-frozen" type="checkbox"> Заморозить</label>
       <div><button type="submit">Применить</button> <button id="clock-close" type="button">Закрыть</button></div>
+    </form>
+    <form id="teleport-form" class="social-panel" aria-label="Телепорт по координатам" hidden>
+      <div class="teleport-coordinates">
+        <label>X <input id="teleport-x" type="number" step="any" required></label>
+        <label>Y <input id="teleport-y" type="number" step="any" required></label>
+        <label>Z <input id="teleport-z" type="number" step="any" required></label>
+      </div>
+      <div><button id="teleport-send" type="submit">Переместиться</button> <button id="teleport-close" type="button">Закрыть</button></div>
     </form>
     <dialog id="creative-menu" aria-labelledby="creative-title">
       <div class="creative-header">
@@ -90,7 +101,7 @@
         <button id="touch-place" type="button" aria-label="Установить блок">+</button>
         <button id="touch-copy" type="button">Копия</button>
         <button id="touch-use" type="button">Действие</button>
-        <button id="touch-remove" type="button" aria-label="Сломать свой блок">−</button>
+        <button id="touch-remove" type="button" aria-label="Сломать блок, поставленный игроком">−</button>
         <button id="touch-rotate" type="button" aria-label="Сменить позицию детали" hidden>↻</button>
         <button id="touch-chisel" type="button" aria-pressed="false">Резец</button>
       </div>
@@ -101,9 +112,9 @@
       <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" title="Креатив · I" disabled>Блоки</button>
       <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
       <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · Q взять материал</span>
-      <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Shift вниз</span>
+      <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift ×2</span>
       <span id="seat-status" role="status" hidden>Сидите · ПКМ встать</span>
-      <span id="keys">ЛКМ — сломать своё · ПКМ — поставить / сесть · E — действие · Q — копировать · F — полёт · V — резец</span>
+      <span id="keys">ЛКМ — сломать блок игрока · ПКМ — поставить / сесть · E — действие · Q — копировать · F5 — камера · F — полёт · V — резец</span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>

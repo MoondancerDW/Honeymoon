@@ -58,12 +58,12 @@ test('creative places registered off-map states with normal ownership, and build
   assert.equal(cube.status, 200, JSON.stringify(cube));
   const revision = cube.body.worldRevision;
   const foreign = await command(b,'remove',[6,1,7],{expectedRevision:revision});
-  assert.equal(foreign.body.error,'block_not_owned');
+  assert.equal(foreign.status,200,JSON.stringify(foreign));
   const door = await place(7,8,'legacy:64:0');
   assert.deepEqual(door.body.changes?.map(change => change.cell), ['legacy:64:0','legacy:64:8'], JSON.stringify(door));
   const open = await command(a,'interact',[7,1,8],{expectedRevision:door.body.worldRevision});
   assert.equal(open.body.changes?.[0].cell,'legacy:64:4',JSON.stringify(open));
-  const remove = await command(a,'remove',[7,2,8],{expectedRevision:open.body.worldRevision});
+  const remove = await command(b,'remove',[7,2,8],{expectedRevision:open.body.worldRevision});
   assert.deepEqual(remove.body.changes?.map(change => change.cell),[null,null], JSON.stringify(remove));
   const bed = await place(10,8,'legacy:26:0');
   assert.deepEqual(bed.body.changes?.map(change => [change.z, change.cell]), [[8,'legacy:26:0'],[9,'legacy:26:8']], JSON.stringify(bed));
@@ -80,7 +80,7 @@ test('creative places registered off-map states with normal ownership, and build
   base.hash = 'creative-b';
   await launch();
   const world = await fetch(url + '/api/world',{headers:{Cookie:a}}).then(r=>r.json());
-  assert.equal(world.overrides.find(change => change.x === 6 && change.z === 7)?.cell, 'legacy:4:0');
+  assert.equal(world.overrides.find(change => change.x === 6 && change.z === 7)?.cell, null);
   assert.equal(world.overrides.find(change => change.x === 10 && change.z === 9)?.cell, 'legacy:26:8');
   assert.equal(world.overrides.find(change => change.x === 8 && change.z === 10)?.object.data.style, 1);
 });

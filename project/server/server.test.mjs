@@ -172,9 +172,6 @@ test('two guests edit one cell and receive the same durable changes after confli
   app = await start(base, state);
   const renewed = await request(app, '/api/session', { cookie: first.cookie, payload: {} });
   assert.equal(renewed.data.playerId, first.data.playerId);
-  const denied = await request(app, '/api/action', { cookie: second.cookie,
-    payload: command('remove', 'breaking-denied', { x: 9, expectedRevision: placed.data.worldRevision }) });
-  assert.deepEqual({ status: denied.status, data: denied.data }, { status: 403, data: { error: 'block_not_owned' } });
   const saved = await request(app, '/api/world', { cookie: first.cookie });
   assert.deepEqual(saved.data.overrides.find(cell => cell.x === 8 && cell.y === 1 && cell.z === 10), winner.changes[0]);
   assert.deepEqual(saved.data.overrides.find(cell => cell.x === 9 && cell.y === 1 && cell.z === 10), placed.data.changes[0]);
@@ -202,18 +199,17 @@ test('two guests edit one cell and receive the same durable changes after confli
     savedCopy.close();
   }
 
-  const mine = command('remove', 'breaking-own', { x: 9, expectedRevision: placed.data.worldRevision });
-  const removed = await request(app, '/api/action', { cookie: first.cookie, payload: mine });
+  const mine = command('remove', 'breaking-other-first', { x: 9, expectedRevision: placed.data.worldRevision });
+  const removed = await request(app, '/api/action', { cookie: second.cookie, payload: mine });
   assert.equal(removed.status, 200);
   assert.deepEqual(removed.data.changes[0], { x: 9, y: 1, z: 10, cell: null, object: null, revision: 3 });
-  assert.deepEqual(await request(app, '/api/action', { cookie: first.cookie, payload: mine }), removed);
+  assert.deepEqual(await request(app, '/api/action', { cookie: second.cookie, payload: mine }), removed);
   const newBuild = await request(app, '/api/action', { cookie: second.cookie, payload: {
     ...put, requestId: 'place-second', expectedRevision: removed.data.worldRevision,
   } });
   assert.equal(newBuild.status, 200);
   const replaced = { ...mine, requestId: 'breaking-other', expectedRevision: newBuild.data.worldRevision };
-  assert.equal((await request(app, '/api/action', { cookie: first.cookie, payload: replaced })).data.error, 'block_not_owned');
-  assert.equal((await request(app, '/api/action', { cookie: second.cookie, payload: replaced })).status, 200);
+  assert.equal((await request(app, '/api/action', { cookie: first.cookie, payload: replaced })).status, 200);
 });
 
 test('block ownership survives changes to a placed lamp and protects imported and unattributed cells', async t => {
