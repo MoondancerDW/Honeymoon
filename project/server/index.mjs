@@ -8,7 +8,7 @@ import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { createChat } from './chat.mjs';
-import { loadLodAssets, serveLodTile } from './lod-assets.mjs';
+import { loadLodAssets, loadVistaAssets, serveLodTile, serveVistaTile } from './lod-assets.mjs';
 import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
 import { MAX_PROFILE_BODY, profileChanges, publicProfile, savedSkinSize } from './presence-profile.mjs';
@@ -162,8 +162,9 @@ export function createHoneymoonServer({
 } = {}) {
   const models = {};
   const lod = base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
+  const vista = lod ? loadVistaAssets(generated) : null;
   const publicWorld = base.publicManifest ?? base.manifest;
-  const manifest = lod ? {...publicWorld, lod:lod.descriptor} : publicWorld;
+  const manifest = lod ? {...publicWorld, lod:lod.descriptor, ...(vista && {vista:vista.descriptor})} : publicWorld;
   const sounds = statSync(join(generated, 'sounds', 'sounds.json'), {throwIfNoEntry: false})?.isFile() ?? false;
   const boatTexture = statSync(join(generated,'textures','boat.png'),{throwIfNoEntry:false})?.isFile() ?? false;
   for (const family of modelFamilies) {
@@ -420,6 +421,10 @@ export function createHoneymoonServer({
     }
     if (path.startsWith('/generated/lod/')) {
       if (await serveLodTile(lod, request, response, path, acceptsGzip(request.headers['accept-encoding']))) return;
+      throw new RequestError(404, 'not_found');
+    }
+    if (path.startsWith('/generated/vista/')) {
+      if (await serveVistaTile(vista, request, response, path, acceptsGzip(request.headers['accept-encoding']))) return;
       throw new RequestError(404, 'not_found');
     }
     const chunk = path.match(/^\/generated\/world\/chunks\/(-?\d+)\.(-?\d+)\.json$/);

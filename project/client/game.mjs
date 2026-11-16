@@ -13,6 +13,7 @@ import {FLIGHT_VERTICAL_MULTIPLIER,POSITION_TRAIL_LIMIT,playerBody} from '../wor
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
+import {canLogLiquid, liquidKind} from '../world/logged-fluid.mjs';
 import {ATLAS_GRID, TILE_SIZE, chiselMaterialShape, coverBoxes, creativeIcon, signFor} from '../world/geometry.mjs';
 import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
@@ -73,6 +74,7 @@ let feed;
 let nearbyStream;
 let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
+let nextSprintDust = 0;
 let hoofSwing = 0;
 let repeatPlacement = false, nextPlacement = 0, resumeOnEscape = false, resuming = false;
 let pointerReleasedAt = -Infinity;
@@ -240,6 +242,9 @@ const messages = {
   boat_requires_water: 'Поставьте лодку на поверхность воды',
   not_a_boat: 'Здесь больше нет лодки',
   boat_limit: 'Достигнут предел числа лодок',
+  drain_liquid_first: 'Сначала уберите воду или лаву',
+  incompatible_liquid: 'Здесь нет места для жидкости',
+  liquid_missing: 'Здесь больше нет жидкости',
   invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
   invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
   invalid_skin_size: skinDescription,
@@ -333,6 +338,7 @@ function stream() {
 
 function heldPonyItem() {
   const item = heldCreativeItem;
+  if (item?.kind === 'shaped-lamp') return {kind:'block',key:item.key};
   if (item && ['flat-item','item-frame','minecart','boat'].includes(item.kind)) {
     return {kind:'item', key:`${item.id}:${item.invisible ? 0 : item.damage ?? 0}`};
   }
@@ -795,7 +801,8 @@ function previewVoxel(target) {
   const old = world.cellAt(x,y,z);
   const {box, indices} = voxelBrush(voxel, chiselSize);
   let unavailable = null;
-  if (old && (!old.voxels && !isMicroblockCell(old) || indices.some(index => voxelMaterialAt(old.voxels, index)) ||
+  if (old?.fluid) unavailable = 'drain_liquid_first';
+  else if (old && (!old.voxels && !isMicroblockCell(old) || indices.some(index => voxelMaterialAt(old.voxels, index)) ||
       old.parts && partBoxesOverlapBox(coverBoxes(old.parts), box))) unavailable = 'occupied';
   else if (old?.voxels?.materials.length >= VOXEL_MATERIAL_LIMIT && !old.voxels.materials.includes(chiselMaterial)) {
     unavailable = 'voxel_material_limit';
@@ -902,6 +909,7 @@ async function action(type, sneaking = false) {
   if (!target) return;
   const selectedVersion = heldVersion;
   const cell = getKey(target.cell);
+  const neighbors = (dx,dy,dz) => world.cellAt(target.x+dx,target.y+dy,target.z+dz);
   let pendingPlacement;
   if (frame) {
     type = {place:'frame_item',remove:'frame_remove',interact:'frame_use'}[type];
@@ -913,6 +921,12 @@ async function action(type, sneaking = false) {
     type = 'place_boat';
   } else if (removingVehicle) {
     type = target.kind === 'boat' ? 'remove_boat' : 'remove_minecart';
+  } else if (type === 'remove' && target.cell?.fluid) {
+    type = 'remove_liquid';
+  } else if (type === 'copy' && target.liquid && target.cell?.fluid) {
+    type = 'copy_liquid';
+  } else if (type === 'place' && !chiseling && liquidKind(clipboard) && canLogLiquid(target.cell,neighbors,world.models)) {
+    type = 'place_liquid';
   } else if (chiseling && target.part && type === 'remove') {
     type = 'remove_part';
   } else if (chiseling && type !== 'interact') {
@@ -957,9 +971,13 @@ async function action(type, sneaking = false) {
     if (heldCreativeItem?.kind === 'flat-item') { notice('Наведите прицел на рамку'); return; }
     if (!clipboard) { notice(messages.nothing_to_copy); return; }
     request.against = {x: target.x, y: target.y, z: target.z};
-    request.x += target.offset[0];
-    request.y += target.offset[1];
-    request.z += target.offset[2];
+    const embedsInLiquid = liquidKind(target.cell) && world.revisionAt(target.x,target.y,target.z) &&
+      canLogLiquid(clipboard,neighbors,world.models);
+    if (!embedsInLiquid) {
+      request.x += target.offset[0];
+      request.y += target.offset[1];
+      request.z += target.offset[2];
+    }
     request.cell = clipboard;
     request.yaw = heading.yaw;
     request.pitch = heading.pitch;
@@ -971,6 +989,10 @@ async function action(type, sneaking = false) {
       request.turns = sofaTurns;
       pendingPlacement = placement;
     }
+  }
+  if (type === 'place_liquid') {
+    request.cell = clipboard;
+    if (fromCreative) request.creative = true;
   }
   if (type === 'place_part') {
     updatePlacement(target);
@@ -1006,7 +1028,7 @@ async function action(type, sneaking = false) {
       hoofSwing = (hoofSwing + 1) & 0x7fffffff;
       presenceDirty = true;
     }
-    if (type === 'copy' && selectedVersion === heldVersion) {
+    if ((type === 'copy' || type === 'copy_liquid') && selectedVersion === heldVersion) {
       fromCreative = false;
       heldCreativeItem = null;
       clipboard = result.body.cell || cell;
@@ -1054,6 +1076,7 @@ function tick(now) {
   }
   if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending) {
     const startX = position.x, startZ = position.z;
+    const fallSpeed = movement.fall;
     const forward = forwardInput();
     const strafe = turnInput();
     const descending = flying ? keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC') : sprinting();
@@ -1073,6 +1096,13 @@ function tick(now) {
         {rise: jump || keys.has('Space'), descend: descending, recordStep: recordPosition});
     }
     horizontalSpeed = dt > 0 ? Math.hypot(position.x - startX, position.z - startZ) / dt : 0;
+    if (!resetting && !flying && movement.grounded && !movement.medium) {
+      if (fallSpeed < -Math.sqrt(40*3)) view.groundDust(position,movement.body,[0,0],-fallSpeed,now);
+      else if (sprinting() && movement.stance === 'stand' && horizontalSpeed > 4 && now >= nextSprintDust) {
+        nextSprintDust = now + 70;
+        view.groundDust(position,movement.body,[(position.x-startX)/dt,(position.z-startZ)/dt],0,now);
+      }
+    }
     audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw, body:movement.body,
       climbing:movement.medium === 'ladder', swimming:movement.medium === 'water'});
     jump = false;
@@ -1104,7 +1134,9 @@ function tick(now) {
     !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) &&
     world.revisionAt(selection.x,selection.y,selection.z) ? 'E — редактировать' : '';
   const held = chiseling ? labelFor(chiselMaterial) : heldCreativeItem?.name ?? (heldPart ? partLabel(heldPart) : labelFor(clipboard));
-  const status = [selected, interaction, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
+  const fluidHint = selection?.cell?.fluid === 'water' ? 'ЛКМ — убрать воду' :
+    selection?.cell?.fluid === 'lava' ? 'ЛКМ — убрать лаву' : '';
+  const status = [selected, interaction, fluidHint, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
   const coordinates = `X ${position.x.toFixed(2)}  Y ${position.y.toFixed(2)}  Z ${position.z.toFixed(2)}`;
   if (coordinateStatus.textContent !== coordinates) coordinateStatus.textContent = coordinates;

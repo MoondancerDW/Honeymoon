@@ -118,11 +118,11 @@ test('voxel edits preserve ownership, material, revision and exact hit through s
   await app.close();
   app = null;
   const old = new DatabaseSync(state);
-  old.exec('ALTER TABLE edits DROP COLUMN voxels; PRAGMA user_version=4');
+  old.exec('ALTER TABLE edits DROP COLUMN fluid; ALTER TABLE edits DROP COLUMN voxels; PRAGMA user_version=4');
   old.close();
   await restart();
   const upgraded = new DatabaseSync(state,{readOnly:true});
-  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version,7);
+  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version,8);
   upgraded.close();
 
   const parentRevision = ordinary.body.worldRevision;

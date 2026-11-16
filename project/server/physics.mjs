@@ -1,5 +1,6 @@
 import { PLAYER } from '../world/player-body.mjs';
 import { intersectSelection } from '../world/selection.mjs';
+import { withLoggedFluid } from '../world/logged-fluid.mjs';
 
 export { PLAYER };
 const epsilon = 0.00001;
@@ -34,13 +35,15 @@ function rayBox(origin, delta, minima, maxima, open = false) {
   return first;
 }
 
-export function physics(base, geometry, getCell) {
+export function physics(base, geometry, getCell, models) {
   const selection = geometry.selectionFor ? 'selectionFor' : 'shapeFor';
   function boxesAt(kind, x, y, z, override, plannedNeighbor) {
     const cell = typeof override === 'string' ? { key: override, parts: base.manifest.compositions?.[override]?.parts }
       : override ?? getCell(x, y, z);
     if (!cell || cell.key === 'air') return [];
-    return geometry[kind](cell, (dx, dy, dz) => plannedNeighbor?.(dx, dy, dz) ?? getCell(x + dx, y + dy, z + dz));
+    const neighbors = (dx, dy, dz) => plannedNeighbor?.(dx, dy, dz) ?? getCell(x + dx, y + dy, z + dz);
+    const boxes = geometry[kind](cell, neighbors);
+    return kind === selection ? withLoggedFluid(boxes, cell, neighbors, models) : boxes;
   }
 
   function collides(position, body = position.body ?? PLAYER, ignored = []) {
@@ -197,13 +200,15 @@ export function physics(base, geometry, getCell) {
       for (let zz = min[2] - 1; zz <= max[2] + 1; zz++) {
         for (let xx = min[0] - 1; xx <= max[0] + 1; xx++) {
           for (const box of boxesAt(selection, xx, yy, zz)) {
-            const result = intersectSelection(origin, direction, box, xx, yy, zz, range + tolerance, chiseling && box.solid === false);
+            const result = intersectSelection(origin, direction, box, xx, yy, zz, range + tolerance,
+              Boolean(box.loggedFluid) || chiseling && box.solid === false);
             if (!result) continue;
             const solid = box.solid !== false;
             const preferSolid = chiseling && solid && !closestSolid &&
               Math.abs(result.length - (closest?.length ?? -1)) < 1e-7;
             if (closest && result.length >= closest.length && !preferSolid) continue;
-            closest = {x: xx, y: yy, z: zz, partSlot: box.partSlot, face: result.offset, length: result.length};
+            closest = {x: xx, y: yy, z: zz, partSlot: box.partSlot, face: result.offset, length: result.length,
+              ...(box.loggedFluid && {liquid:box.loggedFluid}) };
             closestSolid = solid;
           }
         }

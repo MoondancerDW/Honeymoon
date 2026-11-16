@@ -1,13 +1,19 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {DEFAULT_DETAILED_LOD_DISTANCE,lodDistance,supportedLodVersion,validateDetailedLodDistance} from './far-tile-format.mjs';
 import {terrainFilterShader} from './terrain-filter.mjs';
+import {VISTA_BLOCKS, VISTA_VERSION} from './vista-format.mjs';
 
 const PACK_CHUNKS = 4;
 const PACK_BLOCKS = PACK_CHUNKS * 16;
+const VISTA_CHUNKS = VISTA_BLOCKS / 16;
+const VISTA_RADIUS = 126;
+const VISTA_COARSE_AFTER = 54;
+export const VISTA_FOG_END = 1840;
 const MAX_FETCH = 2;
 const MAX_PENDING_UPLOADS = 6;
 const RETAIN_MARGIN = 1;
 const keyOf = (x,z,outer = false) => `${x}.${z}${outer ? '.outer' : ''}`;
+const vistaKey = (x,z) => `vista:${x}.${z}`;
 const packAt = chunk => Math.floor(chunk / PACK_CHUNKS);
 const corners = new Float32Array([0,0,0, 1,0,0, 1,1,0, 0,1,0]);
 const triangles = new Uint16Array([0,1,2, 0,2,3]);
@@ -19,12 +25,14 @@ export function supportsFarTerrain({lod}) {
     /^[0-9a-f]{64}$/.test(lod.contentHash ?? '');
 }
 
-function farMaterial(textures, lightmap, rows, {water = false, outer = false, rail = false} = {}) {
+function farMaterial(textures, lightmap, rows, {water = false, outer = false, rail = false, vista = false} = {}) {
   const uniforms = {
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
     atlas:{value:textures.source}, terrainMid:{value:textures.mid}, terrainAverage:{value:textures.average},
     terrainWater:{value:textures.water},
     lightmap:{value:lightmap}, terrainRows:{value:rows}, visibilityMask:{value:65535}, heightScale:{value:1},
+    coordinateScale:{value:1},
+    vistaChunk:{value:new THREE.Vector2()}, vistaBounds:{value:new THREE.Vector4()}, vistaRadius:{value:0},
     seamMasks:{value:new THREE.Vector4()},
   };
   return new THREE.ShaderMaterial({uniforms, fog:true, transparent:water, depthWrite:!water,
@@ -38,26 +46,29 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
       uniform float visibilityMask;
       uniform vec4 seamMasks;
       uniform float heightScale;
+      uniform float coordinateScale;
       uniform sampler2D lightmap;
       varying vec2 localUv;
       varying float tile;
+      varying float cutout;
       varying vec3 tint;
+      ${vista ? 'varying vec2 vistaXZ;' : ''}
       #include <fog_pars_vertex>
       vec3 srgbToLinear(vec3 encoded) {
         return mix(encoded / 12.92, pow((encoded + .055) / 1.055, vec3(2.4)), step(vec3(.04045), encoded));
       }
       void main() {
-        float chunk = floor(mod(faceSurface.y,128.0) / 8.0);
+        float flags = mod(faceSurface.y,256.0);
+        float chunk = floor(mod(flags,128.0) / 8.0);
         float face = mod(faceSurface.y, 8.0);
-        float mask = faceSurface.y < 128.0 ? visibilityMask :
+        float mask = flags < 128.0 ? visibilityMask :
           face < .5 ? seamMasks.x : face < 1.5 ? seamMasks.y : face < 4.5 ? seamMasks.z : seamMasks.w;
         if (mod(floor(mask / exp2(chunk)), 2.0) < .5) {
           gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
           return;
         }
-        vec2 extent = faceSize * position.xy;
-        vec3 point = faceOrigin;
-        point.y /= heightScale;
+        vec2 extent = faceSize * position.xy / coordinateScale;
+        vec3 point = faceOrigin / vec3(coordinateScale,heightScale,coordinateScale);
         ${rail ? `
         // Follow the source rail quad's corner order for bends and grades.
         float direction = faceSize.x;
@@ -85,6 +96,8 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
         else if (face < 3.5) localUv = point.xz;
         else localUv = vec2(face < 4.5 ? -point.x : point.x, -point.y);`}
         tile = faceSurface.x;
+        cutout = step(256.0,faceSurface.y);
+        ${vista ? 'vistaXZ = (modelMatrix * vec4(point,1.0)).xz;' : ''}
         vec2 lightUv = vec2((mod(faceLight, 16.0) + .5) / 16.0, (floor(faceLight / 16.0) + .5) / 17.0);
         tint = srgbToLinear(faceColor * texture2D(lightmap, lightUv).rgb);
         vec4 mvPosition = modelViewMatrix * vec4(point, 1.0);
@@ -94,28 +107,48 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
         #endif
       }`,
     fragmentShader:`
-      ${water ? 'uniform sampler2D terrainWater;' : rail ? 'uniform float terrainRows;' : outer ?
-        'uniform sampler2D terrainAverage; uniform float terrainRows;' : terrainFilterShader}
+      ${water ? 'uniform sampler2D terrainWater;' : rail ? 'uniform float terrainRows;' : terrainFilterShader}
       uniform sampler2D atlas;
       varying vec2 localUv;
       varying float tile;
+      varying float cutout;
       varying vec3 tint;
+      ${vista ? 'varying vec2 vistaXZ; uniform vec2 vistaChunk; uniform vec4 vistaBounds; uniform float vistaRadius;' : ''}
       #include <fog_pars_fragment>
       void main() {
+        ${vista ? `
+          vec2 chunk = floor(vistaXZ / 16.0);
+          vec2 delta = chunk - vistaChunk;
+          if (dot(delta,delta) <= vistaRadius && all(greaterThanEqual(chunk,vistaBounds.xy)) &&
+              all(lessThanEqual(chunk,vistaBounds.zw))) discard;
+        ` : ''}
         ${water ? 'vec4 color = texture2D(terrainWater,vec2(localUv.x,-localUv.y));' : `
         float tileIndex = floor(tile + .5);
         vec2 cell = vec2(mod(tileIndex,64.0),terrainRows - 1.0 - floor(tileIndex / 64.0));
         ${rail ? `
           vec4 color = texture2D(atlas,(cell + .015625 + localUv * .96875) / vec2(64.0,terrainRows));
           if (color.a < .47) discard;
-        ` : `${outer ? 'vec4 color = texture2D(terrainAverage,(cell + .5) / vec2(64.0,terrainRows));' : `
+        ` : `
           vec2 within = vec2(fract(localUv.x),1.0 - fract(localUv.y));
-          vec4 color = terrainSample(atlas,cell,within,terrainFootprint(localUv));`}
-        if (tileIndex == 49.0 || tileIndex >= 3328.0 && tileIndex < 3388.0) {
+          float footprint = terrainFootprint(localUv);
+          ${vista ? `
+          vec2 meanUv = (cell + .5) / vec2(64.0,terrainRows);
+          vec4 color = texture2D(terrainAverage,meanUv);
+          if (vFogDepth < 240.0) {
+            vec4 close = terrainSample(atlas,cell,within,footprint);
+            float detail = close.a * (1.0 - smoothstep(130.0,240.0,vFogDepth));
+            color.rgb = mix(color.rgb,close.rgb,detail);
+          }
+          ` : `
+          vec4 color = terrainSample(atlas,cell,within,${outer
+            ? 'max(footprint,.16 + .50 * smoothstep(256.0,456.0,vFogDepth))' : 'footprint'});
+          `}
+        if (${vista ? 'false' : 'tileIndex == 49.0 || tileIndex >= 3328.0 && tileIndex < 3388.0'}) {
           vec2 glassUv = vec2(fract(localUv.x),1.0 - fract(localUv.y));
           color = texture2D(atlas,(cell + clamp(glassUv,vec2(.03125),vec2(.96875))) / vec2(64.0,terrainRows));
           if (color.a < .47) discard;
-        }`}`}
+        } ${vista ? '' : `else if (cutout > .5 && color.a < .47) discard;`}
+        `}`}
         gl_FragColor = vec4(color.rgb * tint, ${water ? 'color.a' : '1.0'});
         #include <colorspace_fragment>
         #include <fog_fragment>
@@ -123,8 +156,8 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
   });
 }
 
-function meshFor(layer, material, region) {
-  const {count,offset,span,surface,color,light,minY,maxY,heightScale = 1} = layer;
+function meshFor(layer, material, region, extent = PACK_BLOCKS) {
+  const {count,offset,span,surface,color,light,minY,maxY,heightScale = 1,coordinateScale = 1} = layer;
   const geometry = new THREE.InstancedBufferGeometry();
   geometry.setAttribute('position',new THREE.BufferAttribute(corners,3));
   geometry.setAttribute('faceOrigin',new THREE.InstancedBufferAttribute(offset,3));
@@ -134,12 +167,13 @@ function meshFor(layer, material, region) {
   geometry.setAttribute('faceColor',new THREE.InstancedBufferAttribute(color,3,true));
   geometry.setIndex(new THREE.BufferAttribute(triangles,1));
   geometry.instanceCount = count;
-  const center = new THREE.Vector3(32,(minY+maxY)/2,32);
-  geometry.boundingSphere = new THREE.Sphere(center,Math.hypot(32,32,(maxY-minY)/2));
+  const center = new THREE.Vector3(extent/2,(minY+maxY)/2,extent/2);
+  geometry.boundingSphere = new THREE.Sphere(center,Math.hypot(extent/2,extent/2,(maxY-minY)/2));
   const mesh = new THREE.Mesh(geometry,material);
   mesh.onBeforeRender = () => {
     material.uniforms.visibilityMask.value = region.mask;
     material.uniforms.heightScale.value = heightScale;
+    material.uniforms.coordinateScale.value = coordinateScale;
     material.uniforms.seamMasks.value.copy(region.seams);
     material.uniformsNeedUpdate = true;
   };
@@ -149,12 +183,17 @@ function meshFor(layer, material, region) {
 export class FarTerrain {
   constructor(display, textures) {
     this.display = display;
-    const {lod,bounds} = display.world.manifest;
+    const {lod,bounds,vista} = display.world.manifest;
     this.lod = lod;
     this.bounds = {minX:Math.floor(bounds.minX / PACK_BLOCKS),maxX:Math.floor(bounds.maxX / PACK_BLOCKS),
       minZ:Math.floor(bounds.minZ / PACK_BLOCKS),maxZ:Math.floor(bounds.maxZ / PACK_BLOCKS)};
     const material = options => farMaterial(textures,display.lightmap,display.atlasRows,options);
     this.materials = {inner:material(),water:material({water:true}),outer:material({outer:true}),rail:material({rail:true})};
+    if (vista?.version === VISTA_VERSION && /^[0-9a-f]{64}$/.test(vista.hash) && Array.isArray(vista.regions)) {
+      this.vista = {...vista,packs:new Set(vista.regions.map(([x,z]) => vistaKey(x,z)))};
+      const {uniforms} = this.materials.vista = material({vista:true});
+      uniforms.vistaBounds.value.set(...[bounds.minX,bounds.minZ,bounds.maxX,bounds.maxZ].map(value => Math.floor(value / 16)));
+    }
     this.packs = new Map();
     this.pending = new Map();
     this.failed = new Map();
@@ -243,6 +282,21 @@ export class FarTerrain {
         }
       }
     }
+    if (this.vista && this.radius === 32) {
+      const uniforms = this.materials.vista.uniforms;
+      uniforms.vistaChunk.value.set(cx,cz);
+      uniforms.vistaRadius.value = radius2;
+      for (let rz=Math.floor((cz-VISTA_RADIUS)/VISTA_CHUNKS); rz<=Math.floor((cz+VISTA_RADIUS)/VISTA_CHUNKS); rz++) {
+        for (let rx=Math.floor((cx-VISTA_RADIUS)/VISTA_CHUNKS); rx<=Math.floor((cx+VISTA_RADIUS)/VISTA_CHUNKS); rx++) {
+          const key = vistaKey(rx,rz);
+          if (!this.vista.packs.has(key)) continue;
+          const dx = Math.max(rx*VISTA_CHUNKS-cx,cx-(rx+1)*VISTA_CHUNKS+1,0);
+          const dz = Math.max(rz*VISTA_CHUNKS-cz,cz-(rz+1)*VISTA_CHUNKS+1,0);
+          const distance = distanceSquared(dx,dz);
+          if (distance <= VISTA_RADIUS**2) this.targets.set(key,{rx,rz,vista:true,coarse:distance > VISTA_COARSE_AFTER**2});
+        }
+      }
+    }
     for (const [id,{key}] of this.pending) {
       if (!this.targets.has(key)) {
         this.worker.postMessage({id});
@@ -251,6 +305,7 @@ export class FarTerrain {
     }
     for (const [key,region] of this.packs) {
       if (this.targets.has(key)) continue;
+      if (region.vista) { this.evict(key); continue; }
       const excess = Math.hypot(region.rx * PACK_CHUNKS + 1.5 - cx, region.rz * PACK_CHUNKS + 1.5 - cz);
       const limit = region.outer ? radius : innerRadius;
       if (!region.installed || excess > limit + PACK_CHUNKS + RETAIN_MARGIN) this.evict(key);
@@ -290,6 +345,7 @@ export class FarTerrain {
   }
 
   updateMask(region,lookup) {
+    if (region.vista) return;
     const seam = [0,0,0,0];
     let mask = 0;
     for (let i=0; i<region.counts.length; i++) {
@@ -341,16 +397,18 @@ export class FarTerrain {
     return Boolean(this.regionAt(x,z));
   }
 
-  add({key,rx,rz,outer,tile}) {
-    if (this.packs.has(key) || !this.targets.has(key)) return;
+  add({key,rx,rz,outer,vista,coarse,tile}) {
+    const previous = this.packs.get(key);
+    if (!this.targets.has(key) || previous && (!previous.coarse || coarse)) return;
     const group = new THREE.Group();
-    group.position.set(rx * PACK_BLOCKS,0,rz * PACK_BLOCKS);
-    const region = {key,rx,rz,outer,group,counts:tile.counts,bytes:tile.bytes,triangles:tile.triangles,
+    const extent = vista ? VISTA_BLOCKS : PACK_BLOCKS;
+    group.position.set(rx * extent,0,rz * extent);
+    const region = {key,rx,rz,outer,vista,coarse,previous,group,counts:tile.counts,bytes:tile.bytes,triangles:tile.triangles,
       mask:65535,seams:new THREE.Vector4(),installed:false};
     for (const [index,layer] of tile.layers.entries()) {
       if (!layer.count) continue;
-      const material = this.materials[index === 1 ? 'water' : index === 3 ? 'rail' : outer ? 'outer' : 'inner'];
-      const mesh = meshFor(layer,material,region);
+      const material = this.materials[vista ? 'vista' : index === 1 ? 'water' : index === 3 ? 'rail' : outer ? 'outer' : 'inner'];
+      const mesh = meshFor(layer,material,region,extent);
       if (index === 2) region.transition = mesh;
       group.add(mesh);
     }
@@ -362,6 +420,7 @@ export class FarTerrain {
   evict(key) {
     const region = this.packs.get(key);
     this.packs.delete(key);
+    if (region.previous) this.display.discardGroup(region.previous.group);
     this.display.discardGroup(region.group);
     if (!region.installed) this.display.uploads = this.display.uploads.filter(job => job.far !== region);
   }
@@ -372,6 +431,12 @@ export class FarTerrain {
 
   install(region) {
     region.installed = true;
+    if (region.vista) {
+      if (region.previous) this.display.discardGroup(region.previous.group);
+      region.previous = null;
+      region.group.visible = true;
+      return;
+    }
     for (let i=0; i<region.counts.length; i++) {
       if (region.counts[i]) this.display.updateChunkVisibility(region.rx * 4 + (i & 3),region.rz * 4 + (i >> 2));
     }
@@ -387,23 +452,38 @@ export class FarTerrain {
     const direction = this.display.viewDirection;
     let closest, score = Infinity;
     for (const [key,region] of this.targets) {
-      if (this.packs.has(key) || busy.includes(key) || (this.failed.get(key) ?? 0) > now) continue;
-      const x = region.rx * PACK_CHUNKS + 1.5 - this.cx, z = region.rz * PACK_CHUNKS + 1.5 - this.cz;
+      const loaded = this.packs.get(key);
+      if (loaded && (!loaded.coarse || region.coarse) || busy.includes(key) || (this.failed.get(key) ?? 0) > now) continue;
+      const stride = region.vista ? VISTA_CHUNKS : PACK_CHUNKS, half = (stride-1)/2;
+      const x = region.rx * stride + half - this.cx, z = region.rz * stride + half - this.cz;
       const distance = Math.hypot(x,z);
-      const priority = distance - 5 * (x * direction.x + z * direction.z) / Math.max(5,distance);
+      const facing = (x * direction.x + z * direction.z) / Math.max(5,distance);
+      const priority = region.vista ? 12 + distance / 5 - 8*facing : distance - 5*facing;
       if (priority < score) { closest = {key,...region}; score = priority; }
     }
     if (!closest) { this.nextRequest = now + 100; return; }
     this.nextRequest = now + 25;
     const id = ++this.ticket;
     this.pending.set(id,closest);
-    this.worker.postMessage({id,url:`/generated/lod/${this.lod.contentHash}/${closest.key}.bin`});
+    this.worker.postMessage({id,vista:closest.vista,coarse:closest.coarse,url:closest.vista
+      ? `/generated/vista/${this.vista.hash}/${closest.rx}.${closest.rz}.bin`
+      : `/generated/lod/${this.lod.contentHash}/${closest.key}.bin`});
   }
 
   stats() {
     let packs = 0, outerPacks = 0, chunks = 0, bytes = 0, triangles = 0, missing = this.targets.size;
-    for (const region of this.packs.values()) {
+    let vistaPacks = 0, vistaCoarsePacks = 0, vistaBytes = 0, vistaTriangles = 0;
+    for (const current of this.packs.values()) {
+      const region = current.previous ?? current;
       if (!region.installed) continue;
+      if (region.vista) {
+        vistaPacks++;
+        if (region.coarse) vistaCoarsePacks++;
+        vistaBytes += region.bytes;
+        vistaTriangles += region.triangles;
+        if (this.targets.has(region.key)) missing--;
+        continue;
+      }
       packs++;
       if (region.outer) outerPacks++;
       bytes += region.bytes;
@@ -414,6 +494,7 @@ export class FarTerrain {
     const pending = this.pending.size + this.decoded.length + this.display.uploads.filter(job => job.far).length;
     return {active:this.active,radius:this.active ? this.radius : 0,innerRadius:this.innerRadius,detailedDistance:this.detailedDistance,
       coverageRadius:this.coverageRadius,packs,outerPacks,chunks,pending,
-      ready:this.active && this.targets.size > 0 && !missing,bytes,triangles,missing,errors:this.errors};
+      ready:this.active && this.targets.size > 0 && !missing,bytes,triangles,missing,
+      vistaPacks,vistaCoarsePacks,vistaBytes,vistaTriangles,errors:this.errors};
   }
 }

@@ -1,5 +1,5 @@
 import * as THREE from '/vendor/three/three.module.js';
-import {FLIGHT_SPRINT_SPEED, PLAYER} from '../world/player-body.mjs';
+import {FLIGHT_SPRINT_SPEED,PLAYER,playerBody} from '../world/player-body.mjs';
 import {createPonyAvatar, createPonyFacing} from './pony-avatar.mjs';
 
 const maxVisibleDistance = 96;
@@ -51,8 +51,9 @@ function setNameplate(player) {
   player.labelTyping = player.typing;
 }
 
-function setProfile(player, {nickname, skin}) {
+function setProfile(player,{nickname,skin,size}) {
   player.nickname = nickname;
+  player.size = size;
   if (player.skin !== skin) {
     player.skin = skin;
     player.avatar.setSkin(skin);
@@ -61,7 +62,15 @@ function setProfile(player, {nickname, skin}) {
 
 function setPose(player, pose) {
   const {x, y, z} = pose.position;
-  if (player.object.position.distanceToSquared(player.target.set(x, y, z)) > 64) player.object.position.copy(player.target);
+  const relocated = player.object.position.distanceToSquared(player.target.set(x,y,z)) > 64;
+  if (relocated) player.object.position.copy(player.target);
+  const grounded = pose.motion === 'idle' || pose.motion === 'walk' || pose.motion === 'run';
+  if (pose.motion === 'air') player.airTop = Math.max(y,relocated ? y : player.airTop ?? y);
+  else if (player.airTop !== undefined) {
+    const fall = player.airTop - y;
+    if (!relocated && grounded && fall >= 3) player.landing = Math.min(16,Math.sqrt(40*fall));
+    player.airTop = undefined;
+  }
   player.yaw = pose.yaw;
   player.lookYaw = pose.lookYaw ?? pose.yaw;
   player.pitch = pose.pitch;
@@ -76,11 +85,12 @@ function setPose(player, pose) {
 }
 
 export class RemotePlayers {
-  constructor(scene, camera, itemAssets, isAir) {
+  constructor(scene,camera,itemAssets,isAir,groundDust) {
     this.scene = scene;
     this.camera = camera;
     this.itemAssets = itemAssets;
     this.isAir = isAir;
+    this.groundDust = groundDust;
     this.entries = new Map();
     this.projected = new THREE.Vector3();
   }
@@ -136,9 +146,20 @@ export class RemotePlayers {
       player.drawnLookYaw += angleBetween(player.drawnLookYaw, player.lookYaw) * mix;
       const facing = player.facing(object.position, player.drawnLookYaw, dt, player.motion === 'sit' ? player.yaw : undefined);
       object.rotation.y = facing.bodyYaw;
-      if (!object.visible) continue;
+      if (!object.visible) {
+        player.landing = 0;
+        continue;
+      }
       player.drawnPitch += (player.pitch - player.drawnPitch) * mix;
       const speed = dt > 0 ? Math.min(FLIGHT_SPRINT_SPEED, Math.hypot(object.position.x - x, object.position.z - z) / dt) : 0;
+      if (player.landing) {
+        this.groundDust?.(target,playerBody(player.size,player.stance),[0,0],player.landing,now);
+        player.landing = 0;
+      } else if (player.motion === 'run' && speed > 3 && now >= (player.nextDust ?? 0)) {
+        player.nextDust = now + 90;
+        this.groundDust?.(object.position,playerBody(player.size,player.stance),
+          [(object.position.x-x)/dt,(object.position.z-z)/dt],0,now);
+      }
       player.avatar.animate({time: now / 1000, dt, speed, pitch: player.drawnPitch,
         yawOffset:facing.yawOffset, strideDirection:facing.strideDirection,
         motion:player.motion, stance:player.stance, boost:player.boost, position:object.position,

@@ -176,8 +176,9 @@ async function captureAvatar(page, path, type) {
     let count = 0;
     for (let i = 0; i < pixels.length; i += 4) {
       const [r, g, b] = pixels.subarray(i, i + 3);
-      if (type === 'earth' ? r > 120 && b > 90 && r > g * 1.7 && b > g * 1.4 :
-        g > 100 && b > 75 && g > r * 1.75 && g > b * 1.27) count++;
+      // Colors remain identifiable in low light under the spawn overhang.
+      if (type === 'earth' ? r > 48 && b > 36 && r > g * 1.7 && b > g * 1.4 :
+        g > 36 && b > 21 && g > r * 1.75 && g > b * 1.27) count++;
     }
     return count;
   }, {body:png.toString('base64'), type});
@@ -196,7 +197,7 @@ try {
   }
   browser = await chromium.launch({
     channel:'msedge', headless:process.env.HONEYMOON_HEADED !== '1',
-    args:['--disable-renderer-backgrounding','--disable-background-timer-throttling','--disable-backgrounding-occluded-windows'],
+    args:['--mute-audio','--disable-renderer-backgrounding','--disable-background-timer-throttling','--disable-backgrounding-occluded-windows'],
   });
   report.browser = browser.version();
   const dawnContext = await browser.newContext({viewport});

@@ -19,17 +19,20 @@ import { orientedRail, railFor } from '../world/rails.mjs';
 import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
 import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData } from '../world/creative-items.mjs';
 import { liquidLevel, movementMedium } from '../world/block-movement.mjs';
+import { canLogLiquid, liquidCell, liquidKind } from '../world/logged-fluid.mjs';
 import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush,
   VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
+const liquidActions = new Set(['place_liquid', 'remove_liquid', 'copy_liquid']);
+const dryOnlyActions = new Set(['remove', 'remove_microblocks', 'place_part', 'remove_part', 'place_voxel', 'remove_voxel']);
 const frameActions = new Set(['frame_item','frame_use','frame_remove']);
 const vehiclePlacements = new Map([['place_minecart',CREATIVE_MINECART_KEY],['place_boat',CREATIVE_BOAT_KEY]]);
 const vehicleRemovals = new Map([['remove_minecart','not_a_minecart'],['remove_boat','not_a_boat']]);
 const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', 'edit_sign',
-  'place_frame', ...vehiclePlacements.keys(), ...vehicleRemovals.keys(), ...frameActions, ...partActions, ...voxelActions]);
+  'place_frame', ...vehiclePlacements.keys(), ...vehicleRemovals.keys(), ...frameActions, ...partActions, ...voxelActions, ...liquidActions]);
 const axes = ['x', 'y', 'z'];
 const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 const bedDirections = [[0,1], [-1,0], [0,-1], [1,0]];
@@ -93,6 +96,14 @@ function normalizeAction(body) {
     throw new RequestError(400,'invalid_coordinates');
   }
   if (body.type === 'remove_microblocks' && !input.hit) throw new RequestError(400, 'invalid_coordinates');
+  if (liquidActions.has(body.type)) {
+    if (!input.hit) throw new RequestError(400, 'invalid_coordinates');
+    if (body.type === 'place_liquid') {
+      if (typeof body.cell !== 'string' || body.cell.length > 128 || !liquidKind(body.cell)) throw new RequestError(400, 'invalid_cell');
+      input.cell = body.cell;
+      if (body.creative === true) input.creative = true;
+    }
+  }
   if ((['interact','place','place_frame'].includes(body.type) || vehiclePlacements.has(body.type)) && body.yaw !== undefined) {
     if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
     input.yaw = body.yaw % (2 * Math.PI);
@@ -268,14 +279,14 @@ export function createGame(base, store, geometry, {
   function getCurrent(x, y, z) {
     const edit = mechanicCells.get(cellAddress(x, y, z)) ?? store.getEdit(x, y, z);
     if (edit) return { x, y, z, cell: edit.cell, object: editObject(edit), revision: edit.revision,
-      ...(edit.parts && {parts: edit.parts}), ...(edit.voxels && {voxels: edit.voxels}) };
+      ...(edit.parts && {parts: edit.parts}), ...(edit.voxels && {voxels: edit.voxels}), ...(edit.fluid && {fluid: edit.fluid}) };
     const original = base.getCell(x, y, z);
     return { x, y, z, cell: original.key === 'air' ? null : original.key, object: original.object, revision: 0 };
   }
 
   function cellView(current) {
-    const {cell, object, voxels} = current;
-    return {key: cell, object, parts: current.parts ?? base.manifest.compositions?.[cell]?.parts, voxels};
+    const {cell, object, voxels, fluid} = current;
+    return {key: cell, object, parts: current.parts ?? base.manifest.compositions?.[cell]?.parts, voxels, fluid};
   }
 
   function publicChange(change, object = change.object) {
@@ -287,7 +298,7 @@ export function createGame(base, store, geometry, {
     const current = getCurrent(x, y, z);
     return current.cell === null ? null : cellView(current);
   };
-  const physical = physics(base, geometry, cellAt);
+  const physical = physics(base, geometry, cellAt, models);
   const frames = createItemFrames({base,store,physical,getCurrent,faceSupports,
     protectedCell:(x,y,z) => reserved(x,y,z) || spawnProtected(x,y,z)});
   const carts = createMinecarts({
@@ -514,8 +525,8 @@ export function createGame(base, store, geometry, {
       readState: (owner, key) => store.getState(module.id, owner, key),
       ownerAt: ({x,y,z,moveOwner}) => moveOwner ?? store.getEditOwner(x,y,z),
       pistonDestination: ({x,y,z}) => base.inBounds(x,y,z) && !reserved(x,y,z) &&
-        !spawnProtected(x,y,z) && !seatsAt(x,y,z) && !frames.hasMountAt(x,y,z),
-      pistonMovable: cell => !reserved(cell.x,cell.y,cell.z) && !spawnProtected(cell.x,cell.y,cell.z) &&
+        !spawnProtected(x,y,z) && !seatsAt(x,y,z) && !frames.hasMountAt(x,y,z) && !getCurrent(x,y,z).fluid,
+      pistonMovable: cell => !cell.fluid && !reserved(cell.x,cell.y,cell.z) && !spawnProtected(cell.x,cell.y,cell.z) &&
         !seatsAt(cell.x,cell.y,cell.z) && !frames.hasMountAt(cell.x,cell.y,cell.z) &&
         (allowRemoval || cell.moveOwner || store.getEditOwner(cell.x,cell.y,cell.z)) &&
         geometry.collisionFor(cellView(cell)).some(box => box.solid !== false),
@@ -528,14 +539,17 @@ export function createGame(base, store, geometry, {
     const revision = plan.cells?.length ? store.nextRevision() : store.worldRevision();
     const changes = [];
     for (const {moveOwner,...cell} of plan.cells ?? []) {
-      const change = {...cell,revision};
+      const { x, y, z } = cell;
+      const reservedCell = module.reserved?.(x, y, z);
+      const previous = reservedCell ? null : store.getEdit(x,y,z);
+      const keepLiquid = previous?.fluid && cell.cell !== null && blockState(previous)[0] === blockState(cell)[0];
+      const change = {...cell,revision, ...(keepLiquid && {fluid:previous.fluid})};
       changes.push(change);
-      const { x, y, z } = change;
-      if (module.reserved?.(x, y, z)) continue;
+      if (reservedCell) continue;
       const placed = change.cell !== null && (placement?.key === cellAddress(x, y, z) ||
         placement?.keys?.has(cellAddress(x, y, z)));
       const owner = moveOwner ?? (placed ? placement.player : null);
-      store.writeEdit(change, originalAt(x, y, z), owner);
+      store.writeEdit(change, originalAt(x, y, z), owner, keepLiquid ? store.getMicroParts(x,y,z) : null);
     }
     for (const entry of plan.state ?? []) {
       const value = entry.useRevision ? { ...entry.value, revision } : entry.value;
@@ -563,9 +577,9 @@ export function createGame(base, store, geometry, {
     }
   }
 
-  function writeCell(player, previous, cell, object, companion, adjusted = []) {
+  function writeCell(player, previous, cell, object, companion, adjusted = [], fluid) {
     const {x,y,z} = previous;
-    const change = { x, y, z, cell, object };
+    const change = { x, y, z, cell, object, ...(fluid && {fluid}) };
     const replaced = companion ? [change, companion] : [change];
     const changed = [...replaced, ...adjusted];
     for (const item of changed) {
@@ -731,6 +745,7 @@ export function createGame(base, store, geometry, {
     if (!mate || !store.getEditOwner(mate.x, mate.y, mate.z) ||
         base.getCell(mate.x, mate.y, mate.z).key !== 'air') return undefined;
     if (seatsAt(mate.x, mate.y, mate.z)) throw new RequestError(409, 'seat_taken');
+    if (mate.fluid) throw new RequestError(409, 'drain_liquid_first');
     return {x:mate.x, y:mate.y, z:mate.z, cell:null, object:null};
   }
 
@@ -929,6 +944,43 @@ export function createGame(base, store, geometry, {
     return writeVoxels(player,current,writeVoxelBrush(voxels,brush,null),null,breakEffect(current,undefined,material,[brush.box]));
   }
 
+  function editLiquid(player, input, current) {
+    const {x, y, z, type, hit} = input;
+    if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
+    const target = physical.targetAtHit(playerSight(player), x, y, z, hit, true);
+    if (!target) throw new RequestError(403, 'outside_reach');
+    if (type === 'copy_liquid') {
+      if (!target.liquid) throw new RequestError(409, 'liquid_missing');
+      const cell = liquidCell(target.liquid);
+      store.putClipboard(player, {cell, object:null});
+      return {worldRevision:store.worldRevision(), changes:[], effects:[], cell};
+    }
+
+    let fluid;
+    if (type === 'place_liquid') {
+      const kind = liquidKind(input.cell);
+      if (!(input.creative ? creativeBlocks.has(input.cell) : catalog.has(input.cell) || store.getClipboard(player)?.cell === input.cell)) {
+        throw new RequestError(400, 'unknown_cell_type');
+      }
+      if (current.fluid) throw new RequestError(409, 'drain_liquid_first');
+      const neighbors = (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz));
+      if (!canLogLiquid(cellView(current), neighbors, models)) throw new RequestError(409, 'incompatible_liquid');
+      fluid = kind;
+    } else if (!current.fluid) {
+      throw new RequestError(409, 'liquid_missing');
+    }
+
+    const revision = store.nextRevision();
+    const change = {...current, revision};
+    delete change.fluid;
+    if (fluid) change.fluid = fluid;
+    // Keep the drained revision tied to its original host during a later map rebase.
+    store.writeEdit({...change, fluid:fluid ?? 'dry'}, originalAt(x, y, z),
+      store.getEditOwner(x, y, z), store.getMicroParts(x, y, z));
+    return {worldRevision:revision, changes:[publicChange(change)], effects:fluid ?
+      [{type:'sound', sound:'block.place', cell:liquidCell(fluid), position:[x,y,z]}] : []};
+  }
+
   function execute(player, input, transport) {
     const { x, y, z, type } = input;
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
@@ -972,6 +1024,8 @@ export function createGame(base, store, geometry, {
       transport.placedBoat = boats.place(input);
       return {worldRevision:store.worldRevision(),changes:[],effects:[],boat:transport.placedBoat.entity};
     }
+    if (liquidActions.has(type)) return editLiquid(player, input, current);
+    if (current.fluid && dryOnlyActions.has(type)) throw new RequestError(409, 'drain_liquid_first');
     if (partActions.has(type)) return editMicroParts(player, input, current);
     if (voxelActions.has(type)) return editVoxels(player, input, current);
     if (type === 'remove_microblocks') return removeMicroblocks(player, input, current);
@@ -988,9 +1042,14 @@ export function createGame(base, store, geometry, {
           isMicroblockCell({key: input.cell, parts: base.manifest.compositions?.[input.cell]?.parts}))) {
         throw new RequestError(409, 'part_required');
       }
-      if (current.cell !== null) throw new RequestError(409, 'occupied');
+      const neighbors = (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz));
+      const fluid = liquidKind(current.cell);
+      const intoLiquid = fluid && store.getEditOwner(x, y, z) && base.getCell(x, y, z).key === 'air'
+        && canLogLiquid(input.cell, neighbors, models);
+      if (current.cell !== null && !intoLiquid) throw new RequestError(409, 'occupied');
       if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
-      if (!placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
+      if (intoLiquid ? !physical.targetAtHit(playerSight(player), x, y, z, input.hit, true)
+        : !placementAnchor(player, input)) throw new RequestError(403, 'outside_reach');
       if (signBlocks.has(blockState(input.cell)[0])) return placeSign(player, current, input);
       const rail = railFor(input.cell);
       if (rail) return placeRail(player, current, input, rail);
@@ -1009,7 +1068,7 @@ export function createGame(base, store, geometry, {
         : copiedObject ? { ...copiedObject, position: [x, y, z], key: `tile:${x}:${y}:${z}` } : null;
       const parts = base.manifest.compositions?.[actual.cell]?.parts;
       if (!actual.paired && playerOverlaps(x, y, z, {key:actual.cell, object, parts}, player)) throw new RequestError(409, 'occupied');
-      return writeCell(player, current, actual.cell, object, actual.companion);
+      return writeCell(player, current, actual.cell, object, actual.companion, [], intoLiquid ? fluid : undefined);
     }
 
     if (type === 'remove' && reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
@@ -1225,7 +1284,7 @@ export function createGame(base, store, geometry, {
         segment = [];
         const next = playerBody(size,nextStance);
         if (!samePoint(from,step) || physical.collides(from,next) || nextStance !== 'stand' &&
-            (!physical.supported(from,dimensions) || movementMedium(cellAt,from.x,from.y,from.z))) reject();
+            (!physical.supported(from,dimensions) || movementMedium(cellAt,from.x,from.y,from.z,models))) reject();
         stance = nextStance;
         dimensions = next;
       }

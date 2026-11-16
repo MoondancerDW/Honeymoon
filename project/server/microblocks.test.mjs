@@ -160,6 +160,56 @@ test('last player detail returns the cell to air and retains its revision', asyn
   assert.equal(snapshot.body.overrides.some(change => change.x === 8 && change.z === 10), false);
 });
 
+test('both static liquids surround microblocks, survive restart, and require draining before editing', async t => {
+  const base = fixture('logged-microblocks');
+  base.catalog.add('legacy:9:0');
+  base.catalog.add('legacy:11:0');
+  const restart = workspace(t, base);
+  let app = await restart();
+  const player = (await app.request('session', {})).cookie;
+  const observer = (await app.request('session', {})).cookie;
+  const cell = point(8, 1, 10);
+  const openFace = point(8.75, 1.7, 10);
+  const addRoof = command('place_part', 'add-own-panel', cell, 0, {
+    part: roof, against: {...cell, partSlot:0}, hit:point(8.5, height.floor, 10.5),
+  });
+  const installed = await app.request('action', addRoof, player);
+  assert.equal(installed.status, 200, JSON.stringify(installed.body));
+  let revision = installed.body.worldRevision;
+
+  for (const [fluid, material] of [['water', 'legacy:9:0'], ['lava', 'legacy:11:0']]) {
+    const action = (type, extra = {}, cookie = player) => app.request('action',
+      command(type, fluid + '-' + type, cell, revision, {hit:openFace, ...extra}), cookie);
+    const wet = await action('place_liquid', {cell:material, hit:point(8.75, height.floor, 10.5)});
+    assert.equal(wet.status, 200, JSON.stringify(wet.body));
+    revision = wet.body.worldRevision;
+    assert.equal(wet.body.changes.length, 1);
+    const [changed] = wet.body.changes;
+    assert.equal(changed.fluid, fluid);
+    assert.deepEqual(changed.parts, installed.body.changes[0].parts);
+
+    app = await restart();
+    const shared = await app.request('world', undefined, observer);
+    assert.deepEqual(shared.body.overrides.filter(item => item.revision > 0), [changed]);
+    const copy = await action('copy_liquid', {}, observer);
+    assert.equal(copy.status, 200, JSON.stringify(copy.body));
+    assert.equal(copy.body.cell, material);
+
+    for (const [type, extra] of [['remove_part', {partSlot:1}], ['place_part', {part:bar, against:cell}],
+      ['remove_microblocks', {}], ['remove_voxel', {voxel:0}], ['remove', {}]]) {
+      assert.deepEqual(await action(type, extra), {status:409, body:{error:'drain_liquid_first'}});
+    }
+    const dry = await action('remove_liquid', {}, observer);
+    assert.equal(dry.status, 200, JSON.stringify(dry.body));
+    revision = dry.body.worldRevision;
+    assert.deepEqual(dry.body.changes, [{...installed.body.changes[0], revision}]);
+  }
+  const removed = await app.request('action', command('remove_part', 'remove-dry-roof', cell, revision,
+    {partSlot:roof.slot, hit:point(8.5,1.93,10)}), player);
+  assert.equal(removed.status, 200, JSON.stringify(removed.body));
+  assert.deepEqual(removed.body.changes[0].parts, [floor]);
+});
+
 test('an older owned Cover assembly lazily splits into individual parts', async t => {
   const base = fixture('legacy-owned-parts', false);
   const edge = {slot: 14, shape: 3, material: 3};

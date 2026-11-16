@@ -1,10 +1,11 @@
 import * as geometry from '/world/geometry.mjs';
 import {decodeIndices} from './world-data.mjs';
 import {CHISEL_FANTASY, chiselFantasyQuarters, glassTexture, paneTexture} from '/world/connected-textures.mjs';
-import {contactShade, coverShade, FACE_SHADE, averageLight} from './lighting.mjs';
+import {contactShade, FACE_SHADE, averageLight} from './lighting.mjs';
 import {extractedModel, isJammyConnectableSeat} from '/world/extracted-models.mjs';
 import {crossSpriteCorners} from '/world/cross-sprites.mjs';
 import {isOpaqueFullVoxels, voxelFaces} from '/world/voxel-chisel.mjs';
+import {clipLiquidFace, liquidCavity, liquidKind} from '/world/logged-fluid.mjs';
 import {buildSectionVisibility, isOcclusionBlock, markOcclusionBlock} from './section-visibility.mjs';
 
 const {shapeFor, ATLAS_GRID, TILE_SIZE, FACES} = geometry;
@@ -164,7 +165,9 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
   }
   let vertexShade = shadow;
   let vertexLight = brightness;
-  if (quarter >= 0) {
+  const croppedCover = box.material !== undefined &&
+    (box[MIN[uAxis]] !== 0 || box[MAX[uAxis]] !== 1 || box[MIN[vAxis]] !== 0 || box[MAX[vAxis]] !== 1);
+  if ((quarter >= 0 || croppedCover) && (shadow || Array.isArray(brightness))) {
     const sample = ([a,b,c,d], point) => {
       const u = point[uAxis] - origin[uAxis], v = point[vAxis] - origin[vAxis];
       return (a + (b - a) * u) * (1 - v) + (d + (c - d) * u) * v;
@@ -225,12 +228,14 @@ function makeShape(key, at, cell, neighbors, edited) {
   return shape;
 }
 
-function precise({indices, light, objects, microblocks, sculpted, connectedTextures, chiselConnectedTextures,
+function precise({indices, light, objects, microblocks, sculpted, logged, connectedTextures, chiselConnectedTextures,
   palette = cells, compositions: definitions = compositions, collectVisibility = false}) {
   const layers = {opaque: layer(), cutout: layer(), blend: layer()};
   const indexedObjects = new Map(objects);
   const editedParts = new Map(microblocks);
   const voxelCells = new Map(sculpted);
+  const loggedCells = logged?.length ? new Map(logged) : null;
+  const liquidVolumes = new Map();
   const hasSculptures = voxelCells.size > 0;
   const rendered = new Map();
   const signs = [];
@@ -251,6 +256,21 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
     if (!indices[at] || hasSculptures && voxelCells.has(at) && !editedParts.has(at)) return null;
     if (!rendered.has(at)) rendered.set(at, makeShape(palette[indices[at]], at, cell(at), cell, editedParts.has(at)));
     return rendered.get(at);
+  }
+  const offsetCell = at => (dx, dy, dz) => cell(at + dx + dz * SIDE + dy * SIDE * SIDE);
+  function openVolume(at) {
+    if (!liquidVolumes.has(at)) liquidVolumes.set(at, liquidCavity(cell(at), offsetCell(at), models));
+    return liquidVolumes.get(at);
+  }
+  function liquidObstacles(at, kind) {
+    const block = shape(at);
+    const neighboringLiquid = liquidKind(palette[indices[at]]);
+    if (neighboringLiquid === kind || neighboringLiquid === 'lava' && kind === 'water') return block?.boxes ?? [];
+    const boxes = block?.model?.collision ?? block?.boxes ?? [];
+    const solid = boxes.filter(box => box.mode === 'opaque' && box.solid !== false && !box.kind && box.angle === undefined);
+    if (isOpaqueFullVoxels(voxelCells.get(at))) solid.push({x0:0, y0:0, z0:0, x1:1, y1:1, z1:1});
+    const nearby = loggedCells?.get(at);
+    return nearby === kind || nearby === 'lava' && kind === 'water' ? [...solid, ...openVolume(at)] : solid;
   }
   const shadowCells = new Uint8Array(indices.length);
   function castsContactShade(at) {
@@ -292,6 +312,26 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
         const at = (x + 1) + (z + 1) * SIDE + (y + 1) * SIDE * SIDE;
         if (!indices[at]) continue;
         const origin = [x, y, z];
+        const loggedKind = loggedCells?.get(at);
+        if (loggedKind) {
+          const volume = openVolume(at);
+          const lava = loggedKind === 'lava';
+          const out = lava ? layers.opaque : layers.water ??= layer();
+          const tile = lava ? geometry.tiles.lava : geometry.tiles.water;
+          for (let face = 0; face < 6; face++) {
+            const axis = face >> 1;
+            const edge = face & 1 ? MAX[axis] : MIN[axis];
+            const boundary = volume.filter(box => box[edge] === (face & 1));
+            if (!boundary.length) continue;
+            const adjacent = at + FACES[face][axis] * STRIDE[axis];
+            const obstacles = liquidObstacles(adjacent, loggedKind);
+            for (const box of boundary) {
+              for (const piece of clipLiquidFace(box, face, obstacles)) {
+                faceQuad(out, piece, face, origin, lava ? 256 : light[at], tile, lava ? 1 : FACE_SHADE[face]);
+              }
+            }
+          }
+        }
         const voxels = hasSculptures && voxelCells.get(at);
         if (voxels) {
           const next = face => at + FACES[face][face >> 1] * STRIDE[face >> 1];
@@ -332,7 +372,6 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
         const chisel = chiselConnectedTextures && blockKey === CHISEL_FANTASY;
         const glass = ctm && blockKey.startsWith('legacy:20:');
         const water = waterKey(blockKey);
-        const cover = blockKey === 'legacy:750:0' || blockKey.startsWith('cover:750:0:');
         const neighborLit = usesNeighborLight(blockKey);
         const neighbors = ctm || chisel ? (dx, dy, dz) => cell(at + dx + dz * SIDE + dy * SIDE * SIDE) : null;
         if (indexedObjects.has(at)) {
@@ -392,9 +431,12 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             const lightOffset = box.chestLightOffset;
             const brightness = box.emissive ? 256 : box.redPowerLocalShade || box.chestLightOffset
               ? light[at + (lightOffset ? lightOffset[0] + lightOffset[2] * SIDE : 0)] : packed;
-            const shade = box.emissive ? 1 : box.redPowerLocalShade?.[f] ?? FACE_SHADE[f] * (cover ? coverShade(light[adjacent]) : 1);
-            const smooth = onEdge && box === blockShape.full && box.mode === 'opaque' && !box.emissive
-              ? faceLighting(adjacent, f, brightness) : null;
+            // Covers sample the same light map as other blocks. Multiplying by
+            // the adjacent cell again blackens recessed faces next to solids.
+            const shade = box.emissive ? 1 : box.redPowerLocalShade?.[f] ?? FACE_SHADE[f];
+            const litCover = box.material !== undefined && brightness > 0;
+            const smooth = box.mode === 'opaque' && !box.emissive && (litCover || onEdge && box === blockShape.full)
+              ? faceLighting(onEdge ? adjacent : at, f, brightness) : null;
             if (chisel) {
               const tiles = chiselFantasyQuarters(f, neighbors);
               for (let quarter = 0; quarter < tiles.length; quarter++) {
@@ -404,6 +446,15 @@ function precise({indices, light, objects, microblocks, sculpted, connectedTextu
             }
             let tile = box.faces[f];
             if (glass) tile = glassTexture(f, neighbors, Number(blockKey.slice(10))) ?? tile;
+            if (onEdge && loggedCells?.has(adjacent)) {
+              const kind = liquidKind(blockKey);
+              if (kind) {
+                for (const piece of clipLiquidFace(box, f, liquidObstacles(adjacent, kind))) {
+                  faceQuad(out, piece, f, origin, brightness, tile, shade);
+                }
+                continue;
+              }
+            }
             faceQuad(out, box, f, origin, smooth?.levels ?? brightness, tile, shade, -1, smooth?.shadow);
           }
         }

@@ -983,8 +983,9 @@ function vanillaShape(id, meta, neighbors) {
     case 10:
     case 11: return [box([0, 0, 0, 1, meta < 8 ? 1 - (meta + 1) / 9 : 1, 1], tiles.lava, { solid: false, emissive: true })];
     case 17: return uniform(log(meta));
-    // The reference client's Fast trees select the opaque tile next to each leaf tile.
-    case 18: return uniform([53, 133, 53, 197][meta & 3], { tint: [WARM_LEAVES, 0x619961, 0x80a755, WARM_LEAVES][meta & 3] });
+    case 18: return uniform([52, 132, 52, 196][meta & 3],
+      {mode:'cutout', tint:[WARM_LEAVES, 0x619961, 0x80a755, WARM_LEAVES][meta & 3]});
+    case 243: return uniform(304,{mode:'cutout', tint:creativeBlock(id,meta)?.[5]});
     case 20: return uniform(49, GLASS);
     case 23:
     case 61:

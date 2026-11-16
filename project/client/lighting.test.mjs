@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { FACE_SHADE, averageLight, contactShade, coverShade, legacyLight, linearByte, sunlightAt, writeLightmap } from './lighting.mjs';
+import { FACE_SHADE, averageLight, contactShade, legacyLight, linearByte, sunlightAt, writeLightmap } from './lighting.mjs';
 import { World } from './world-data.mjs';
 import { filledVoxels, voxelKey, writeVoxel } from '../world/voxel-chisel.mjs';
 import { lightChanged } from './block-light.mjs';
@@ -42,8 +42,6 @@ test('legacy lighting keeps shaded interiors and the warm block-light curve', ()
   assert.deepEqual(legacyLight(0xf0), [250,250,250]);
   assert.equal(linearByte(255, FACE_SHADE[0], 255), 81);
   assert.equal(linearByte(255, FACE_SHADE[3], 255), 255);
-  assert.equal(coverShade(0xf0), 1);
-  assert.ok(Math.abs(coverShade(0xb7) - 11/27) < 1e-9);
 });
 
 test('native day cycle dims sky light without scaling block light', () => {

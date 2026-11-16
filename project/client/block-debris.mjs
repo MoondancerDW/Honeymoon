@@ -5,6 +5,14 @@ const limit = 24;
 const corners = [[-1,-1],[1,-1],[1,1],[-1,1]];
 const fallback = {x0:0,y0:0,z0:0,x1:1,y1:1,z1:1};
 
+function debrisMaterial(key, material) {
+  const shapes = shapeFor(material === undefined ? key : `cover-material:${material}`);
+  const face = shapes.find(shape => shape.faces.some(tile => tile >= 0));
+  if (!face) return null;
+  const tile = [4,5,0,1,3,2].map(index => face.faces[index]).find(value => value >= 0);
+  return {shapes, tile, tint:face.tint ?? face.tintFaces?.[3] ?? 0xffffff};
+}
+
 export class BlockDebris {
   constructor(scene, world) {
     this.scene = scene;
@@ -16,15 +24,11 @@ export class BlockDebris {
 
   add({position,cell,material,voxelMaterial,boxes}, surface, rows, time) {
     if (!surface || !cell || !this.world.hasChunk(position[0],position[2])) return;
-    const key = material === undefined ? voxelMaterial ?? cell : `cover-material:${material}`;
-    const shapes = shapeFor(key);
-    const appearance = shapes.find(shape => shape.faces.some(tile => tile >= 0));
+    const appearance = debrisMaterial(voxelMaterial ?? cell,material);
     if (!appearance) return;
-    const tile = [4,5,0,1,3,2].map(face => appearance.faces[face]).find(value => value >= 0);
-    const tint = appearance.tint ?? appearance.tintFaces?.[3] ?? 0xffffff;
-    const volumes = boxes?.length ? boxes : material === undefined && !voxelMaterial ? shapes : [fallback];
+    const volumes = boxes?.length ? boxes : material === undefined && !voxelMaterial ? appearance.shapes : [fallback];
     const light = this.world.lightAt(...position);
-    const particles = [], uvs = [], indices = [];
+    const particles = [];
     const floorCell = this.world.cellAt(position[0],position[1] - 1,position[2]);
     const supports = floorCell ? collisionFor(floorCell) : [];
     for (const box of volumes.slice(0,4)) {
@@ -38,17 +42,41 @@ export class BlockDebris {
           .reduce((height,s) => Math.max(height,position[1] - 1 + s.y1),-Infinity);
         const velocity = local.map(value => (value - .5) * 2.3 + (Math.random() - .5) * .7);
         const half = .025 + Math.random() * .043;
-        const offset = particles.length * 4;
-        const u = tile % ATLAS_GRID + (Math.floor(Math.random() * 13) + .05) / 16;
-        const v = Math.floor(tile / ATLAS_GRID) + (Math.floor(Math.random() * 13) + .05) / 16;
-        const right = (u + .24) / ATLAS_GRID, top = 1 - v / rows;
-        const left = u / ATLAS_GRID, bottom = 1 - (v + .24) / rows;
-        uvs.push(left,bottom,right,bottom,right,top,left,top);
-        indices.push(offset,offset+1,offset+2,offset,offset+2,offset+3);
         particles.push({x:px,y:py,z:pz,velocity,half,floor});
       }
     }
+    this.addBurst(particles,appearance,surface,rows,light,time,.72);
+  }
+
+  ground(feet, contact, motion, fall, surface, rows, time) {
+    if (!surface) return;
+    const appearance = debrisMaterial(typeof contact.cell === 'string' ? contact.cell : contact.cell.key,contact.material);
+    if (!appearance) return;
+    const particles = [];
+    const count = fall ? Math.min(28,Math.round(8 + fall)) : 1;
+    for (let i=0; i<count; i++) {
+      const dx = (Math.random()-.5)*.46, dz = (Math.random()-.5)*.46;
+      const velocity = fall ? [dx*5,.7+Math.random()*1.45,dz*5] :
+        [-motion[0]*.28+dx, .7+Math.random()*.55,-motion[1]*.28+dz];
+      particles.push({x:feet.x+dx,y:contact.height+.03,z:feet.z+dz,velocity,
+        half:.021+Math.random()*.024,floor:contact.height});
+    }
+    const light = this.world.lightAt(contact.position[0],contact.position[1]+1,contact.position[2]);
+    this.addBurst(particles,appearance,surface,rows,light,time,fall ? .62 : .37);
+  }
+
+  addBurst(particles,{tile,tint},surface,rows,light,time,lifetime) {
     if (!particles.length) return;
+    const uvs = [], indices = [];
+    for (let i=0; i<particles.length; i++) {
+      const offset = i * 4;
+      const u = tile % ATLAS_GRID + (Math.floor(Math.random() * 13) + .05) / 16;
+      const v = Math.floor(tile / ATLAS_GRID) + (Math.floor(Math.random() * 13) + .05) / 16;
+      const right = (u + .24) / ATLAS_GRID, top = 1 - v / rows;
+      const left = u / ATLAS_GRID, bottom = 1 - (v + .24) / rows;
+      uvs.push(left,bottom,right,bottom,right,top,left,top);
+      indices.push(offset,offset+1,offset+2,offset,offset+2,offset+3);
+    }
     const vertices = particles.length * 4;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position',new THREE.BufferAttribute(new Float32Array(vertices*3),3).setUsage(THREE.DynamicDrawUsage));
@@ -66,7 +94,7 @@ export class BlockDebris {
     mesh.frustumCulled = false;
     if (this.bursts.length === limit) this.remove(this.bursts.shift());
     this.scene.add(mesh);
-    this.bursts.push({mesh, particles, time, previous:time});
+    this.bursts.push({mesh,particles,time,lifetime,previous:time});
   }
 
   remove({mesh}) {
@@ -80,14 +108,14 @@ export class BlockDebris {
     this.up.set(0,1,0).applyQuaternion(camera.quaternion);
     this.bursts = this.bursts.filter(burst => {
       const elapsed = (now - burst.time) / 1000;
-      if (elapsed >= .72) {
+      if (elapsed >= burst.lifetime) {
         this.remove(burst);
         return false;
       }
       const dt = Math.min(.05,(now - burst.previous) / 1000);
       burst.previous = now;
       const positions = burst.mesh.geometry.attributes.position;
-      const scale = Math.min(1,(.72 - elapsed) * 5);
+      const scale = Math.min(1,(burst.lifetime - elapsed) * 5);
       let vertex = 0;
       for (const particle of burst.particles) {
         const {velocity,half,floor} = particle;

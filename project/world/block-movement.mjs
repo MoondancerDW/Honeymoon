@@ -1,5 +1,6 @@
 import {hasHatchRung} from './west-cellar.mjs';
 import {VOXEL_SIZE, voxelFluidAt} from './voxel-chisel.mjs';
+import {liquidAt} from './logged-fluid.mjs';
 
 const keyOf = cell => typeof cell === 'string' ? cell : cell?.key;
 
@@ -15,7 +16,7 @@ export function liquidLevel(cell) {
   return 1 - ((meta < 8 ? meta : 0) + 1) / 9;
 }
 
-export function movementMedium(cellAt, x, y, z) {
+export function movementMedium(cellAt, x, y, z, models) {
   // A collision may settle the feet a few micrometres below the floor plane.
   const xx = Math.floor(x), zz = Math.floor(z), yy = Math.floor(y + .00001);
   const atFeet = cellAt(xx, yy, zz);
@@ -29,6 +30,8 @@ export function movementMedium(cellAt, x, y, z) {
   }
   const sampleY = Math.floor(depth);
   const sample = sampleY === yy ? atFeet : (above ?? cellAt(xx, sampleY, zz));
+  if (sample?.fluid === 'water' && liquidAt(sample, [x - xx, depth - sampleY, z - zz],
+    (dx, dy, dz) => cellAt(xx + dx, sampleY + dy, zz + dz), models) === 'water') return 'water';
   if (sample?.voxels && voxelFluidAt(sample.voxels,
       Math.floor((x - xx) * VOXEL_SIZE), Math.floor((depth - sampleY) * VOXEL_SIZE),
       Math.floor((z - zz) * VOXEL_SIZE)) === 'water') return 'water';

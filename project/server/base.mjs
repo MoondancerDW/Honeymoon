@@ -5,6 +5,7 @@ import { relatedBlockStates } from '../world/block-interactions.mjs';
 import { isRideableMinecart } from '../world/minecarts.mjs';
 import { isRideableBoat } from '../world/boats.mjs';
 import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
+import { loadSnowCleanup } from './snow-cleanup.mjs';
 
 const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
 const MAX_CACHED_CHUNKS = 80;
@@ -112,7 +113,7 @@ function publicWorld(manifest, hash) {
     chunks, legacyRegistry, terrain, palette:['air'], compositions:{}, contentHash:hash, chunkPalettes:true};
 }
 
-export function loadBase(directory) {
+export function loadBase(directory, {cleanSnow = true} = {}) {
   const rawManifest = readFileSync(join(directory, 'world.json'), 'utf8');
   const manifest = JSON.parse(rawManifest);
   if (manifest.schemaVersion !== 1 || manifest.palette[0] !== 'air') {
@@ -123,7 +124,9 @@ export function loadBase(directory) {
   const playableCoordinates = new Set(manifest.chunks.map(([x, z]) => `${x}.${z}`));
   const chunks = new Map();
   const bounds = manifest.bounds;
-  const hash = manifest.contentHash ?? createHash('sha256').update(rawManifest).digest('hex');
+  const originalHash = manifest.contentHash ?? createHash('sha256').update(rawManifest).digest('hex');
+  const cleanup = cleanSnow ? loadSnowCleanup(directory,originalHash) : null;
+  const hash = cleanup?.hash ?? originalHash;
   const publicManifest = publicWorld(manifest, hash);
   const corePalette = manifest.palette.slice(0, manifest.corePaletteSize ?? manifest.palette.length);
   const catalog = new Set(corePalette);
@@ -147,6 +150,7 @@ export function loadBase(directory) {
     }
     const source = JSON.parse(readFileSync(join(directory, 'chunks', `${chunkKey}.json`), 'utf8'));
     if (source.x !== cx || source.z !== cz) throw new Error(`Mismatched chunk coordinates ${chunkKey}`);
+    cleanup?.apply(source,manifest.palette);
     const palette = manifest.chunkPalettes ? source.palette : manifest.palette;
     if (!Array.isArray(palette) || palette[0] !== 'air') throw new Error(`Malformed palette in ${chunkKey}`);
     const sections = new Map();

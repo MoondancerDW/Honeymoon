@@ -11,12 +11,14 @@ import {createPonyAvatar, createPonyFacing} from './pony-avatar.mjs';
 import {cameraClearance} from './movement.mjs';
 import {clockTick} from '../world/world-time.mjs';
 import {SectionVisibility} from './section-visibility.mjs';
-import {FarTerrain, supportsFarTerrain} from './far-terrain.mjs';
+import {FarTerrain, supportsFarTerrain, VISTA_FOG_END} from './far-terrain.mjs';
 import {FIRE_FRAMES, FIRE_SIZE, FIRE_STEP_MS, fireSpriteSheet} from '../world/fire-animation.mjs';
 import {addTerrainFilter, terrainFilter} from './terrain-filter.mjs';
 import {ViewBobbing} from './view-bobbing.mjs';
 import {PonyShadows} from './pony-shadows.mjs';
 import {BlockDebris} from './block-debris.mjs';
+import {HeldLights} from './held-light.mjs';
+import {groundSurface} from './audio.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -100,6 +102,7 @@ export class Display {
     this.lightBytes = new Uint8Array(16 * 17 * 4);
     this.lightmap = new THREE.DataTexture(this.lightBytes, 16, 17, THREE.RGBAFormat);
     this.lightmap.magFilter = this.lightmap.minFilter = THREE.NearestFilter;
+    this.heldLights = new HeldLights(world);
     this.dayHorizon = new THREE.Color('#95aad5');
     this.dayZenith = new THREE.Color('#84abfc');
     this.nightHorizon = new THREE.Color('#0c1326');
@@ -126,7 +129,8 @@ export class Display {
     this.localSkin = null;
     const ponyAirAt = (x,y,z) => this.world.hasChunk(x,z) && !this.world.cellAt(x,y,z);
     this.ponyAirAt = ponyAirAt;
-    this.players = new RemotePlayers(this.scene, this.camera, () => this.heldItemAssets(), ponyAirAt);
+    this.players = new RemotePlayers(this.scene,this.camera,() => this.heldItemAssets(),ponyAirAt,
+      (feet,body,motion,fall,now) => this.groundDust(feet,body,motion,fall,now));
     this.ponyShadows = new PonyShadows(this.scene, this.world);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
@@ -363,6 +367,7 @@ export class Display {
           float skyLight = floor(legacyLightLevel / 16.0);
           vec3 illumination = texture2D(honeymoonLightmap, vec2((blockLight + .5) / 16.0, (skyLight + .5) / 17.0)).rgb;
           vColor.rgb = lightSrgbToLinear(vColor.rgb * illumination);`);
+      this.heldLights.attach(shader);
     };
   }
 
@@ -526,6 +531,7 @@ export class Display {
   }
 
   addChunk(chunk) {
+    this.heldLights.invalidate(chunk.x * 16 + 8,chunk.z * 16 + 8,8);
     this.frameChunksDirty = true;
     this.remeshLighting(this.world.updateLighting(chunk));
     const levels = new Set(chunk.sections.keys());
@@ -580,6 +586,7 @@ export class Display {
     this.frameChunksDirty = true;
     const removedEntities = new Set();
     for (const {x, z} of chunks) {
+      this.heldLights.invalidate(x * 16 + 8,z * 16 + 8,8);
       const key = chunkKey(x, z);
       this.preciseLevels.delete(key);
       this.completedChunks.delete(key);
@@ -683,6 +690,7 @@ export class Display {
   }
 
   remesh(x, y, z, revision) {
+    this.heldLights.invalidate(x,z);
     const cx = Math.floor(x / 16), cy = Math.floor(y / 16), cz = Math.floor(z / 16);
     this.schedule(cx, cy, cz, true);
     const id = sectionKey(cx, cy, cz);
@@ -732,8 +740,11 @@ export class Display {
     }
     if (this.world.manifest.chunkPalettes) {
       const layered = distance >= 24 && this.farTerrain?.lod.maxDistance === 32;
-      this.scene.fog.near = distance === 32 ? 448 : distance === 4 ? 56 : layered ? 128 : distance * 14;
-      this.scene.fog.far = distance * 16;
+      const vista = distance === 32 && this.farTerrain?.vista;
+      this.scene.fog.near = vista ? 500 : distance === 32 ? 448 : distance === 4 ? 56 : layered ? 128 : distance * 14;
+      this.scene.fog.far = vista ? VISTA_FOG_END : distance * 16;
+      this.camera.far = vista ? VISTA_FOG_END + 280 : 850;
+      this.camera.updateProjectionMatrix();
     } else {
       this.scene.fog.near = distance === 4 ? 60 : distance * 8;
       this.scene.fog.far = Math.max(115, distance * 22);
@@ -941,6 +952,15 @@ export class Display {
   breakBlock(effect) {
     this.blockDebris ??= new BlockDebris(this.scene,this.world);
     this.blockDebris.add(effect,this.materials?.cutout,this.atlasRows,performance.now());
+  }
+
+  groundDust(feet,body,motion,fall,now) {
+    const {x,y,z} = this.camera.position;
+    if (Math.hypot(feet.x-x,feet.y-y,feet.z-z)>24) return;
+    const contact = groundSurface(this.world,feet,body);
+    if (!contact) return;
+    this.blockDebris ??= new BlockDebris(this.scene,this.world);
+    this.blockDebris.ground(feet,contact,motion,fall,this.materials?.cutout,this.atlasRows,now);
   }
 
   dispense({position,direction,stack}) {
@@ -1300,10 +1320,13 @@ export class Display {
       this.sky.updateMatrixWorld();
       const ponies = [...this.players.entries.values()];
       if (this.localAvatar) ponies.push({object:this.localAvatar.object, avatar:this.localAvatar});
+      this.heldLights.update(ponies, this.camera.position, this.spectating ? null : this.localAvatar);
       for (const {object,avatar} of ponies) {
         if (!object.visible && avatar !== this.localAvatar) continue;
         const {x,y,z} = object.position;
-        const offset = 4 * this.world.lightAt(Math.floor(x), Math.floor(y + .85), Math.floor(z));
+        const xx = Math.floor(x), yy = Math.floor(y + .85), zz = Math.floor(z);
+        const packed = this.world.lightAt(xx,yy,zz);
+        const offset = 4 * ((packed & 240) | Math.max(packed & 15,this.heldLights.levelAt(xx,yy,zz)));
         avatar.setLight(this.lightBytes[offset] << 16 | this.lightBytes[offset + 1] << 8 | this.lightBytes[offset + 2]);
       }
       this.ponyShadows.update(ponies.map(pony => pony.object), this.camera.position);
@@ -1328,7 +1351,7 @@ export class Display {
       }
     }
     return {calls: render.calls, triangles: render.triangles, geometries: memory.geometries, textures: memory.textures,
-      occlusion:this.sectionVisibility.statistics(),
+      occlusion:this.sectionVisibility.statistics(), heldLights:this.heldLights.statistics(),
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles, farTerrain:this.farTerrain?.stats(),
       pending: this.pendingWork,
       loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};

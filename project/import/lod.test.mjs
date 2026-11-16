@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {buildRegion,makeMaterials,outerChunk,sampleChunk,OUTER_STEP} from './lod-mesh.mjs';
-import {decodeFarTile,LOD_VERSION,TRANSITION_FACE,WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
+import {CUTOUT_FACE,decodeFarTile,LOD_VERSION,MICRO_FACE,MICRO_SCALE,TRANSITION_FACE,WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
 import {shapeFor, tiles} from '../world/geometry.mjs';
 import {fullCoverMaterial} from '../world/cover-plane.mjs';
 
@@ -26,9 +26,11 @@ function faces(content, slot = 0, transition = false) {
     const at=first+i*16;
     const flags=content[at+8];
     const water = Boolean(flags&128);
+    const scale = flags&MICRO_FACE ? MICRO_SCALE : 1;
     const light = content.readUInt16LE(at+11);
-    return {x:content[at],z:content[at+1],y:content.readUInt16LE(at+2)/(water ? WATER_HEIGHT_SCALE : 1),
-      w:content.readUInt16LE(at+4),h:content.readUInt16LE(at+6),face:flags&7,water,tile:content.readUInt16LE(at+9),
+    return {x:content[at]/scale,z:content[at+1]/scale,y:content.readUInt16LE(at+2)/(water ? WATER_HEIGHT_SCALE : scale),
+      w:content.readUInt16LE(at+4)/scale,h:content.readUInt16LE(at+6)/scale,face:flags&7,water,tile:content.readUInt16LE(at+9),
+      ...(flags & CUTOUT_FACE && {cutout:true}),
       ...(light !== 240 && {light}), transition:Boolean(flags & TRANSITION_FACE)};
   }).filter(face => face.transition === transition).map(({transition:_,...face}) => face);
 }
@@ -66,7 +68,7 @@ test('admits a one-block masonry tower and omits geometry inside sealed air', ()
   assert.ok(geometry.every(face => face.y>=8));
 });
 
-test('ignores partial standalone covers and retains the underlying attached frame in simplified terrain', () => {
+test('keeps partial standalone covers and the underlying attached frame in simplified terrain', () => {
   const cover = 'cover:750:0:test';
   const coveredFrame = 'cover:768:0:test';
   const parts = [{slot:1, shape:3, material:28}];
@@ -75,11 +77,16 @@ test('ignores partial standalone covers and retains the underlying attached fram
   simplified.compositions[cover] = {parts};
   simplified.compositions[coveredFrame] = {parts};
   const bareFrame = supplied(0,0,(x,y) => y < 8 ? 1 : x < 12 ? 0 : 2,[air,rock,'legacy:768:0']);
-  assert.deepEqual(pack([simplified],0,0).content, pack([bareFrame],0,0).content);
+  const detailed = pack([simplified],0,0).content;
+  const bare = pack([bareFrame],0,0).content;
+  const layer = decodeFarTile(Uint8Array.from(detailed).buffer).layers[4];
+  assert.ok(layer.count > 0);
+  assert.equal(layer.coordinateScale,8);
+  assert.equal(decodeFarTile(Uint8Array.from(bare).buffer).layers[4].count,0);
   assert.ok(shapeFor({key:cover, parts}).some(box => box.partSlot === 1));
 });
 
-test('restores only complete cover faces, including a union of mixed materials on the same plane', () => {
+test('keeps the center of a hollow cover open in both tiers and draws each material on its own plane', () => {
   const cover = 'cover:750:0:test';
   const slab = {slot:1, shape:3, material:28};
   const center = {slot:29, material:1, bounds:[[2,7,2,6,8,6]]};
@@ -94,9 +101,22 @@ test('restores only complete cover faces, including a union of mixed materials o
   const {content} = pack([tinyRoof],0,0);
   const tile = shapeFor('cover-material:28')[0].faces[3];
   assert.ok(faces(content).some(face => face.tile === tile && face.face === 3 && face.y === 9));
+  assert.ok(faces(content).some(face => face.tile === 1 && face.face === 3 && face.y === 9 && face.x === 8.25 && face.z === 8.25));
   tinyRoof.compositions[cover] = {parts:[slab]};
-  const partial = pack([tinyRoof],0,0).content;
-  assert.ok(faces(partial).every(face => face.tile !== tile));
+  for (const outer of [false,true]) {
+    const partial = faces(pack([tinyRoof],0,0,0,0,outer).content);
+    const top = partial.filter(face => face.tile === tile && face.face === 3 && face.y === 9);
+    assert.equal(top.reduce((area,face) => area+face.w*face.h,0),.75);
+    assert.ok(top.every(face => face.x > 8.5 || face.x + face.h <= 8.5 || face.z > 8.5 || face.z + face.w <= 8.5));
+  }
+});
+
+test('leaf faces share the exact texture and retain alpha test in both tiers', () => {
+  const grove = supplied(0,0,(_x,y) => y < 4 ? 1 : y < 8 ? 2 : 0,[air,rock,'legacy:18:0']);
+  for (const outer of [false,true]) {
+    const tops = faces(pack([grove],0,0,0,0,outer).content).filter(face => face.face === 3);
+    assert.ok(tops.some(face => face.tile === 52 && face.cutout));
+  }
 });
 
 test('both distance tiers retain saved block light and the inner tier keeps lit lamp surfaces', () => {

@@ -78,8 +78,11 @@ test('lantern matching and both LOD tiers work across chunk boundaries', () => {
     const stripped = structuredClone(chunk);
     const bytes = Buffer.from(stripped.sections[0].indices,'base64');
     for (const [at,key] of replacements) {
-      const material = key === 'cover-material:28' ? 'cover:750:0:wood-only' : key;
-      if (key === 'cover-material:28') stripped.compositions[material] = {parts:[{slot:0,shape:0,material:28}]};
+      const material = key === 'cover-material:28' ? `cover:750:0:wood-only-${at}` : key;
+      if (key === 'cover-material:28') {
+        const previous = chunk.palette[bytes.readUInt16LE(2*at)];
+        stripped.compositions[material] = {parts:chunk.compositions[previous].parts.filter(part => part.slot >= 26)};
+      }
       let index = stripped.palette.indexOf(material);
       if (index<0) index = stripped.palette.push(material)-1;
       bytes.writeUInt16LE(index,2*at);

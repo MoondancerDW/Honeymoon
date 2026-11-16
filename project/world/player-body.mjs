@@ -21,7 +21,7 @@ export function playerBody(size, stance) {
 
 export const WALK_SPEED = 3.8;
 export const GROUND_SPRINT_SPEED = 5.1 * 1.4;
-export const FLIGHT_SPEED = 10.2;
+export const FLIGHT_SPEED = 7.65;
 export const FLIGHT_SPRINT_SPEED = FLIGHT_SPEED * 2;
 export const FLIGHT_VERTICAL_MULTIPLIER = 1;
 export const POSITION_TRAIL_LIMIT = 32;

@@ -1,5 +1,6 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {ATLAS_GRID, creativeIcon, shapeFor, tiles} from '../world/geometry.mjs';
+import {heldLamp, heldLightLevel} from '../world/held-light.mjs';
 
 const facePoints = [
   [0,4,7,3], [5,1,2,6], [0,1,5,4], [7,6,2,3], [1,0,3,2], [4,5,6,7],
@@ -26,7 +27,8 @@ function appearance(held, assets) {
     map = sprite?.map ?? map;
     quads.push({points:flatItem, uv:sprite?.uv ?? tileUV(tiles.unknown, assets.rows), shade:1});
   } else {
-    const shape = shapeFor(held.key);
+    const lamp = heldLamp(held.key);
+    const shape = shapeFor(lamp ? {key:'legacy:768:0',object:{data:lamp}} : held.key);
     if (shape[0]?.kind === 'cross') {
       const icon = creativeIcon(held);
       quads.push({points:flatItem, uv:tileUV(icon.tile, assets.rows),
@@ -86,6 +88,7 @@ export function createPonyHeldItem() {
   glow.scale.setScalar(1.13);
   object.add(mesh, glow);
   let key, currentAssets;
+  let luminous = false;
 
   function show(held, assets, magic) {
     const nextKey = held && `${held.kind}:${held.key}`;
@@ -99,13 +102,14 @@ export function createPonyHeldItem() {
       material.map = halo.map = map;
       halo.alphaTest = .2;
       material.needsUpdate = halo.needsUpdate = true;
+      luminous = heldLightLevel(held) > 0;
       key = nextKey;
       currentAssets = assets;
     }
     if (glow.visible) halo.color.setHex(magic);
   }
 
-  return {object, show, setLight(color) { material.color.setHex(color); }, dispose() {
+  return {object, show, setLight(color) { material.color.setHex(luminous ? 0xffffff : color); }, dispose() {
     object.removeFromParent();
     mesh.geometry.dispose();
     material.dispose();

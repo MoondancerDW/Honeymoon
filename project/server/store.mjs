@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { publicMicroPart } from '../world/microblocks.mjs';
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 const chatHistoryLimit = 100;
 
 export function transaction(db, run) {
@@ -85,6 +85,7 @@ function migrate(db) {
         WHERE edits.x=proven.x AND edits.y=proven.y AND edits.z=proven.z;`);
     if (version < 4) db.exec('ALTER TABLE edits ADD COLUMN micro_parts TEXT;');
     if (version < 5) db.exec('ALTER TABLE edits ADD COLUMN voxels TEXT;');
+    if (version < 8) db.exec("ALTER TABLE edits ADD COLUMN fluid TEXT CHECK (fluid IN ('water','lava','dry'));");
     db.exec(`
       CREATE TABLE IF NOT EXISTS player_profiles (
         player TEXT PRIMARY KEY REFERENCES players(id),
@@ -130,17 +131,17 @@ export function openStore(filename) {
   const readState = statement('SELECT version,value FROM module_state WHERE module=? AND owner=? AND key=?');
   const writeState = statement(`INSERT INTO module_state VALUES (?,?,?,?,?) ON CONFLICT(module,owner,key)
     DO UPDATE SET version=excluded.version,value=excluded.value`);
-  const readEdit = statement('SELECT cell,object,revision,micro_parts,voxels FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
+  const readEdit = statement('SELECT cell,object,revision,micro_parts,voxels,fluid FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
   const readMicroParts = statement('SELECT micro_parts FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
   const readEditOwner = statement('SELECT placed_by FROM edits WHERE x=? AND y=? AND z=? AND cell IS NOT NULL AND quarantined=0');
-  const listEdits = statement('SELECT x,y,z,cell,object,revision,micro_parts,voxels FROM edits WHERE quarantined=0 ORDER BY x,y,z');
-  const writeEdit = statement(`INSERT INTO edits(x,y,z,cell,object,revision,original,quarantined,placed_by,micro_parts,voxels)
-    VALUES (?,?,?,?,?,?,?,0,?,?,?) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
-    object=excluded.object,revision=excluded.revision,quarantined=0,micro_parts=excluded.micro_parts,voxels=excluded.voxels,
+  const listEdits = statement('SELECT x,y,z,cell,object,revision,micro_parts,voxels,fluid FROM edits WHERE quarantined=0 ORDER BY x,y,z');
+  const writeEdit = statement(`INSERT INTO edits(x,y,z,cell,object,revision,original,quarantined,placed_by,micro_parts,voxels,fluid)
+    VALUES (?,?,?,?,?,?,?,0,?,?,?,?) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
+    object=excluded.object,revision=excluded.revision,quarantined=0,micro_parts=excluded.micro_parts,voxels=excluded.voxels,fluid=excluded.fluid,
     placed_by=CASE WHEN excluded.placed_by IS NOT NULL THEN excluded.placed_by
       WHEN excluded.micro_parts IS NOT NULL THEN NULL
       WHEN edits.quarantined=0 THEN edits.placed_by END`);
-  const allEdits = statement('SELECT x,y,z,cell,original,placed_by,micro_parts IS NOT NULL AS is_multipart,voxels FROM edits ORDER BY x,y,z');
+  const allEdits = statement('SELECT x,y,z,cell,original,placed_by,micro_parts IS NOT NULL AS is_multipart,voxels,fluid FROM edits ORDER BY x,y,z');
   const updateOriginal = statement('UPDATE edits SET original=?,quarantined=? WHERE x=? AND y=? AND z=?');
   const insertConflict = statement('INSERT OR REPLACE INTO rebase_conflicts VALUES (?,?,?,?,?,?,?,?)');
   const listConflicts = statement('SELECT * FROM rebase_conflicts WHERE base_hash=? ORDER BY x,y,z');
@@ -173,7 +174,7 @@ export function openStore(filename) {
   }
   function unpackEdit(row) {
     if (!row) return row;
-    const { micro_parts: raw, voxels, ...edit } = row;
+    const { micro_parts: raw, voxels, fluid, ...edit } = row;
     const decoded = readParts(raw);
     let sculpture;
     if (voxels !== null) {
@@ -185,7 +186,8 @@ export function openStore(filename) {
       }
     }
     return { ...edit, object: edit.object ? JSON.parse(edit.object) : null,
-      ...(decoded && {parts: decoded.parts}), ...(sculpture && {voxels: sculpture}) };
+      ...(decoded && {parts: decoded.parts}), ...(sculpture && {voxels: sculpture}),
+      ...(fluid && fluid !== 'dry' && {fluid}) };
   }
 
   return {
@@ -258,15 +260,15 @@ export function openStore(filename) {
     edits() {
       return listEdits.all().map(unpackEdit);
     },
-    writeEdit({ x, y, z, cell, object, revision, voxels }, original, placedBy = null, parts = null) {
+    writeEdit({ x, y, z, cell, object, revision, voxels, fluid }, original, placedBy = null, parts = null) {
       writeEdit.run(x, y, z, cell, object ? JSON.stringify(object) : null, revision, original, placedBy,
-        parts === null ? null : JSON.stringify(parts), voxels ? JSON.stringify(voxels) : null);
+        parts === null ? null : JSON.stringify(parts), voxels ? JSON.stringify(voxels) : null, fluid ?? null);
     },
     rebase(base, reserved, originalAt) {
       return transaction(db, () => {
         const previousHash = readMeta.get('base_hash')?.value;
         if (previousHash === base.hash) return listConflicts.all(base.hash);
-        for (const { x, y, z, cell, original, placed_by: owner, is_multipart: isMultipart, voxels } of allEdits.all()) {
+        for (const { x, y, z, cell, original, placed_by: owner, is_multipart: isMultipart, voxels, fluid } of allEdits.all()) {
           const current = originalAt(x, y, z);
           let reason;
           let quarantined = 0;
@@ -277,14 +279,14 @@ export function openStore(filename) {
             : !isMultipart && cell !== null && !base.catalog.has(cell)) {
             reason = 'missing_catalog_entry';
             quarantined = 1;
-          } else if ((isMultipart && current !== original) || (!isMultipart && owner && base.getCell(x, y, z).key !== 'air')) {
+          } else if (((isMultipart || fluid) && current !== original) || (!isMultipart && owner && base.getCell(x, y, z).key !== 'air')) {
             reason = 'original_cell_changed';
             quarantined = 1;
           } else if (original !== null && current !== original) {
             reason = 'original_cell_changed';
           }
           if (reason) insertConflict.run(base.hash, x, y, z, original, current, cell, reason);
-          updateOriginal.run(isMultipart && quarantined ? original : current, quarantined, x, y, z);
+          updateOriginal.run((isMultipart || fluid) && quarantined ? original : current, quarantined, x, y, z);
         }
         if (previousHash) writeMeta.run('world_revision', String(worldRevision() + 1));
         writeMeta.run('base_hash', base.hash);

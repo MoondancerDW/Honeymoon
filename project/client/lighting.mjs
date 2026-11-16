@@ -50,11 +50,6 @@ export function writeLightmap(target, sun) {
   target.fill(255, 256 * 4);
 }
 
-export function coverShade(packed) {
-  // RedPower flat Covers multiply directional color by adjacent scalar brightness.
-  return level(Math.max(packed >> 4, packed & 15));
-}
-
 export function legacyLight(packed) {
   return colors[packed ?? 0];
 }

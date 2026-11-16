@@ -6,6 +6,7 @@ import {parseArgs} from 'node:util';
 import {gzipSync} from 'node:zlib';
 import {buildRegion,makeMaterials,outerChunk,sampleChunk,OUTER_STEP,TILE_CHUNKS} from './lod-mesh.mjs';
 import {LOD_VERSION,lodDistance} from '../client/far-tile-format.mjs';
+import {loadSnowCleanup} from '../server/snow-cleanup.mjs';
 
 const DEFAULT_WORLD = fileURLToPath(new URL('../generated/world',import.meta.url));
 const DEFAULT_OUTPUT = fileURLToPath(new URL('../generated/lod',import.meta.url));
@@ -38,7 +39,9 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
   if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.chunks) || !/^[a-f0-9]{64}$/.test(manifest.contentHash ?? '')) {
     throw new Error('Expected a converted Honeymoon world');
   }
-  const {bounds, contentHash} = manifest;
+  const {bounds} = manifest;
+  const snow = loadSnowCleanup(world,manifest.contentHash);
+  const contentHash = snow.hash;
   const minX = Math.floor(bounds.minX/16), maxX = Math.floor(bounds.maxX/16);
   const minZ = Math.floor(bounds.minZ/16), maxZ = Math.floor(bounds.maxZ/16);
   const worldChunks = new Set(manifest.chunks.map(([x,z]) => `${x}.${z}`));
@@ -67,6 +70,7 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
     if (!sources.has(key)) {
       const source = JSON.parse(readFileSync(join(world,'chunks',`${key}.json`),'utf8'));
       if (source.x!==x || source.z!==z) throw new Error(`Unexpected coordinates in chunk ${key}`);
+      snow.apply(source,manifest.palette);
       sources.set(key,{...source, palette:source.palette ?? manifest.palette,
         compositions:source.compositions ?? manifest.compositions});
     }

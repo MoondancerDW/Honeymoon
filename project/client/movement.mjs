@@ -3,6 +3,7 @@ import {extractedModel} from '../world/extracted-models.mjs';
 import {movementMedium} from '../world/block-movement.mjs';
 import {FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, PLAYER, WALK_SPEED, isPlayerStance, playerBody} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
+import {withLoggedFluid} from '../world/logged-fluid.mjs';
 import {isRideableMinecart, minecartHit} from '../world/minecarts.mjs';
 import {isRideableBoat,boatHit} from '../world/boats.mjs';
 import {itemFrameHit} from '../world/item-frames.mjs';
@@ -139,7 +140,7 @@ export class Movement {
 
   setStance({x,y,z}, stance) {
     if (stance === this.stance || !isPlayerStance(stance)) return this.stance;
-    if (stance !== 'stand' && (!this.grounded || movementMedium(this.cellAt,x,y,z))) return this.stance;
+    if (stance !== 'stand' && (!this.grounded || movementMedium(this.cellAt,x,y,z,this.world.models))) return this.stance;
     if (!this.blocked(x,y,z,playerBody(this.size, stance))) this.stance = stance;
     return this.stance;
   }
@@ -230,7 +231,7 @@ export class Movement {
   }
 
   update(position, dx, dz, jump, dt, {descend = false, rise = jump, recordStep} = {}) {
-    this.medium = movementMedium(this.cellAt, position.x, position.y, position.z);
+    this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
     if (!this.medium && jump && this.grounded && this.stance !== 'crawl') {
       this.fall = Math.sqrt(40 * this.body.jumpHeight);
       this.grounded = false;
@@ -262,7 +263,7 @@ export class Movement {
       const swimOut = startMedium === 'water' && rise && !descend;
       const wallX = this.horizontal(position, 'x', dx * step * drag, swimOut);
       const wallZ = this.horizontal(position, 'z', dz * step * drag, swimOut);
-      this.medium = movementMedium(this.cellAt, position.x, position.y, position.z);
+      this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
       if (!descend && (wallX || wallZ)) {
         if (this.medium === 'ladder') this.fall = 2.4;
         if (this.medium === 'water') this.fall = 2.5;
@@ -313,11 +314,12 @@ export function pick(world, origin, direction, chiseling = false, solidOnly = fa
         const cell = world.cellAt(x, y, z);
         if (!cell) continue;
         const neighbors = (dx, dy, dz) => world.cellAt(x + dx, y + dy, z + dz);
-        const boxes = extractedModel(world.models, cell, neighbors)?.selection
+        const selection = extractedModel(world.models, cell, neighbors)?.selection
           ?? (geometry.selectionFor ?? geometry.shapeFor)(cell, neighbors);
+        const boxes = solidOnly ? selection : withLoggedFluid(selection, cell, neighbors, world.models);
         for (const box of boxes) {
           if (solidOnly && box.solid === false) continue;
-          const result = intersectSelection(origin, direction, box, x, y, z, 6, chiseling && box.solid === false);
+          const result = intersectSelection(origin, direction, box, x, y, z, 6, Boolean(box.loggedFluid) || chiseling && box.solid === false);
           if (!result) continue;
           const solid = box.solid !== false;
           const preferSolid = chiseling && solid && !bestSolid && Math.abs(result.length - (best?.length ?? -1)) < 1e-7;
@@ -325,6 +327,10 @@ export function pick(world, origin, direction, chiseling = false, solidOnly = fa
           const hit = origin.map((value, axis) => value + direction[axis] * result.length);
           best = {x, y, z, cell, length: result.length, offset: result.offset, hit: {x: hit[0], y: hit[1], z: hit[2]}};
           bestSolid = solid;
+          if (box.loggedFluid) {
+            best.liquid = box.loggedFluid;
+            best.boxes = [box];
+          }
           if (Number.isInteger(box.partSlot)) {
             best.partSlot = box.partSlot;
             selectedBoxes = boxes;
@@ -337,7 +343,7 @@ export function pick(world, origin, direction, chiseling = false, solidOnly = fa
     best.part = best.cell.parts.find(part => part.slot === best.partSlot);
     best.boxes = selectedBoxes.filter(box => box.partSlot === best.partSlot);
   }
-  if (chiseling && best && best.partSlot === undefined) {
+  if (chiseling && best && !best.liquid && best.partSlot === undefined) {
     const state = best.cell.voxels;
     const key = typeof best.cell === 'string' ? best.cell : best.cell.key;
     if (state || isChiselMaterial(key)) {

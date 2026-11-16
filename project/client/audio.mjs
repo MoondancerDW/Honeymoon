@@ -52,7 +52,7 @@ export function caveMoodSource(world, player, random = Math.random) {
   return null;
 }
 
-function support(world, position, body = PLAYER) {
+export function groundSurface(world, position, body = PLAYER) {
   const x = Math.floor(position.x), z = Math.floor(position.z);
   const startY = Math.floor(position.y + .001);
   let closest;
@@ -70,13 +70,13 @@ function support(world, position, body = PLAYER) {
               position.x + body.halfWidth <= xx + box.x0 || position.x - body.halfWidth >= xx + box.x1 ||
               position.z + body.halfWidth <= zz + box.z0 || position.z - body.halfWidth >= zz + box.z1) continue;
           height = top;
-          closest = {cell, material: box.material};
+          closest = {cell, material:box.material, position:[xx,y,zz], height:top};
         }
       }
     }
   }
   const layer = world.cellAt(x, startY, z);
-  return blockId(layer) === 78 ? {cell: layer} : closest;
+  return blockId(layer) === 78 ? {cell:layer,position:[x,startY,z],height:position.y} : closest;
 }
 
 export class WorldAudio {
@@ -284,7 +284,7 @@ export class WorldAudio {
         if (swimming) {
           void this.play('liquid.swim', undefined, {volume: .2, pitch: .8 + Math.random() * .4});
         } else {
-          const surface = climbing ? {cell: 'legacy:65:0'} : support(world,position,body);
+          const surface = climbing ? {cell:'legacy:65:0'} : groundSurface(world,position,body);
           if (surface) {
             const [event, , volume, pitch] = blockSoundProfile(this.#catalog, surface.cell, surface.material);
             void this.play(event, undefined, {volume: volume * .15, pitch});

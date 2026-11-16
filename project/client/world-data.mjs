@@ -115,7 +115,7 @@ export class World {
     if (previous && previous.revision >= change.revision) return false;
     const key = change.cell || 'air';
     const {x, y, z} = change;
-    if (this.chunks.has(chunkKey(x >> 4, z >> 4)) && lightChanged(this.lightCell(x, y, z), {key, object: change.object, voxels: change.voxels})) {
+    if (this.chunks.has(chunkKey(x >> 4, z >> 4)) && lightChanged(this.lightCell(x, y, z), {key, object: change.object, voxels: change.voxels, fluid: change.fluid})) {
       if (!this.pendingLights.has(position)) this.pendingLights.set(position, [x, y, z, this.lightAt(x, y, z) & 15]);
     }
     const override = {...change, index: this.addPalette(key)};
@@ -153,13 +153,12 @@ export class World {
   cellAt(x, y, z) {
     const chunk = this.chunks.get(chunkKey(x >> 4, z >> 4));
     if (!chunk || chunk.visualOnly) return null;
-    const {key, object, parts, voxels} = this.lightCell(x, y, z, false, chunk);
+    const {key, object, parts, voxels, fluid} = this.lightCell(x, y, z, false, chunk);
     if (key === 'air') return null;
-    if (voxels) return {key, voxels, ...(parts && {parts})};
+    if (voxels) return {key, voxels, ...(parts && {parts}), ...(fluid && {fluid})};
     const composition = (chunk.compositions ?? this.manifest.compositions)?.[key];
-    if (parts) return {key, ...composition, object, parts};
-    if (!composition && !object) return key;
-    return {key, ...composition, object};
+    if (!composition && !object && !parts && !fluid) return key;
+    return {key, ...composition, object, ...(parts && {parts}), ...(fluid && {fluid})};
   }
 
   revisionAt(x, y, z) {
@@ -179,7 +178,8 @@ export class World {
 
   lightCell(x, y, z, base = false, chunk = this.chunks.get(chunkKey(x >> 4, z >> 4))) {
     const override = !base && this.overrides.size ? this.overrides.get(cellKey(x, y, z)) : null;
-    if (override) return {key: this.palette[override.index], object: override.object, parts: override.parts, voxels: override.voxels};
+    if (override) return {key: this.palette[override.index], object: override.object, parts: override.parts,
+      voxels: override.voxels, ...(override.fluid && {fluid: override.fluid})};
     const local = blockIndex(x, y, z);
     const index = chunk?.sections.get(y >> 4)?.indices[local] ?? 0;
     return {key: (chunk?.palette ?? this.palette)[index], object: chunk?.objects.get(y >> 4)?.get(local)};
@@ -225,6 +225,7 @@ export class World {
     const objects = [];
     const microblocks = [];
     const sculpted = [];
+    const logged = [];
     const chunks = [-1, 0, 1].map(dz => [-1, 0, 1].map(dx => this.chunks.get(chunkKey(cx + dx, cz + dz))));
     const mappings = compact && chunks.map(row => row.map(chunk => {
       if (!chunk) return null;
@@ -276,11 +277,12 @@ export class World {
             if (object && indices[i]) objects.push([i, object]);
             if (override?.parts && indices[i]) microblocks.push([i, override.parts]);
             if (override?.voxels && indices[i]) sculpted.push([i, override.voxels]);
+            if (override?.fluid && indices[i]) logged.push([i, override.fluid]);
           }
         }
       }
     }
-    return {indices, light, objects, microblocks, sculpted, ...(compact && {palette, compositions})};
+    return {indices, light, objects, microblocks, sculpted, ...(logged.length && {logged}), ...(compact && {palette, compositions})};
   }
 }
 

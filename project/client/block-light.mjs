@@ -21,6 +21,7 @@ for (let dy = -MIDDLE; dy <= MIDDLE; dy++) {
 function cellAttenuation(cell, emission) {
   // Light still propagates on the original block grid. A fully flooded cell
   // absorbs the same light as a source block. Small open shapes use air.
+  if (cell.fluid === 'water') return attenuationOf('legacy:9:0');
   if (cell.voxels) {
     if (isOpaqueFullVoxels(cell.voxels) && !emission) return 15;
     if (fullVoxelFluid(cell.voxels) === 'water') return attenuationOf('legacy:9:0');
@@ -30,8 +31,9 @@ function cellAttenuation(cell, emission) {
 }
 
 function cellEmission(cell) {
-  if (!cell.voxels) return emissionOf(cell.key, cell.object?.data);
-  let emission = 0;
+  const fluidEmission = cell.fluid === 'lava' ? emissionOf('legacy:11:0') : 0;
+  if (!cell.voxels) return Math.max(fluidEmission, emissionOf(cell.key, cell.object?.data));
+  let emission = fluidEmission;
   for (const material of cell.voxels?.materials ?? []) emission = Math.max(emission, emissionOf(material));
   return emission;
 }

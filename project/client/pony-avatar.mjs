@@ -2,6 +2,7 @@ import * as THREE from '/vendor/three/three.module.js';
 import {ponyModels} from '../world/pony-model-data.mjs';
 import {defaultPonyPixels, ponySkinHeight, readPonySkin} from '../world/pony-skins.mjs';
 import {createPonyHeldItem, magicMaterial} from './pony-held-item.mjs';
+import {heldLightLevel} from '../world/held-light.mjs';
 
 const LEG_NAMES = ['frontRight', 'frontLeft', 'hindRight', 'hindLeft'];
 const TAU = Math.PI * 2;
@@ -568,6 +569,16 @@ export function createPonyAvatar(isAir) {
     return rig.eyes.getWorldPosition(eyePosition);
   }
 
+  function heldLight(target) {
+    if (!heldItem?.object.visible) return 0;
+    const level = heldLightLevel(activeProp);
+    if (level) {
+      heldItem.object.getWorldPosition(target);
+      target.y += .17;
+    }
+    return level;
+  }
+
   function inspect() {
     return {skinReady, ponyType: skin.ponyType, advanced: skin.advanced, size: skin.size, phase:limbSwing * .6662 % TAU,
       tail:skin.tail, male:skin.male, mane:skin.mane,
@@ -599,5 +610,5 @@ export function createPonyAvatar(isAir) {
   }
   return {object, get labelHeight() {
     return rig.labelHeight - rig.head.position.y * rig.headScale;
-  }, setSkin, setLight, animate, setFirstPerson, eyesWorldPosition, inspect, dispose};
+  }, setSkin, setLight, animate, setFirstPerson, eyesWorldPosition, heldLight, inspect, dispose};
 }

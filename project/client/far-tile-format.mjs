@@ -1,12 +1,15 @@
 const HEADER = 72;
 const RECORD = 16;
 const CHUNKS = 16;
-export const LOD_VERSION = 4;
+export const LOD_VERSION = 5;
 export const DETAILED_LOD_DISTANCES = Object.freeze([8,12,16,20,24,28]);
 export const DEFAULT_DETAILED_LOD_DISTANCE = 20;
 export const WATER_HEIGHT_SCALE = 9;
 export const TRANSITION_FACE = 8;
 export const RAIL_FACE = 16;
+export const MICRO_FACE = 32;
+export const CUTOUT_FACE = 64;
+export const MICRO_SCALE = 8;
 export const supportedLodVersion = value => Number.isInteger(value) && value >= 1 && value <= LOD_VERSION;
 export const lodDistance = version => version >= 3 ? 32 : 24;
 
@@ -29,20 +32,21 @@ export function decodeFarTile(buffer) {
   }
   if (total !== (view.byteLength - HEADER) / RECORD) throw new Error('Invalid far terrain tile size');
 
-  let water = 0, transitions = 0, rails = 0;
+  let water = 0, transitions = 0, rails = 0, micros = 0;
   for (let offset = HEADER; offset < view.byteLength; offset += RECORD) {
     const flags = view.getUint8(offset + 8);
     if (flags & 128) water++;
     else if (flags & TRANSITION_FACE) transitions++;
     else if (flags === RAIL_FACE) rails++;
+    else if (flags & MICRO_FACE) micros++;
   }
-  function layer(count, heightScale = 1) {
+  function layer(count, heightScale = 1, coordinateScale = 1) {
     return {count, at:0, offset:new Uint16Array(count * 3), span:new Uint16Array(count * 2),
       surface:new Uint16Array(count * 2), light:new Uint16Array(count), color:new Uint8Array(count * 3),
-      minY:256, maxY:0, heightScale};
+      minY:256, maxY:0, heightScale, coordinateScale};
   }
-  const layers = [layer(total-water-transitions-rails), layer(water,version === 1 ? 1 : WATER_HEIGHT_SCALE),
-    layer(transitions), layer(rails)];
+  const layers = [layer(total-water-transitions-rails-micros), layer(water,version === 1 ? 1 : WATER_HEIGHT_SCALE),
+    layer(transitions), layer(rails), layer(micros,MICRO_SCALE,MICRO_SCALE)];
   const heightAxes = [[2,1], [1,2], [0,2], [2,0], [1,0], [0,1]];
   let byte = HEADER;
   for (let chunk = 0; chunk < CHUNKS; chunk++) {
@@ -52,30 +56,36 @@ export function decodeFarTile(buffer) {
       const face = flags & 7;
       const skirt = flags & TRANSITION_FACE;
       const rail = flags === RAIL_FACE;
-      if (rail ? version < 4 : face >= 6 || flags & 0x70 || skirt && (version < 3 || face === 2 || face === 3 || flags & 128) ||
+      const micro = flags & MICRO_FACE;
+      const cutout = flags & CUTOUT_FACE;
+      if (rail ? version < 4 : face >= 6 || flags & RAIL_FACE || (micro || cutout) && version < 5 ||
+          micro && (skirt || flags & 128) || skirt && (version < 3 || face === 2 || face === 3 || flags & 128) ||
           version !== 1 && (flags & 128) && face !== 3) {
         throw new Error('Invalid far terrain face');
       }
-      const data = layers[rail ? 3 : skirt ? 2 : flags >> 7];
+      const data = layers[rail ? 3 : micro ? 4 : skirt ? 2 : flags >> 7];
       const at = data.at++;
       const y = view.getUint16(byte + 2, true);
       const width = view.getUint16(byte + 4, true);
       const height = view.getUint16(byte + 6, true);
       if (rail && (width > 9 || height !== 1)) throw new Error('Invalid far terrain rail');
-      data.offset[at * 3] = x + view.getUint8(byte);
+      data.offset[at * 3] = x * data.coordinateScale + view.getUint8(byte);
       data.offset[at * 3 + 1] = y;
-      data.offset[at * 3 + 2] = z + view.getUint8(byte + 1);
+      data.offset[at * 3 + 2] = z * data.coordinateScale + view.getUint8(byte + 1);
       data.span[at * 2] = width;
       data.span[at * 2 + 1] = height;
-      data.surface[at * 2] = view.getUint16(byte + 9, true);
-      data.surface[at * 2 + 1] = face + chunk * 8 + (skirt ? 128 : 0);
+      const tile = view.getUint16(byte + 9, true);
+      const modLeaves = version >= 5 && tile === 305;
+      data.surface[at * 2] = modLeaves ? 304 : tile;
+      data.surface[at * 2 + 1] = face + chunk * 8 + (skirt ? 128 : 0) + (cutout || modLeaves ? 256 : 0);
       data.light[at] = view.getUint16(byte + 11, true);
       data.color[at * 3] = view.getUint8(byte + 13);
       data.color[at * 3 + 1] = view.getUint8(byte + 14);
       data.color[at * 3 + 2] = view.getUint8(byte + 15);
       data.minY = Math.min(data.minY, y / data.heightScale);
       const [u, v] = heightAxes[face];
-      const rise = rail ? 1 / 16 + Number(width >= 2 && width <= 5) : u === 1 ? width : v === 1 ? height : 0;
+      const rise = rail ? 1 / 16 + Number(width >= 2 && width <= 5) :
+        (u === 1 ? width : v === 1 ? height : 0) / data.coordinateScale;
       data.maxY = Math.max(data.maxY, y / data.heightScale + rise);
     }
   }

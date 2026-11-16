@@ -1,7 +1,8 @@
 import {decodeFarTile} from './far-tile-format.mjs';
+import {decodeVista} from './vista-format.mjs';
 
 const active = new Map();
-self.onmessage = async ({data:{id, url}}) => {
+self.onmessage = async ({data:{id, url, vista, coarse}}) => {
   if (!url) {
     active.get(id)?.abort();
     return;
@@ -11,7 +12,8 @@ self.onmessage = async ({data:{id, url}}) => {
   try {
     const response = await fetch(url, {priority:'low', signal:AbortSignal.any([controller.signal, AbortSignal.timeout(12000)])});
     if (!response.ok) throw new Error(`Far terrain tile returned ${response.status}`);
-    const tile = decodeFarTile(await response.arrayBuffer());
+    const buffer = await response.arrayBuffer();
+    const tile = vista ? decodeVista(buffer,coarse) : decodeFarTile(buffer);
     if (controller.signal.aborted) return;
     const buffers = tile.layers.flatMap(({offset,span,surface,light,color}) =>
       [offset.buffer,span.buffer,surface.buffer,light.buffer,color.buffer]);
