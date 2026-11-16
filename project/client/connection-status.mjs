@@ -1,7 +1,7 @@
 const pingInterval=5000;
 const recoveryInterval=2000;
 
-export function createConnectionStatus({element,onRecover}) {
+export function createConnectionStatus({element,onRecover,onLatency,active}) {
   const fps=element('connection-fps'),ping=element('connection-ping');
   const alert=element('connection-alert'),message=element('connection-message'),retry=element('connection-retry');
   let reachable,live,wasLive=false,startupStopped=false,autoReload=false,request,timer,warmed=false;
@@ -31,13 +31,20 @@ export function createConnectionStatus({element,onRecover}) {
         reachable=navigator.onLine!==false && response.status===204;
       } catch {reachable=false;}
       if (reachable) {
-        if (warmed) ping.textContent='Пинг '+Math.round(performance.now()-start)+' мс';
+        if (warmed) {
+          const latency = Math.round(performance.now()-start);
+          ping.textContent='Пинг '+latency+' мс';
+          onLatency(latency);
+        }
         if (startupStopped && autoReload) onRecover();
-      } else ping.textContent='Пинг —';
+      } else {
+        ping.textContent='Пинг —';
+        onLatency(null);
+      }
       const isWarm=warmed;
       warmed=reachable;
       paint();
-      schedule(!reachable?recoveryInterval:isWarm?pingInterval:250);
+      schedule(!reachable ? recoveryInterval : !isWarm ? 250 : active() ? 1250 : pingInterval);
       return reachable;
     })().finally(()=>{request=undefined;});
     return request;

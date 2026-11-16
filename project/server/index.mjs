@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -35,6 +35,8 @@ const MAX_STREAM_BACKLOG = 256 * 1024;
 const MAX_BULK_COMMIT = 3 * 1024 * 1024;
 const MAX_WORLD_RESPONSES = 224;
 const MAX_WORLD_CACHE_BYTES = 48 * 1024 * 1024;
+// Bump when the public chunk format or server-side projection changes.
+const CHUNK_CACHE_FORMAT = 1;
 const gzipWorld = promisify(gzip);
 const privateNpcFiles = new Set(['original.json']);
 const MIME = {
@@ -90,7 +92,7 @@ function serveWorldJson() {
     return entry;
   }
 
-  return async (request, response, key, load) => {
+  return async (request, response, key, load, cacheControl) => {
     let entry = entries.get(key);
     if (entry) {
       entries.delete(key);
@@ -105,7 +107,8 @@ function serveWorldJson() {
     const authenticated=response.getHeader('Vary')==='Cookie';
     response.writeHead(200, {
       'Content-Type': MIME['.json'], 'Content-Length': body.length, Vary:authenticated?'Cookie, Accept-Encoding':'Accept-Encoding',
-      'Cache-Control':authenticated?'private, no-cache':'no-cache', ...(compressed && { 'Content-Encoding': 'gzip' }),
+      'Cache-Control':cacheControl ?? (authenticated?'private, no-cache':'no-cache'),
+      ...(compressed && { 'Content-Encoding': 'gzip' }),
     });
     response.end(request.method === 'HEAD' ? undefined : body);
   };
@@ -226,7 +229,10 @@ export function createHoneymoonServer({
   const lod = base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
   const vista = lod ? loadVistaAssets(generated) : null;
   const publicWorld = base.publicManifest ?? base.manifest;
-  const manifest = lod ? {...publicWorld, lod:lod.descriptor, ...(vista && {vista:vista.descriptor})} : publicWorld;
+  const chunkCacheVersion = createHash('sha256').update(JSON.stringify([
+    CHUNK_CACHE_FORMAT, base.hash, publicWorld.fullChunks?.hash,
+  ])).digest('hex');
+  const manifest = {...publicWorld, chunkCacheVersion, ...(lod && {lod:lod.descriptor}), ...(vista && {vista:vista.descriptor})};
   const sounds = statSync(join(generated, 'sounds', 'sounds.json'), {throwIfNoEntry: false})?.isFile() ?? false;
   const boatTexture = statSync(join(generated,'textures','boat.png'),{throwIfNoEntry:false})?.isFile() ?? false;
   for (const family of modelFamilies) {
@@ -807,11 +813,14 @@ export function createHoneymoonServer({
       if (await serveVistaTile(vista, request, response, path, acceptsGzip(request.headers['accept-encoding']))) return;
       throw new RequestError(404, 'not_found');
     }
-    const chunk = path.match(/^\/generated\/world\/chunks\/(-?\d+)\.(-?\d+)\.json$/);
+    const chunk = path.match(/^\/generated\/world\/chunks\/(?:(?<version>[0-9a-f]{64})\/)?(?<x>-?\d+)\.(?<z>-?\d+)\.json$/);
     if (chunk) {
-      const x = Number(chunk[1]);
-      const z = Number(chunk[2]);
-      return serveWorld(request, response, `chunk:${x}.${z}`, () => base.publicChunk(x, z));
+      const {version} = chunk.groups;
+      if (version && version !== chunkCacheVersion) throw new RequestError(404, 'chunk_version_changed');
+      const x = Number(chunk.groups.x);
+      const z = Number(chunk.groups.z);
+      return serveWorld(request, response, `chunk:${x}.${z}`, () => base.publicChunk(x, z),
+        version ? 'private, max-age=2592000, immutable' : undefined);
     }
     const terrain = path.match(/^\/generated\/world\/(terrain-(?:8|16|32)\.json)$/);
     if (terrain) {

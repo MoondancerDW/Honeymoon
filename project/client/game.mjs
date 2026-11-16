@@ -36,10 +36,13 @@ import {supportsFarTerrain} from './far-terrain.mjs';
 import {bindTouchControls} from './touch-controls.mjs';
 import {createPlayerModeUi} from './player-mode-ui.mjs';
 import {createConnectionStatus} from './connection-status.mjs';
+import {createTerrainNetwork} from './terrain-network.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
-const connection=createConnectionStatus({element,onRecover:()=>location.reload()});
+const terrainNetwork = createTerrainNetwork();
+const connection=createConnectionStatus({element,onRecover:()=>location.reload(),
+  onLatency:ms=>terrainNetwork.sample(ms),active:()=>Boolean(view) && !document.hidden});
 const entry = element('entry');
 const loading = element('loading');
 const button = element('play');
@@ -53,6 +56,7 @@ const microHint = element('micro-hint');
 const touchRotate = element('touch-rotate');
 const chiselHint = element('chisel-hint');
 const touchChisel = element('touch-chisel');
+const touchChiselSize = element('touch-chisel-size');
 const signEditor = element('sign-editor');
 const signFields = [...element('sign-form').querySelectorAll('input')];
 const signStatus = element('sign-status');
@@ -355,7 +359,7 @@ const messages = {
   part_missing: 'Деталь уже убрана', invalid_part: 'Эта форма или материал недоступны',
   part_required: 'Наведите прицел на отдельную деталь',
   incompatible_part: 'Деталь здесь не помещается',
-  voxel_required: 'Нажмите Z, чтобы взять резец',
+  voxel_required: touchMode ? 'Откройте «Ещё» и нажмите «Резец»' : 'Нажмите K, чтобы взять резец',
   voxel_not_owned: 'Резцом можно менять блоки, установленные игроками',
   invalid_voxel: 'Наведите прицел на нужную часть блока',
   invalid_material: 'Резец берёт материал с полного блока, жидкости или уже вырезанной части',
@@ -1127,7 +1131,10 @@ function toggleChisel() {
 }
 
 function updateChiselHint() {
-  chiselHint.textContent = `Резец 1/${8 / chiselSize} · B — сменить размер · ЛКМ — убрать · ПКМ — добавить · O/СКМ — взять материал`;
+  const size=`1/${8 / chiselSize}`;
+  chiselHint.textContent = `Резец ${size} · Shift+K — сменить размер · ЛКМ — убрать · ПКМ — добавить · O/СКМ — взять материал`;
+  touchChiselSize.textContent = `Размер резца · ${size}`;
+  touchChiselSize.disabled = !chiseling;
 }
 
 function toggleChiselSize() {
@@ -1642,9 +1649,11 @@ function bindControls() {
         recordPosition(position);
       }
     }
-    if (event.code === 'KeyK' && !resetting && !acting) {
-      if (event.shiftKey && chiseling) toggleChiselSize();
+    if (event.code === 'KeyK' && !resetting && !acting && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      event.preventDefault();
+      if (event.shiftKey) toggleChiselSize();
       else toggleChisel();
+      return;
     }
     if (event.code === 'KeyJ') creative.openInventory();
     if (['KeyB','KeyZ'].includes(event.code)&&!flying&&!seat&&movement.grounded&&movement.stance==='stand') {
@@ -1866,7 +1875,9 @@ function distanceToChunk([x, z]) {
 }
 
 async function addChunk([x, z], visualOnly = false, isNeeded, signal) {
-  const chunk = await json(`/generated/world/chunks/${x}.${z}.json`, {signal});
+  const version = world.manifest.chunkCacheVersion;
+  const directory = version ? `/generated/world/chunks/${version}` : '/generated/world/chunks';
+  const chunk = await json(`${directory}/${x}.${z}.json`, {signal});
   if (isNeeded && !isNeeded()) return;
   view.addChunk(world.addChunk(chunk, visualOnly));
   if (visualOnly) metrics.visualChunksLoaded++;
@@ -1899,7 +1910,7 @@ function streamNearby(scenery) {
   const inFullWorld=detailCoverage(world.manifest.fullChunks);
   const inFlight = new Map();
   const retryAt = new Map();
-  let area, planned = [];
+  let area, planned = [], lastBackgroundRequest = -Infinity;
 
   function status() {
     const missing = planned.filter(({key}) => !world.chunks.has(key)).length;
@@ -1910,6 +1921,8 @@ function streamNearby(scenery) {
     const x = Math.floor(position.x / 16), z = Math.floor(position.z / 16);
     const radius = view.detailedDistance + 1;
     if (area?.x === x && area.z === z && area.radius === radius) return;
+    const forwardX = area ? Math.sign(x - area.x) : 0;
+    const forwardZ = area ? Math.sign(z - area.z) : 0;
     area = {x, z, radius};
     view.streamAround(x, z, radius);
     for (const {coordinate, controller} of inFlight.values()) {
@@ -1924,7 +1937,8 @@ function streamNearby(scenery) {
       const key = chunkKey(...coordinate);
       const visualOnly = !world.isPlayableChunk(...coordinate);
       if (visualOnly && !visual.has(key) && !inFullWorld(...coordinate) || world.chunks.has(key)) continue;
-      planned.push({coordinate, key, visualOnly, distance:Math.max(Math.abs(dx), Math.abs(dz)), order:dx * dx + dz * dz});
+      planned.push({coordinate, key, visualOnly, distance:Math.max(Math.abs(dx), Math.abs(dz)),
+        order:dx * dx + dz * dz - (dx * forwardX + dz * forwardZ)});
     }
     planned.sort((a, b) => a.distance - b.distance || Number(a.visualOnly) - Number(b.visualOnly) || a.order - b.order);
     const wanted = new Set(planned.map(entry => entry.key));
@@ -1936,8 +1950,11 @@ function streamNearby(scenery) {
     while (!view.workerFailure) {
       updateArea();
       const now = performance.now();
-      const next = planned.find(({key}) => !inFlight.has(key) && !world.chunks.has(key) && (retryAt.get(key) ?? 0) <= now);
-      if (!next) {
+      const available = ({key}) => !world.chunks.has(key) && (retryAt.get(key) ?? 0) <= now;
+      const next = planned.find(entry => !inFlight.has(entry.key) && available(entry));
+      terrainNetwork.urgent = planned.some(entry => entry.distance <= 2 && available(entry));
+      if (!next || terrainNetwork.constrained(now) &&
+          (inFlight.size > 0 || next.distance > 2 && now - lastBackgroundRequest < 200)) {
         await new Promise(resolve => setTimeout(resolve, 80));
         continue;
       }
@@ -1947,6 +1964,7 @@ function streamNearby(scenery) {
         await view.waitForStreamSlot(!next.visualOnly && needed(next.coordinate) && next.distance <= 2);
         updateArea();
         if (!controller.signal.aborted) {
+          if (distanceToChunk(next.coordinate) > 2) lastBackgroundRequest = performance.now();
           await addChunk(next.coordinate, next.visualOnly, () => needed(next.coordinate),
             AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]));
         }
@@ -1990,7 +2008,7 @@ async function start() {
   movement.stance = confirmedStance = session.body.stance ?? 'stand';
   crawlRequested = movement.stance === 'crawl';
   view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
-    lowDevice:localStorage.getItem(lowDevicePreference)==='1'});
+    lowDevice:localStorage.getItem(lowDevicePreference)==='1',terrainNetwork});
   modeUi.update(session.body.gameMode);
   view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
@@ -2018,6 +2036,7 @@ async function start() {
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
       revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
+      terrainNetwork:terrainNetwork.status(),
       flying, spectator, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
       movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),

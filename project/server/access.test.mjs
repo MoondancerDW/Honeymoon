@@ -218,6 +218,19 @@ test('invite consumption is atomic and device credentials retain name, UID and a
   assert.equal(manifest.status,200);
   assert.match(manifest.headers.get('cache-control'),/private/);
   assert.match(manifest.headers.get('vary'),/Cookie/);
+  const version=manifest.json.chunkCacheVersion;
+  assert.match(version,/^[0-9a-f]{64}$/);
+  const chunkPath=`/generated/world/chunks/${version}/0.0.json`;
+  assert.equal(code(await request(urls.public,chunkPath),401).error,'session_required');
+  const cachedChunk=await request(urls.public,chunkPath,{cookie:winner.cookie});
+  const legacyChunk=await request(urls.public,'/generated/world/chunks/0.0.json',{cookie:winner.cookie});
+  assert.deepEqual(code(cachedChunk),code(legacyChunk));
+  assert.equal(cachedChunk.headers.get('cache-control'),'private, max-age=2592000, immutable');
+  assert.equal(cachedChunk.headers.get('vary'),'Cookie, Accept-Encoding');
+  assert.match(legacyChunk.headers.get('cache-control'),/no-cache/);
+  const obsoleteVersion=version[0]==='0' ? '1'.repeat(64) : '0'.repeat(64);
+  assert.equal(code(await request(urls.public,chunkPath.replace(version,obsoleteVersion),{cookie:winner.cookie}),404).error,
+    'chunk_version_changed');
 
   const viewer=await fetch(urls.public+'/api/events?presence=1',{headers:{Cookie:winner.cookie}});
   assert.equal(viewer.status,200);
@@ -231,6 +244,7 @@ test('invite consumption is atomic and device credentials retain name, UID and a
     assert.equal((await denied.json()).error,'profile_active_elsewhere');
     code(await admin('/api/admin/devices/revoke',{id:player.deviceId}));
     assert.equal(code(await request(urls.public,'/api/world',{cookie:winner.cookie}),401).error,'session_required');
+    assert.equal(code(await request(urls.public,chunkPath,{cookie:winner.cookie}),401).error,'session_required');
     const connected=await fetch(urls.public+'/api/events?presence=1',{headers:{Cookie:second.cookie}});
     assert.equal(connected.status,200);
     await connected.body.cancel();

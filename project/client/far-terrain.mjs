@@ -504,7 +504,11 @@ export class FarTerrain {
     const uploads = this.display.uploads.filter(job => job.far).length;
     if (stream && uploads < MAX_PENDING_UPLOADS && this.decoded.length) this.add(this.decoded.shift());
     const busy = [...this.pending.values(),...this.decoded].map(({key}) => key);
-    if (this.pending.size >= MAX_FETCH || uploads + busy.length >= MAX_PENDING_UPLOADS || now < (this.nextRequest ?? 0)) return;
+    const network = this.display.terrainNetwork;
+    const constrained = network?.constrained(now);
+    if (constrained && (network.urgent || now - (this.lastRequest ?? -Infinity) < 500)) return;
+    const maxFetch = constrained || network?.urgent ? 1 : MAX_FETCH;
+    if (this.pending.size >= maxFetch || uploads + busy.length >= MAX_PENDING_UPLOADS || now < (this.nextRequest ?? 0)) return;
     const direction = this.display.viewDirection;
     let closest, score = Infinity;
     for (const [key,region] of this.targets) {
@@ -518,6 +522,7 @@ export class FarTerrain {
       if (priority < score) { closest = {key,...region}; score = priority; }
     }
     if (!closest) { this.nextRequest = now + 100; return; }
+    this.lastRequest = now;
     this.nextRequest = now + 25;
     const id = ++this.ticket;
     this.pending.set(id,closest);
