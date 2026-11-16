@@ -91,7 +91,9 @@ try {
   await choose(vanilla);
   await place('place',vanilla,-9,-20);
   await openMenu();
-  await page.locator('#creative-tabs [data-tab="chisel"]').click();
+  const chisel = page.locator('#creative-tabs [data-tab="tabChisel"]');
+  if (!await chisel.isVisible()) await page.locator('#creative-next-page').click();
+  await chisel.click();
   await choose(mod);
   await place('place',mod,-6,-20);
   const part = catalog.entries.find(entry => entry.key === 'creative:750:0' && entry.placeable !== false);

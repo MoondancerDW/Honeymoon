@@ -53,16 +53,30 @@ export class BlockDebris {
     const appearance = debrisMaterial(typeof contact.cell === 'string' ? contact.cell : contact.cell.key,contact.material);
     if (!appearance) return;
     const particles = [];
-    const count = fall ? Math.min(28,Math.round(8 + fall)) : 1;
-    for (let i=0; i<count; i++) {
-      const dx = (Math.random()-.5)*.46, dz = (Math.random()-.5)*.46;
-      const velocity = fall ? [dx*5,.7+Math.random()*1.45,dz*5] :
-        [-motion[0]*.28+dx, .7+Math.random()*.55,-motion[1]*.28+dz];
-      particles.push({x:feet.x+dx,y:contact.height+.03,z:feet.z+dz,velocity,
-        half:.021+Math.random()*.024,floor:contact.height});
+    if (fall) {
+      const count = Math.min(28,Math.round(8 + fall));
+      for (let i=0; i<count; i++) {
+        const dx = (Math.random()-.5)*.46, dz = (Math.random()-.5)*.46;
+        particles.push({x:feet.x+dx,y:contact.height+.03,z:feet.z+dz,
+          velocity:[dx*5,.7+Math.random()*1.45,dz*5],half:.021+Math.random()*.024,floor:contact.height});
+      }
+    } else {
+      const speed = Math.hypot(...motion);
+      if (speed < .1) return;
+      const alongX = motion[0] / speed, alongZ = motion[1] / speed;
+      for (let i=0; i<4; i++) {
+        const side = (i % 2 ? .24 : -.24) + (Math.random()-.5)*.14;
+        const forward = i < 2 ? .43 : -.11;
+        const backwards = 1.35 + speed * .25 + Math.random() * .6;
+        const sideways = (Math.random()-.5)*.85;
+        particles.push({x:feet.x+alongX*forward-alongZ*side,y:contact.height+.065,
+          z:feet.z+alongZ*forward+alongX*side,
+          velocity:[-alongX*backwards-alongZ*sideways,.95+Math.random()*.7,-alongZ*backwards+alongX*sideways],
+          half:.03+Math.random()*.026,floor:contact.height});
+      }
     }
     const light = this.world.lightAt(contact.position[0],contact.position[1]+1,contact.position[2]);
-    this.addBurst(particles,appearance,surface,rows,light,time,fall ? .62 : .37);
+    this.addBurst(particles,appearance,surface,rows,light,time,fall ? .62 : .43);
   }
 
   addBurst(particles,{tile,tint},surface,rows,light,time,lifetime) {

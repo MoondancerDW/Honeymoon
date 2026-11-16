@@ -74,6 +74,16 @@ function workspace(t, base = fixture()) {
   };
 }
 
+test('the standard server lets players remove a single original microblock',async t=>{
+  const app = await start(fixture(),':memory:');
+  t.after(()=>app.close());
+  const {cookie} = await app.request('session',{});
+  const removed = await app.request('action',originalPart('remove_part','break-original-part'),cookie);
+  assert.equal(removed.status,200,JSON.stringify(removed.body));
+  assert.deepEqual(removed.body.changes,[{x:8,y:1,z:10,cell:null,object:null,revision:1,parts:[]}]);
+  assert.equal(removed.body.effects[0].material,floor.material);
+});
+
 test('individual RedPower edits preserve originals and ownership through retries, races and restart', async t => {
   const restart = workspace(t);
   let app = await restart();

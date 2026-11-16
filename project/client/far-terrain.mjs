@@ -151,7 +151,11 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
         `}`}
         gl_FragColor = vec4(color.rgb * tint, ${water ? 'color.a' : '1.0'});
         #include <colorspace_fragment>
-        #include <fog_fragment>
+        #ifdef USE_FOG
+          float farFog = smoothstep(fogNear,fogFar,vFogDepth);
+          float haze = .16 * smoothstep(fogNear*.46,fogNear,vFogDepth);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb,fogColor,haze+(1.0-haze)*farFog);
+        #endif
       }`,
   });
 }

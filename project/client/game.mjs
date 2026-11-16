@@ -32,6 +32,7 @@ const selectionStatus = element('selected');
 const coordinateStatus = element('coords');
 const clearSelection = element('clear-selection');
 const creativeToggle = element('creative-toggle');
+const inventoryToggle = element('inventory-toggle');
 const microHint = element('micro-hint');
 const touchRotate = element('touch-rotate');
 const chiselHint = element('chisel-hint');
@@ -55,6 +56,10 @@ let fromCreative = false;
 let heldCreativeItem = null;
 let creativeAvailable = false;
 const creativeNames = new Map();
+const creativeEntries = new Map();
+let catalogRequest, inventoryRequest = Promise.resolve();
+let inventory = {slots:Array(36).fill(null),selected:0};
+let heldSignature = '';
 let iconImage, itemIconImage;
 let selectionInputs, selectionRevision = 0;
 let seatTarget = null;
@@ -67,6 +72,7 @@ let flying = false;
 let crawlRequested = false, confirmedStance = 'stand';
 let spectator = false, spectatorReturn = null;
 let seat = null, seatPending = false, seatEpoch = 0;
+let seatedMoveSince;
 let signTarget;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
@@ -75,6 +81,7 @@ let nearbyStream;
 let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
 let nextSprintDust = 0;
+let crouchUntil = 0;
 let hoofSwing = 0;
 let repeatPlacement = false, nextPlacement = 0, resumeOnEscape = false, resuming = false;
 let pointerReleasedAt = -Infinity;
@@ -105,30 +112,60 @@ function resume() {
   catch { rejected(); }
 }
 const social = createSocialHud({post, notice, pause, resume, teleport});
-const creative = createCreativeMenu({load:loadCreative, choose:chooseCreative,
+const creative = createCreativeMenu({load:loadCreative,
+  choose:(entry,slot)=>inventoryAction('inventory_give',{key:entry.key,slot}),
+  select:slot=>inventoryAction('inventory_select',{slot}),
+  move:(from,to,count)=>inventoryAction('inventory_move',{from,to,count}),
+  trash:slot=>inventoryAction('inventory_trash',{slot}),
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
 const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open;
 
 async function loadCreative() {
-  const catalog = await json('/generated/creative/catalog.json');
-  for (const {key, name} of catalog.entries) if (key && name) creativeNames.set(key, name);
-  return catalog;
+  catalogRequest ??= json('/generated/creative/catalog.json').then(catalog=>{
+    for (const entry of catalog.entries) if (entry.key) {
+      creativeEntries.set(entry.key,entry);
+      if (entry.name) creativeNames.set(entry.key,entry.name);
+    }
+    return catalog;
+  }).catch(error=>{catalogRequest=undefined; throw error;});
+  return catalogRequest;
 }
 
-function chooseCreative(entry) {
-  if (entry.placeable === false) return false;
+function inventoryAction(type,fields = {}) {
+  const run = inventoryRequest.then(async()=>{
+    if (['drop_item','pickup_item'].includes(type) && !await flushPosition()) return false;
+    const result = await postAction({requestId:requestId(),type,...fields});
+    if (!result.ok) {
+      if (result.body.error !== 'no_dropped_item') notice(messages[result.body.error] || result.body.error);
+      return false;
+    }
+    applyInventory(result.body.inventory);
+    return true;
+  }).catch(error=>{console.error(error); notice('Не удалось обновить инвентарь'); return false;});
+  inventoryRequest = run;
+  return run;
+}
+
+function applyInventory(value) {
+  if (!value || !Array.isArray(value.slots)) return;
+  inventory = value;
+  creative.setInventory(value);
+  const stack = value.slots[value.selected];
+  const signature = stack ? JSON.stringify([stack.key,stack.cell,stack.part,stack.pattern,stack.object,stack.copied]) : '';
+  if (signature === heldSignature) return;
+  heldSignature = signature;
+  const entry = stack && creativeEntries.get(stack.key);
   heldVersion++;
-  fromCreative = true;
-  heldCreativeItem = entry.kind ? entry : null;
-  clipboard = ['microblock','minecart','boat','item-frame','flat-item'].includes(entry.kind) ? null : entry.blockKey ?? entry.key;
-  heldSofa = isJammyConnectableSeat(world.models?.jammy, clipboard) ? {} : null;
+  fromCreative = Boolean(stack && !stack.copied);
+  heldCreativeItem = entry?.kind && !stack.copied ? entry : null;
+  clipboard = stack?.part ? null : stack?.cell ?? null;
+  heldSofa = isJammyConnectableSeat(world.models?.jammy,clipboard) ? {object:stack.object} : null;
   sofaTurns = 0;
   chiselMaterial = isChiselMaterial(clipboard) ? chiselMaterialKey(clipboard) : null;
   if (chiseling) toggleChisel();
-  setHeldPart(entry.kind === 'microblock' ? creativeMicroblock(entry) : null);
-  notice(entry.kind === 'minecart' ? 'Вагонетка в руке · ПКМ по рельсам' :
-    entry.kind === 'boat' ? 'Лодка в руке · ПКМ по воде' : 'В руке · ' + entry.name);
-  return true;
+  setHeldPart(entry?.kind === 'microblock' && !stack.copied ? creativeMicroblock(entry) :
+    stack?.part ? {...stack.part,pattern:stack.pattern} : null);
+  presenceDirty = true;
 }
 
 async function drawCreativeIcon(entry, canvas) {
@@ -165,7 +202,7 @@ async function drawCreativeIcon(entry, canvas) {
     context.fillRect(3, 9, 26, 2);
     return true;
   }
-  const model = entry.kind === 'microblock' ? {part:creativeMicroblock(entry)} :
+  const model = entry.kind === 'microblock' ? {part:entry.part ?? creativeMicroblock(entry)} :
     entry.kind === 'shaped-lamp' ? {data:shapedLampData(entry.damage), lit:Boolean(entry.damage & 16)} : undefined;
   const info = creativeIcon({...entry, ...model, key:entry.blockKey ?? entry.key});
   if (!info || !Number.isInteger(info.tile) || info.tile < 0) return false;
@@ -227,6 +264,7 @@ const messages = {
   no_interaction: 'С этим объектом нельзя взаимодействовать',
   not_a_seat: 'На этот блок нельзя сесть', seat_taken: 'Место уже занято',
   seat_blocked: 'Над сиденьем недостаточно места',
+  seat_requires_ground: 'Сесть можно на твёрдую поверхность',
   invalid_sign_face: 'Табличку можно поставить сверху или сбоку блока',
   invalid_sign_text: 'Каждая строка должна содержать до 80 символов без переноса',
   not_a_sign: 'Здесь больше нет таблички',
@@ -245,6 +283,12 @@ const messages = {
   drain_liquid_first: 'Сначала уберите воду или лаву',
   incompatible_liquid: 'Здесь нет места для жидкости',
   liquid_missing: 'Здесь больше нет жидкости',
+  missing_support: 'Для этого блока нужна твёрдая опора',
+  empty_inventory_slot: 'Активная ячейка пуста',
+  inventory_full: 'В инвентаре нет места',
+  occupied_inventory_slot: 'Освободите ячейку для этой стопки',
+  too_many_dropped_items: 'Рядом слишком много выброшенных предметов',
+  drop_obstructed: 'Здесь нельзя выбросить предмет',
   invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
   invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
   invalid_skin_size: skinDescription,
@@ -284,6 +328,7 @@ function changes(list = [], revision = 0, frames) {
   }
   if (frames) world.setFrames(frames,revision);
   if (changed.length || frames) selectionRevision++;
+  if (seat?.kind === 'ground' && changed.length) presenceDirty = true;
   view.remeshLighting(world.updateLighting());
   for (const change of changed) {
     if (world.hasChunk(change.x, change.z)) view.remesh(change.x, change.y, change.z, change.revision);
@@ -298,10 +343,12 @@ async function refresh() {
     return;
   }
   changes(snapshot.overrides, snapshot.worldRevision, snapshot.frames);
+  applyInventory(snapshot.inventory);
+  if (snapshot.droppedItems) world.setDroppedItems(snapshot.droppedItems,performance.now());
 }
 
 function stream() {
-  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1');
+  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1');
   feed.addEventListener('open', () => { presenceDirty = true; });
   feed.addEventListener('presence', event => {
     const {players, selfOnline} = JSON.parse(event.data);
@@ -309,6 +356,7 @@ function stream() {
     social.roster(players, selfOnline && profile.confirmed);
   });
   feed.addEventListener('presence-motion', event => view.players.update(JSON.parse(event.data).players));
+  feed.addEventListener('dropped-items',event=>world.setDroppedItems(JSON.parse(event.data).entities,performance.now()));
   feed.addEventListener('minecarts', event => {
     const {entities,boats,seat:reportedSeat,position:feet} = JSON.parse(event.data);
     world.setMinecarts(entities,performance.now(),boats);
@@ -324,6 +372,7 @@ function stream() {
     view.setWorldTime(time);
     social.clockState(time);
   });
+  feed.addEventListener('weather',event=>updateWeather(JSON.parse(event.data).mode));
   feed.addEventListener('commit', event => {
     const data = JSON.parse(event.data);
     changes(data.changes, data.worldRevision, data.frames);
@@ -445,13 +494,17 @@ function look(dx, dy, sensitivity = .0023) {
   heading.pitch = Math.min(1.55, Math.max(-1.55, heading.pitch - dy * sensitivity));
 }
 
+function enterWorld() {
+  entered = true;
+  presenceDirty = true;
+  creativeToggle.disabled = spectator || !creativeAvailable;
+  inventoryToggle.disabled = spectator;
+  element('weather').disabled = false;
+}
+
 function setPlaying(active) {
   playing = active;
-  if (active && !entered && !button.disabled) {
-    entered = true;
-    presenceDirty = true;
-    creativeToggle.disabled = spectator || !creativeAvailable;
-  }
+  if (active && !entered && !button.disabled) enterWorld();
   audio.setPlaying(active);
   game.classList.toggle('playing', active);
   game.classList.toggle('paused', !active && entered);
@@ -495,6 +548,7 @@ function setSpectator(active) {
   game.classList.toggle('spectating', active);
   element('spectator-status').hidden = !active;
   creativeToggle.disabled = active || !creativeAvailable;
+  inventoryToggle.disabled = active;
   updateCameraHint();
 }
 
@@ -598,15 +652,15 @@ async function arriveAt(feet, stance) {
   }
 }
 
-async function toggleSeat() {
+async function toggleSeat(ground) {
   const {x, y, z, hit, entity} = seatTarget ?? selection ?? {};
-  const target = seat ? undefined : {x, y, z, hit, ...(entity && {entity})};
+  const target = seat || ground !== undefined ? undefined : {x, y, z, hit, ...(entity && {entity})};
   acting = true;
   seatPending = true;
   seatEpoch++;
   try {
     if (!await flushPosition()) return;
-    const {ok, body} = await post('seat', {...playerPose(), target}, AbortSignal.timeout(4000));
+    const {ok, body} = await post('seat', {...playerPose(), target,ground}, AbortSignal.timeout(4000));
     if (ok) setSeat(body.seat, body.position,body.stance);
     else notice(messages[body.error] ?? body.error);
   } catch {
@@ -847,6 +901,19 @@ function clearHeld() {
   notice('Выбор сброшен');
 }
 
+function stowHeld() {
+  if (!inventory.slots[inventory.selected]) { clearHeld(); return; }
+  const empty = inventory.slots.indexOf(null);
+  if (empty < 0) { notice(messages.inventory_full); return; }
+  if (empty < 9) void inventoryAction('inventory_select',{slot:empty});
+  else void inventoryAction('inventory_move',{from:inventory.selected,to:empty});
+}
+
+function updateWeather(mode) {
+  view.setWeather(mode);
+  element('weather').value = view.weather;
+}
+
 function toggleChisel() {
   chiseling = !chiseling;
   if (chiseling && !chiselMaterial && isChiselMaterial(clipboard)) chiselMaterial = chiselMaterialKey(clipboard);
@@ -927,6 +994,8 @@ async function action(type, sneaking = false) {
     type = 'copy_liquid';
   } else if (type === 'place' && !chiseling && liquidKind(clipboard) && canLogLiquid(target.cell,neighbors,world.models)) {
     type = 'place_liquid';
+  } else if (type === 'remove' && target.part && !isMicroblockCell(target.cell) && !target.cell?.voxels) {
+    type = 'remove';
   } else if (chiseling && target.part && type === 'remove') {
     type = 'remove_part';
   } else if (chiseling && type !== 'interact') {
@@ -1050,6 +1119,9 @@ async function action(type, sneaking = false) {
       placementKey = '';
       notice('Материал резца · ' + labelFor(chiselMaterial));
     }
+    if ((type === 'copy' || type === 'copy_part' || type === 'copy_liquid') && selectedVersion === heldVersion) {
+      await inventoryAction('inventory_copy',{slot:inventory.selected});
+    }
     changes(result.body.changes, result.body.worldRevision, result.body.frames);
     effects(result.body);
     metrics.lastEdit = performance.now() - started;
@@ -1074,6 +1146,13 @@ function tick(now) {
     Object.assign(position, {x:anchor.x, y:anchor.y, z:anchor.z});
     Object.assign(seat, anchor);
   }
+  if (seat?.kind === 'ground' && playing && !menuOpen() && !orbitHeading && (forwardInput() || turnInput())) {
+    seatedMoveSince ??= now;
+    if (now-seatedMoveSince >= 1000 && !acting && !seatPending && !resetting) {
+      seatedMoveSince = now;
+      void toggleSeat(false);
+    }
+  } else seatedMoveSince = undefined;
   if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending) {
     const startX = position.x, startZ = position.z;
     const fallSpeed = movement.fall;
@@ -1085,7 +1164,7 @@ function tick(now) {
     if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
       if (!flying) {
         const previous = movement.stance;
-        const stance = crawlRequested ? 'crawl' : keys.has('KeyC') ? 'crouch' : 'stand';
+        const stance = crawlRequested ? 'crawl' : keys.has('KeyC') || now < crouchUntil ? 'crouch' : 'stand';
         if (movement.setStance(position,stance) !== previous) recordPosition(position);
       }
       const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance}) / Math.max(1,Math.hypot(forward,strafe,vertical));
@@ -1151,7 +1230,7 @@ function tick(now) {
 
 function bindControls() {
   const canvas = view.renderer.domElement;
-  clearSelection.addEventListener('click', clearHeld);
+  clearSelection.addEventListener('click', stowHeld);
   button.addEventListener('click', () => {
     let pending;
     try {
@@ -1173,11 +1252,8 @@ function bindControls() {
         if (body.position) setSeat(body.seat,body.position,body.stance);
         social.profileUpdated(profile.confirmed);
         view.setLocalSkin(profile.confirmed.skin);
-        if (playing) {
-          entered = true;
-          presenceDirty = true;
-          creativeToggle.disabled = spectator || !creativeAvailable;
-        }
+        if (playing && !entered) enterWorld();
+        else if (playing) presenceDirty = true;
       }).catch(error => {
         if (touchMode) setPlaying(false);
         else if (document.pointerLockElement === canvas) document.exitPointerLock();
@@ -1252,6 +1328,11 @@ function bindControls() {
       return;
     }
     if (!playing || orbitHeading) return;
+    if (!spectator && /^Digit[1-9]$/.test(event.code)) {
+      event.preventDefault();
+      if (!event.repeat) creative.selectSlot(Number(event.code.slice(-1)) - 1);
+      return;
+    }
     if (event.code === 'KeyI' && !event.repeat && !creativeToggle.disabled) {
       event.preventDefault();
       creative.open();
@@ -1271,8 +1352,22 @@ function bindControls() {
       }
     }
     if (event.code === 'KeyZ' && !resetting && !acting) toggleChisel();
-    if (event.code === 'KeyB') toggleChiselSize();
-    if (event.code === 'KeyQ' || event.code === 'KeyX') clearHeld();
+    if (event.code === 'KeyB') {
+      if (chiseling) toggleChiselSize();
+      else creative.openInventory();
+    }
+    if (event.code === 'KeyQ') {
+      event.preventDefault();
+      if (inventory.slots[inventory.selected]) void inventoryAction('drop_item',{yaw:heading.yaw,all:event.ctrlKey,eye:view.eyeOffset()});
+    }
+    if (event.code === 'KeyC' && !flying && !seat && !resetting) {
+      crouchUntil = performance.now() + 180;
+      if (world.droppedItems.size) void inventoryAction('pickup_item',{eye:view.eyeOffset()});
+    }
+    if (event.code === 'KeyX' && !flying && !acting && !resetting && (!seat || seat.kind === 'ground')) {
+      event.preventDefault();
+      void toggleSeat(seat?.kind !== 'ground');
+    }
     if (event.code === 'KeyO') action('copy');
     if (event.code === 'KeyR') cyclePlacement();
     if (event.code === 'KeyE') {
@@ -1311,6 +1406,11 @@ function bindControls() {
     if (event.button === 1) action('copy');
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
+  canvas.addEventListener('wheel',event=>{
+    if (!playing || menuOpen() || spectator || orbitHeading || !event.deltaY) return;
+    event.preventDefault();
+    creative.scrollHotbar(Math.sign(event.deltaY));
+  },{passive:false});
   element('teleport-reload').addEventListener('click', () => location.reload());
   element('sign-form').addEventListener('submit', saveSign);
   element('sign-cancel').addEventListener('click', closeSign);
@@ -1361,6 +1461,33 @@ function bindControls() {
     view.setDetailedLodDistance(distance).then(() => {
       localStorage.setItem('honeymoon-detail-distance', String(distance));
     }).catch(error => notice(error.message));
+  });
+  const night = element('night-vision');
+  const showVision = enabled=>{
+    view.setNightVision(enabled);
+    night.textContent = enabled ? 'Ночное зрение вкл.' : 'Ночное зрение выкл.';
+    night.setAttribute('aria-pressed',String(enabled));
+  };
+  showVision(localStorage.getItem('honeymoon-night-vision') === '1');
+  night.addEventListener('click',()=>{
+    const enabled = !view.nightVision;
+    localStorage.setItem('honeymoon-night-vision',enabled ? '1' : '0');
+    showVision(enabled);
+  });
+  const weather = element('weather');
+  weather.addEventListener('change',async()=>{
+    weather.disabled = true;
+    try {
+      const {ok,body} = await post('weather',{mode:weather.value});
+      if (ok) updateWeather(body.mode);
+      else notice(messages[body.error] || 'Не удалось изменить погоду');
+    } catch (error) {
+      console.error(error);
+      notice('Не удалось изменить погоду');
+    } finally {
+      weather.value = view.weather;
+      weather.disabled = false;
+    }
   });
   const sound = element('audio-toggle');
   const showSound = muted => {
@@ -1539,6 +1666,7 @@ async function start() {
   if (session.body.seat) setSeat(session.body.seat, p,session.body.stance);
   if (session.body.spectator) setSpectator(true);
   if (session.body.time) view.setWorldTime(session.body.time);
+  if (session.body.weather) updateWeather(session.body.weather);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
   updateCamera();
   const farSupported = supportsFarTerrain(manifest) && manifest.lod.maxDistance === 32;
@@ -1546,7 +1674,8 @@ async function start() {
   const savedDetail = Number(localStorage.getItem('honeymoon-detail-distance'));
   if ([...distance.options].some(option => Number(option.value) === savedDetail)) distance.value = String(savedDetail);
   distance.disabled = !farSupported;
-  await Promise.all([view.loadTextures(), refresh()]);
+  await Promise.all([view.loadTextures(),creativeAvailable ? loadCreative().catch(console.error) : null]);
+  await refresh();
   await view.prepareGraphics();
   bindControls();
   stream();

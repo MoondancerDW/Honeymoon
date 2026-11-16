@@ -55,11 +55,27 @@ test('native day cycle dims sky light without scaling block light', () => {
   assert.deepEqual([...light.slice(256 * 4, 256 * 4 + 4)], [255,255,255,255]);
 });
 
+test('overcast nights dim sky paths and local night vision fills actually dark surfaces', () => {
+  const bytes = new Uint8Array(16*17*4);
+  writeLightmap(bytes,.16,{darkFloor:true});
+  assert.equal(bytes[0],0);
+  const moon = bytes[240*4], torch = bytes[8*4];
+  writeLightmap(bytes,1,{skyLoss:3,darkFloor:true});
+  const overcastDay = bytes[240*4];
+  assert.ok(overcastDay>moon);
+  writeLightmap(bytes,.025,{skyLoss:3,darkFloor:true});
+  assert.ok(bytes[240*4] < moon/5);
+  assert.equal(bytes[8*4],torch);
+  writeLightmap(bytes,.025,{skyLoss:3,darkFloor:true,nightVision:true});
+  assert.ok(bytes.every(value=>value===255));
+});
+
 test('contact shade preserves exposed corners and increases beside solid blocks', () => {
   assert.equal(contactShade(false, false, false), 1);
   assert.equal(contactShade(true, false, false), contactShade(false, false, true));
   assert.ok(contactShade(true, false, false) > contactShade(true, false, true));
   assert.equal(contactShade(true, true, false), contactShade(true, true, true));
+  assert.ok(contactShade(.5,false,false) > contactShade(1,false,false));
 });
 
 test('smooth corner lighting averages sky and block light independently', () => {

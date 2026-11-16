@@ -74,6 +74,56 @@ test('bed halves share occupancy and releasing a seat restores a collision-free 
   assert.equal(game.sit(one,head,pose).position.z,3);
 });
 
+test('ground seating keeps exact feet and heading, is idempotent, and releases when support disappears',t=>{
+  const store = openStore(':memory:');
+  t.after(()=>store.close());
+  const bounds = {minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15};
+  let floor=true;
+  const base = {hash:'ground-seat-test',manifest:{spawn:Object.values(spawn),bounds},
+    inBounds:(x,y,z)=>[x,y,z].every(value=>value>=0 && value<=15),
+    catalog:new Set(['air','legacy:1:0','legacy:44:0','legacy:9:0']),
+    getCell(x,y,z) {
+      const key=x>=3&&x<=5&&z>=3&&z<=5&&y===0 ? 'legacy:44:0' :
+        x===6&&z===6&&y===1 ? 'legacy:9:0' :
+          floor&&y===0 ? 'legacy:1:0' : 'air';
+      return {key,object:null};
+    }};
+  const game=createGame(base,store,geometry,{modules:[]});
+  const player=store.createPlayer().id;
+  const pose={yaw:-1.25,pitch:.1,motion:'idle'};
+  game.session(player);
+
+  const sit = () => game.sit(player,undefined,pose,true);
+  const stand = () => game.sit(player,undefined,pose,false);
+  const first=sit();
+  assert.deepEqual(first,{seat:{...spawn,yaw:pose.yaw,kind:'ground'},position:spawn,stance:'stand'});
+  assert.deepEqual(sit(),first);
+  assert.equal(game.poseFor(player,pose).motion,'sit');
+  assert.equal(game.poseFor(player,pose).yaw,pose.yaw);
+  assert.throws(()=>game.position(player,{...spawn,z:3.5}),{code:'movement_blocked'});
+  assert.deepEqual(stand(),{seat:null,position:spawn,stance:'stand'});
+  assert.deepEqual(stand(),{seat:null,position:spawn,stance:'stand'});
+  assert.equal(game.poseFor(player,{...pose,motion:'sit'}).motion,'idle');
+
+  const above={...spawn,y:3};
+  game.teleport(player,above);
+  assert.throws(sit,{code:'seat_requires_ground'});
+  assert.equal(game.session(player).seat,null);
+  game.teleport(player,{x:6.5,y:1,z:6.5});
+  assert.throws(sit,{code:'seat_requires_ground'});
+
+  const slab={x:4.3,y:.5,z:4.7};
+  game.teleport(player,slab);
+  assert.deepEqual(sit().position,slab);
+  assert.deepEqual(stand().position,slab);
+
+  game.teleport(player,spawn);
+  sit();
+  floor=false;
+  assert.equal(game.session(player).seat,null);
+  assert.equal(game.poseFor(player,{...pose,motion:'sit'}).motion,'idle');
+});
+
 test('imported passenger cart seats one player through water and rejects forged or occluded hits', t => {
   const store = openStore(':memory:');
   t.after(() => store.close());

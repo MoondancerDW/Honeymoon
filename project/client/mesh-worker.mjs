@@ -165,9 +165,9 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
   }
   let vertexShade = shadow;
   let vertexLight = brightness;
-  const croppedCover = box.material !== undefined &&
+  const croppedFace = !box.angle &&
     (box[MIN[uAxis]] !== 0 || box[MAX[uAxis]] !== 1 || box[MIN[vAxis]] !== 0 || box[MAX[vAxis]] !== 1);
-  if ((quarter >= 0 || croppedCover) && (shadow || Array.isArray(brightness))) {
+  if ((quarter >= 0 || croppedFace) && (shadow || Array.isArray(brightness))) {
     const sample = ([a,b,c,d], point) => {
       const u = point[uAxis] - origin[uAxis], v = point[vAxis] - origin[vAxis];
       return (a + (b - a) * u) * (1 - v) + (d + (c - d) * u) * v;
@@ -274,14 +274,23 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
   }
   const shadowCells = new Uint8Array(indices.length);
   function castsContactShade(at) {
-    if (!indices[at]) return false;
+    if (!indices[at]) return 0;
     if (!shadowCells[at]) {
       const block = shape(at);
       const solid = block?.boxes.length === 1 && isOcclusionBlock(block.full) ||
         hasSculptures && isOpaqueFullVoxels(voxelCells.get(at));
-      shadowCells[at] = solid ? 2 : 1;
+      if (solid) shadowCells[at] = 255;
+      else {
+        let volume = 0;
+        for (const box of block?.boxes ?? []) {
+          if (box.solid && box.mode === 'opaque' && !box.kind) {
+            volume += (box.x1-box.x0)*(box.y1-box.y0)*(box.z1-box.z0);
+          }
+        }
+        shadowCells[at] = 1 + Math.round(200*Math.sqrt(Math.min(1,volume)));
+      }
     }
-    return shadowCells[at] === 2;
+    return (shadowCells[at]-1)/254;
   }
   function faceLighting(adjacent, face, center) {
     const [uAxis, vAxis] = AXES[face];
@@ -290,12 +299,12 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
     const v0 = castsContactShade(adjacent - v), v1 = castsContactShade(adjacent + v);
     const a = castsContactShade(adjacent - u - v), b = castsContactShade(adjacent + u - v);
     const c = castsContactShade(adjacent + u + v), d = castsContactShade(adjacent - u + v);
-    const left = u0 ? center : light[adjacent - u], right = u1 ? center : light[adjacent + u];
-    const bottom = v0 ? center : light[adjacent - v], top = v1 ? center : light[adjacent + v];
-    const bottomLeft = a || u0 && v0 ? center : light[adjacent - u - v];
-    const bottomRight = b || u1 && v0 ? center : light[adjacent + u - v];
-    const topRight = c || u1 && v1 ? center : light[adjacent + u + v];
-    const topLeft = d || u0 && v1 ? center : light[adjacent - u + v];
+    const left = u0 === 1 ? center : light[adjacent - u], right = u1 === 1 ? center : light[adjacent + u];
+    const bottom = v0 === 1 ? center : light[adjacent - v], top = v1 === 1 ? center : light[adjacent + v];
+    const bottomLeft = a === 1 || u0 === 1 && v0 === 1 ? center : light[adjacent - u - v];
+    const bottomRight = b === 1 || u1 === 1 && v0 === 1 ? center : light[adjacent + u - v];
+    const topRight = c === 1 || u1 === 1 && v1 === 1 ? center : light[adjacent + u + v];
+    const topLeft = d === 1 || u0 === 1 && v1 === 1 ? center : light[adjacent - u + v];
     const uniform = left === center && right === center && bottom === center && top === center &&
       bottomLeft === center && bottomRight === center && topRight === center && topLeft === center;
     const shadow = u0 || u1 || v0 || v1 || a || b || c || d
@@ -392,7 +401,7 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
             torchQuads(out, box, origin, light[at]);
             continue;
           }
-          if (box.kind === 'rail') {
+          if (box.kind === 'rail' || box.kind === 'strip') {
             const corners = box.corners.map(([dx, dy, dz]) => [x + dx, y + dy, z + dz]);
             quad(out, corners, box.faces[0], box.uv, light[at]);
             quad(out, corners.toReversed(), box.faces[0], box.uv.toReversed(), light[at]);
@@ -435,7 +444,7 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
             // the adjacent cell again blackens recessed faces next to solids.
             const shade = box.emissive ? 1 : box.redPowerLocalShade?.[f] ?? FACE_SHADE[f];
             const litCover = box.material !== undefined && brightness > 0;
-            const smooth = box.mode === 'opaque' && !box.emissive && (litCover || onEdge && box === blockShape.full)
+            const smooth = box.mode === 'opaque' && !box.emissive && (litCover || box.solid && !box.angle)
               ? faceLighting(onEdge ? adjacent : at, f, brightness) : null;
             if (chisel) {
               const tiles = chiselFantasyQuarters(f, neighbors);

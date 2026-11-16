@@ -1,5 +1,5 @@
 import * as THREE from '/vendor/three/three.module.js';
-import {ATLAS_GRID, creativeIcon, shapeFor, tiles} from '../world/geometry.mjs';
+import {ATLAS_GRID, coverBoxes, creativeIcon, shapeFor, tiles} from '../world/geometry.mjs';
 import {heldLamp, heldLightLevel} from '../world/held-light.mjs';
 
 const facePoints = [
@@ -28,7 +28,8 @@ function appearance(held, assets) {
     quads.push({points:flatItem, uv:sprite?.uv ?? tileUV(tiles.unknown, assets.rows), shade:1});
   } else {
     const lamp = heldLamp(held.key);
-    const shape = shapeFor(lamp ? {key:'legacy:768:0',object:{data:lamp}} : held.key);
+    const shape = held.part ? coverBoxes([held.part]) :
+      shapeFor(lamp ? {key:'legacy:768:0',object:{data:lamp}} : held.key);
     if (shape[0]?.kind === 'cross') {
       const icon = creativeIcon(held);
       quads.push({points:flatItem, uv:tileUV(icon.tile, assets.rows),

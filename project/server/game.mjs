@@ -5,6 +5,8 @@ import {readEye} from './presence.mjs';
 import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
 import { createMinecarts } from './minecarts.mjs';
+import { createDroppedItems } from './dropped-items.mjs';
+import { createInventory, inventoryInput, isInventoryAction } from './inventory.mjs';
 import { createBoats } from './boats.mjs';
 import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
@@ -15,6 +17,7 @@ import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITIO
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
 import { isRideableBoat,boatHeading,boatHit,boatSeat } from '../world/boats.mjs';
+import { pistonHead } from './pistons.mjs';
 import { orientedRail, railFor } from '../world/rails.mjs';
 import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
 import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData } from '../world/creative-items.mjs';
@@ -62,6 +65,9 @@ const slotNumber = value => Number.isInteger(value) && value >= 0 && value < PAR
 
 function normalizeAction(body) {
   if (typeof body.requestId !== 'string' || !REQUEST_ID.test(body.requestId)) throw new RequestError(400, 'invalid_request_id');
+  if (isInventoryAction(body.type)) {
+    return inventoryInput(body, {type:body.type, ...(body.eye !== undefined && {eye:readEye(body.eye)})});
+  }
   if (!actions.has(body.type)) throw new RequestError(400, 'unknown_action');
   if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw new RequestError(400, 'invalid_revision');
   const input = { type: body.type, ...point(body, true), expectedRevision: body.expectedRevision };
@@ -299,6 +305,8 @@ export function createGame(base, store, geometry, {
     return current.cell === null ? null : cellView(current);
   };
   const physical = physics(base, geometry, cellAt, models);
+  const inventory = createInventory(store, creativeBlocks, creativeItems);
+  const drops = createDroppedItems({base, store, clock, collides:physical.collides, visible:physical.visiblePoint});
   const frames = createItemFrames({base,store,physical,getCurrent,faceSupports,
     protectedCell:(x,y,z) => reserved(x,y,z) || spawnProtected(x,y,z)});
   const carts = createMinecarts({
@@ -379,6 +387,18 @@ export function createGame(base, store, geometry, {
   function leaveSeat(player) {
     const seat = seats.get(player);
     if (!seat) return;
+    if (seat.anchor.kind === 'ground') {
+      const position = playerAt(player);
+      const stance = ['stand','crouch','crawl'].find(name => {
+        const body = bodyFor(player,name);
+        return bodyWithinMap(position,body) && !physical.collides(position,body);
+      });
+      if (stance) {
+        releaseSeat(player);
+        movePlayer(player,position,stance);
+        return position;
+      }
+    }
     const body = bodyFor(player,'stand');
     const standable = point => bodyWithinMap(point,body) && !physical.collides(point,body);
     const prior = seat.previous;
@@ -463,12 +483,30 @@ export function createGame(base, store, geometry, {
     return result;
   }
 
-  function sit(player, target, pose) {
+  function supportedGroundSeat(position,body) {
+    return physical.supported(position,body) && !movementMedium(cellAt,position.x,position.y,position.z,models);
+  }
+
+  function setGroundSeat(player, previous, existing, ground, pose) {
+    if (!ground || existing) {
+      const position = !ground && existing?.kind === 'ground' ? leaveSeat(player) : previous;
+      return {seat:publicSeat(player),position,stance:stanceFor(player)};
+    }
+    const anchor = {...previous,yaw:pose.yaw,kind:'ground'};
+    const body = bodyAtSeat(player,anchor);
+    if (!bodyWithinMap(previous,body)) throw new RequestError(403,'outside_playable_area');
+    if (physical.collides(previous,body)) throw new RequestError(409,'seat_blocked');
+    if (!supportedGroundSeat(previous,body)) throw new RequestError(409,'seat_requires_ground');
+    return {...takeSeat(player,previous,anchor,[]),stance:'stand'};
+  }
+
+  function sit(player, target, pose, ground) {
     if (pose?.eye) eyes.set(player,pose.eye);
     else eyes.delete(player);
     if (spectators.has(player)) throw new RequestError(403, 'spectator_action');
     const previous = playerAt(player);
     const existing = publicSeat(player);
+    if (ground !== undefined) return setGroundSeat(player,previous,existing,ground,pose);
     if (existing || !target) {
       const position = target ? previous : leaveSeat(player) ?? previous;
       return {seat:publicSeat(player), position};
@@ -617,7 +655,8 @@ export function createGame(base, store, geometry, {
     const [dx, dz] = bedDirections[orientation];
     const second = {x:x + (isBed ? dx : 0), y:y + (isBed ? 0 : 1), z:z + (isBed ? dz : 0)};
     if (!base.inBounds(second.x, second.y, second.z) || reserved(second.x, second.y, second.z) ||
-        spawnProtected(second.x, second.y, second.z) || base.getCell(second.x, second.y, second.z).key !== 'air') {
+        spawnProtected(second.x, second.y, second.z) ||
+        !allowRemoval && base.getCell(second.x, second.y, second.z).key !== 'air') {
       throw new RequestError(403, 'protected_cell');
     }
     if (getCurrent(second.x, second.y, second.z).cell !== null) throw new RequestError(409, 'occupied');
@@ -633,13 +672,14 @@ export function createGame(base, store, geometry, {
   function controlPlacement(input) {
     const [id, meta] = blockState(input.cell);
     if (!input.against || !input.creative && input.yaw === undefined) return null;
+    if (id === 107 && input.yaw !== undefined) return blockKey(id,(2 - Math.round(input.yaw * 2 / Math.PI)) & 3);
     if ((id === 23 || id === 29 || id === 33) && input.yaw !== undefined) {
       const direction = [3,4,2,5][-Math.round(input.yaw * 2 / Math.PI) & 3];
       const pitch = input.pitch ?? 0;
       return blockKey(id,id === 23 || Math.abs(pitch) < Math.PI / 3 ? direction : Number(pitch < 0));
     }
     const button = Boolean(buttonDuration(id));
-    const torch = id === 50 || id === 75 || id === 76;
+    const torch = id === 50 || id === 75 || id === 76 || id >= 3909 && id <= 3924;
     const repeater = id === 93 || id === 94;
     const floor = repeater || pressurePlate(id) || id === 55;
     if (!floor && !button && !torch && id !== 69) return null;
@@ -675,7 +715,7 @@ export function createGame(base, store, geometry, {
     const standing = input.yaw === undefined ? blockState(input.cell)[1] : -Math.round(input.yaw * 8 / Math.PI) & 15;
     const cell = !orient ? input.cell : face === 1 ? blockKey(63, standing) : face >= 2 ? blockKey(68, face) : input.cell;
     const position = [x, y, z];
-    const copied = input.creative ? null : store.getClipboard(player);
+    const copied = input.creative ? null : clipboardFor(player, input.cell);
     const original = copied?.cell === input.cell ? copied.object : null;
     const object = original ? (geometry.placementObject ? geometry.placementObject(cell, original, position) :
       {...original, position, key:`tile:${position.join(':')}`}) : signObject(position, ['', '', '', '']);
@@ -732,7 +772,7 @@ export function createGame(base, store, geometry, {
     return writeCell(player, current, cell, null, undefined, updateRailNeighbors(current, cell));
   }
 
-  function placedCompanion(current) {
+  function breakCompanion(current) {
     const {x, y, z} = current;
     const [id, meta] = blockState(current);
     let mate;
@@ -741,9 +781,17 @@ export function createGame(base, store, geometry, {
       const other = getCurrent(x, y + (meta & 8 ? -1 : 1), z);
       const [otherId, otherMeta] = blockState(other);
       if (id === otherId && Boolean(meta & 8) !== Boolean(otherMeta & 8)) mate = other;
+    } else if (id === 34 && allowRemoval) {
+      const side = signalSides[meta & 7];
+      if (side) {
+        const stem = getCurrent(x - side[0],y - side[1],z - side[2]);
+        if (samePoint(pistonHead(stem,getCurrent) ?? {},current)) mate = stem;
+      }
     }
-    if (!mate || !store.getEditOwner(mate.x, mate.y, mate.z) ||
-        base.getCell(mate.x, mate.y, mate.z).key !== 'air') return undefined;
+    if (!mate || reserved(mate.x,mate.y,mate.z)) return undefined;
+    const mateOwner = store.getEditOwner(mate.x, mate.y, mate.z);
+    if (allowRemoval ? id !== 34 && mateOwner !== store.getEditOwner(x,y,z) :
+        !mateOwner || base.getCell(mate.x, mate.y, mate.z).key !== 'air') return undefined;
     if (seatsAt(mate.x, mate.y, mate.z)) throw new RequestError(409, 'seat_taken');
     if (mate.fluid) throw new RequestError(409, 'drain_liquid_first');
     return {x:mate.x, y:mate.y, z:mate.z, cell:null, object:null};
@@ -770,19 +818,19 @@ export function createGame(base, store, geometry, {
 
   function microParts(current) {
     const {x, y, z} = current;
-    const owner = base.getCell(x, y, z).key === 'air' ? store.getEditOwner(x, y, z) : null;
+    const owner = store.getEditOwner(x, y, z);
     return store.getMicroParts(x, y, z) ?? (cellView(current).parts ?? []).map(part => ({...publicMicroPart(part), owner}));
   }
 
   function removeMicroblocks(player, input, current) {
     const {x, y, z, hit} = input;
-    if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
+    if (reserved(x, y, z) || !allowRemoval && spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
     if (!physical.targetAtHit(playerSight(player), x, y, z, hit, true)) throw new RequestError(403, 'outside_reach');
     const parts = microParts(current);
-    const remaining = parts.filter(part => !part.owner);
-    const clearVoxels = current.voxels && store.getEditOwner(x, y, z);
+    const remaining = allowRemoval ? [] : parts.filter(part => !part.owner);
+    const clearVoxels = current.voxels && (allowRemoval || store.getEditOwner(x, y, z));
     if (remaining.length === parts.length && !clearVoxels) throw new RequestError(403, 'part_not_owned');
-    const effects = parts.filter(part => part.owner).map(part => breakEffect(current,part.material,undefined,coverBoxes([part])));
+    const effects = parts.filter(part => allowRemoval || part.owner).map(part => breakEffect(current,part.material,undefined,coverBoxes([part])));
     if (clearVoxels) effects.push(breakEffect(current,undefined,current.voxels.materials[0]));
     return writeMicroParts(current, remaining, null, clearVoxels ? null : current.voxels,effects);
   }
@@ -805,10 +853,12 @@ export function createGame(base, store, geometry, {
       return {worldRevision: store.worldRevision(), changes: [], effects: [], part: copied, pattern};
     }
 
-    if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
+    if (reserved(x, y, z) || (type !== 'remove_part' || !allowRemoval) && spawnProtected(x, y, z)) {
+      throw new RequestError(403, 'protected_cell');
+    }
     const original = base.getCell(x, y, z).key;
-    if ((!isMultipart && (!current.voxels && current.cell !== null || original !== 'air')) ||
-        (isMultipart && original !== 'air' && !isMicroblockCell({key: original, parts: base.manifest.compositions?.[original]?.parts}))) {
+    if (!isMultipart && !current.voxels && current.cell !== null || !allowRemoval && original !== 'air' &&
+        (!isMultipart || !isMicroblockCell({key: original, parts: base.manifest.compositions?.[original]?.parts}))) {
       throw new RequestError(409, 'incompatible_part');
     }
     const parts = view.parts ?? [];
@@ -818,7 +868,7 @@ export function createGame(base, store, geometry, {
     if (type === 'remove_part') {
       const part = owned.find(({slot}) => slot === input.partSlot);
       if (!part) throw new RequestError(409, 'part_missing');
-      if (!part.owner) throw new RequestError(403, 'part_not_owned');
+      if (!allowRemoval && !part.owner) throw new RequestError(403, 'part_not_owned');
       if (!physical.visiblePart(position, x, y, z, part.slot, hit)) throw new RequestError(403, 'outside_reach');
       const next = microblockRemoval(parts, part.slot, {
         mayReshape: slot => owned.some(remaining => remaining.slot === slot && remaining.owner),
@@ -841,7 +891,7 @@ export function createGame(base, store, geometry, {
     }
     if (input.part.bounds) {
       const item = input.creativeItem && creativeItems.get(input.creativeItem);
-      const copied = input.creativeItem ? item?.part && {part:item.part, pattern:item.part.pattern} : store.getClipboard(player);
+      const copied = input.creativeItem ? item?.part && {part:item.part, pattern:item.part.pattern} : clipboardFor(player);
       if (!copied?.pattern || input.part.material !== copied.part.material || input.part.shape !== copied.part.shape ||
           input.part.sourceSlot !== (copied.part.sourceSlot ?? copied.part.slot)) throw new RequestError(409, 'nothing_to_copy');
       const proposal = guidedMicroblock({...against, hit: anchor.hit, offset: anchor.face}, copied.part, copied.pattern, input.orientation);
@@ -860,8 +910,11 @@ export function createGame(base, store, geometry, {
     return isChiselMaterial(cell.cell) && catalog.has(chiselMaterialKey(cell.cell));
   }
 
-  function checkVoxelEditable({x, y, z, cell}) {
-    if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
+  function checkVoxelEditable({x, y, z, cell}, removing = false) {
+    if (reserved(x, y, z) || !(allowRemoval && removing) && spawnProtected(x, y, z)) {
+      throw new RequestError(403, 'protected_cell');
+    }
+    if (allowRemoval) return;
     const original = base.getCell(x, y, z).key;
     if ((original !== 'air' && !isMicroblockCell({key:original, parts:base.manifest.compositions?.[original]?.parts})) ||
         (cell !== null && !store.getEditOwner(x, y, z))) {
@@ -875,7 +928,8 @@ export function createGame(base, store, geometry, {
     const cell = parts?.length ? microblockKey : voxels ? voxelKey : null;
     checkAdjacentCollisions(player, current, {key: cell ?? 'air', voxels, parts});
     const change = {x, y, z, cell, object: null, ...(voxels && {voxels})};
-    const placement = voxels ? {key: cellAddress(x, y, z), player} : undefined;
+    const owner = store.getEditOwner(x,y,z) ?? (material ? player : null);
+    const placement = voxels && owner ? {key: cellAddress(x,y,z), player:owner} : undefined;
     const effects = material ? [{type: 'sound', sound: 'block.place', cell: voxelKey,
       position: [x, y, z], voxelMaterial: material}] : [removed];
     if (parts?.length) {
@@ -883,7 +937,7 @@ export function createGame(base, store, geometry, {
       if (!voxels) return writeMicroParts(current, owned, null, null,effects);
       const revision = store.nextRevision();
       const combined = {...change, parts, revision};
-      store.writeEdit(combined, originalAt(x, y, z), player, owned);
+      store.writeEdit(combined, originalAt(x, y, z), owner, owned);
       return {worldRevision: revision, changes: [combined], effects};
     }
     // Re-evaluate neighbours if chiselling converts an ordinary solid block.
@@ -928,7 +982,7 @@ export function createGame(base, store, geometry, {
       return writeVoxels(player, current, writeVoxelBrush(current.voxels, brush, material), material);
     }
 
-    if (type === 'remove_voxel') checkVoxelEditable(current);
+    if (type === 'remove_voxel') checkVoxelEditable(current,true);
     if (!current.voxels && !chiselMaterial(current)) throw new RequestError(409, 'invalid_material');
     const surface = physical.targetAtHit(position, x, y, z, hit, true);
     if (!surface || surface.partSlot !== undefined ||
@@ -983,6 +1037,23 @@ export function createGame(base, store, geometry, {
 
   function execute(player, input, transport) {
     const { x, y, z, type } = input;
+    if (isInventoryAction(type)) {
+      const output = {worldRevision:store.worldRevision(), changes:[], effects:[]};
+      if (type === 'drop_item') {
+        const taken = inventory.take(player,input.all);
+        transport.drop = drops.drop(taken.stack,playerAt(player),playerSight(player),input.yaw);
+        return {...output, inventory:taken.inventory, droppedItem:transport.drop.key};
+      }
+      if (type === 'pickup_item') {
+        const item = drops.nearest(playerAt(player),playerSight(player));
+        if (!item) return {...output, inventory:inventory.read(player)};
+        const state = inventory.put(player,{...item.stack,count:1});
+        transport.drop = drops.pick(item);
+        transport.removedDrop = !transport.drop && item.key;
+        return {...output, inventory:state, pickedItem:item.key};
+      }
+      return {...output, inventory:inventory.edit(player,input)};
+    }
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
     if (frameActions.has(type)) {
       let stack;
@@ -1044,7 +1115,7 @@ export function createGame(base, store, geometry, {
       }
       const neighbors = (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz));
       const fluid = liquidKind(current.cell);
-      const intoLiquid = fluid && store.getEditOwner(x, y, z) && base.getCell(x, y, z).key === 'air'
+      const intoLiquid = fluid && store.getEditOwner(x, y, z) && (allowRemoval || base.getCell(x,y,z).key === 'air')
         && canLogLiquid(input.cell, neighbors, models);
       if (current.cell !== null && !intoLiquid) throw new RequestError(409, 'occupied');
       if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
@@ -1060,7 +1131,12 @@ export function createGame(base, store, geometry, {
         return writeCell(player,current,control,object);
       }
       const actual = input.creative ? creativePlacement(input, current, player) : input;
-      const copied = input.creative ? null : store.getClipboard(player);
+      const [actualId] = blockState(actual.cell);
+      const isGroundSprite = geometry.shapeFor?.(actual.cell,neighbors).some(box=>box.kind === 'cross');
+      if ((isGroundSprite || liquidKind(actual.cell) || actualId === 51) && !faceSupports(x,y-1,z,1,.35)) {
+        throw new RequestError(409,'missing_support');
+      }
+      const copied = input.creative ? null : clipboardFor(player, actual.cell);
       const copiedObject = input.creative || item ? newCreativeObject(actual.cell, [x, y, z], input, item) :
         copied?.cell === actual.cell ? copied.object : null;
       const object = geometry.placementObject
@@ -1072,7 +1148,7 @@ export function createGame(base, store, geometry, {
     }
 
     if (type === 'remove' && reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
-    if (type === 'remove' && blockState(current)[0] === 34) throw new RequestError(403,'protected_cell');
+    if (type === 'remove' && !allowRemoval && blockState(current)[0] === 34) throw new RequestError(403,'protected_cell');
     if (type === 'remove' && seatsAt(x, y, z)) throw new RequestError(409, 'seat_taken');
     if (current.cell === null) throw new RequestError(409, 'empty_cell');
     if ((type === 'remove' || type === 'copy') && current.cell === voxelKey) throw new RequestError(409, 'voxel_required');
@@ -1107,9 +1183,17 @@ export function createGame(base, store, geometry, {
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
     }
     const adjusted = railFor(current) ? updateRailNeighbors(current, null) : [];
-    const result = writeCell(player,current,null,null,placedCompanion(current),adjusted);
-    const remaining = frames.removeSupported(x,y,z);
+    const mate = breakCompanion(current);
+    const result = writeCell(player,current,null,null,mate,adjusted);
+    const existing = frames.removeSupported(x,y,z);
+    const remaining = (mate && frames.removeSupported(mate.x,mate.y,mate.z)) ?? existing;
     return remaining === undefined ? result : {...result,frames:remaining};
+  }
+
+  function clipboardFor(player, cell) {
+    const selected = inventory.selected(player);
+    if (selected?.copied && (cell ? selected.cell === cell : selected.part)) return selected;
+    return store.getClipboard(player);
   }
 
   function heldStack(cell,itemKey) {
@@ -1154,6 +1238,7 @@ export function createGame(base, store, geometry, {
       if (result.output.changes.length) refreshMechanicCells();
       carts.accept(transport.placed,result.output.removedMinecart);
       boats.accept(transport.placedBoat,result.output.removedBoat);
+      drops.accept(transport.drop,transport.removedDrop);
     }
     return result;
   }
@@ -1395,6 +1480,13 @@ export function createGame(base, store, geometry, {
     setSpectator,
     advance,
     advanceMinecarts,
+    advanceDroppedItems: drops.advance,
+    flushDroppedItems: drops.flush,
+    droppedItemSnapshot: player => drops.snapshot(playerAt(player)),
+    droppedItemView: player => {
+      const {x,y,z} = playerAt(player);
+      return cellAddress(x >> 4, y >> 4, z >> 4);
+    },
     driveMinecart(player,pose,direction,boatDrive) {
       const seat = seats.get(player);
       if (!seat?.entity) return;
@@ -1425,11 +1517,14 @@ export function createGame(base, store, geometry, {
     worldRevision: store.worldRevision,
     session(playerId) {
       if (!positions.has(playerId)) positions.set(playerId, { position: spawn, updated: clock(), budget: 1 });
+      const ground = publicSeat(playerId);
+      if (ground?.kind === 'ground' && !supportedGroundSeat(ground,bodyAtSeat(playerId,ground))) leaveSeat(playerId);
       return {
         playerId, spawn: base.manifest.spawn, position: playerAt(playerId), worldRevision: store.worldRevision(),
         catalogVersion: base.manifest.catalogVersion ?? 1, importVersion: base.manifest.importVersion, contentHash: base.hash,
         mechanics: descriptions(playerId), seat:publicSeat(playerId), spectator:spectators.has(playerId),
         stance:publicSeat(playerId)?.bed ? 'crawl' : stanceFor(playerId),
+        inventory:inventory.read(playerId),
       };
     },
     snapshot(player) {
@@ -1438,10 +1533,13 @@ export function createGame(base, store, geometry, {
         overrides: [...store.edits().map(edit => publicChange(edit, editObject(edit))),
           ...snapshotCells()],
         frames:frames.snapshot(),
+        droppedItems:drops.snapshot(playerAt(player)),
+        inventory:inventory.read(player),
         mechanics: descriptions(player),
       };
     },
     didCommit(event) {
+      drops.terrainChanged(event.changes);
       for (const module of mechanics) module.onCommitted?.(event);
     },
   };

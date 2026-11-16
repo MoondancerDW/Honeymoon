@@ -31,7 +31,13 @@
         </label>
         <button id="audio-toggle" type="button" aria-pressed="false" hidden>Звук</button>
         <button id="music-toggle" type="button" aria-pressed="false" hidden>Музыка</button>
-        <button id="clear-selection" type="button" title="Сбросить выбранный блок или материал (X)">Сбросить выбор</button>
+        <button id="night-vision" type="button" aria-pressed="false">Ночное зрение выкл.</button>
+        <label class="distance" for="weather">Погода
+          <select id="weather" disabled>
+            <option value="clear">Ясно</option><option value="cloudy">Облачно</option><option value="rain">Дождь</option>
+          </select>
+        </label>
+        <button id="clear-selection" type="button" title="Убрать выбранный блок в инвентарь">Освободить руку</button>
         <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled>Телепорт</button>
         <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
       </div>
@@ -52,7 +58,7 @@
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
         <small id="resume-help" hidden>Esc или Enter — продолжить с захватом мыши</small>
-        <small id="entry-help">WASD — ходьба · Пробел — прыжок · C — присесть · V — ползти · Shift — ускорение · F — полёт · F5/Y — камера · U — обзор · P — наблюдатель · I — блоки · Z — резец · G — телепорт · Esc — пауза</small>
+        <small id="entry-help">WASD — ходьба · Пробел — прыжок · C — присесть / подобрать · V — ползти · X — сесть / встать · Shift — ускорение · F — полёт · F5/Y — камера · U — обзор · P — наблюдатель · I — креатив · B — инвентарь · Z — резец · G — телепорт · Esc — пауза</small>
       </div>
     </section>
     <div id="toast" role="status" aria-live="polite"></div>
@@ -86,10 +92,14 @@
     <dialog id="creative-menu" aria-labelledby="creative-title">
       <div class="creative-header">
         <h2 id="creative-title">Креатив</h2>
-        <input id="creative-search" type="search" aria-label="Поиск блоков" placeholder="Блок, мод или ID" autocomplete="off" spellcheck="false">
+        <input id="creative-search" type="search" aria-label="Поиск в креативе" placeholder="Предмет, блок или ID" autocomplete="off" spellcheck="false">
         <button id="creative-close" type="button">Закрыть</button>
       </div>
-      <div id="creative-tabs" role="tablist" aria-label="Категории блоков"></div>
+      <div class="creative-tabs-row">
+        <button id="creative-prev-page" type="button" aria-label="Предыдущая страница вкладок" hidden>‹</button>
+        <div id="creative-tabs" role="tablist" aria-label="Категории креатива"></div>
+        <button id="creative-next-page" type="button" aria-label="Следующая страница вкладок" hidden>›</button>
+      </div>
       <div id="creative-list" role="tabpanel" tabindex="0">
         <div id="creative-grid"></div>
         <button id="creative-more" type="button" hidden>Показать ещё</button>
@@ -98,6 +108,18 @@
         <span id="creative-count" role="status"></span>
         <button id="creative-retry" type="button" hidden>Повторить загрузку</button>
       </div>
+      <section id="creative-inventory" aria-labelledby="inventory-title">
+        <h3 id="inventory-title">Инвентарь</h3>
+        <div class="inventory-layout">
+          <div class="inventory-storage">
+            <div id="inventory-slots" class="inventory-grid" role="group" aria-label="Основной инвентарь"></div>
+            <div id="inventory-hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа"></div>
+          </div>
+          <button id="inventory-trash" type="button" aria-label="Корзина" title="Перетащить сюда, чтобы удалить">
+            <span class="trash-icon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </section>
     </dialog>
     <dialog id="sign-editor" aria-labelledby="sign-title">
       <form id="sign-form">
@@ -126,16 +148,20 @@
       </div>
     </div>
     <footer class="bottom">
+      <div class="hud-hotbar-row">
+        <div id="hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа" hidden></div>
+      </div>
       <span id="coords" aria-label="Координаты"></span>
       <span id="selected">Ячейка не выбрана</span>
-      <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" title="Креатив · I" disabled>Блоки</button>
+      <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" title="Креатив · I" disabled>Креатив</button>
+      <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" disabled>Инвентарь</button>
       <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
       <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · O/СКМ взять материал</span>
       <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift ×2</span>
       <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
       <span id="orbit-status" role="status" hidden>Свободный обзор · U — выйти</span>
       <span id="spectator-status" role="status" hidden>Наблюдатель · Пробел вверх · Ctrl/C вниз · P — выйти</span>
-      <span id="keys">ЛКМ — сломать · ПКМ — поставить · E — действие · СКМ/O — копировать · Q — выбросить · C — присесть · V — ползти · F5/Y — камера · F — полёт · Z — резец</span>
+      <span id="keys">ЛКМ — сломать · ПКМ — поставить · E — действие · СКМ/O — копировать · Q — выбросить · C — присесть / подобрать · 1–9 — панель · V — ползти · X — сесть / встать · F5/Y — камера · F — полёт · Z — резец</span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>

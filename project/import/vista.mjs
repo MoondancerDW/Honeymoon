@@ -6,6 +6,7 @@ import {parseArgs} from 'node:util';
 import {gzipSync} from 'node:zlib';
 import {readRegionChunk} from './nbt.mjs';
 import {makeMaterials} from './lod-mesh.mjs';
+import {findStraySnow,SNOW_CONTEXT_RADIUS} from './snow-cleanup.mjs';
 import {VISTA_VERSION,VISTA_STEP,VISTA_SIDE,VISTA_RECORD,vistaBytes,vistaCell} from '../client/vista-format.mjs';
 
 const regionName = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
@@ -23,47 +24,130 @@ function material(id,meta) {
   return atlasEntry.get(key);
 }
 
-function sampleColumn(sections, height, x, z) {
+function sourceId(section,index) {
+  const shift = (index & 1) * 4;
+  return section.Blocks[index] | ((section.Add?.[index>>1] >> shift & 15) << 8);
+}
+
+function sampleColumn(sections, height, x, z, removedSnow) {
   for (let y=Math.min(255,height); y>=0; y--) {
     const section = sections[y>>4];
     if (!section) { y &= ~15; continue; }
     const index = x+16*z+256*(y&15);
     const shift = (index & 1) * 4;
-    const id = section.Blocks[index] | ((section.Add?.[index>>1] >> shift & 15) << 8);
+    const id = sourceId(section,index);
     if (!id) continue;
-    const style = material(id,section.Data[index>>1] >> shift & 15);
+    const metadata = section.Data[index>>1] >> shift & 15;
+    if (id === 78 && removedSnow?.has(y*256+(index&255))) continue;
+    const style = material(id,metadata);
     if (!style) continue;
     const packed = style.light === 256 ? 256 : ((section.SkyLight?.[index>>1] >> shift & 15) << 4) |
       (section.BlockLight?.[index>>1] >> shift & 15);
-    return {height:y+style.height,tile:style.tile,light:packed || 240,rgb:style.rgb};
+    return {height:y+style.height,tile:style.tile,light:packed || 240,rgb:style.rgb,thinSnow:id === 78 && (metadata&7) < 2};
   }
 }
 
-function setChunk(content,chunk,cx,cz) {
+function chunkSections(chunk) {
   const sections = [];
   for (const section of chunk.Sections ?? []) if (section.Blocks?.length === 4096) sections[section.Y] = section;
+  return sections;
+}
+
+function setChunk(content,chunk,cx,cz,removedSnow) {
+  const sections = chunkSections(chunk);
   const highest = (sections.length << 4) - 1;
-  if (highest < 0) return;
+  if (highest < 0) return null;
   const cells = 16 / VISTA_STEP;
   const samples = [];
+  let thinSnow;
   for (let sz=0; sz<cells; sz++) for (let sx=0; sx<cells; sx++) {
     samples.length = 0;
     for (let dz=1; dz<VISTA_STEP; dz+=2) for (let dx=1; dx<VISTA_STEP; dx+=2) {
       const x = sx*VISTA_STEP+dx, z = sz*VISTA_STEP+dz;
       const height = chunk.HeightMap?.[x+z*16];
-      const sample = sampleColumn(sections,Number.isInteger(height) ? Math.min(highest,height) : highest,x,z);
-      if (sample) samples.push(sample);
+      const sample = sampleColumn(sections,Number.isInteger(height) ? Math.min(highest,height) : highest,x,z,removedSnow);
+      if (sample) {
+        samples.push(sample);
+        if (sample.thinSnow) {
+          thinSnow ??= new Set();
+          thinSnow.add(z*16+x);
+        }
+      }
     }
-    if (!samples.length) continue;
+    const index = vistaCell(cx*cells+sx,cz*cells+sz);
+    if (!samples.length) {
+      if (removedSnow) content.fill(0,index,index+VISTA_RECORD);
+      continue;
+    }
     samples.sort((a,b) => a.height-b.height);
     // Use the upper half of the height distribution so a roof or tree does
     // not flatten to the height of the surrounding path at the next tier.
     const {height,tile,light,rgb} = samples[Math.floor(samples.length * .6)];
-    const index = vistaCell(cx*cells+sx,cz*cells+sz);
     content.writeUInt16LE(Math.round(height * 8),index);
     content.writeUInt16LE(tile,index+2);
     content.writeUInt16LE(light,index+4);
     content.set(rgb,index+6);
+  }
+  return thinSnow;
+}
+
+function collectSnow(chunk,snow,candidates,samples) {
+  const sections = chunkSections(chunk);
+  for (const section of sections) {
+    if (!section) continue;
+    for (const id of [78,80]) {
+      for (let index=section.Blocks.indexOf(id); index>=0; index=section.Blocks.indexOf(id,index+1)) {
+        if (sourceId(section,index) !== id) continue;
+        const y = section.Y*16+(index>>8);
+        const layers = id === 80 ? 8 : (section.Data[index>>1] >> ((index&1)*4) & 7)+1;
+        const below = sections[(y-1)>>4];
+        const supportId = below ? sourceId(below,(index-256)&4095) : 0;
+        const point = {x:chunk.xPos*16+(index&15),y,z:chunk.zPos*16+((index>>4)&15),layers,full:id===80,supportId};
+        snow.push(point);
+        if (id === 78 && layers <= 2 && samples?.has(index&255)) candidates.push(point);
+      }
+    }
+  }
+}
+
+function removeScatteredSnow(source,bounds,rx,rz,raw,content,candidateChunks) {
+  if (!candidateChunks.size) return;
+  const radius = Math.ceil(SNOW_CONTEXT_RADIUS/16);
+  const [minX,minZ,maxX,maxZ] = bounds;
+  const sources = new Map([[`${rx},${rz}`,raw]]);
+  function readChunk(x,z) {
+    const sourceX = x>>5, sourceZ = z>>5;
+    const key = `${sourceX},${sourceZ}`;
+    if (!sources.has(key)) {
+      const file = join(source,`r.${sourceX}.${sourceZ}.mca`);
+      sources.set(key,existsSync(file) ? readFileSync(file) : null);
+    }
+    const region = sources.get(key);
+    if (!region) return null;
+    try { return readRegionChunk(region,x,z); }
+    catch { return null; } // The main pass reports unreadable chunks in the manifest.
+  }
+  const nearby = new Map();
+  for (const {x:cx,z:cz} of candidateChunks.values()) {
+    for (let z=Math.max(minZ,cz-radius);z<=Math.min(maxZ,cz+radius);z++) {
+      for (let x=Math.max(minX,cx-radius);x<=Math.min(maxX,cx+radius);x++) nearby.set(`${x},${z}`,[x,z]);
+    }
+  }
+  const snow = [], candidates = [];
+  for (const [key,[x,z]] of nearby) {
+    const chunk = readChunk(x,z);
+    if (chunk) collectSnow(chunk,snow,candidates,candidateChunks.get(key)?.samples);
+  }
+  const removed = new Map();
+  for (const {x,y,z} of findStraySnow(snow,undefined,candidates)) {
+    const key = `${x>>4},${z>>4}`;
+    if (!removed.has(key)) removed.set(key,new Set());
+    removed.get(key).add(y*256+(z&15)*16+(x&15));
+  }
+  for (const [key,offsets] of removed) {
+    const {x,z} = candidateChunks.get(key);
+    const chunk = readChunk(x,z);
+    if (chunk) setChunk(content,chunk,x&31,z&31,offsets);
   }
 }
 
@@ -90,17 +174,24 @@ export function buildVista(world,output,bounds,progress = () => {}) {
     content[4] = VISTA_VERSION;
     content[5] = VISTA_STEP;
     let count = 0;
+    const snowCandidates = new Map();
     for (let z=0; z<32; z++) for (let x=0; x<32; x++) {
       if (rx*32+x < minX || rx*32+x > maxX || rz*32+z < minZ || rz*32+z > maxZ) continue;
       if (raw.length < 8192 || raw.readUInt32BE(4*(x+32*z)) === 0) continue;
       try {
-        const chunk = readRegionChunk(raw,rx*32+x,rz*32+z);
-        if (chunk) { setChunk(content,chunk,x,z); count++; }
+        const cx = rx*32+x, cz = rz*32+z;
+        const chunk = readRegionChunk(raw,cx,cz);
+        if (chunk) {
+          const samples = setChunk(content,chunk,x,z);
+          if (samples) snowCandidates.set(`${cx},${cz}`,{x:cx,z:cz,samples});
+          count++;
+        }
       } catch (error) {
         corrupt.push([rx*32+x,rz*32+z,error.message]);
       }
     }
     if (!count) continue;
+    removeScatteredSnow(source,bounds,rx,rz,raw,content,snowCandidates);
     regions.push([rx,rz]);
     payloads.set(`${rx}.${rz}`,content);
     chunks += count;

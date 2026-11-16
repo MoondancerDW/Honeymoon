@@ -52,6 +52,18 @@ export function readRegistryTsv(source) {
   });
 }
 
+export function readNativeCreativeTabs(source) {
+  const tabs = new Map();
+  for (const row of readRegistryTsv(source)) {
+    const index = Number(row.index);
+    if (!Number.isInteger(index) || index < 0 || !row.key) throw new Error('Invalid native creative tab');
+    if (!tabs.has(index)) tabs.set(index,{index,id:row.key,label:row.label || row.key,
+      icon:row.iconId ? `${row.iconId}:${row.iconDamage || 0}` : null,entries:[]});
+    if (row.id) tabs.get(index).entries.push(`${row.id}:${row.damage || 0}`);
+  }
+  return Array.from(tabs.values()).sort((a,b)=>a.index-b.index);
+}
+
 function family(row) {
   const [,mod,category] = mods.find(([prefix]) => row.class.startsWith(prefix)) ?? [];
   if (mod) return {mod, category};
@@ -208,6 +220,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     registry:{type:'string', default:resolve(project,'work/creative-registry/registry-full.tsv')},
     items:{type:'string'}, world:{type:'string', default:resolve(project,'generated/world/world.json')}, compact:{type:'string'},
     english:{type:'string'},
+    'tab-layout':{type:'string'},
     output:{type:'string', default:resolve(project,'generated/creative/catalog.json')},
   }});
   const {palette} = JSON.parse(readFileSync(values.world,'utf8'));
@@ -232,6 +245,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const {entries, ...top} = compact;
     writeFileSync(values.compact, `${JSON.stringify(top).slice(0,-1)},"entries":[\n` +
       entries.map(entry => `  ${JSON.stringify(entry)}`).join(',\n') + '\n]}\n');
+  }
+  if (values['tab-layout']) {
+    const original = readNativeCreativeTabs(readFileSync(values.registry+'.tabs','utf8'));
+    writeFileSync(values['tab-layout'],`// Creative tab order captured from the original Forge client.\nexport default [\n` +
+      original.map(tab=>`  ${JSON.stringify(tab)}`).join(',\n')+'\n];\n');
   }
   console.log(JSON.stringify(catalog.counts));
 }

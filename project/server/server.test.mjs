@@ -216,11 +216,30 @@ test('two guests edit one cell and receive the same durable changes after confli
   assert.equal((await request(app, '/api/action', { cookie: first.cookie, payload: replaced })).status, 200);
 });
 
-test('block ownership survives changes to a placed lamp and protects imported and unattributed cells', async t => {
+test('the standard server lets players break and build in original-world cells', async t => {
+  const directory = makeWorkspace();
+  const base = writeFixture(join(directory, 'world'));
+  const app = await start(base, ':memory:');
+  t.after(async () => {
+    await app.close();
+    rmSync(directory, {recursive:true,force:true});
+  });
+  const {cookie} = await request(app,'/api/session',{payload:{}});
+  const removed = await request(app,'/api/action',{cookie,payload:command('remove','break-original-build')});
+  assert.equal(removed.status,200,JSON.stringify(removed.data));
+  assert.equal(removed.data.changes[0].cell,null);
+  const placed = await request(app,'/api/action',{cookie,payload:command('place','fill-original-position',{
+    expectedRevision:removed.data.worldRevision,cell:'legacy:4:0',against:{x:8,y:0,z:10},
+  })});
+  assert.equal(placed.status,200,JSON.stringify(placed.data));
+  assert.equal(placed.data.changes[0].cell,'legacy:4:0');
+});
+
+test('restricting original removal retains placed-block ownership and rejects unattributed edits', async t => {
   const directory = makeWorkspace();
   const base = writeFixture(join(directory, 'world'));
   const state = join(directory, stateFile);
-  let app = await start(base, state);
+  let app = await start(base, state, {allowRemoval:false});
   t.after(async () => {
     await app.close();
     rmSync(directory, { recursive: true, force: true });
@@ -248,7 +267,7 @@ test('block ownership survives changes to a placed lamp and protects imported an
     UPDATE receipts SET status=409 WHERE id='place-failed-proof';
     UPDATE receipts SET output=json_set(output, '$.changes[0].revision', 0) WHERE id='place-wrong-revision';`);
   legacy.close();
-  app = await start(base, state);
+  app = await start(base, state, {allowRemoval:false});
   for (const [suffix, result] of [['no-receipt', unknown], ['unsuccessful', unconfirmed], ['wrong-revision', changed]]) {
     const { x, y, z, revision: expectedRevision } = result.data.changes[0];
     const denied = await action('remove', 'remove-' + suffix, { x, y, z, expectedRevision });
@@ -277,7 +296,7 @@ test('an imported block wins over an owned placement when rebasing the map', asy
     }
     await app.close();
     const changed = writeFixture(join(directory, 'world'), { hash: 'build-cell-original', buildCell: 'legacy:4:0' });
-    app = await start(changed, state);
+    app = await start(changed, state, {allowRemoval:false});
     const snapshot = (await request(app, '/api/world', { cookie })).data;
     assert.equal(snapshot.overrides.some(({ x, y, z }) => x === 9 && y === 1 && z === 10), false);
     const denied = await request(app, '/api/action', { cookie, payload: command('remove', 'remove-rebased', { x: 9 }) });

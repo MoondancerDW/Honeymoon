@@ -79,8 +79,8 @@ const stairTiles = id => isCottonStair(id) ? wool[id - 4035] : STAIRS[id] ??
 const TERRAIN = {
   1: 1, 3: 2, 4: 16, 7: 17, 12: 18, 13: 19, 14: 32, 15: 33, 16: 34,
   19: 48, 21: 160, 22: 144, 41: 23, 42: 22, 45: 7, 48: 36, 49: 37,
-  52: 65, 56: 50, 57: 24, 73: 51, 74: 51, 80: 66, 82: 72, 87: 103,
-  103: 136, 110: topSides(77, 78, 2), 112: 224, 121: 175, 129: 171,
+  56: 50, 57: 24, 73: 51, 74: 51, 80: 66, 82: 72, 87: 103,
+  110: topSides(77, 78, 2), 112: 224, 121: 175, 129: 171,
   133: 25, 3217: 1, 3230: tiles.cloud + 17, 3903: 3792,
 };
 const plants = { 6: 15, 30: 11, 31: 39, 32: 55, 37: 13, 38: 12, 39: 29, 40: 28,
@@ -106,15 +106,8 @@ const isCandle = id => id >= 3909 && id <= 3924;
 const candleMount = [null, [-1, 0], [1, 0], [0, -1], [0, 1]];
 
 function candleSprite(id, meta) {
-  const [sprite] = cross(3270 + id - 3909, 1, undefined, .05);
-  const mount = candleMount[meta & 7];
-  if (mount) {
-    const [dx, dz] = mount;
-    sprite.y0 = .22;
-    sprite.y1 = 1.22;
-    sprite.spriteShift = [dx * .4, dz * .4, dx * -.2, dz * -.2];
-  }
-  return [{...sprite, emissive:true}];
+  // The original HarvestCraft CandleDeco uses the vanilla torch renderer.
+  return torch(3270 + id - 3909,meta & 7,true);
 }
 
 function candleSelection(id, meta) {
@@ -182,17 +175,11 @@ function torch(tile, meta, emissive) {
 }
 
 function log(meta) {
-  const bark = [20, 116, 117, 153][meta & 3];
-  const end = (meta & 3) === 3 ? 153 : 21;
-  const axis = meta & 12;
-  if (axis === 12) return bark;
-  if (axis === 4) return [end, end, bark, bark, bark, bark];
-  if (axis === 8) return [bark, bark, bark, bark, end, end];
-  return topSides(bark, end);
+  return creativeBlock(17,meta & 15)[0];
 }
 
 function sandstone(meta) {
-  return topSides([192, 229, 230][meta] ?? 192, 176, 208);
+  return (creativeBlock(24,meta) ?? creativeBlock(24,0))[0];
 }
 
 function stairs(id, meta, neighbors) {
@@ -621,17 +608,23 @@ function jacketShape(meta, data, neighbors) {
   return [core, ...arms];
 }
 
-// RenderBufferChest uses machine1.png and rotates its texture faces by the tile's stored side.
-const bufferFaces = [
-  [88, 88, 87, 89, 88, 88], [88, 88, 89, 87, 88, 88],
-  [88, 88, 88, 88, 87, 89], [88, 88, 88, 88, 89, 87],
-  [87, 89, 88, 88, 88, 88], [89, 87, 88, 88, 88, 88],
+// RenderContext.orientTextures, expressed in Honeymoon face order.
+const machineFaceOrder = [
+  [4,5,0,1,2,3], [5,4,1,0,2,3], [2,3,4,5,0,1],
+  [3,2,4,5,1,0], [0,1,4,5,3,2], [1,0,4,5,2,3],
 ];
-const bufferUvFlags = [
+const machineUvFlags = [
   [0, 0, 0, 0, 0, 0], [3, 3, 3, 3, 3, 3],
   [5, 6, 6, 5, 0, 0], [6, 5, 5, 6, 0, 0],
   [0, 0, 0, 0, 6, 5], [0, 0, 3, 3, 5, 6],
 ];
+
+function orientedRedPowerMachine(source, rotation) {
+  const side = Number.isInteger(rotation) && rotation >= 0 && rotation < machineFaceOrder.length ? rotation : 0;
+  const order = machineFaceOrder[side];
+  const faces = order.map(face => tiles.redPowerMachine + source[face]);
+  return [box(CUBE, faces, {redPowerUv:machineUvFlags[side]})];
+}
 
 const APPROX_FURNITURE = 'Simplified Jammy Furniture model';
 const APPROX_BIBLIO = 'Simplified BiblioCraft model';
@@ -830,9 +823,7 @@ function specialShape(id, meta, cell, neighbors) {
     return [...coverBoxes(parts, true), ...frame(parts)];
   }
   if (id === 751 && meta === 2) {
-    const rotation = Number.isInteger(data?.rot) && data.rot >= 0 && data.rot < bufferFaces.length ? data.rot : 0;
-    const faces = bufferFaces[rotation].map(tile => tiles.redPowerMachine + tile);
-    return [box(CUBE, faces, { redPowerUv: bufferUvFlags[rotation] })];
+    return orientedRedPowerMachine([87,89,88,88,88,88],data?.rot);
   }
   if (id === 751 && (meta === 0 || meta === 1 || meta === 4)) {
     const active = Number(data?.ps > 0);
@@ -863,6 +854,10 @@ function specialShape(id, meta, cell, neighbors) {
   if (id === 753) return [box([0, 0, 0, 1, 0.125, 1], tiles.redPowerLogic + meta, {
     approximation: 'Simplified RedPower logic board',
   })];
+  if (id === 763 && meta === 12) {
+    // RenderMachine sets an alternate igniter face when TileMachine.Active is set.
+    return orientedRedPowerMachine([48,164 + (data?.ps & 1),167,167,166,166],data?.rot);
+  }
   if ([760, 761, 762, 763, 764, 767].includes(id)) {
     const controller = id <= 762;
     return [box([0, 0, 0, 1, id === 764 ? 0.25 : 1, 1],
@@ -939,11 +934,39 @@ function pistonShape(id,meta) {
     plate[axis + (forward ? 0 : 3)] = forward ? .75 : .25;
     shaft[axis] = forward ? 0 : .25;
     shaft[axis + 3] = forward ? .75 : 1;
-    return [box(plate,faceMaterial(108,face,front),{uv:'box'}),box(shaft,108,{uv:'box'})];
+    const plateFaces = faceMaterial(faceMaterial(108,face,front),face ^ 1,front);
+    return [box(plate,plateFaces),box(shaft,faceMaterial(108,face,front))];
   }
   const bounds = [...CUBE];
   if (meta & 8) bounds[axis + (forward ? 3 : 0)] = forward ? .75 : .25;
-  return [box(bounds,faceMaterial(108,face,meta & 8 ? 109 : front),{uv:'box'})];
+  const faces = faceMaterial(faceMaterial(108,face,meta & 8 ? 110 : front),face ^ 1,109);
+  return [box(bounds,faces)];
+}
+
+function tripwire(meta, neighbors) {
+  const directions = [[0,0,1],[-1,0,0],[0,0,-1],[1,0,0]];
+  const connected = directions.map((direction,side) => {
+    const [id,state] = unpack(neighbors?.(...direction));
+    return id === 132 && (state & 2) === (meta & 2) || id === 131 && (state & 3) === ((side + 2) & 3);
+  });
+  if (!connected.some(Boolean)) connected[0] = connected[2] = true;
+  const y = (meta & 2 ? 3.5 : 1.5) / 16;
+  const low = .5 - 1 / 64, high = .5 + 1 / 64;
+  const v = meta & 4 ? 2 / 16 : 0;
+  const uv = [[0,v],[1,v],[1,v + 2 / 16],[0,v + 2 / 16]];
+  return directions.flatMap(([dx,,dz],side) => {
+    if (!connected[side]) return [];
+    const transverse = dz ? [1,0] : [0,1];
+    return [0,.25].map(start => {
+      const point = (distance, across) => [.5 + dx * distance + transverse[0] * across,
+        y, .5 + dz * distance + transverse[1] * across];
+      const corners = [point(start,low - .5),point(start + .25,low - .5),
+        point(start + .25,high - .5),point(start,high - .5)];
+      const xs = corners.map(corner => corner[0]), zs = corners.map(corner => corner[2]);
+      return box([Math.min(...xs),y - .02,Math.min(...zs),Math.max(...xs),y + .02,Math.max(...zs)],173,
+        {mode:'blend',solid:false,kind:'strip',corners,uv});
+    });
+  });
 }
 
 function vanillaShape(id, meta, neighbors) {
@@ -1018,6 +1041,7 @@ function vanillaShape(id, meta, neighbors) {
       const tile = id === 50 ? 80 : id === 75 ? 115 : 99;
       return torch(tile, meta, id !== 75);
     }
+    case 52: return uniform(65, {mode:'cutout'});
     case 54:
     case 130: return [box(chestCollision(id, neighbors), 3660 + Number(id === 130) * 18)];
     case 55: {
@@ -1026,7 +1050,7 @@ function vanillaShape(id, meta, neighbors) {
         Math.round(Math.max(0,.7 * strength ** 2 - .5) * 255) << 8;
       return [box([0,0.0125,0,1,0.025,1],164,{mode:'cutout',solid:false,tint})];
     }
-    case 58: return uniform(topSides(59, 43, 4));
+    case 58: return uniform(creativeBlock(58,0)[0]);
     case 60: return [box([0, 0, 0, 1, 0.9375, 1], topSides(2, meta > 0 ? 86 : 87))];
     case 63:
     case 68: return signGeometry(meta, id === 68);
@@ -1060,7 +1084,7 @@ function vanillaShape(id, meta, neighbors) {
     case 113: return fence(id, neighbors);
     case 139: return wall(meta, neighbors);
     case 86:
-    case 91: return uniform(rotateFaces([118, 118, 102, 102, 118, id === 91 ? 120 : 119], meta & 3), id === 91 ? LIGHT : undefined);
+    case 91: return uniform(creativeBlock(id,meta & 15)[0], id === 91 ? LIGHT : undefined);
     case 88: return [box([0, 0, 0, 1, 0.875, 1], 104)];
     case 89: return uniform(105, LIGHT);
     case 90: return [box([0, 0, 0.375, 1, 1, 0.625], 14, { mode: 'blend', solid: false, emissive: true })];
@@ -1076,7 +1100,8 @@ function vanillaShape(id, meta, neighbors) {
     case 97: return uniform([1, 16, 54][meta] ?? 1);
     case 98: return uniform(stoneBrick[meta & 3]);
     case 99:
-    case 100: return uniform(id === 99 ? 142 : 141);
+    case 100: return uniform(creativeBlock(id,meta & 15)[0]);
+    case 103: return uniform(creativeBlock(103,0)[0]);
     case 101:
     case 102: return pane(id, neighbors);
     case 106: return vine(meta);
@@ -1121,7 +1146,7 @@ function vanillaShape(id, meta, neighbors) {
       wallPlate([2,5,3,4][meta & 3], .375, .25, .6, .125, 4, GROUND_DECOR),
       wallPlate([2,5,3,4][meta & 3], .1875, .375, .5625, .3125, 172, {mode:'cutout', solid:false, uv:'box'}),
     ];
-    case 132: return [box([0, 0, .4875, 1, .0625, .5125], 173, GROUND_DECOR)];
+    case 132: return tripwire(meta,neighbors);
     case 138: return [
       box([.125, .00625, .125, .875, .1875, .875], 37),
       box(CUBE, 49, GLASS),
@@ -1167,10 +1192,10 @@ function registryShape(id, meta) {
 }
 
 const simpleCache = new Map();
-const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 139, 750, 1527, 2802, 2803,
+const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 132, 139, 750, 1527, 2802, 2803,
   ...Array.from({length:24}, (_, i) => 2808 + i),
   ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
-const dynamic = new Set([...neighborDependent, 751, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
+const dynamic = new Set([...neighborDependent, 751, 763, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
 const chiselMaterialShapes = new Map();
 const jammyCubeTiles = 3880;
 const chiselWater = box(CUBE, tiles.water, {mode:'blend', solid:false, fluid:'water'});
@@ -1331,7 +1356,14 @@ export function collisionFor(cell, neighbors) {
     return [{...cake, y1: 7 / 16}];
   }
   if (id === 3249) return [{...shapeFor(cell)[0], y1: 7 / 16}];
-  if (isFence(id)) return [box(barrierBounds(barrierLinks(id, neighbors), .375, .625, 1.5), fenceTile(id))];
+  if (isFence(id)) {
+    const [west,east,north,south] = barrierLinks(id,neighbors);
+    const tile = fenceTile(id);
+    const result = [];
+    if (north || south) result.push(box([.375,0,north ? 0 : .375,.625,1.5,south ? 1 : .625],tile));
+    if (west || east || !result.length) result.push(box([west ? 0 : .375,0,.375,east ? 1 : .625,1.5,.625],tile));
+    return result;
+  }
   if (id === 139) return [box(wallBounds(barrierLinks(id, neighbors), 1.5), wallTile(meta))];
   if (isPane(id)) {
     const result = [];

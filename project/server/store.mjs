@@ -139,7 +139,7 @@ export function openStore(filename) {
     VALUES (?,?,?,?,?,?,?,0,?,?,?,?) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
     object=excluded.object,revision=excluded.revision,quarantined=0,micro_parts=excluded.micro_parts,voxels=excluded.voxels,fluid=excluded.fluid,
     placed_by=CASE WHEN excluded.placed_by IS NOT NULL THEN excluded.placed_by
-      WHEN excluded.micro_parts IS NOT NULL THEN NULL
+      WHEN excluded.micro_parts IS NOT NULL OR NOT ? THEN NULL
       WHEN edits.quarantined=0 THEN edits.placed_by END`);
   const allEdits = statement('SELECT x,y,z,cell,original,placed_by,micro_parts IS NOT NULL AS is_multipart,voxels,fluid FROM edits ORDER BY x,y,z');
   const updateOriginal = statement('UPDATE edits SET original=?,quarantined=? WHERE x=? AND y=? AND z=?');
@@ -194,6 +194,7 @@ export function openStore(filename) {
     db,
     atomic: run => transaction(db, run),
     close: () => db.close(),
+    baseHash: () => readMeta.get('base_hash')?.value,
     worldRevision,
     nextRevision() {
       const revision = worldRevision() + 1;
@@ -260,9 +261,9 @@ export function openStore(filename) {
     edits() {
       return listEdits.all().map(unpackEdit);
     },
-    writeEdit({ x, y, z, cell, object, revision, voxels, fluid }, original, placedBy = null, parts = null) {
+    writeEdit({ x, y, z, cell, object, revision, voxels, fluid }, original, placedBy = null, parts = null, inheritOwner = true) {
       writeEdit.run(x, y, z, cell, object ? JSON.stringify(object) : null, revision, original, placedBy,
-        parts === null ? null : JSON.stringify(parts), voxels ? JSON.stringify(voxels) : null, fluid ?? null);
+        parts === null ? null : JSON.stringify(parts), voxels ? JSON.stringify(voxels) : null, fluid ?? null, Number(inheritOwner));
     },
     rebase(base, reserved, originalAt) {
       return transaction(db, () => {
@@ -279,7 +280,7 @@ export function openStore(filename) {
             : !isMultipart && cell !== null && !base.catalog.has(cell)) {
             reason = 'missing_catalog_entry';
             quarantined = 1;
-          } else if (((isMultipart || fluid) && current !== original) || (!isMultipart && owner && base.getCell(x, y, z).key !== 'air')) {
+          } else if (current !== original && (isMultipart || fluid || owner && base.getCell(x, y, z).key !== 'air')) {
             reason = 'original_cell_changed';
             quarantined = 1;
           } else if (original !== null && current !== original) {

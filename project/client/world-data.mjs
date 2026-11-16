@@ -1,4 +1,5 @@
 import {lightChanged, updateBlockLight} from './block-light.mjs';
+import {skyCellProfile,skyProfile,updateSkyAccess} from './sky-access.mjs';
 
 export const chunkKey = (x, z) => x + ',' + z;
 export const sectionKey = (x, y, z) => x + ',' + y + ',' + z;
@@ -30,6 +31,11 @@ export async function json(url, init) {
   return response.json();
 }
 
+export function droppedItemPosition({start, target, at, duration}, now) {
+  const phase = Math.max(0,Math.min(1,(now - at) / duration));
+  return start.map((value,index) => value + (target.position[index] - value) * phase);
+}
+
 export class World {
   constructor(manifest) {
     this.manifest = manifest;
@@ -39,18 +45,32 @@ export class World {
     this.minecarts = new Map();
     this.boats = new Map();
     this.frames = new Map();
+    this.droppedItems = new Map();
     this.frameRevision = -1;
     this.minecartSnapshotTime = undefined;
     this.overrides = new Map();
     this.overridesByChunk = new Map();
     this.blockLightOverrides = new Map();
     this.pendingLights = new Map();
+    this.skyLightOverrides = new Map();
+    this.pendingSky = new Map();
   }
 
   setFrames(frames,revision) {
     if (revision <= this.frameRevision) return;
     this.frameRevision = revision;
     this.frames = new Map(frames.map(frame => [frame.key,frame]));
+  }
+
+  setDroppedItems(entities,now) {
+    const duration = Math.min(100,Math.max(40,now - (this.droppedItemSnapshotTime ?? now - 50)));
+    this.droppedItemSnapshotTime = now;
+    const next = new Map(entities.map(target => {
+      const previous = this.droppedItems.get(target.key);
+      const start = previous ? droppedItemPosition(previous,now) : target.position;
+      return [target.key,{start,target,at:now,duration}];
+    }));
+    this.droppedItems = next;
   }
 
   setMinecarts(entities, now, boats = []) {
@@ -88,6 +108,9 @@ export class World {
     }]));
     const stored = {x: chunk.x, z: chunk.z, sections, visualOnly, entities: chunk.entities || [],
       palette: chunk.palette, compositions: chunk.compositions};
+    stored.hasSky = [...sections.values()].some(section=>section.sky);
+    stored.skyTop = (Math.max(-1,...sections.keys())<<4)+15;
+    for (const edit of this.editsInChunk(chunk.x,chunk.z)) stored.skyTop=Math.max(stored.skyTop,edit.y);
     this.chunks.set(chunkKey(chunk.x, chunk.z), stored);
     const objects = new Map();
     for (const object of chunk.objects || []) {
@@ -115,11 +138,17 @@ export class World {
     if (previous && previous.revision >= change.revision) return false;
     const key = change.cell || 'air';
     const {x, y, z} = change;
-    if (this.chunks.has(chunkKey(x >> 4, z >> 4)) && lightChanged(this.lightCell(x, y, z), {key, object: change.object, voxels: change.voxels, fluid: change.fluid})) {
+    const coordinates = chunkKey(x >> 4, z >> 4);
+    const chunk = this.chunks.get(coordinates);
+    if (chunk && lightChanged(this.lightCell(x, y, z), {key, object: change.object, voxels: change.voxels, fluid: change.fluid})) {
       if (!this.pendingLights.has(position)) this.pendingLights.set(position, [x, y, z, this.lightAt(x, y, z) & 15]);
     }
+    if (chunk?.hasSky && !chunk.visualOnly) {
+      const parts=change.parts ?? (chunk.compositions ?? this.manifest.compositions)?.[key]?.parts;
+      if (skyCellProfile(this,x,y,z,false,chunk) !== skyProfile({...change,key,parts})) this.pendingSky.set(position,[x,y,z]);
+      chunk.skyTop=Math.max(chunk.skyTop,y);
+    }
     const override = {...change, index: this.addPalette(key)};
-    const coordinates = chunkKey(x >> 4, z >> 4);
     let entries = this.overridesByChunk.get(coordinates);
     if (!entries) this.overridesByChunk.set(coordinates, entries = new Map());
     entries.set(position, override);
@@ -138,6 +167,10 @@ export class World {
     for (const key of this.blockLightOverrides.keys()) {
       const [x, , z] = key.split(',').map(Number);
       if (removed.has(chunkKey(x >> 4, z >> 4))) this.blockLightOverrides.delete(key);
+    }
+    for (const key of this.skyLightOverrides.keys()) {
+      const [x, , z] = key.split(',').map(Number);
+      if (removed.has(chunkKey(x>>4,z>>4))) this.skyLightOverrides.delete(key);
     }
   }
 
@@ -167,9 +200,11 @@ export class World {
 
   lightAt(x, y, z) {
     const original = this.baseLightAt(x, y, z);
-    if (!this.blockLightOverrides.size) return original;
-    const block = this.blockLightOverrides.get(cellKey(x, y, z));
-    return block === undefined ? original : (original & 240) | block;
+    if (!this.blockLightOverrides.size && !this.skyLightOverrides.size) return original;
+    const key=cellKey(x,y,z);
+    const block=this.blockLightOverrides.get(key) ?? (original&15);
+    const sky=this.skyLightOverrides.get(key) ?? (original>>4);
+    return sky<<4 | block;
   }
 
   baseLightAt(x, y, z) {
@@ -189,17 +224,29 @@ export class World {
     if (chunk) {
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
         const coordinates = chunkKey(chunk.x + dx, chunk.z + dz);
-        if (!this.chunks.has(coordinates)) continue;
+        const loaded=this.chunks.get(coordinates);
+        if (!loaded) continue;
         for (const [position, {x, y, z}] of this.overridesByChunk.get(coordinates) ?? []) {
           if (lightChanged(this.lightCell(x, y, z, true), this.lightCell(x, y, z))) {
             this.pendingLights.set(position, [x, y, z, this.lightAt(x, y, z) & 15]);
           }
+          if (loaded.hasSky && !loaded.visualOnly &&
+              skyCellProfile(this,x,y,z,true,loaded) !== skyCellProfile(this,x,y,z,false,loaded)) this.pendingSky.set(position,[x,y,z]);
         }
       }
     }
     const dirty = new Set();
     for (const changed of this.pendingLights.values()) for (const section of updateBlockLight(this, ...changed)) dirty.add(section);
     this.pendingLights.clear();
+    const skyGroups=new Map();
+    for (const change of this.pendingSky.values()) {
+      const [x,y,z]=change, key=sectionKey(x>>4,y>>4,z>>4);
+      let group=skyGroups.get(key);
+      if (!group) skyGroups.set(key,group=[]);
+      group.push(change);
+    }
+    for (const group of skyGroups.values()) for (const section of updateSkyAccess(this,group)) dirty.add(section);
+    this.pendingSky.clear();
     return dirty;
   }
 
@@ -235,6 +282,7 @@ export class World {
     }));
     const overrides = this.overrides;
     const blockOverrides = this.blockLightOverrides;
+    const skyOverrides = this.skyLightOverrides;
     let i = 0;
     for (let dy = -1; dy <= 16; dy++) {
       const y = cy * 16 + dy;
@@ -252,7 +300,7 @@ export class World {
           const from = segment === 0 ? -1 : segment === 1 ? 0 : 16;
           const to = segment === 0 ? 0 : segment === 1 ? 16 : 17;
           for (let dx = from; dx < to; dx++, i++) {
-            const key = overrides.size || blockOverrides.size ? cellKey(cx * 16 + dx, y, z) : null;
+            const key = overrides.size || blockOverrides.size || skyOverrides.size ? cellKey(cx * 16 + dx, y, z) : null;
             const override = key && overrides.get(key);
             const index = localRow + (dx & 15);
             const baseIndex = section?.indices[index] ?? 0;
@@ -272,7 +320,8 @@ export class World {
             }
             const original = packedLight(section, index);
             const block = key ? blockOverrides.get(key) : undefined;
-            light[i] = block === undefined ? original : (original & 240) | block;
+            const sky = key ? skyOverrides.get(key) : undefined;
+            light[i]=(sky ?? (original>>4))<<4 | (block ?? (original&15));
             const object = override ? override.object : layer?.get(index);
             if (object && indices[i]) objects.push([i, object]);
             if (override?.parts && indices[i]) microblocks.push([i, override.parts]);

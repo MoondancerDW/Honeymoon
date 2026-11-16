@@ -6,37 +6,74 @@ import {loadBase} from '../server/base.mjs';
 
 const snowLayer = /^legacy:78:(\d+)$/;
 const fullSnow = /^legacy:80:/;
-const canopy = /^(?:legacy:(?:17|18|161|162):)/;
-const roof = /^(?:cover:|legacy:(?:5|35|44|53|67|108|109|114|126|128|134|135|136|28(?:0[89]|[12]\d|3[01])|3230|324[789]|40[3456]\d):)/;
+const highGround = new Set([1,2,3,12,13,24,82,110]);
 const chunkKey = (x,z) => `${x >> 4}.${z >> 4}`;
+const cellKey = (x,y,z) => `${x},${y},${z}`;
+const localRadius = 7;
+export const SNOW_CONTEXT_RADIUS = 24;
+const highSnowY = 96;
 
-export function findStraySnow(snow,cellAt) {
+export function findStraySnow(snow,cellAt,candidates = snow) {
   const buckets = new Map();
+  const cellIndices = new Map();
   for (const point of snow) {
     const key = chunkKey(point.x,point.z);
     if (!buckets.has(key)) buckets.set(key,[]);
     buckets.get(key).push(point);
   }
-  function snowyArea({x,y,z}) {
-    let nearby = 0, connected = 0;
-    for (let cz=(z-7)>>4; cz<=(z+7)>>4; cz++) for (let cx=(x-7)>>4; cx<=(x+7)>>4; cx++) {
-      for (const point of buckets.get(`${cx}.${cz}`) ?? []) {
-        const dx = point.x-x, dz = point.z-z, dy = Math.abs(point.y-y);
-        if (dx*dx+dz*dz > 49 || dy > 6) continue;
-        nearby += point.full ? 2 : 1;
-        if (Math.abs(dx)<=2 && Math.abs(dz)<=2 && dy<=1) connected++;
-        if (nearby >= 10 || connected >= 4) return true;
+  function snowAt(x,y,z) {
+    const key = chunkKey(x,z);
+    const points = buckets.get(key);
+    if (!points) return undefined;
+    if (!cellIndices.has(key)) cellIndices.set(key,new Map(points.map(point=>[cellKey(point.x,point.y,point.z),point])));
+    return cellIndices.get(key).get(cellKey(x,y,z));
+  }
+  function inSnowyTerrain({x,y,z}) {
+    let nearby = 0, regional = 0;
+    for (let cz=(z-SNOW_CONTEXT_RADIUS)>>4; cz<=(z+SNOW_CONTEXT_RADIUS)>>4; cz++) {
+      for (let cx=(x-SNOW_CONTEXT_RADIUS)>>4; cx<=(x+SNOW_CONTEXT_RADIUS)>>4; cx++) {
+        for (const point of buckets.get(`${cx}.${cz}`) ?? []) {
+          const dx = point.x-x, dz = point.z-z, dy = Math.abs(point.y-y);
+          const distance = dx*dx+dz*dz;
+          if (distance > SNOW_CONTEXT_RADIUS**2 || dy > 16) continue;
+          const weight = point.full ? 2 : 1;
+          regional += weight;
+          if (distance <= localRadius**2 && dy <= 6) {
+            if (point.full) return true;
+            nearby += weight;
+          }
+          if (nearby >= 10 || regional >= 48) return true;
+        }
       }
     }
     return false;
   }
-  return snow.filter(point => {
+  function inContinuousPatch(origin) {
+    const seen = new Set([origin]);
+    const queue = [origin];
+    for (const {x,y,z} of queue) {
+      for (let dz=-1; dz<=1; dz++) for (let dx=-1; dx<=1; dx++) {
+        if (dx === 0 && dz === 0) continue;
+        for (let dy=-1; dy<=1; dy++) {
+          const next = snowAt(x+dx,y+dy,z+dz);
+          if (!next || seen.has(next)) continue;
+          if (next.full || next.layers > 2) return true;
+          seen.add(next);
+          if (seen.size >= 10) return true;
+          queue.push(next);
+        }
+      }
+    }
+    return false;
+  }
+  return candidates.filter(point => {
     if (point.full || point.layers > 2) return false;
     const {x,y,z} = point;
-    const support = cellAt(x,y-1,z);
-    let sheltered = roof.test(support) || canopy.test(support);
-    for (let dy=1; dy<=7 && !sheltered; dy++) sheltered = canopy.test(cellAt(x,y+dy,z));
-    return sheltered && !snowyArea(point);
+    if (y >= highSnowY) {
+      const supportId = point.supportId ?? Number(/^legacy:(\d+):/.exec(cellAt?.(x,y-1,z))?.[1]);
+      if (highGround.has(supportId)) return false;
+    }
+    return !inSnowyTerrain(point) && !inContinuousPatch(point);
   });
 }
 
@@ -51,7 +88,7 @@ export function buildSnowCleanup(directory,output) {
     let marked = false;
     for (let i=0; i<palette.length; i++) {
       const layer = snowLayer.exec(palette[i]);
-      markers[i] = layer ? 1+Number(layer[1]) : fullSnow.test(palette[i]) ? 255 : 0;
+      markers[i] = layer ? 1+(Number(layer[1]) & 7) : fullSnow.test(palette[i]) ? 255 : 0;
       marked ||= markers[i]>0;
     }
     if (!marked) continue;

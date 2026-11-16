@@ -158,7 +158,7 @@ export function createHoneymoonServer({
   allowedOrigin,
   clock,
   afterCommit,
-  allowRemoval,
+  allowRemoval = true,
 } = {}) {
   const models = {};
   const lod = base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
@@ -221,7 +221,8 @@ export function createHoneymoonServer({
   const serveWorld = serveWorldJson();
   const session = player => {
     const time = worldTime.snapshot();
-    return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,creative:Boolean(creative),
+    return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,
+      weather:worldTime.weather(),creative:Boolean(creative),
       profile:profileFor(player) };
   };
 
@@ -237,12 +238,13 @@ export function createHoneymoonServer({
   }
 
   function broadcast(player, output) {
+    const {inventory: _, ...publicOutput} = output;
     for (const stream of streams) {
       const effects = player === stream.player ? [] : output.effects.filter(effect => effect.sound)
         .map(({message: _, ...effect}) => effect);
       if (output.changes.length || effects.length || output.frames) {
         writeEvent(stream.response, 'commit', {
-          ...output,
+          ...publicOutput,
           effects,
         }, output.worldRevision);
       }
@@ -254,6 +256,18 @@ export function createHoneymoonServer({
     for (const {player,response,minecarts} of streams) {
       if (minecarts) writeEvent(response,'minecarts',game.minecartSnapshot(player));
     }
+  }
+
+  function sendDroppedItems(stream, force) {
+    if (!stream.droppedItems) return;
+    const view = game.droppedItemView(stream.player);
+    if (!force && view === stream.droppedItemView) return;
+    stream.droppedItemView = view;
+    writeEvent(stream.response,'dropped-items',{entities:game.droppedItemSnapshot(stream.player)});
+  }
+
+  function broadcastDroppedItems(force) {
+    for (const stream of streams) sendDroppedItems(stream,force);
   }
 
   async function dispatch(request, response) {
@@ -284,6 +298,13 @@ export function createHoneymoonServer({
         sendSocial('world-time', time);
         return json(response, 200, time);
       }
+      if (path === '/api/weather' && method === 'POST') {
+        const {mode} = await readBody(request);
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        const value = {mode:worldTime.setWeather(mode)};
+        sendSocial('weather',value);
+        return json(response,200,value);
+      }
       if (path === '/api/profile' && method === 'POST') {
         const updates = await profileChanges(await readBody(request, MAX_PROFILE_BODY));
         const saved = store.getProfile(player);
@@ -312,9 +333,9 @@ export function createHoneymoonServer({
           if (body.boatDrive !== undefined && (!Array.isArray(body.boatDrive) || body.boatDrive.length !== 2 ||
               body.boatDrive.some(value => ![-1,0,1].includes(value)))) throw new RequestError(400,'invalid_pose');
           game.driveMinecart(player,pose,body.cartDrive,body.boatDrive);
-          const {position, seat} = game.session(player);
+          const {position, seat, stance} = game.session(player);
           presence.join(player, position, game.poseFor(player, pose));
-          return json(response, 200, {ok:true, position, seat});
+          return json(response, 200, {ok:true, position, seat, stance});
         }
         if (method === 'DELETE') {
           presence.leave(player);
@@ -324,8 +345,11 @@ export function createHoneymoonServer({
       if (path === '/api/seat' && method === 'POST') {
         const body = await readBody(request);
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
+        if (body.ground !== undefined && (typeof body.ground !== 'boolean' || body.target !== undefined)) {
+          throw new RequestError(400,'invalid_coordinates');
+        }
         const pose = readPose(body);
-        const result = game.sit(player, body.target, pose);
+        const result = game.sit(player, body.target, pose,body.ground);
         presence.update(player, result.position, game.poseFor(player, {
           ...pose, yaw:result.seat?.yaw ?? pose.yaw, pitch:result.seat ? 0 : pose.pitch, motion:'idle',
         }));
@@ -368,6 +392,7 @@ export function createHoneymoonServer({
           afterCommit?.(request, response, result.output);
           broadcast(player, result.output);
           if (result.output.minecart || result.output.removedMinecart || result.output.boat || result.output.removedBoat) broadcastMinecarts();
+          if (result.output.droppedItem || result.output.pickedItem) broadcastDroppedItems(true);
         }
         if (!response.destroyed) json(response, result.status, result.output);
         return;
@@ -381,7 +406,8 @@ export function createHoneymoonServer({
           'X-Accel-Buffering': 'no',
         });
         const stream = { player, response, social: url.searchParams.get('social') === '1',
-          minecarts: url.searchParams.get('minecarts') === '1' };
+          minecarts: url.searchParams.get('minecarts') === '1',
+          droppedItems: url.searchParams.get('droppedItems') === '1' };
         streams.add(stream);
         game.touch(player);
         response.on('close', () => {
@@ -396,8 +422,10 @@ export function createHoneymoonServer({
         if (stream.social) {
           writeEvent(response, 'chat-history', {entries:chat.history(player)});
           writeEvent(response, 'world-time', worldTime.snapshot());
+          writeEvent(response, 'weather', {mode:worldTime.weather()});
         }
         if (stream.minecarts) writeEvent(response,'minecarts',game.minecartSnapshot(player));
+        sendDroppedItems(stream,true);
         return;
       }
       throw new RequestError(404, 'not_found');
@@ -460,6 +488,7 @@ export function createHoneymoonServer({
   heartbeat.unref();
   const presenceTicks = setInterval(() => presence.flush(), 100);
   presenceTicks.unref();
+  let itemRefresh = 0;
   const blockTicks = setInterval(() => {
     try {
       const result = game.advance();
@@ -469,6 +498,8 @@ export function createHoneymoonServer({
         for (const {player,position,pose} of riders) presence.update(player,position,pose);
         broadcastMinecarts();
       }
+      if (game.advanceDroppedItems()) broadcastDroppedItems(true);
+      else if (++itemRefresh % 10 === 0) broadcastDroppedItems(false);
     } catch (error) {
       console.error(error);
     }
@@ -491,6 +522,7 @@ export function createHoneymoonServer({
         server.closeAllConnections();
       });
       game.flushMinecarts();
+      game.flushDroppedItems();
       store.close();
     },
   };

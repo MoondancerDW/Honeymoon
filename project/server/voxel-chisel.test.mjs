@@ -95,7 +95,7 @@ test('voxel edits preserve ownership, material, revision and exact hit through s
   });
   async function restart(base = fixture()) {
     await app?.close();
-    app = createHoneymoonServer({base, geometry, state, clock:() => now});
+    app = createHoneymoonServer({base, geometry, state, clock:() => now,allowRemoval:false});
     app.server.listen(0,'127.0.0.1');
     await once(app.server,'listening');
     url = `http://127.0.0.1:${app.server.address().port}/api/`;

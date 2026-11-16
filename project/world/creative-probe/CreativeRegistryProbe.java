@@ -142,6 +142,30 @@ public final class CreativeRegistryProbe {
     }
   }
 
+  private static void captureTabs(Class<?> tab, Class<?> stack, String output) throws Exception {
+    Object[] tabs = (Object[]) tab.getField("a").get(null);
+    Method key = tab.getMethod("b"), label = tab.getMethod("c"), contents = tab.getMethod("a", List.class);
+    Method icon = tab.getMethod("getIconItemStack"), damage = stack.getMethod("j");
+    Field id = stack.getField("c");
+    try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(Paths.get(output + ".tabs"), StandardCharsets.UTF_8))) {
+      row(out, "index", "key", "label", "iconId", "iconDamage", "id", "damage");
+      for (int index = 0; index < tabs.length; index++) {
+        Object value = tabs[index];
+        if (value == null) continue;
+        Object tabKey = key.invoke(value), title = label.invoke(value), tabIcon = safe(icon, value);
+        Object iconId = tabIcon == null ? null : id.get(tabIcon);
+        Object iconDamage = tabIcon == null ? null : damage.invoke(tabIcon);
+        List<Object> variants = new ArrayList<>();
+        if (!"search".equals(tabKey) && !"inventory".equals(tabKey)) contents.invoke(value, variants);
+        if (variants.isEmpty()) row(out, index, tabKey, title, iconId, iconDamage, null, null);
+        else for (Object variant : variants) {
+          if (variant != null) row(out, index, tabKey, title, iconId, iconDamage, id.get(variant), damage.invoke(variant));
+        }
+      }
+      if (out.checkError()) throw new IllegalStateException("Failed to write the creative tabs");
+    }
+  }
+
   private static void capture(ClassLoader loader, String output) throws Exception {
     Class<?> block = loader.loadClass("amq"), item = loader.loadClass("up"), stack = loader.loadClass("ur");
     Class<?> tab = loader.loadClass("tj"), material = loader.loadClass("agi");
@@ -174,6 +198,7 @@ public final class CreativeRegistryProbe {
     Method coverData = covers.getMethod("damageToCoverData", int.class), coverValue = covers.getMethod("damageToCoverValue", int.class);
     Method coverName = covers.getMethod("getName", int.class);
 
+    captureTabs(tab, stack, output);
     captureFlatItems(loader, output, items, english, russian);
     try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(Paths.get(output), StandardCharsets.UTF_8));
          PrintWriter inventory = new PrintWriter(Files.newBufferedWriter(Paths.get(output + ".items"), StandardCharsets.UTF_8))) {

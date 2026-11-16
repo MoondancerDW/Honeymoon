@@ -17,8 +17,11 @@ import {addTerrainFilter, terrainFilter} from './terrain-filter.mjs';
 import {ViewBobbing} from './view-bobbing.mjs';
 import {PonyShadows} from './pony-shadows.mjs';
 import {BlockDebris} from './block-debris.mjs';
+import {DroppedItemView} from './dropped-items.mjs';
 import {HeldLights} from './held-light.mjs';
 import {groundSurface} from './audio.mjs';
+import {Rain} from './rain.mjs';
+import {isWeather} from '../world/weather.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -107,6 +110,10 @@ export class Display {
     this.dayZenith = new THREE.Color('#84abfc');
     this.nightHorizon = new THREE.Color('#0c1326');
     this.nightZenith = new THREE.Color('#040716');
+    this.cloudyHorizon = new THREE.Color('#69727d');
+    this.cloudyNight = new THREE.Color('#070a10');
+    this.weather = 'clear';
+    this.nightVision = false;
     this.updateSky(dayTick);
     this.visualEntities = new THREE.Group();
     this.visualEntities.visible = false;
@@ -375,18 +382,38 @@ export class Display {
     const sun = sunlightAt(tick);
     const angle = Math.PI * 2 * celestialAngle(tick);
     const sky = Math.max(0, Math.min(1, 2 * Math.cos(angle) + .5));
-    if (this.lastSun !== sun) {
-      writeLightmap(this.lightBytes, sun);
+    const overcast = this.weather !== 'clear';
+    const skyStrength = overcast ? Math.min(sun,.025 + .975 * sky) : sun;
+    if (this.lastSun !== skyStrength) {
+      writeLightmap(this.lightBytes,skyStrength,{skyLoss:overcast ? 3 : 0,darkFloor:true,nightVision:this.nightVision});
       this.lightmap.needsUpdate = true;
-      this.lastSun = sun;
+      this.lastSun = skyStrength;
     }
-    const {zenith, horizon, sunDirection, cloudOffset, night} = this.sky.material.uniforms;
+    const {zenith, horizon, sunDirection, cloudOffset, night, cloudy} = this.sky.material.uniforms;
     zenith.value.copy(this.nightZenith).lerp(this.dayZenith, sky);
-    horizon.value.copy(this.nightHorizon).lerp(this.dayHorizon, sky);
+    horizon.value.copy(overcast ? this.cloudyNight : this.nightHorizon)
+      .lerp(overcast ? this.cloudyHorizon : this.dayHorizon,sky);
     sunDirection.value.set(-Math.sin(angle), Math.cos(angle) * .96, Math.cos(angle) * -.28);
     cloudOffset.value.set(Math.sin(angle) * 1.3, (1 - Math.cos(angle)) * .6);
     night.value = 1 - sky;
+    cloudy.value = Number(overcast);
     this.scene.fog.color.copy(horizon.value);
+  }
+
+  setWeather(mode) {
+    if (!isWeather(mode) || mode === this.weather) return;
+    this.weather = mode;
+    this.lastSun = undefined;
+    this.nextSkyUpdate = 0;
+    if (mode !== 'rain') this.rain?.visible(false);
+    this.visibleRain = 0;
+  }
+
+  setNightVision(enabled) {
+    if (enabled === this.nightVision) return;
+    this.nightVision = enabled;
+    this.lastSun = undefined;
+    this.nextSkyUpdate = 0;
   }
 
   setWorldTime(time) {
@@ -690,6 +717,7 @@ export class Display {
   }
 
   remesh(x, y, z, revision) {
+    this.rain?.invalidate(x,z);
     this.heldLights.invalidate(x,z);
     const cx = Math.floor(x / 16), cy = Math.floor(y / 16), cz = Math.floor(z / 16);
     this.schedule(cx, cy, cz, true);
@@ -1318,9 +1346,20 @@ export class Display {
       if (this.fireTexture) this.fireTexture.offset.y = (Math.floor(now / FIRE_STEP_MS) % FIRE_FRAMES) / FIRE_FRAMES;
       this.sky.position.copy(this.camera.position);
       this.sky.updateMatrixWorld();
+      this.sky.material.uniforms.windTime.value = now * .001;
       const ponies = [...this.players.entries.values()];
       if (this.localAvatar) ponies.push({object:this.localAvatar.object, avatar:this.localAvatar});
       this.heldLights.update(ponies, this.camera.position, this.spectating ? null : this.localAvatar);
+      if (this.weather === 'rain') {
+        this.rain ??= new Rain(this.scene,this.world);
+        const {x,y,z}=this.camera.position;
+        const bx=Math.floor(x), by=Math.floor(y), bz=Math.floor(z);
+        const packed=this.world.lightAt(bx,by,bz);
+        const nearby=this.heldLights.levelAt(bx,by,bz);
+        const offset=4*((packed&240)|Math.max(packed&15,nearby));
+        const brightness=Math.max(.07,.2+this.lastSun*.58,this.lightBytes[offset]/255);
+        this.visibleRain=this.rain.step(now,this.camera.position,brightness);
+      }
       for (const {object,avatar} of ponies) {
         if (!object.visible && avatar !== this.localAvatar) continue;
         const {x,y,z} = object.position;
@@ -1330,6 +1369,11 @@ export class Display {
         avatar.setLight(this.lightBytes[offset] << 16 | this.lightBytes[offset + 1] << 8 | this.lightBytes[offset + 2]);
       }
       this.ponyShadows.update(ponies.map(pony => pony.object), this.camera.position);
+      this.droppedItemView ??= new DroppedItemView(this.scene,this.world);
+      this.droppedItemView.update(now,this.camera.position,this.heldItemAssets(),(x,y,z) => {
+        const offset = 4 * this.world.lightAt(Math.floor(x),Math.floor(y),Math.floor(z));
+        return this.lightBytes[offset] << 16 | this.lightBytes[offset + 1] << 8 | this.lightBytes[offset + 2];
+      },(x,z) => this.isPreciseVisible(x,z));
       this.updateOcclusion(now);
       this.renderer.render(this.scene, this.camera);
       this.nextIdleRender = now + 100;
@@ -1353,7 +1397,7 @@ export class Display {
     return {calls: render.calls, triangles: render.triangles, geometries: memory.geometries, textures: memory.textures,
       occlusion:this.sectionVisibility.statistics(), heldLights:this.heldLights.statistics(),
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles, farTerrain:this.farTerrain?.stats(),
-      pending: this.pendingWork,
+      pending: this.pendingWork, weather:this.weather, nightVision:this.nightVision, rainDrops:this.visibleRain ?? 0,
       loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
   }
 }
@@ -1368,6 +1412,8 @@ function createSky() {
       sunDirection: {value: new THREE.Vector3(0, 1, 0)},
       cloudOffset: {value: new THREE.Vector2()},
       night: {value: 0},
+      cloudy: {value: 0},
+      windTime: {value: 0},
       sunColor: {value: new THREE.Color('#fff7cf')},
       moonColor: {value: new THREE.Color('#dce8f9')},
     },
@@ -1375,7 +1421,8 @@ function createSky() {
       varying vec3 skyDirection;
       void main() {
         skyDirection = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec4 projected = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projected.xyww;
       }
     `,
     fragmentShader: /* glsl */ `
@@ -1386,6 +1433,8 @@ function createSky() {
       uniform vec3 sunColor;
       uniform vec3 moonColor;
       uniform float night;
+      uniform float cloudy;
+      uniform float windTime;
       varying vec3 skyDirection;
       float hash(vec2 cell) {
         return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453);
@@ -1407,6 +1456,21 @@ function createSky() {
         vec3 ray = normalize(skyDirection);
         float mixAmount = 1.0 - exp(-max(ray.y, 0.0) * 8.0);
         vec3 skyColor = mix(horizon, zenith, mixAmount);
+        if (cloudy > .5) {
+          vec2 p = ray.xz / (max(ray.y,0.0) + .24);
+          float upper = clouds(p*1.9 + vec2(windTime*.023,windTime*.008));
+          float lower = clouds(p*3.1 + vec2(8.7+windTime*.052,3.7+windTime*.019));
+          float shoulders = smoothstep(.34,.70,upper);
+          float distinct = smoothstep(.41,.53,lower);
+          vec3 darkCloud = vec3(.12,.145,.175);
+          vec3 highCloud = mix(vec3(.20,.235,.27),vec3(.33,.365,.39),shoulders);
+          vec3 deck = mix(highCloud,darkCloud + vec3(.08)*smoothstep(.48,.72,lower),distinct);
+          float light = mix(.022,1.0,1.0-night);
+          skyColor = mix(horizon,deck*light,smoothstep(-.01,.17,ray.y));
+          gl_FragColor = vec4(skyColor,1.0);
+          #include <colorspace_fragment>
+          return;
+        }
         if (night > .01 && ray.y > 0.0) {
           vec2 uv = vec2(atan(ray.z, ray.x) * (128.0 / 6.2831853), asin(ray.y) * 24.0);
           vec2 cell = floor(uv);
@@ -1437,7 +1501,7 @@ function createSky() {
     `,
   });
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(660, 24, 12), material);
-  mesh.renderOrder = -10;
+  mesh.renderOrder = 1000;
   return mesh;
 }
 

@@ -3,8 +3,9 @@
 export const FACE_SHADE = Object.freeze([.6, .6, .5, 1, .8, .8]);
 
 export function contactShade(sideU, sideV, corner) {
-  const covered = sideU && sideV ? 3 : Number(sideU) + Number(sideV) + Number(corner);
-  return 1 - covered * .09;
+  const u=Number(sideU), v=Number(sideV);
+  const covered = u + v + Math.max(Math.min(u,v),Number(corner));
+  return 1 - covered * (.058 + .011 * covered);
 }
 
 export function averageLight(a, b, c, d) {
@@ -18,16 +19,17 @@ function level(nibble) {
   return value / (4 - 3 * value);
 }
 
-function channel(value) {
-  return Math.trunc(255 * (.96 * Math.min(1, .96 * value + .03) + .03));
+function channel(value, darkFloor) {
+  const encoded = 255 * (.96 * Math.min(1, .96 * value + .03) + .03);
+  return Math.trunc(darkFloor ? encoded * Math.min(1,value*8) : encoded);
 }
 
-function channels(index, sun) {
-  const sky = level(index >> 4) * (.95 * sun + .05);
+function channels(index, sun, skyLoss = 0, darkFloor = false) {
+  const sky = level(Math.max(0,(index >> 4)-skyLoss)) * (darkFloor && sun < .1 ? sun : .95 * sun + .05);
   const warmSky = sky * (.65 * sun + .35);
   const warm = 1.5 * level(index & 15);
-  return [channel(warmSky + warm), channel(warmSky + warm * (.64 + .36 * warm)),
-    channel(sky + warm * (.4 + .6 * warm * warm))];
+  return [channel(warmSky + warm,darkFloor), channel(warmSky + warm * (.64 + .36 * warm),darkFloor),
+    channel(sky + warm * (.4 + .6 * warm * warm),darkFloor)];
 }
 
 const colors = Array.from({length: 256}, (_, index) => channels(index, 1));
@@ -42,9 +44,13 @@ export function sunlightAt(tick) {
   return .16 + .84 * Math.max(0, Math.min(1, 2 * Math.cos(Math.PI * 2 * celestialAngle(tick)) + .2));
 }
 
-export function writeLightmap(target, sun) {
+export function writeLightmap(target, sun, {skyLoss=0,darkFloor=false,nightVision=false} = {}) {
+  if (nightVision) {
+    target.fill(255);
+    return;
+  }
   for (let i = 0; i < 256; i++) {
-    const [r,g,b] = channels(i, sun);
+    const [r,g,b] = channels(i,sun,skyLoss,darkFloor);
     target.set([r,g,b,255], i * 4);
   }
   target.fill(255, 256 * 4);
