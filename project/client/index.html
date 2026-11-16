@@ -51,17 +51,16 @@
             <option value="24">24 чанка</option><option value="28">28 чанков</option>
           </select>
         </label>
-        <button id="audio-toggle" type="button" aria-pressed="false" hidden>Звук</button>
-        <button id="music-toggle" type="button" aria-pressed="false" hidden>Музыка</button>
         <button id="audio-settings-toggle" type="button" aria-haspopup="dialog" aria-controls="audio-settings">Громкость и окружение</button>
         <button id="night-vision" type="button" aria-pressed="false">Ночное зрение выкл.</button>
         <button id="low-device" type="button" aria-pressed="false">Слабое устройство: выкл.</button>
+        <button id="self-mode-toggle" type="button" title="Переключить режим для себя" hidden>Режим: Игровой</button>
         <label class="distance" for="weather">Погода
           <select id="weather" disabled>
             <option value="clear">Ясно</option><option value="cloudy">Облачно</option><option value="rain">Дождь</option>
+            <option value="snow">Снег</option>
           </select>
         </label>
-        <button id="clear-selection" type="button" title="Убрать выбранный блок в инвентарь">Освободить руку</button>
         <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled>Телепорт</button>
         <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
       </div>
@@ -138,6 +137,7 @@
       <label for="clock-input">Время в мире</label>
       <input id="clock-input" type="time" required>
       <label><input id="clock-frozen" type="checkbox"> Заморозить</label>
+      <label><input id="clock-dynamic-weather" type="checkbox"> Динамическая погода</label>
       <div><button type="submit">Применить</button> <button id="clock-close" type="button">Закрыть</button></div>
     </form>
     <form id="teleport-form" class="social-panel" aria-label="Телепорт по координатам" hidden>
@@ -248,6 +248,7 @@
     <dialog id="audio-settings" aria-labelledby="audio-settings-title">
       <h2 id="audio-settings-title">Звук и окружение</h2>
       <div class="audio-options">
+        <button id="audio-master" type="button" aria-pressed="true">Весь звук: вкл.</button>
         <label>Звуки <input id="audio-volume" type="range" min="0" max="100" value="100"></label>
         <label>Музыка <input id="music-volume" type="range" min="0" max="100" value="50"></label>
         <label>Режим окружения
@@ -301,6 +302,7 @@
       </header>
       <nav class="admin-tabs" aria-label="Разделы администрирования">
         <button type="button" data-admin-tab="profiles" aria-pressed="true">Профили</button>
+        <button type="button" data-admin-tab="uids" aria-pressed="false">Все UID</button>
         <button type="button" data-admin-tab="invites" aria-pressed="false">Приглашения</button>
         <button type="button" data-admin-tab="world" aria-pressed="false">Мир</button>
       </nav>

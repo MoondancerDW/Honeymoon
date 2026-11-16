@@ -154,14 +154,14 @@ export class SnowAccumulation {
     this.nextSurvey=0;
   }
 
-  exposed(x,z,eye) {
+  exposed(x,z,eye,globalSnow=false) {
     if(!this.chunkVisible(x>>4,z>>4)) return null;
     const px=x+.5,pz=z+.5;
     const surface=this.cover.surfaceAt(px,pz);
     const y=surface.top;
     if(!Number.isFinite(y) || y>eye.y+8 || y<eye.y-34 ||
         ['water','foliage','glass'].includes(surface.kind) ||
-        !this.climate.snowAt(px,y+.035,pz)) return null;
+        (!globalSnow && !this.climate.snowAt(px,y+.035,pz))) return null;
     const footing=Math.floor(y-.0001);
     if(snowBlocks.has(blockState(this.world.cellAt(x,footing,z))[0]) ||
         snowBlocks.has(blockState(this.world.cellAt(x,Math.floor(y+.01),z))[0])) return null;
@@ -270,7 +270,7 @@ export class SnowAccumulation {
     this.fade.setXYZW(index,weight,patch.created+(layer===1?1.4:0),patch.seen,layer);
   }
 
-  survey(now,eye,snowing) {
+  survey(now,eye,snowing,globalSnow) {
     const x=Math.floor(eye.x), z=Math.floor(eye.z);
     if(this.x===undefined || Math.abs(x-this.x)+Math.abs(z-this.z)>=4) {
       this.x=x;this.z=z;this.cursor=0;
@@ -281,7 +281,7 @@ export class SnowAccumulation {
       for(let i=0;i<this.batch;i++) {
         const [offX,offZ]=offsets[this.cursor++%offsets.length];
         const x=this.x+offX,z=this.z+offZ,key=x+','+z;
-        const patch=this.exposed(x,z,eye);
+        const patch=this.exposed(x,z,eye,globalSnow);
         if(!patch) continue;
         const previous=this.patches.get(key);
         if(previous) previous.seen=time;
@@ -297,7 +297,7 @@ export class SnowAccumulation {
       const distance=(patch.x-eye.x)**2+(patch.z-eye.z)**2;
       if(distance>radius**2*1.2 || Math.abs(patch.y-eye.y)>36 ||
           !this.chunkVisible(Math.floor(patch.x)>>4,Math.floor(patch.z)>>4)) continue;
-      if(snowing && this.climate.snowAt(patch.x,patch.y,patch.z)) patch.seen=time;
+      if(snowing && (globalSnow || this.climate.snowAt(patch.x,patch.y,patch.z))) patch.seen=time;
       candidates.push({patch,distance});
     }
     candidates.sort((a,b)=>a.distance-b.distance);
@@ -336,11 +336,11 @@ export class SnowAccumulation {
     this.fade.needsUpdate=true;
   }
 
-  update(now,eye,snowing) {
+  update(now,eye,snowing,globalSnow=false) {
     this.clock.value=now*.001;
     if(now<this.nextSurvey) return;
     this.nextSurvey=now+(snowing?145:340);
-    this.survey(now,eye,snowing);
+    this.survey(now,eye,snowing,globalSnow);
   }
 
   inspect() {return {coating:this.mesh.count,retained:this.patches.size,grains:this.grains,fringes:this.fringeCount,

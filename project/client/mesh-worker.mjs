@@ -30,13 +30,13 @@ function layer() {
   return {positions: [], colors: [], lightLevels: [], uvs: [], indices: []};
 }
 
-function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding = .25 / TILE_SIZE, shadow, wind = 0, leaf = 0) {
+function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding = .25 / TILE_SIZE, shadow, wind = 0, foliageSlot = 0) {
   const start = out.positions.length / 3;
   if (wind && out.windMarks) {
     if (wind < 0) out.windMarks.push(start,-wind,start+1,-wind,start+2,-wind,start+3,-wind);
     else out.windMarks.push(start+2,wind,start+3,wind);
   }
-  if (leaf && out.leafMarks) out.leafMarks.push(start);
+  if (foliageSlot && out.foliageMarks) out.foliageMarks.push(start,foliageSlot);
   if (tile >= ATLAS_GRID * atlasRows) tile = geometry.tiles.unknown;
   const u0 = (tile % ATLAS_GRID) / ATLAS_GRID;
   const v0 = 1 - Math.floor(tile / ATLAS_GRID) / atlasRows;
@@ -450,10 +450,10 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
     }
   }
   const visibility = occlusionCells ? buildSectionVisibility(occlusionCells, opaqueCells) : null;
-  const ornament=foliage && {...layer(),windMarks:[],leafMarks:[]};
+  const ornament=foliage && {...layer(),windMarks:[],foliageMarks:[]};
   const foliageQuads=ornament ? appendFoliage({indices,palette,light,origin:foliage,biomeTints,
-    emit:(corners,tile,packed,tint,shade,wind,leaf)=>quad(ornament,corners,tile,FULL_UV,
-      packed,tint,shade,undefined,undefined,wind,leaf)}) : 0;
+    emit:(corners,tile,packed,tint,shade,wind,slot,uv=FULL_UV)=>quad(ornament,corners,tile,uv,
+      packed,tint,shade,undefined,undefined,wind,slot)}) : 0;
   if (foliageQuads) layers.foliage=ornament;
   return {layers,signs,visibility,foliageQuads};
 }
@@ -531,12 +531,15 @@ self.onmessage = ({data}) => {
         transfers.push(out.wind.buffer);
       }
       delete out.windMarks;
-      if (out.leafMarks?.length) {
-        out.leaf=new Uint8Array(out.positions.length/3);
-        for (const first of out.leafMarks) out.leaf.fill(1,first,first+4);
-        transfers.push(out.leaf.buffer);
+      if (out.foliageMarks?.length) {
+        out.foliageSlots=new Uint8Array(out.positions.length/3);
+        for (let i=0;i<out.foliageMarks.length;i+=2) {
+          const start=out.foliageMarks[i];
+          out.foliageSlots.fill(out.foliageMarks[i+1],start,start+4);
+        }
+        transfers.push(out.foliageSlots.buffer);
       }
-      delete out.leafMarks;
+      delete out.foliageMarks;
       if (mode!=='foliage') fitsSection &&= out.bounds.fitsSection;
       transfers.push(out.positions.buffer, out.uvs.buffer, out.colors.buffer, out.lightLevels.buffer, out.indices.buffer);
     }

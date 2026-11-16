@@ -25,12 +25,11 @@ import {Rain} from './rain.mjs';
 import {SnowAccumulation} from './snow-accumulation.mjs';
 import {Climate} from './climate.mjs';
 import {detailCoverage} from '../world/full-detail.mjs';
-import {isWeather} from '../world/weather.mjs';
+import {isPrecipitating,isWeather} from '../world/weather.mjs';
 import {fluidAt} from '../world/block-movement.mjs';
 import {FallingLeaves} from './falling-leaves.mjs';
-import {attachFoliageWind,windAt} from './wind.mjs';
+import {attachFoliageWind,foliageDistance,windAt} from './wind.mjs';
 import {rainStrength,stormAt} from './storm.mjs';
-import {canopyCardPixels,canopyCardSize} from './canopy-card.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -274,20 +273,14 @@ export class Display {
       return Object.entries(materialsFor(texture, 26 / 255)).map(([mode, material]) => [`${family}:${mode}`, material]);
     }));
     this.materials = {...materialsFor(map), ...Object.fromEntries(additional.flat())};
-    const textures = terrainFilter(map,this.atlasRows);
+    const textures = terrainFilter(map,this.atlasRows,this.foliageEnabled);
     this.useLightmap(this.materials.opaque,textures);
     this.useLightmap(this.materials.cutout,textures);
     if (this.foliageEnabled) {
       attachFoliageWind(this.materials.cutout,this.foliageDirection,this.foliagePhase);
       this.materials.foliage=new THREE.MeshBasicMaterial({map,vertexColors:true,side:THREE.DoubleSide,alphaTest:.28});
       this.useLightmap(this.materials.foliage,textures);
-      const canopyMap=new THREE.DataTexture(canopyCardPixels(),canopyCardSize,canopyCardSize);
-      canopyMap.colorSpace=THREE.SRGBColorSpace;
-      canopyMap.minFilter=THREE.LinearMipmapLinearFilter;
-      canopyMap.magFilter=THREE.NearestFilter;
-      canopyMap.generateMipmaps=true;
-      canopyMap.needsUpdate=true;
-      attachFoliageWind(this.materials.foliage,this.foliageDirection,this.foliagePhase,canopyMap);
+      attachFoliageWind(this.materials.foliage,this.foliageDirection,this.foliagePhase,textures.foliage);
     }
     this.useLightmap(this.materials.blend,textures);
     const multisample = Boolean(this.renderer.getContext().getContextAttributes()?.antialias);
@@ -464,7 +457,7 @@ export class Display {
     this.weather = mode;
     this.lastSun = undefined;
     this.nextSkyUpdate = 0;
-    if (mode !== 'rain') {
+    if (!isPrecipitating(mode)) {
       this.rain?.visible(false);
       this.precipitationKind = null;
       this.weatherAudio=null;
@@ -1172,7 +1165,7 @@ export class Display {
       geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3, true));
       geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(data.lightLevels, 1));
       if (data.wind) geometry.setAttribute('foliageWind',new THREE.BufferAttribute(data.wind,1));
-      if (data.leaf) geometry.setAttribute('foliageLeaf',new THREE.BufferAttribute(data.leaf,1));
+      if (data.foliageSlots) geometry.setAttribute('foliageSlot',new THREE.BufferAttribute(data.foliageSlots,1));
       geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
       const {center, radius} = data.bounds;
       geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(...center), radius);
@@ -1400,7 +1393,8 @@ export class Display {
     this.updateDispensers(now);
     this.blockDebris?.update(now,this.camera);
     const epoch=Date.now();
-    const snow=this.weather==='rain' && this.climate.snowAt(listener.x,listener.y,listener.z);
+    const globalSnow=this.weather==='snow';
+    const snow=globalSnow || this.weather==='rain' && this.climate.snowAt(listener.x,listener.y,listener.z);
     const strike=this.weather==='rain' && !snow ? stormAt(epoch) : null;
     const flash=strike?.flash ?? 0;
     if (now >= (this.nextSkyUpdate ?? 0) || flash!==(this.lastStormFlash ?? 0)) {
@@ -1471,7 +1465,7 @@ export class Display {
         for (const mesh of this.foliageMeshes) {
           const {center,radius}=mesh.geometry.boundingSphere, origin=mesh.parent.position;
           mesh.visible=(camera.x-origin.x-center.x)**2+(camera.y-origin.y-center.y)**2+
-            (camera.z-origin.z-center.z)**2<(59+radius)**2;
+            (camera.z-origin.z-center.z)**2<(foliageDistance+radius)**2;
         }
       }
       this.sky.position.copy(this.camera.position);
@@ -1480,7 +1474,7 @@ export class Display {
       const ponies = [...this.players.entries.values()];
       if (this.localAvatar) ponies.push({object:this.localAvatar.object, avatar:this.localAvatar});
       this.heldLights.update(ponies, this.camera.position, this.spectating ? null : this.localAvatar);
-      if (this.weather === 'rain') {
+      if (isPrecipitating(this.weather)) {
         this.rain ??= new Rain(this.scene,this.world,this.climate);
         const {x,y,z}=this.camera.position;
         this.precipitationKind=snow ? 'snow' : 'rain';
@@ -1491,7 +1485,7 @@ export class Display {
         const brightness=Math.max(.23,.25+this.lastSun*.62,this.lightBytes[offset]/255);
         const strength=rainStrength(wind);
         this.visibleRain=this.rain.step(now,this.camera.position,this.viewDirection,brightness,wind,strength,listener,strike,
-          this.lowDevice?180:undefined);
+          this.lowDevice?180:undefined,globalSnow);
         this.weatherAudio={strength,cover:this.rain.listenerCover,strike,epoch};
       }
       if(!this.lowDevice && snow && !this.snowAccumulation) {
@@ -1502,7 +1496,7 @@ export class Display {
             return this.lightBytes[offset]<<16 | this.lightBytes[offset+1]<<8 | this.lightBytes[offset+2];
           }});
       }
-      if (!this.lowDevice) this.snowAccumulation?.update(now,listener,snow);
+      if (!this.lowDevice) this.snowAccumulation?.update(now,listener,snow,globalSnow);
       for (const {object,avatar} of ponies) {
         if (!object.visible && avatar !== this.localAvatar) continue;
         const {x,y,z} = object.position;

@@ -63,6 +63,28 @@ function withData(cell, spec, data) {
   return {...cell,object:{...object,data}};
 }
 
+export function stackFromRaw(item,creativeBlocks,creativeItems) {
+  const {id,Damage:damage=0,Count:count=1,Slot:_,tag,[STACK_EXTENSION]:extension,...legacyNbt} = item ?? {};
+  if (!Number.isInteger(id) || id < 1 || id > 32767 || !Number.isInteger(damage) || damage < 0 ||
+      damage > 32767 || !Number.isInteger(count) || count < 1 || count > 127) return null;
+  const creativeKey = `creative:${id}:${damage}`;
+  const variant = creativeItems.get(creativeKey);
+  const legacy = id < 4096 && damage < 16 ? blockKey(id,damage) : undefined;
+  const cell = variant?.blockKey ?? (!variant && (creativeBlocks.has(legacy) || legacyNbt.Block === true) ? legacy : undefined);
+  const key = variant || !cell ? creativeKey : cell;
+  const portable = compound(extension) && typeof extension.key === 'string' && extension.key.length <= 128 &&
+    (extension.key === 'copy:part' || extension.key.startsWith('cover:') || nativeKey.test(extension.key));
+  if (extension !== undefined && !portable) legacyNbt[STACK_EXTENSION] = extension;
+  const stack = portable ? {key:extension.key,...(typeof extension.cell === 'string' && {cell:extension.cell}),
+      ...(extension.part && {part:extension.part,pattern:extension.pattern}),
+      ...(compound(extension.object) && {object:extension.object}),
+      ...(extension.copied === true && {copied:true}),
+      ...(typeof extension.name === 'string' && {name:extension.name})} :
+    {key,...(cell && {cell}),...(variant?.part && {part:variant.part,pattern:variant.part.pattern})};
+  return {...stack,count,
+    ...(tag !== undefined && {nbt:tag}),...(Object.keys(legacyNbt).length && {legacyNbt})};
+}
+
 export function createContainers({store, inventory, getCell, getOriginalCell, creativeBlocks, creativeItems}) {
   function storedData(cell, spec) {
     const data=cell.object?.data ?? {};
@@ -85,28 +107,6 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
     })};
   }
 
-  function stackFromRaw(item) {
-    const {id,Damage:damage=0,Count:count=1,Slot:_,tag,[STACK_EXTENSION]:extension,...legacyNbt} = item ?? {};
-    if (!Number.isInteger(id) || id < 1 || id > 32767 || !Number.isInteger(damage) || damage < 0 ||
-        damage > 32767 || !Number.isInteger(count) || count < 1 || count > 127) return null;
-    const creativeKey = `creative:${id}:${damage}`;
-    const variant = creativeItems.get(creativeKey);
-    const legacy = id < 4096 && damage < 16 ? blockKey(id,damage) : undefined;
-    const cell = variant?.blockKey ?? (!variant && (creativeBlocks.has(legacy) || legacyNbt.Block === true) ? legacy : undefined);
-    const key = variant || !cell ? creativeKey : cell;
-    const portable = compound(extension) && typeof extension.key === 'string' && extension.key.length <= 128 &&
-      (extension.key === 'copy:part' || extension.key.startsWith('cover:') || nativeKey.test(extension.key));
-    if (extension !== undefined && !portable) legacyNbt[STACK_EXTENSION] = extension;
-    const stack = portable ? {key:extension.key,...(typeof extension.cell === 'string' && {cell:extension.cell}),
-        ...(extension.part && {part:extension.part,pattern:extension.pattern}),
-        ...(compound(extension.object) && {object:extension.object}),
-        ...(extension.copied === true && {copied:true}),
-        ...(typeof extension.name === 'string' && {name:extension.name})} :
-      {key,...(cell && {cell}),...(variant?.part && {part:variant.part,pattern:variant.part.pattern})};
-    return {...stack,count,
-      ...(tag !== undefined && {nbt:tag}),...(Object.keys(legacyNbt).length && {legacyNbt})};
-  }
-
   function materials(player, current) {
     const spec = containerSpec(current);
     if (!spec) throw new RequestError(409,'not_a_container');
@@ -126,7 +126,7 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
       const slots = Array(spec.size).fill(null);
       for (const item of raw) {
         const slot = rawSlot(item,spec.single);
-        if (inSlot(slot,slots.length) && !slots[slot]) slots[slot] = stackFromRaw(item);
+        if (inSlot(slot,slots.length) && !slots[slot]) slots[slot] = stackFromRaw(item,creativeBlocks,creativeItems);
       }
       return {cell,data,raw,slots};
     });

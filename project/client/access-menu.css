@@ -31,6 +31,9 @@
 #admin-menu h2 { font-size: clamp(1.02rem, 4vw, 1.26rem); }
 #admin-menu h3 { font-size: 1rem; }
 #admin-menu :is(.admin-tabs, .admin-actions) { display: flex; flex-wrap: wrap; gap: .45rem; }
+#admin-menu .admin-uid-list { display: grid; gap: .5rem; }
+#admin-menu .admin-uid-entry { display: grid; gap: .18rem; padding: .45rem 0; border-bottom: 1px solid #405667; }
+#admin-menu .admin-uid-entry code { overflow-wrap: anywhere; user-select: all; }
 #admin-menu .admin-tabs { padding: .75rem 1rem 0; }
 #admin-menu [aria-pressed="true"] { border-color: var(--gold); }
 #admin-menu #admin-status { padding: .55rem 1rem 0; }

@@ -1,28 +1,59 @@
-export const canopyCardSize=32;
+import {ATLAS_GRID,TILE_SIZE,shapeFor} from '../world/geometry.mjs';
 
-const blades=[
-  [14,14,10,4,.30,154], [8,15,7,3,.74,143], [21,20,8,4,-.36,136],
-  [16,23,7,3,1.13,166], [22,12,6,3,-.86,177], [10,8,6,3,.86,181],
-  [27,17,5,2.8,-.42,159], [17,6,5,2.6,-.94,190], [5,19,4,2.7,.25,128],
-  [23,25,4,2.1,.44,168], [12,25,4,2.1,.75,162], [6,10,4,2.2,.48,178],
-];
+// Vanilla, RedPower rubber, Twilight oak and magic trees, and Mine Little Brony fruit trees.
+export const foliageLeafIds = [18,243,2164,2177,3250];
+const leafTiles = [...new Set(foliageLeafIds.flatMap(id => Array.from({length:4}, (_, species) =>
+  shapeFor(`legacy:${id}:${species}`)[0].faces[0])))];
+export const canopySlot = new Map(leafTiles.map((tile,index) => [tile,index+1]));
+export const shortGrassTile = shapeFor('legacy:31:1')[0].faces[0];
+export const shortGrassSlot = leafTiles.length+1;
+export const foliageAtlasColumns = 4;
+export const foliageAtlasRows = Math.ceil(shortGrassSlot/foliageAtlasColumns);
+const spriteSize = TILE_SIZE*2;
+const stride = spriteSize*2;
+const gutter = spriteSize/2;
+const clamp = coordinate => Math.min(spriteSize-1,Math.max(0,coordinate));
+const fineTiles = new Set([18,2164].map(id => shapeFor(`legacy:${id}:1`)[0].faces[0]));
 
-export function canopyCardPixels() {
-  const pixels=new Uint8Array(canopyCardSize*canopyCardSize*4);
-  for (const [cx,cy,length,width,angle,value] of blades) {
-    const cos=Math.cos(angle), sin=Math.sin(angle);
-    for (let y=0;y<canopyCardSize;y++) for (let x=0;x<canopyCardSize;x++) {
-      const dx=x+.5-cx, dy=y+.5-cy;
-      const across=-dx*sin+dy*cos, along=dx*cos+dy*sin;
-      const taper=1-(along/length)**2;
-      if (taper<=0 || Math.abs(across)>width*taper**.75) continue;
-      const i=(y*canopyCardSize+x)*4;
-      const vein=across>=0 && across<.68 ? 17 : 0;
-      const grain=(Math.imul(x+2,31)^Math.imul(y+3,53))&15;
-      const shade=value+(across<0 ? 13 : -11)+vein+grain;
-      pixels[i]=pixels[i+1]=pixels[i+2]=shade;
-      pixels[i+3]=255;
+function roundMask(x,y,fine) {
+  const u = (x+.5-gutter)/gutter;
+  const v = (y+.5-gutter)/gutter;
+  const radius = Math.hypot(u,v);
+  const angle = Math.atan2(v,u);
+  const edge = .93 + .072*Math.sin(angle*5+.6) + .042*Math.cos(angle*11-1.6);
+  if (radius > edge) return 0;
+  // Cutting small gaps in the outline keeps opaque modded leaf textures leafy too.
+  const pores = Math.sin(x*1.27+y*.69) + Math.cos(y*1.17-x*.37);
+  return pores > (fine ? 1.13 : 1.54+.27*(1-radius)) ? 0 : 255;
+}
+
+// Better Foliage builds a round sprite by tiling the pack's leaf sprite 2×2
+// and masking its alpha. Keep the pack's pixel colors, texture holes and tint rules.
+export function foliageAtlasPixels(source,sourceWidth,sourceRows) {
+  const width = foliageAtlasColumns*stride;
+  const height = foliageAtlasRows*stride;
+  const pixels = new Uint8Array(width*height*4);
+  for (const [slot,tile] of [...leafTiles,shortGrassTile].entries()) {
+    if (tile >= sourceRows*ATLAS_GRID) continue;
+    const grass = slot+1===shortGrassSlot;
+    const fine = fineTiles.has(tile);
+    const inputX = tile%ATLAS_GRID*TILE_SIZE;
+    const inputY = Math.floor(tile/ATLAS_GRID)*TILE_SIZE;
+    const outputX = (slot%foliageAtlasColumns)*stride;
+    const outputY = Math.floor(slot/foliageAtlasColumns)*stride;
+    const grassOffset = spriteSize*3/8;
+    for (let py=0;py<stride;py++) for (let px=0;px<stride;px++) {
+      const x=px-gutter, y=py-gutter;
+      const sx=grass ? clamp(x)>>1 : clamp(x)%TILE_SIZE;
+      const sy=grass ? Math.max(0,clamp(y)-grassOffset)>>1 : clamp(y)%TILE_SIZE;
+      const from=(inputX+sx+(inputY+sy)*sourceWidth)*4;
+      const into=(outputX+px+(height-1-outputY-py)*width)*4;
+      pixels[into]=source[from];
+      pixels[into+1]=source[from+1];
+      pixels[into+2]=source[from+2];
+      if (x<0||x>=spriteSize||y<0||y>=spriteSize) continue;
+      if (grass ? y>=grassOffset : roundMask(x,y,fine)) pixels[into+3]=source[from+3];
     }
   }
-  return pixels;
+  return {pixels,width,height};
 }

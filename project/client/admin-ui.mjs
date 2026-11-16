@@ -29,11 +29,13 @@ const date=new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short'}
 const stamp=value=>Number.isFinite(value)?date.format(value):'';
 const nameOf=profile=>profile.profileName||profile.nickname||profile.uid;
 
-export function createAdminUi({element,load,post,pause,worldSettings,teleport}) {
+export function createAdminUi({element,load,loadUids,post,pause,worldSettings,teleport}) {
   const toggle=element('admin-toggle'),dialog=element('admin-menu'),body=element('admin-body'),status=element('admin-status');
   const tabs=[...dialog.querySelectorAll('[data-admin-tab]')];
   const identity=element('game');
   let data,access,busy=false,tab='profiles',freshLink,searchText='',banTarget;
+  let worldWeather;
+  let uidRows,uidSearch='';
   const activeTab=()=>tabs.forEach(control=>control.setAttribute('aria-pressed',String(control.dataset.adminTab===tab)));
 
   function tell(message='',error=false) {
@@ -263,6 +265,55 @@ export function createAdminUi({element,load,post,pause,worldSettings,teleport}) 
     return panel;
   }
 
+  function uidDirectory() {
+    if (!uidRows) return section('UID игроков',node('p','admin-subtle','Загружаем UID…'));
+    const search=field('Поиск по имени или UID',{type:'search',value:uidSearch});
+    const list=node('div','admin-uid-list'), summary=node('small','admin-subtle');
+    const previous=button('Назад',()=>{page--; draw();});
+    const next=button('Дальше',()=>{page++; draw();});
+    const pages=node('div','admin-actions');
+    pages.append(previous,summary,next);
+    let page=0;
+    const pageSize=40;
+    function draw() {
+      const needle=uidSearch.normalize('NFKC').trim().toLowerCase();
+      const rows=uidRows.filter(row=>!needle||row.uid.toLowerCase().includes(needle)||
+        row.names.some(name=>name.normalize('NFKC').toLowerCase().includes(needle)));
+      const start=page*pageSize;
+      const visible=rows.slice(start,start+pageSize);
+      summary.textContent=rows.length ? `${start+1}–${start+visible.length} из ${rows.length}` : '0';
+      previous.disabled=page===0;
+      next.disabled=start+pageSize>=rows.length;
+      list.replaceChildren(...visible.map(row=>{
+        const entry=node('div','admin-uid-entry');
+        const origin=row.source==='original' ? (row.claimed?'Из мира · привязан':'Из мира · свободен') : 'Профиль Honeymoon';
+        entry.append(node('strong',null,row.names.join(', ')||'Профиль без имени'),node('code',null,row.uid),
+          node('small','admin-subtle',origin));
+        return entry;
+      }));
+      if (!rows.length) list.append(node('p','admin-subtle','UID по этому запросу не найдены.'));
+    }
+    search.input.addEventListener('input',()=>{uidSearch=search.input.value; page=0; draw();});
+    draw();
+    return section('UID игроков',search.wrapper,pages,list);
+  }
+
+  async function refreshUids() {
+    uidRows=undefined;
+    render();
+    try {
+      const response=await loadUids();
+      if (!response.ok) throw new Error(textErrors[response.body?.error]??'Список UID недоступен.');
+      uidRows=response.body.rows;
+      if (dialog.open&&tab==='uids') render();
+    } catch (error) {
+      if (dialog.open&&tab==='uids') {
+        body.replaceChildren();
+        tell(error.message||'Список UID недоступен.',true);
+      }
+    }
+  }
+
   function world() {
     const values=worldSettings();
     const shortcuts=node('div','admin-actions');
@@ -273,19 +324,26 @@ export function createAdminUi({element,load,post,pause,worldSettings,teleport}) 
       });
       shortcuts.append(shortcut);
     }
-    const weather=field('Погода',{choices:[['clear','Ясно'],['cloudy','Облачно'],['rain','Дождь / снег']],
+    const weather=field('Погода',{choices:[['clear','Ясно'],['cloudy','Облачно'],['rain','Дождь'],['snow','Снег']],
       value:values.weather,changed:mode=>void submit('weather',{mode},reply=>{
-        values.weatherChanged(reply.mode??mode);
+        values.weatherChanged(reply);
         tell('Погода обновлена.');
       },false)});
+    worldWeather=weather.input;
+    const clearDrop=button('Очистить весь дроп на карте',()=>void submit('admin/dropped-items/clear',{},({removed})=>{
+      tell(removed ? 'Выпавшие предметы убраны с карты.' : 'Выпавших предметов на карте нет.');
+    },false),'admin-danger');
+    shortcuts.append(clearDrop);
     return section('Мир',shortcuts,weather.wrapper);
   }
 
   function render() {
     activeTab();
-    if (!data&&tab!=='world') return;
-    const page=tab==='profiles'?profiles():tab==='invites'?invitations():world();
-    body.replaceChildren(...(freshLink&&tab!=='world'?[linkBox(),page]:[page]));
+    worldWeather=undefined;
+    if (!data&&tab!=='world'&&tab!=='uids') return;
+    const page=tab==='profiles'?profiles():tab==='invites'?invitations():tab==='uids'?uidDirectory():world();
+    const inviteVisible=freshLink&&(tab==='profiles'||tab==='invites');
+    body.replaceChildren(...(inviteVisible?[linkBox(),page]:[page]));
   }
 
   toggle.addEventListener('click',async()=>{
@@ -293,6 +351,10 @@ export function createAdminUi({element,load,post,pause,worldSettings,teleport}) 
     dialog.showModal();
     pause();
     tell();
+    if (tab==='uids') {
+      await refreshUids();
+      return;
+    }
     body.replaceChildren(node('p','admin-subtle','Загружаем профили…'));
     try {await fetchList(); if (dialog.open) render();}
     catch(error) {body.replaceChildren(); tell(error.message,true);}
@@ -302,7 +364,12 @@ export function createAdminUi({element,load,post,pause,worldSettings,teleport}) 
   for (const control of tabs) control.addEventListener('click',()=>{
     tab=control.dataset.adminTab;
     tell();
-    render();
+    if (tab==='uids') void refreshUids();
+    else if (!data&&tab!=='world') {
+      void fetchList().then(()=>{if(dialog.open) render();}).catch(error=>tell(error.message,true));
+    } else render();
   });
-  return {setAccess,isOpen:()=>dialog.open};
+  return {setAccess,isOpen:()=>dialog.open,weatherChanged(mode) {
+    if (worldWeather) worldWeather.value=mode;
+  }};
 }

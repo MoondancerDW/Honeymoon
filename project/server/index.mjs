@@ -278,7 +278,7 @@ export function createHoneymoonServer({
       presence.leave(player);
     }});
   const bulkWrites=new WeakMap();
-  const worldTime = createWorldTime(store);
+  const worldTime = createWorldTime(store,clock);
   const warps = createWarps(store);
   const chat = createChat({
     store,now:clock,logDirectory:state===':memory:'?undefined:join(dirname(state),'chat-logs'),
@@ -313,8 +313,9 @@ export function createHoneymoonServer({
   const session = (credential, owner) => {
     const player=credential.uid;
     const time = worldTime.snapshot();
+    const weatherSettings=worldTime.weatherSettings();
     return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,
-      weather:worldTime.weather(),creative:Boolean(creative),
+      weather:weatherSettings.mode,weatherSettings,creative:Boolean(creative),
       ...(survival.enabled&&{gameMode:playerMode(player)}),profile:profileFor(player),access:accessView(credential,owner) };
   };
 
@@ -477,6 +478,7 @@ export function createHoneymoonServer({
       }
       if (path==='/api/admin/access' && method==='GET')
         return json(response,200,access.listAdmin(credential,presence.onlineProfile));
+      if (path==='/api/admin/uids' && method==='GET') return json(response,200,access.listUids(player));
       if (path==='/api/admin/invites' && method==='POST')
         return json(response,200,access.issue(player,await readInput()));
       if (path==='/api/admin/invites/revoke' && method==='POST') {
@@ -491,6 +493,13 @@ export function createHoneymoonServer({
       if (method==='POST'&&(path==='/api/admin/profiles/ban'||path==='/api/admin/profiles/unban')) {
         const {uid,reason}=await readInput();
         return json(response,200,access.setBan(player,uid,reason,path.endsWith('/ban')));
+      }
+      if (path==='/api/admin/dropped-items/clear'&&method==='POST') {
+        await readInput();
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        const removed=game.clearDroppedItems();
+        broadcastDroppedItems(true);
+        return json(response,200,{removed});
       }
       const presenceStream=path==='/api/events' && url.searchParams.get('presence')==='1';
       if ((presenceStream || (method==='POST'||method==='DELETE')&&!parallelDeviceRoutes.has(path)) && activeElsewhere(credential)) {
@@ -551,7 +560,7 @@ export function createHoneymoonServer({
             if (position) presence.update(id,position,{death:survival.avatarDeath(id)});
           }
         }
-        return json(response,200,modeAdministration());
+        return json(response,200,{...modeAdministration(),selfMode:playerMode(player)});
       }
       if (path==='/api/combat' && method==='POST' && survival.enabled) {
         const {target}=await readInput();
@@ -570,19 +579,21 @@ export function createHoneymoonServer({
         return json(response, 200, chat.message(presence.onlineProfile(player), body, player, presence.onlinePosition(player)));
       }
       if (path === '/api/time' && method === 'POST') {
-        if ((inviteRequired||survival.enabled)&&!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
         const body = await readInput();
-        if (!inviteRequired&&!survival.enabled&&!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const time = worldTime.set(body);
         sendSocial('world-time', time);
         return json(response, 200, time);
       }
+      if (path === '/api/weather' && method === 'GET') return json(response,200,worldTime.weatherSettings());
       if (path === '/api/weather' && method === 'POST') {
-        if ((inviteRequired||survival.enabled)&&!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
-        const {mode} = await readInput();
-        if (!inviteRequired&&!survival.enabled&&!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
-        const value = {mode:worldTime.setWeather(mode)};
-        sendSocial('weather',value);
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        const body=await readInput();
+        const previous=worldTime.weatherSettings();
+        const value=worldTime.setWeather(body);
+        if (value.mode!==previous.mode || value.dynamic!==previous.dynamic || value.nextChangeAt!==previous.nextChangeAt) {
+          sendSocial('weather',value);
+        }
         return json(response,200,value);
       }
       if (path === '/api/profile' && method === 'POST') {
@@ -719,7 +730,7 @@ export function createHoneymoonServer({
         if (stream.social) {
           writeEvent(response, 'chat-history', {entries:chat.history(player)});
           writeEvent(response, 'world-time', worldTime.snapshot());
-          writeEvent(response, 'weather', {mode:worldTime.weather()});
+          writeEvent(response, 'weather', worldTime.weatherSettings());
           if (survival.enabled) writeEvent(response,'game-mode',playerMode(player));
         }
         if (stream.minecarts) writeEvent(response,'minecarts',game.minecartSnapshot(player));
@@ -821,6 +832,13 @@ export function createHoneymoonServer({
   heartbeat.unref();
   const presenceTicks = setInterval(() => presence.flush(), 100);
   presenceTicks.unref();
+  const weatherTicks=setInterval(()=>{
+    try {
+      const changed=worldTime.advanceWeather();
+      if (changed) sendSocial('weather',changed);
+    } catch (error) { console.error(error); }
+  },1000);
+  weatherTicks.unref();
   const npcTicks=setInterval(()=>{
     try {
       const online=new Map();
@@ -860,6 +878,7 @@ export function createHoneymoonServer({
     async close() {
       clearInterval(heartbeat);
       clearInterval(presenceTicks);
+      clearInterval(weatherTicks);
       clearInterval(npcTicks);
       clearInterval(blockTicks);
       for (const { response } of streams) response.end();

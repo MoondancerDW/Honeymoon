@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
 import {test} from 'node:test';
+import {createDroppedItems} from './dropped-items.mjs';
 import {createGame} from './game.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import {openStore} from './store.mjs';
@@ -148,8 +149,35 @@ test('drops expire ten minutes after being thrown and are cleared on restart', t
   assert.deepEqual(nearby(player),[]);
 });
 
-test('other sessions receive dropped item events without receiving the thrower inventory', async t => {
-  const app = createHoneymoonServer({base:miniature(),geometry,state:':memory:',clock:() => 0});
+test('clearing drops reaches outside viewers, frees capacity and cannot restore an old drop', t => {
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const near = {x:8.5,y:1,z:8.5};
+  const far = {x:136.5,y:1,z:8.5};
+  store.putState('dropped-items','world','entities',1,[{key:'old-drop',position:[near.x,near.y,near.z]}]);
+  const base = {manifest:{bounds:{...bounds,maxX:255}}};
+  const open = () => createDroppedItems({base,store,clock:() => 0,collides:() => false,visible:() => true});
+  const drops = open();
+  assert.deepEqual(drops.snapshot(near),[]);
+  const stacks = Array.from({length:256},() => at(dirt,2));
+  for (const view of [near,far]) {
+    for (const drop of drops.prepareScatter(stacks,[Math.floor(view.x),view.y,Math.floor(view.z)])) drops.accept(drop);
+  }
+  assert.equal(drops.snapshot(near).length,256);
+  assert.equal(drops.snapshot(far).length,256);
+  assert.throws(() => drops.prepareScatter([at(dirt,1)],[8,1,8]), {code:'too_many_dropped_items'});
+  assert.equal(drops.clear(),512);
+  assert.deepEqual(drops.snapshot(near),[]);
+  assert.deepEqual(drops.snapshot(far),[]);
+  assert.equal(drops.clear(),0);
+  assert.equal(drops.prepareScatter([at(dirt,1)],[8,1,8]).length,1);
+  assert.deepEqual(store.getState('dropped-items','world','entities').value,[]);
+  assert.deepEqual(open().snapshot(far),[]);
+});
+
+test('drop updates hide private inventory and only an admin can clear them from the world', async t => {
+  const npcAdminKey = 'local-owner-clear-drops-test';
+  const app = createHoneymoonServer({base:miniature(),geometry,state:':memory:',clock:() => 0,npcAdminKey});
   t.after(() => app.close());
   app.server.listen(0,'127.0.0.1');
   await once(app.server,'listening');
@@ -160,6 +188,12 @@ test('other sessions receive dropped item events without receiving the thrower i
     return response.headers.get('set-cookie').split(';')[0];
   });
   const thrower = await session(), observer = await session();
+  const bootstrap = await fetch(address + '/api/access/owner',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({key:npcAdminKey,profileName:'Map Admin'}),
+  });
+  assert.equal(bootstrap.status,200,await bootstrap.clone().text());
+  const admin = bootstrap.headers.get('set-cookie').split(';')[0];
   let sequence = 0;
   const action = (cookie,type,fields = {}) => fetch(address + '/api/action',{
     method:'POST', headers:{Cookie:cookie,'Content-Type':'application/json'},
@@ -168,6 +202,13 @@ test('other sessions receive dropped item events without receiving the thrower i
     assert.equal(response.status,200,await response.clone().text());
     return response.json();
   });
+  async function clear(cookie,origin) {
+    const response = await fetch(address + '/api/admin/dropped-items/clear',{
+      method:'POST',headers:{'Content-Type':'application/json',...(cookie&&{Cookie:cookie}),...(origin&&{Origin:origin})},
+      body:'{}',
+    });
+    return [response.status,await response.json()];
+  }
 
   const response = await fetch(address + '/api/events?droppedItems=1',{
     headers:{Cookie:observer}, signal:AbortSignal.timeout(4000),
@@ -202,6 +243,22 @@ test('other sessions receive dropped item events without receiving the thrower i
     assert.equal(picked.inventory.slots[0].count,1);
     assert.deepEqual(await nextDrops(),[]);
     assert.deepEqual(await action(observer,'pickup_item'),{worldRevision:0,changes:[],effects:[],inventory:picked.inventory});
+
+    await action(thrower,'inventory_give',{slot:0,key:dirt,count:2});
+    const second = await action(thrower,'drop_item',{yaw:0});
+    assert.equal((await nextDrops())[0].key,second.droppedItem);
+    assert.deepEqual(await clear(),[401,{error:'session_required'}]);
+    assert.deepEqual(await clear(observer),[403,{error:'admin_required'}]);
+    assert.deepEqual(await clear(admin,'http://untrusted.example'),[403,{error:'origin_denied'}]);
+    const before = await fetch(address + '/api/world',{headers:{Cookie:observer}}).then(reply => reply.json());
+    assert.equal(before.droppedItems[0].key,second.droppedItem);
+    assert.deepEqual(await clear(admin),[200,{removed:1}]);
+    assert.deepEqual(await nextDrops(),[]);
+    const after = await fetch(address + '/api/world',{headers:{Cookie:observer}}).then(reply => reply.json());
+    assert.deepEqual(after.droppedItems,[]);
+    assert.deepEqual(after.inventory,before.inventory);
+    assert.equal(after.worldRevision,before.worldRevision);
+    assert.deepEqual(await clear(admin),[200,{removed:0}]);
   } finally {
     await stream.cancel();
   }

@@ -231,8 +231,7 @@ export function openStore(filename) {
       writeMeta.run('world_revision', String(revision));
       return revision;
     },
-    createPlayer() {
-      const id = randomUUID();
+    createPlayer(id = randomUUID()) {
       const token = randomBytes(32).toString('base64url');
       addPlayer.run(id, tokenHash(token));
       return { id, token };

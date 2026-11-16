@@ -45,7 +45,6 @@ const surface = element('scene');
 const toast = element('toast');
 const selectionStatus = element('selected');
 const coordinateStatus = element('coords');
-const clearSelection = element('clear-selection');
 const creativeToggle = element('creative-toggle');
 const inventoryToggle = element('inventory-toggle');
 const microHint = element('micro-hint');
@@ -141,7 +140,7 @@ function resume() {
   try { Promise.resolve(canvas.requestPointerLock()).catch(rejected); }
   catch { rejected(); }
 }
-const social = createSocialHud({post, notice, pause, resume, teleport, placeWarp,
+const social = createSocialHud({post, notice, pause, resume, teleport, placeWarp,weatherChanged:updateWeather,
   worldEditCommand:command=>worldEdit.command(command),
   loadWarps:()=>json('/api/warps',{signal:AbortSignal.timeout(5000)})});
 const inventoryStackAt=slot=>slot<36 ? inventory.slots[slot] : inventory.equipment?.[slot-36];
@@ -163,7 +162,7 @@ const modeUi=createPlayerModeUi({element,notice,pause,changed:updateGameMode,rev
     if (result.ok) applyInventory(result.body.inventory);
     return result;
   }});
-const adminUi=createAdminUi({element,load:()=>getNpc('/api/admin/access'),
+const adminUi=createAdminUi({element,load:()=>getNpc('/api/admin/access'),loadUids:()=>getNpc('/api/admin/uids'),
   async post(path,fields) {
     if (path==='admin/teleport' && fields.direction==='bring' && !await flushPosition()) {
       return {ok:false,body:{error:'movement_blocked'}};
@@ -205,8 +204,8 @@ function updateGameMode(next) {
   creativeToggle.hidden=modeUi.active&&!modeUi.creative;
   element('touch-catalog').hidden=modeUi.active&&!modeUi.creative;
   element('touch-copy').hidden=modeUi.active&&!modeUi.creative;
-  element('weather').disabled=modeUi.active&&!next.admin;
-  social.setAdmin(!modeUi.active||next.admin);
+  element('weather').disabled=!next.admin;
+  social.setAdmin(next.admin);
   game.classList.toggle('dead',Boolean(next.death));
   if (!view) return;
   if (next.death&&!deathOrbit) {
@@ -524,7 +523,7 @@ function stream() {
     view.setWorldTime(time);
     social.clockState(time);
   });
-  feed.addEventListener('weather',event=>updateWeather(JSON.parse(event.data).mode));
+  feed.addEventListener('weather',event=>updateWeather(JSON.parse(event.data)));
   feed.addEventListener('game-mode',event=>modeUi.update(JSON.parse(event.data)));
   feed.addEventListener('access-revoked',()=>location.reload());
   feed.addEventListener('admin-teleport',event=>{
@@ -1091,31 +1090,11 @@ function setHeldPart(part) {
   updatePlacementHints();
 }
 
-function clearHeld() {
-  heldVersion++;
-  fromCreative = false;
-  heldCreativeItem = null;
-  clipboard = null;
-  heldSofa = null;
-  sofaTurns = 0;
-  chiselMaterial = null;
-  placement = null;
-  if (chiseling) toggleChisel();
-  setHeldPart(null);
-  notice('Выбор сброшен');
-}
-
-function stowHeld() {
-  if (!inventory.slots[inventory.selected]) { clearHeld(); return; }
-  const empty = inventory.slots.indexOf(null);
-  if (empty < 0) { notice(messages.inventory_full); return; }
-  if (empty < 9) void inventoryAction('inventory_select',{slot:empty});
-  else void inventoryAction('inventory_move',{from:inventory.selected,to:empty});
-}
-
-function updateWeather(mode) {
-  view.setWeather(mode);
+function updateWeather(weather) {
+  view.setWeather(typeof weather==='string' ? weather : weather.mode);
   element('weather').value = view.weather;
+  adminUi.weatherChanged(view.weather);
+  if (typeof weather.dynamic==='boolean') social.weatherState(weather);
 }
 
 function toggleChisel() {
@@ -1522,7 +1501,6 @@ function tick(now) {
 
 function bindControls() {
   const canvas = view.renderer.domElement;
-  clearSelection.addEventListener('click', stowHeld);
   button.addEventListener('click', () => {
     let pending;
     try {
@@ -1782,7 +1760,7 @@ function bindControls() {
     weather.disabled = true;
     try {
       const {ok,body} = await post('weather',{mode:weather.value});
-      if (ok) updateWeather(body.mode);
+      if (ok) updateWeather(body);
       else notice(messages[body.error] || 'Не удалось изменить погоду');
     } catch (error) {
       console.error(error);
@@ -1792,13 +1770,18 @@ function bindControls() {
       weather.disabled = modeUi.active&&!modeUi.admin;
     }
   });
-  const sound = element('audio-toggle');
+  const masterAudio=element('audio-master');
   const soundLevel=element('audio-volume'), musicLevel=element('music-volume');
   const settingsKey='honeymoon-audio-settings';
   const settings={...audioDefaults,soundVolume:.13,musicVolume:.16};
   try { Object.assign(settings,JSON.parse(localStorage.getItem(settingsKey)) ?? {}); } catch {}
+  if (typeof settings.muted!=='boolean') {
+    settings.muted=localStorage.getItem('honeymoon-muted')==='1';
+    settings.musicVolume=localStorage.getItem('honeymoon-music')==='1' ? settings.musicVolume||.16 : 0;
+  }
   audio.setEnvironment(settings);
   audio.setVolume(settings.soundVolume);
+  audio.setMusicVolume(settings.musicVolume);
   soundLevel.value=String(Math.round(settings.soundVolume*100));
   musicLevel.value=String(Math.round(settings.musicVolume*100));
   const environmentProfileSelect=element('audio-profile');
@@ -1817,42 +1800,25 @@ function bindControls() {
     range.value=String(Math.round(settings[key]*100));
     range.addEventListener('input',()=>{settings[key]=Number(range.value)/100; audio.setEnvironment(settings); persist();});
   }
-  const showSound = muted => {
-    sound.textContent = muted ? 'Звук выкл.' : 'Звук вкл.';
-    sound.setAttribute('aria-pressed', String(!muted));
-    audio.setMuted(muted);
+  const updateMasterAudio=()=>{
+    masterAudio.textContent=settings.muted ? 'Весь звук: выкл.' : 'Весь звук: вкл.';
+    masterAudio.setAttribute('aria-pressed', String(!settings.muted));
+    audio.setMuted(settings.muted);
   };
-  showSound(localStorage.getItem('honeymoon-muted') === '1');
-  sound.addEventListener('click', () => {
-    const muted = sound.getAttribute('aria-pressed') === 'true';
-    localStorage.setItem('honeymoon-muted', muted ? '1' : '0');
-    showSound(muted);
+  updateMasterAudio();
+  masterAudio.addEventListener('click',()=>{
+    settings.muted=!settings.muted;
+    updateMasterAudio();
+    persist();
   });
   soundLevel.addEventListener('input',()=>{
     settings.soundVolume=Number(soundLevel.value)/100;
     audio.setVolume(settings.soundVolume);
-    const muted=!settings.soundVolume;
-    localStorage.setItem('honeymoon-muted',muted ? '1' : '0');
-    showSound(muted);
     persist();
-  });
-  const music = element('music-toggle');
-  const showMusic = enabled => {
-    music.textContent = enabled ? 'Музыка вкл.' : 'Музыка выкл.';
-    music.setAttribute('aria-pressed', String(enabled));
-    audio.setMusicVolume(enabled ? settings.musicVolume || .16 : 0);
-  };
-  showMusic(localStorage.getItem('honeymoon-music') === '1');
-  music.addEventListener('click', () => {
-    const enabled = music.getAttribute('aria-pressed') !== 'true';
-    localStorage.setItem('honeymoon-music', enabled ? '1' : '0');
-    showMusic(enabled);
   });
   musicLevel.addEventListener('input',()=>{
     settings.musicVolume=Number(musicLevel.value)/100;
-    const enabled=Boolean(settings.musicVolume);
-    localStorage.setItem('honeymoon-music',enabled ? '1' : '0');
-    showMusic(enabled);
+    audio.setMusicVolume(settings.musicVolume);
     persist();
   });
   element('reset').addEventListener('click', async () => {
@@ -1984,16 +1950,13 @@ async function start() {
   if (!sessionBody) return;
   const session = {body:sessionBody};
   adminUi.setAccess(sessionBody.access);
+  modeUi.setSelf(sessionBody.access?.uid??sessionBody.profile?.id);
+  social.setAdmin(sessionBody.access?.role==='admin');
   if (sessionBody.access?.role==='admin') npcUi.setAccess(true);
   const manifest = await json('/generated/world/world.json');
   creativeAvailable = session.body.creative;
   profile.initialize(session.body.profile);
-  if (session.body.sounds) {
-    audio.load().then(loaded => {
-      element('audio-toggle').hidden = !loaded;
-      element('music-toggle').hidden = !loaded;
-    }).catch(error => console.error(error));
-  }
+  if (session.body.sounds) void audio.load();
   world = new World(manifest);
   world.boatTexture = session.body.boatTexture === true;
   world.models = Object.fromEntries(await Promise.all((session.body.modelFamilies ?? []).map(async family =>
@@ -2014,7 +1977,8 @@ async function start() {
   if (session.body.seat) setSeat(session.body.seat, p,session.body.stance);
   if (session.body.spectator) setSpectator(true);
   if (session.body.time) view.setWorldTime(session.body.time);
-  if (session.body.weather) updateWeather(session.body.weather);
+  const weather=session.body.weatherSettings??session.body.weather;
+  if (weather) updateWeather(weather);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
   updateCamera();
   const farSupported = supportsFarTerrain(manifest) && manifest.lod.maxDistance === 32;

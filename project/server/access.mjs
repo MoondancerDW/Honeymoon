@@ -1,5 +1,6 @@
 import {createHash,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
 import {RequestError} from './errors.mjs';
+import {claimLegacyPlayer,hasLegacyPlayer} from './legacy-player.mjs';
 
 export const deviceCookieName='honeymoon_device';
 export const legacyCookieName='honeymoon_guest';
@@ -29,11 +30,11 @@ function label(value,cap,error,fallback) {
   return normalized || fallback;
 }
 
-function accountName(value,previous) {
+function accountName(value,previous,allowShort) {
   if (previous) return previous;
   const name=label(value,48,'invalid_profile_name',undefined);
   if (!name) throw new RequestError(409,'profile_name_required');
-  if ([...name].length<2) throw new RequestError(400,'invalid_profile_name');
+  if ([...name].length<2&&!allowShort?.(name)) throw new RequestError(400,'invalid_profile_name');
   return name;
 }
 
@@ -61,6 +62,12 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
   const profileList=prepare(`SELECT players.id AS uid, players.profile_name AS profileName,players.access_role AS role,
     player_profiles.nickname FROM players LEFT JOIN player_profiles ON player_profiles.player=players.id
     ORDER BY players.profile_name COLLATE NOCASE, player_profiles.nickname COLLATE NOCASE, players.id`);
+  const originalProfiles=prepare(`SELECT json_extract(imported.value,'$.uid') AS uid,
+    COALESCE(json_extract(imported.value,'$.nickname'),imported.owner) AS nickname,
+    claimed.owner IS NOT NULL AS claimed
+    FROM module_state imported LEFT JOIN module_state claimed ON claimed.module='legacy-player' AND claimed.key='claim'
+      AND claimed.owner=json_extract(imported.value,'$.uid')
+    WHERE imported.module='legacy-player' AND imported.key='import'`);
   const updateAccount=prepare('UPDATE players SET profile_name=COALESCE(profile_name,?),access_role=? WHERE id=?');
   const updateInitialNick=prepare(`INSERT INTO player_profiles(player,nickname) VALUES (?,?)
     ON CONFLICT(player) DO UPDATE SET nickname=COALESCE(player_profiles.nickname,excluded.nickname)`);
@@ -75,6 +82,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
     WHERE id=? AND used_at IS NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)`);
   const disableInvite=prepare('UPDATE access_invites SET revoked_at=? WHERE id=? AND used_at IS NULL AND revoked_at IS NULL');
   const expected=typeof ownerKey==='string' && ownerKey.length ? Buffer.from(hash(ownerKey),'hex') : undefined;
+  const originalName=name=>hasLegacyPlayer(store,name);
   const failedOwner=new Map();
   const bans=new Map(prepare("SELECT owner,value FROM module_state WHERE module='access' AND key='ban' AND value<>'null'")
     .all().map(({owner,value})=>[owner,JSON.parse(value)]));
@@ -158,8 +166,8 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
           initialNick(uid,name);
         }
       } else {
-        const name=accountName(body.profileName??body.nickname);
-        uid=store.createPlayer().id;
+        const name=accountName(body.profileName??body.nickname,undefined,originalName);
+        uid=claimLegacyPlayer(store,name,id=>account.get(id),time)??store.createPlayer().id;
         updateAccount.run(name,row.kind,uid);
         initialNick(uid,name);
       }
@@ -210,10 +218,13 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
       const previous=credential?.uid??(legacy?store.playerFromToken(legacy):null);
       requireUnbanned(previous);
       const previousAccount=previous?account.get(previous):undefined;
-      const name=accountName(body.profileName??body.nickname,
+      const requestedName=body.profileName??body.nickname;
+      const name=accountName(requestedName,
         previousAccount?.profileName ?? (previous ? store.getProfile(previous)?.nickname : null) ??
-        (!inviteRequired&&legacyRoute?'Владелец':null));
-      const uid=previous??store.createPlayer().id;
+        (!inviteRequired&&legacyRoute?'Владелец':null),previous?undefined:originalName);
+      const imported=previous||requestedName===undefined?undefined:
+        claimLegacyPlayer(store,name,id=>account.get(id),Math.trunc(now()));
+      const uid=previous??imported??store.createPlayer().id;
       updateAccount.run(name,'admin',uid);
       initialNick(uid,name);
       store.putState('access','','owner',1,uid);
@@ -242,6 +253,25 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
         devices:deviceList.all(profile.uid).map(device=>({...device,current:device.id===credential.deviceId}))})),
       invites:inviteList.all().map(row=>publicInvite(row,time)),
     };
+  }
+
+  function listUids(actor) {
+    authorize(actor);
+    const rows=new Map();
+    function add(uid,source,claimed,names) {
+      const row=rows.get(uid)??{uid,source,claimed,names:new Set()};
+      for (const name of names) if (typeof name==='string'&&name) row.names.add(name);
+      rows.set(uid,row);
+    }
+    for (const profile of originalProfiles.all()) {
+      if (typeof profile.uid==='string'&&uidPattern.test(profile.uid)) {
+        add(profile.uid,'original',Boolean(profile.claimed),[profile.nickname]);
+      }
+    }
+    for (const {uid,profileName,nickname} of profileList.all()) add(uid,'profile',true,[profileName,nickname]);
+    const sorted=[...rows.values()].map(row=>({...row,names:[...row.names].sort()}));
+    sorted.sort((a,b)=>(a.names[0]??'').localeCompare(b.names[0]??'','ru')||a.uid.localeCompare(b.uid));
+    return {rows:sorted};
   }
 
   function issue(uid,body) {
@@ -292,7 +322,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
     return {ok:true};
   }
 
-  return {authenticate,signIn,bootstrap,view,isAdmin,requireUnbanned,adminTarget,setBan,listAdmin,issue,revokeInvite,revokeDevice,profiles:()=>profileList.all(),account:uid=>
+  return {authenticate,signIn,bootstrap,view,isAdmin,requireUnbanned,adminTarget,setBan,listAdmin,listUids,issue,revokeInvite,revokeDevice,profiles:()=>profileList.all(),account:uid=>
     typeof uid==='string'&&uidPattern.test(uid)?account.get(uid):undefined,
   npcEditor:{available:Boolean(expected),isAdmin,require(uid) {
     if (!isAdmin(uid)) throw new RequestError(403,'npc_editor_required');

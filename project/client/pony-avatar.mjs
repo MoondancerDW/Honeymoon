@@ -481,7 +481,8 @@ export function createPonyAvatar(isAir) {
     const holdingWithMagic = rig.horn && held;
     if (held && !holdingWithMagic) {
       const lift = THREE.MathUtils.lerp(1.32,.89,THREE.MathUtils.smoothstep(pitch,-.72,.16));
-      hoof.x = THREE.MathUtils.lerp(hoof.x * .5 - lift, hoof.x, boost);
+      const raise = (hoof.x * .5 + lift) * (1-boost);
+      hoof.x -= raise * (firstPerson ? .5 : 1);
       hoof.y += (held.kind === 'block' ? .26 : .12) * (1-boost);
       hoof.x += Math.sin(time * 1.34) * .05;
       hoof.z = hoof.z * .45 + Math.cos(time * 1.8) * .05 + .05;

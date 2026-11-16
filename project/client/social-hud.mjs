@@ -10,7 +10,7 @@ const teleportErrors = {
 };
 const historyLimit = 100;
 
-export function createSocialHud({post, notice, pause, resume, teleport, loadWarps, placeWarp, worldEditCommand}) {
+export function createSocialHud({post, notice, pause, resume, teleport, loadWarps, placeWarp, worldEditCommand, weatherChanged}) {
   const byId = id => document.getElementById(id);
   const chat = byId('chat');
   const log = byId('chat-log');
@@ -22,6 +22,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   const clockForm = byId('clock-form');
   const clockInput = byId('clock-input');
   const frozen = byId('clock-frozen');
+  const dynamic = byId('clock-dynamic-weather');
   const teleportButton = byId('teleport-toggle');
   const teleportForm = byId('teleport-form');
   const warpButton = byId('warp-toggle');
@@ -34,7 +35,8 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   let panel, onlineVisible = false, connected = false, players = [], clockText, writingTime = false;
   let peers = [];
   let channel = 'global';
-  let canSetTime=true;
+  let canSetTime=false;
+  let dynamicWeather=false;
 
   function entry({id, kind, nickname, newNickname, text, channel:target = 'global'}, recent) {
     if (seen.has(id)) return;
@@ -170,6 +172,17 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   byId('chat-close').addEventListener('click', () => close());
   byId('clock-close').addEventListener('click', () => close());
   byId('teleport-close').addEventListener('click', () => close());
+  dynamic.addEventListener('change',async()=>{
+    if (!canSetTime || dynamic.disabled) return;
+    dynamic.disabled=true;
+    try {
+      const result=await submit('weather',{dynamic:dynamic.checked},'Не удалось изменить динамическую погоду');
+      if (result) weatherChanged(result);
+    } finally {
+      dynamic.checked=dynamicWeather;
+      dynamic.disabled=false;
+    }
+  });
   clockForm.addEventListener('submit', async event => {
     event.preventDefault();
     const tick = tickFromTime(clockInput.value);
@@ -245,6 +258,10 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       }
     },
     clockState(state) { frozen.checked = state.frozen; },
+    weatherState(state) {
+      dynamicWeather=state.dynamic;
+      dynamic.checked=dynamicWeather;
+    },
     names: () => players.slice(),
   };
 }

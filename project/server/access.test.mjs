@@ -7,6 +7,7 @@ import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import * as geometry from '../world/geometry.mjs';
 import {createHoneymoonServer} from './index.mjs';
+import {normalizeLegacyPlayerName} from './legacy-player.mjs';
 import {openStore} from './store.mjs';
 
 const fixtures=fileURLToPath(new URL('../work/',import.meta.url));
@@ -65,12 +66,90 @@ async function request(url,path,{body,cookie,origin,headers={}}={}) {
 const code=(reply,expected=200)=>{assert.equal(reply.status,expected,JSON.stringify(reply.json));return reply.json;};
 const legacy=token=>`honeymoon_guest=${token}`;
 
+const legacyStack=(size,slot,stack)=>Array.from({length:size},(_,index)=>index===slot?stack:null);
+function stageLegacy(store,uid,nickname,stack,{selected=7,ender=null}={}) {
+  const inventory={slots:legacyStack(36,selected,stack),selected,equipment:Array(4).fill(null)};
+  store.putState('legacy-player',normalizeLegacyPlayerName(nickname),'import',1,
+    {uid,nickname,inventory,enderItems:legacyStack(27,12,ender)});
+  return inventory;
+}
+
+test('an imported UID and original inventory can be claimed only once across aliases',async t=>{
+  const {state,start,close}=fixture(t);
+  const ownerUid='10000000-0000-3000-8000-000000000001';
+  const playerUid='10000000-0000-3000-8000-000000000002';
+  const untouchedUid='10000000-0000-3000-8000-000000000003';
+  const emerald={key:'creative:388:0',count:99,nbt:{display:{Name:'Saved emeralds'}}};
+  const book={key:'creative:387:0',count:1,nbt:{title:'Saved pages',pages:['Original text']}};
+  const map={key:'creative:358:660',count:1,nbt:{custom:'unchanged'},legacyNbt:{modField:5}};
+  const seeded=openStore(state);
+  const hostInventory=stageLegacy(seeded,ownerUid,'Saved Owner',book);
+  const profileInventory=stageLegacy(seeded,playerUid,'Saved Guest',emerald,{ender:map});
+  const aliasInventory=stageLegacy(seeded,playerUid,'Alt Guest',book,{selected:3,ender:map});
+  const shortInventory=stageLegacy(seeded,untouchedUid,'S',book);
+  seeded.close();
+
+  let urls=await start();
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'  saved owner  '}});
+  assert.equal(code(owner).access.uid,ownerUid);
+  assert.equal(owner.json.access.role,'admin');
+  assert.deepEqual(owner.json.inventory,hostInventory);
+  const host=(path,body)=>request(urls.owner,path,{body,cookie:owner.cookie});
+  const redeem=(invite,profileName,cookie)=>request(urls.public,'/api/session',{origin:external,body:{invite,profileName},cookie});
+  const invalid=await redeem('invalid','Saved Guest');
+  assert.equal(code(invalid,400).error,'invalid_invite');
+  assert.equal(code(await request(urls.public,'/api/admin/uids'),401).error,'session_required');
+  const first=code(await host('/api/admin/invites',{kind:'player'}));
+  const second=code(await host('/api/admin/invites',{kind:'player'}));
+  const [canonical,alias]=await Promise.all([redeem(first.code,'Ｓaved Guest'),redeem(second.code,'Alt Guest')]);
+  code(canonical);
+  code(alias);
+  const claimed=canonical.json.access.uid===playerUid?canonical:alias;
+  const blank=claimed===canonical?alias:canonical;
+  assert.equal(claimed.json.access.role,'player');
+  assert.equal(claimed.json.access.uid,playerUid);
+  assert.deepEqual(claimed.json.inventory,claimed===canonical?profileInventory:aliasInventory);
+  assert.notEqual(blank.json.access.uid,playerUid);
+  assert.ok(blank.json.inventory.slots.every(stack=>stack===null));
+  assert.equal(code(await request(urls.public,'/api/admin/uids',{cookie:claimed.cookie}),403).error,'admin_required');
+  const byUid=async uid=>code(await host('/api/admin/uids')).rows.find(row=>row.uid===uid);
+  const row=await byUid(playerUid);
+  assert.equal(row.source,'original');
+  assert.equal(row.claimed,true);
+  assert.ok(row.names.includes('Saved Guest')&&row.names.includes('Alt Guest'));
+  assert.deepEqual(await byUid(untouchedUid),{uid:untouchedUid,names:['S'],source:'original',claimed:false});
+  assert.equal((await byUid(blank.json.access.uid)).source,'profile');
+  const shortInvite=code(await host('/api/admin/invites',{kind:'player'}));
+  assert.equal(code(await redeem(shortInvite.code,'X'),400).error,'invalid_profile_name');
+  const short=await redeem(shortInvite.code,'S');
+  assert.equal(code(short).access.uid,untouchedUid);
+  assert.equal(short.json.access.profileName,'S');
+  assert.deepEqual(short.json.inventory,shortInventory);
+  assert.notEqual(short.json.profile.nickname,'S');
+  const shortNickname=await request(urls.public,'/api/profile',{body:{nickname:'S'},origin:external,cookie:short.cookie});
+  assert.equal(code(shortNickname,400).error,'invalid_nickname');
+
+  await close();
+  const saved=openStore(state);
+  assert.equal(saved.getState('legacy-player',playerUid,'claim').value.uid,playerUid);
+  assert.deepEqual(saved.getState('container',playerUid,'ender').value,
+    {revision:1,items:[{id:358,Damage:660,Count:1,Slot:12,tag:map.nbt,modField:5}]});
+  saved.close();
+  urls=await start();
+  const device=code(await host('/api/admin/invites',{kind:'device',profileUid:playerUid}));
+  const restored=code(await redeem(device.code));
+  assert.equal(restored.access.uid,playerUid);
+  assert.deepEqual(restored.inventory,claimed.json.inventory);
+  assert.deepEqual(await byUid(playerUid),row);
+});
+
 test('owner bootstrap must use the isolated listener and can claim an exact saved version-8 UID',async t=>{
   const {state,start,close}=fixture(t);
   const old=openStore(state);
   const {id,token}=old.createPlayer();
   old.updateProfile(id,{nickname:'Saved Owner'},null);
   old.putState('inventory',id,'slots',2,{slots:[{key:'legacy:1:0',cell:'legacy:1:0',count:19}],selected:0,equipment:[]});
+  stageLegacy(old,'10000000-0000-3000-8000-000000000004','Saved Owner',{key:'creative:388:0',count:64});
   old.close();
   const raw=new DatabaseSync(state);
   raw.exec('DROP TABLE access_devices; DROP TABLE access_invites; ALTER TABLE players DROP COLUMN access_role; ALTER TABLE players DROP COLUMN profile_name; PRAGMA user_version=8');
@@ -218,6 +297,50 @@ async function eventReader(t,url,cookie,query='presence=1') {
     }
   };
 }
+
+test('an administrator can override a natural weather front and all clients reload the same schedule',async t=>{
+  const {start}=fixture(t);
+  let now=100_000;
+  let urls=await start({clock:()=>now});
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const host=(path,body)=>request(urls.owner,path,{body,cookie:owner.cookie});
+  const invitation=code(await host('/api/admin/invites',{kind:'player'}));
+  const guest=await request(urls.public,'/api/session',{body:{invite:invitation.code,profileName:'Cloud Watcher'},origin:external});
+  code(guest);
+  const observer=(path,body)=>request(urls.public,path,{body,cookie:guest.cookie,origin:external});
+  const events=await eventReader(t,urls.public,guest.cookie,'social=1');
+  assert.deepEqual(await events('weather'),{mode:'clear',dynamic:false,nextChangeAt:null});
+  assert.equal(code(await observer('/api/weather',{dynamic:true}),403).error,'admin_required');
+  assert.equal(code(await observer('/api/weather',{mode:'snow'}),403).error,'admin_required');
+  assert.equal(code(await observer('/api/time',{frozen:true}),403).error,'admin_required');
+  code(await host('/api/time',{tick:22500,frozen:true}));
+
+  const enabled=code(await host('/api/weather',{dynamic:true}));
+  assert.deepEqual(await events('weather'),enabled);
+  assert.ok(enabled.nextChangeAt>=now+15*60_000 && enabled.nextChangeAt<=now+35*60_000);
+  now=enabled.nextChangeAt;
+  const clouds=await events('weather');
+  assert.equal(clouds.mode,'cloudy');
+  assert.ok(clouds.nextChangeAt>=now+2*60_000 && clouds.nextChangeAt<=now+5*60_000);
+  now+=30_000;
+  const manual=code(await host('/api/weather',{mode:'snow'}));
+  assert.deepEqual(await events('weather'),manual);
+  assert.equal(manual.mode,'snow');
+  assert.equal(manual.dynamic,true);
+  assert.ok(manual.nextChangeAt>=now+5*60_000 && manual.nextChangeAt<=now+12*60_000);
+  assert.deepEqual(code(await observer('/api/weather')),manual);
+
+  urls=await start({clock:()=>now});
+  const reopened=code(await observer('/api/session',{}));
+  assert.equal(reopened.weather,'snow');
+  assert.deepEqual(reopened.weatherSettings,manual);
+  assert.deepEqual(reopened.time,{tick:22500,frozen:true});
+  const reconnected=await eventReader(t,urls.public,guest.cookie,'social=1');
+  assert.deepEqual(await reconnected('weather'),manual);
+  const disabled=code(await host('/api/weather',{dynamic:false}));
+  assert.deepEqual(disabled,{mode:'snow',dynamic:false,nextChangeAt:null});
+  assert.deepEqual(await reconnected('weather'),disabled);
+});
 
 test('administrators teleport online players privately and bans persist without replacing profiles',async t=>{
   const {state,start,close}=fixture(t);

@@ -29,6 +29,37 @@ test('all 1440 clock minutes round trip and the shared clock freezes, resumes an
   } finally { store.close(); }
 });
 
+test('weather fronts advance independently of the game clock, with wet and dry cloud phases', () => {
+  const store=openStore(':memory:');
+  try {
+    let now=12_000;
+    const minutes=60_000;
+    const wet=createWorldTime(store,()=>now,()=>0);
+    const step=()=>{now=wet.weatherSettings().nextChangeAt;return wet.advanceWeather();};
+    wet.set({tick:18_000,frozen:true});
+    assert.deepEqual(wet.setWeather({dynamic:true}),{mode:'clear',dynamic:true,nextChangeAt:now+15*minutes});
+    assert.equal(wet.advanceWeather(),undefined);
+    assert.deepEqual(step(),{mode:'cloudy',dynamic:true,nextChangeAt:now+2*minutes});
+    assert.deepEqual(step(),{mode:'rain',dynamic:true,nextChangeAt:now+5*minutes});
+    assert.deepEqual(step(),{mode:'cloudy',dynamic:true,nextChangeAt:now+minutes});
+    assert.deepEqual(step(),{mode:'clear',dynamic:true,nextChangeAt:now+15*minutes});
+    assert.equal(wet.snapshot().tick,18_000);
+
+    const dry=createWorldTime(store,()=>now,()=>.9);
+    assert.deepEqual(dry.weatherSettings(),wet.weatherSettings());
+    now=dry.weatherSettings().nextChangeAt;
+    assert.equal(dry.advanceWeather().mode,'cloudy');
+    now=dry.weatherSettings().nextChangeAt;
+    assert.equal(dry.advanceWeather().mode,'clear');
+    assert.deepEqual(dry.setWeather({mode:'snow',dynamic:false}),{mode:'snow',dynamic:false,nextChangeAt:null});
+    now+=60*minutes;
+    assert.equal(dry.advanceWeather(),undefined);
+    assert.equal(createWorldTime(store,()=>now).weather(),'snow');
+    assert.throws(()=>dry.setWeather({mode:'wind'}),{code:'invalid_weather'});
+    assert.throws(()=>dry.setWeather({dynamic:'false'}),{code:'invalid_weather'});
+  } finally { store.close(); }
+});
+
 test('chat preserves ordering, sends join and leave with the nickname and bounds spam and history', () => {
   const sent = [];
   let now = 1000;

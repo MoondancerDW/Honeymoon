@@ -1,5 +1,6 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {ATLAS_GRID as columns, TILE_SIZE as tileSize, tiles} from '../world/geometry.mjs';
+import {foliageAtlasPixels} from './canopy-card.mjs';
 
 const filteredSize = 4;
 const stride = filteredSize + 2;
@@ -9,7 +10,7 @@ const linear = Array.from({length:256}, (_, value) => {
 });
 const encode = value => Math.round(255 * (value <= .0031308 ? 12.92 * value : 1.055 * value ** (1 / 2.4) - .055));
 
-export function terrainFilter(source, rows) {
+export function terrainFilter(source, rows, withFoliage = false) {
   const canvas = document.createElement('canvas');
   canvas.width = source.image.width;
   canvas.height = source.image.height;
@@ -69,7 +70,17 @@ export function terrainFilter(source, rows) {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.needsUpdate = true;
   }
-  return {source, mid, average, water};
+  let foliage;
+  if (withFoliage) {
+    const atlas = foliageAtlasPixels(pixels,canvas.width,rows);
+    foliage = new THREE.DataTexture(atlas.pixels,atlas.width,atlas.height);
+    foliage.colorSpace = THREE.SRGBColorSpace;
+    foliage.minFilter = THREE.LinearMipmapLinearFilter;
+    foliage.magFilter = THREE.NearestFilter;
+    foliage.generateMipmaps = true;
+    foliage.needsUpdate = true;
+  }
+  return {source, mid, average, water, foliage};
 }
 
 const uniforms = `

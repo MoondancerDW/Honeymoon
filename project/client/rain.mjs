@@ -70,6 +70,7 @@ export class Rain {
       this.last=undefined;
       this.lightning.visible=false;
       this.listenerAt=undefined;
+      this.visibleSnow=0;
     }
   }
 
@@ -105,7 +106,7 @@ export class Rain {
     this.lightning.material.opacity=strike.flash*.92;
   }
 
-  step(now,camera,direction,brightness,wind,strength,listener,strike,budget=capacity) {
+  step(now,camera,direction,brightness,wind,strength,listener,strike,budget=capacity,globalSnow=false) {
     const dt = Math.min(.045,(now-(this.last ?? now))/1000);
     this.last = now;
     this.material.uniforms.brightness.value=brightness;
@@ -130,7 +131,7 @@ export class Rain {
         particle.depth=.65+Math.random()*.7;
         particle.phase=Math.random()*6.283;
       }
-      const snow=this.climate.snowAt(particle.x,particle.y,particle.z);
+      const snow=globalSnow || this.climate.snowAt(particle.x,particle.y,particle.z);
       const wx=snow ? .36+wind.x*.48+.22*Math.sin(now*.0015+particle.phase) : (.35+wind.x*4.4)*particle.depth;
       const wz=snow ? .16+wind.z*.48+.12*Math.cos(now*.0013+particle.phase) : .26+wind.z*3.6;
       particle.x+=wx*dt;

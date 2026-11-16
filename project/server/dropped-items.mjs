@@ -184,7 +184,11 @@ export function createDroppedItems({base, store, clock, collides, visible, liqui
     return moved;
   }
 
-  function clear() { items.clear(); }
+  function clear() {
+    const removed = items.size;
+    items.clear();
+    return removed;
+  }
 
   function snapshot(position) {
     const now = clock();

@@ -1,20 +1,22 @@
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
 import {mkdir, writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
 import {chromium} from 'playwright-core';
 import {loadBase} from '../server/base.mjs';
 import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
 
-const base = loadBase('generated/world');
-const app = createHoneymoonServer({state: ':memory:', geometry,
+const generated = process.env.HONEYMOON_GENERATED ?? 'generated';
+const base = loadBase(join(generated, 'world'));
+const app = createHoneymoonServer({state: ':memory:', geometry, generated,
   base: {...base, manifest: {...base.manifest, spawn: [-30.5, 65, -57.5]}}});
 let browser;
 try {
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
   const origin = `http://127.0.0.1:${app.server.address().port}`;
-  browser = await chromium.launch({channel: 'msedge'});
+  browser = await chromium.launch({channel: 'msedge', args:['--mute-audio']});
   const page = await browser.newPage({viewport: {width: 1280, height: 720}});
   const recording = [];
   let sampleRate = 48_000;
@@ -23,6 +25,18 @@ try {
     recording.push(Int16Array.from(frame.pcm));
   });
   await page.addInitScript(() => {
+    if (!localStorage.getItem('honeymoon-audio-settings')) {
+      localStorage.setItem('honeymoon-audio-settings',JSON.stringify({musicVolume:.75,soundVolume:.13}));
+      localStorage.setItem('honeymoon-muted','0');
+      localStorage.setItem('honeymoon-music','0');
+    }
+    const originalAudio=window.Audio;
+    const media=window.qaMedia=[];
+    window.Audio=function(...args) {
+      const player=new originalAudio(...args);
+      media.push(player);
+      return player;
+    };
     const AudioContext = window.AudioContext;
     if (!AudioContext) return;
     window.AudioContext = class extends AudioContext {
@@ -60,7 +74,17 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   const manifest = await (await fetch(`${origin}/generated/sounds/sounds.json`)).json();
   await page.goto(origin);
-  await page.waitForFunction(() => globalThis.honeymoon?.stats().audio.loaded && !document.querySelector('#play').disabled, null, {timeout: 90_000});
+  const master=page.locator('#audio-master');
+  const openAudio=()=>page.locator('#audio-settings-toggle').click();
+  const closeAudio=()=>page.locator('#audio-settings-close').click();
+  const musicVolume=page.locator('#music-volume');
+  const setMusicVolume=value=>musicVolume.evaluate((input,value)=>{
+    input.value=value;
+    input.dispatchEvent(new Event('input',{bubbles:true}));
+  },value);
+  await page.waitForFunction(() => globalThis.honeymoon?.stats().audio.loaded && !document.querySelector('#play').disabled, null, {timeout: 90_000})
+    .catch(async error=>{throw new Error(await page.locator('#loading').textContent()+' '+errors.join(' '),{cause:error});});
+  assert.equal(await page.locator(':is(#audio-toggle, #music-toggle, #clear-selection)').count(),0);
   assert.equal((await page.evaluate(() => honeymoon.stats().audio)).state, 'disabled');
   await page.locator('#play').click();
   await page.waitForFunction(() => honeymoon.stats().audio.state === 'running' && document.querySelector('#entry').hidden);
@@ -83,7 +107,12 @@ try {
   await page.evaluate(() => document.exitPointerLock());
   await page.locator('#reset').click();
   await page.waitForFunction(() => honeymoon.stats().position.z === -57.5);
-  await page.locator('#audio-toggle').click();
+  await openAudio();
+  assert.equal(await master.getAttribute('aria-pressed'),'true');
+  assert.equal(await musicVolume.inputValue(),'0');
+  await master.click();
+  assert.equal(await master.getAttribute('aria-pressed'),'false');
+  await closeAudio();
   await page.locator('#play').click();
   await page.waitForFunction(() => honeymoon.stats().audio.muted && document.querySelector('#entry').hidden);
   await page.evaluate(() => honeymoon.look(.39, -.12));
@@ -98,19 +127,38 @@ try {
   assert.equal(afterMuted.played, beforeMuted);
   assert.equal(afterMuted.musicPlaying, false);
   await page.evaluate(() => document.exitPointerLock());
-  await page.locator('#audio-toggle').click();
-  await page.locator('#music-toggle').click();
+  await openAudio();
+  await master.click();
+  await setMusicVolume('35');
+  await closeAudio();
+  const music = manifest.sounds['music.overworld'];
+  const requestedMusic=page.waitForResponse(response=>response.ok() && music.some(file=>response.url().endsWith(file)));
   await page.locator('#play').click();
   await page.waitForFunction(() => honeymoon.stats().audio.musicPlaying);
-  const music = manifest.sounds['music.overworld'];
+  await requestedMusic;
+  await page.waitForFunction(files=>window.qaMedia.some(player=>files.some(file=>player.src.endsWith(file)) && player.currentTime>0),music);
   assert.ok(audioFiles.some(entry => music.some(file => entry.url.endsWith(file))));
   await page.evaluate(() => document.exitPointerLock());
-  await page.locator('#music-toggle').click();
+  await openAudio();
+  await master.click();
+  assert.equal(await musicVolume.inputValue(),'35');
+  assert.equal(await page.evaluate(files=>window.qaMedia.findLast(player=>files.some(file=>player.src.endsWith(file)))?.muted,music),true);
+  await closeAudio();
+  await page.reload();
+  await page.waitForFunction(() => globalThis.honeymoon?.stats().audio.loaded && !document.querySelector('#play').disabled);
+  await page.locator('#play').click();
+  await page.waitForFunction(() => document.pointerLockElement?.tagName==='CANVAS');
+  await page.evaluate(() => document.exitPointerLock());
+  await openAudio();
+  assert.equal(await master.getAttribute('aria-pressed'),'false');
+  assert.equal(await musicVolume.inputValue(),'35');
+  await master.click();
+  await setMusicVolume('0');
   assert.equal((await page.evaluate(() => honeymoon.stats().audio)).musicPlaying, false);
   assert.deepEqual(errors, []);
   const result = {browser: browser.version(), audio: afterMuted, samples: audioFiles.map(entry => entry.url.split('/').pop()),
     checks: ['gesture unlock', 'original door and footstep Ogg decoded and played', 'muted door action remains functional',
-      'optional music starts with the configured pack and stops when switched off']};
+      'music slider starts an original track', 'master mutes the running track and persists with volume unchanged']};
   await mkdir('work/audio-registry', {recursive: true});
   const frames = recording.flatMap(frame => Array.from(frame));
   const audible = frames.findIndex(frame => Math.abs(frame) > 2);

@@ -231,6 +231,7 @@ export class WorldAudio {
     this.#updateGain();
     if (this.#music) this.#music.muted = this.#muted;
     if (this.#bard) this.#bard.player.muted = this.#muted;
+    for (const {player} of this.#records.values()) player.muted = this.#muted;
   }
 
   npcMusic(npcs,position,now) {
@@ -411,7 +412,7 @@ export class WorldAudio {
       this.#caveMood(world);
     }
     for (const {player, position: sourcePosition} of this.#records.values()) {
-      player.volume = this.#muted ? 0 : this.#volume * Math.max(0, 1 - this.#distance(sourcePosition) / 64);
+      player.volume = this.#volume * Math.max(0, 1 - this.#distance(sourcePosition) / 64);
     }
     const previous = this.#previous;
     this.#previous = {...position, grounded, swimming};
@@ -590,7 +591,8 @@ export class WorldAudio {
     if (!this.#playing || this.#distance(position) >= 64 || !globalThis.Audio || !SOUND_FILE.test(file ?? '')) return;
     const player = new Audio(ASSETS + file);
     this.#records.set(key, {player, position});
-    player.volume = this.#muted ? 0 : this.#volume * Math.max(0, 1 - this.#distance(position) / 64);
+    player.muted = this.#muted;
+    player.volume = this.#volume * Math.max(0, 1 - this.#distance(position) / 64);
     const finish = () => { if (this.#records.get(key)?.player === player) this.#records.delete(key); };
     player.onended = finish;
     this.#music?.pause();

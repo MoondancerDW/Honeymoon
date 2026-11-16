@@ -16,11 +16,12 @@ function selectMode(value,inherit=false) {
 export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,changed,pause,notice}) {
   const health=element('health'), death=element('death-screen'), reviveButton=element('revive');
   const admin=element('mode-menu'), administrator=element('mode-toggle'), list=element('mode-players');
+  const selfMode=element('self-mode-toggle');
   const defaultRow=element('mode-default'), craftMenu=element('craft-menu'), craftToggle=element('craft-toggle');
   const right=element('mode-error'), craftError=element('craft-error');
   const cells=Array.from({length:10},()=>document.createElement('span'));
   health.append(...cells);
-  let state, deathTime, retry, pending=false;
+  let state, deathTime, retry, selfUid, pending=false;
   function update(next) {
     if (!next) return;
     state=next;
@@ -28,6 +29,9 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     health.setAttribute('aria-valuenow',String(next.health));
     cells.forEach((cell,index)=>cell.classList.toggle('filled',index<next.health));
     administrator.hidden=!next.admin;
+    selfMode.hidden=!next.admin||!selfUid;
+    selfMode.disabled=pending;
+    selfMode.textContent=`Режим: ${labels[next.mode]}`;
     craftToggle.hidden=next.mode!=='game';
     death.hidden=!next.death;
     if (deathTime!==next.death?.at) {
@@ -56,16 +60,25 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
   async function change(fields) {
     if (pending) return;
     pending=true;
+    selfMode.disabled=true;
     right.textContent='';
     try {
       const result=await changeMode(fields);
       if (!result.ok) throw new Error(result.body.error);
+      if (result.body.selfMode) update(result.body.selfMode);
       if (admin.open) render(result.body);
     } catch {
       right.textContent='Не удалось обновить режим';
+      if (!admin.open && fields.target===selfUid) notice(right.textContent);
       try {if (admin.open) render(await fetchModes());} catch {}
-    } finally {pending=false;}
+    } finally {
+      pending=false;
+      selfMode.disabled=false;
+    }
   }
+  selfMode.addEventListener('click',()=>{
+    if (state?.admin&&selfUid) void change({target:selfUid,mode:state.mode==='creative'?'game':'creative'});
+  });
   administrator.addEventListener('click',async()=>{
     if (!state?.admin||admin.open) return;
     pause();
@@ -107,7 +120,7 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     catch {notice('Не удалось ожить');}
     finally {reviveButton.disabled=false;}
   });
-  return {update,get active(){return Boolean(state);},get creative(){return state?.mode!=='game';},
+  return {update,setSelf(uid){selfUid=uid;},get active(){return Boolean(state);},get creative(){return state?.mode!=='game';},
     get admin(){return Boolean(state?.admin);},get death(){return state?.mode==='game'?state.death:null;},
     isOpen:()=>admin.open||craftMenu.open};
 }
