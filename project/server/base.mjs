@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relatedBlockStates } from '../world/block-interactions.mjs';
 import { isRideableMinecart } from '../world/minecarts.mjs';
+import { isRideableBoat } from '../world/boats.mjs';
 import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
 
 const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
@@ -95,6 +96,9 @@ export function displayEntity(entity) {
   } else if (isRideableMinecart(entity)) {
     data.Type = 0;
     data.Rotation = [Number.isFinite(entity.data.Rotation?.[0]) ? entity.data.Rotation[0] : 0];
+  } else if (isRideableBoat(entity)) {
+    const facing = entity.data?.Rotation?.[0];
+    data.Rotation = [Number.isFinite(facing) ? 180-facing : 0,0];
   }
   return { key: entity.key, position: entity.position, type, data };
 }

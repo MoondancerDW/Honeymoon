@@ -2,12 +2,14 @@ import {randomUUID} from 'node:crypto';
 import {displayEntity} from './base.mjs';
 import {RequestError} from './errors.mjs';
 import {isRideableMinecart, minecartRotation} from '../world/minecarts.mjs';
+import {PLAYER} from '../world/player-body.mjs';
 import {railFor, railPoint, railTangent} from '../world/rails.mjs';
 
 const height = 3 / 8;
 const maxSpeed = 8;
 const maxCarts = 128;
 const historyTime = 300;
+const contactRadius = .54 + PLAYER.halfWidth;
 const coordinates = ['x','y','z'];
 const worldPoint = (track, local) => local.map((value, axis) => value + track[coordinates[axis]]);
 const directionAt = (track, rail) => railTangent(rail, track.t).map(value => value * track.direction);
@@ -54,7 +56,21 @@ function degreeDelta(from,to) {
   return (difference < 0 ? difference + 360 : difference) - 180;
 }
 
-export function createMinecarts({base,store,clock,cellAt,solidAt,canMove}) {
+function walkingContact(from,to,[x,y,z],canTouch) {
+  const dx = to.x - from.x, dz = to.z - from.z;
+  const distanceSquared = dx * dx + dz * dz;
+  const offsetX = x - from.x, offsetZ = z - from.z;
+  const approach = offsetX * dx + offsetZ * dz;
+  if (distanceSquared < .000025 || approach <= 0) return null;
+  const t = Math.min(1,approach / distanceSquared);
+  const feet = [from.x + dx * t, from.y + (to.y - from.y) * t, from.z + dz * t];
+  if (feet[1] >= y + .32 || feet[1] + PLAYER.height <= y - height ||
+      Math.hypot(x - feet[0],z - feet[2]) >= contactRadius) return null;
+  if (!canTouch([feet[0],Math.max(feet[1] + .04,y),feet[2]],[x,y,z])) return null;
+  return [offsetX,offsetZ];
+}
+
+export function createMinecarts({base,store,clock,cellAt,solidAt,canMove,canTouch = () => true}) {
   const saved = store.getState('minecarts','world','entities');
   const carts = new Map((saved?.value ?? []).filter(cart => isRideableMinecart(cart.entity) &&
     base.inBounds(...cart.entity.position.map(Math.floor))).map(cart => [cart.entity.key,cart]));
@@ -91,6 +107,15 @@ export function createMinecarts({base,store,clock,cellAt,solidAt,canMove}) {
     return null;
   }
 
+  function originalCartsAt(cx,cz) {
+    const address = cx + ',' + cz;
+    if (!originals.has(address)) {
+      if (originals.size >= 128) originals.delete(originals.keys().next().value);
+      originals.set(address,(base.publicChunk?.(cx,cz)?.entities ?? []).filter(isRideableMinecart));
+    }
+    return originals.get(address);
+  }
+
   function occupied(entity) {
     const [x,y,z] = entity.position;
     const overlaps = other => other.key !== entity.key &&
@@ -98,12 +123,7 @@ export function createMinecarts({base,store,clock,cellAt,solidAt,canMove}) {
     if ([...carts.values()].some(cart => overlaps(cart.entity))) return true;
     for (let cz = Math.floor((z - 1) / 16); cz <= Math.floor((z + 1) / 16); cz++) {
       for (let cx = Math.floor((x - 1) / 16); cx <= Math.floor((x + 1) / 16); cx++) {
-        const address = cx + ',' + cz;
-        if (!originals.has(address)) {
-          if (originals.size >= 128) originals.delete(originals.keys().next().value);
-          originals.set(address,(base.publicChunk?.(cx,cz)?.entities ?? []).filter(isRideableMinecart));
-        }
-        if (originals.get(address).some(other => !carts.has(other.key) && overlaps(other))) return true;
+        if (originalCartsAt(cx,cz).some(other => !carts.has(other.key) && overlaps(other))) return true;
       }
     }
     return false;
@@ -166,6 +186,51 @@ export function createMinecarts({base,store,clock,cellAt,solidAt,canMove}) {
     else drivers.set(key,{direction,expires:clock() + 400});
   }
 
+  function pushAlongPath(start, trail) {
+    const path = [start,...trail];
+    if (!trail.some((point,index) => Math.hypot(point.x - path[index].x,point.z - path[index].z) >= .005)) return;
+    const xs = path.map(point => point.x), zs = path.map(point => point.z);
+    const left = Math.min(...xs) - contactRadius, right = Math.max(...xs) + contactRadius;
+    const front = Math.min(...zs) - contactRadius, back = Math.max(...zs) + contactRadius;
+    const nearby = entity => {
+      const [x,,z] = entity.position;
+      return x > left && x < right && z > front && z < back;
+    };
+    const entities = new Map();
+    for (const {entity} of carts.values()) {
+      if (nearby(entity)) entities.set(entity.key,entity);
+    }
+    for (let cz = Math.floor(front / 16); cz <= Math.floor(back / 16); cz++) {
+      for (let cx = Math.floor(left / 16); cx <= Math.floor(right / 16); cx++) {
+        for (const entity of originalCartsAt(cx,cz)) {
+          if (!carts.has(entity.key) && nearby(entity)) entities.set(entity.key,entity);
+        }
+      }
+    }
+    for (const entity of entities.values()) {
+      let contact;
+      for (let i = 0; i < trail.length && !contact; i++) {
+        contact = walkingContact(path[i],trail[i],entity.position,canTouch);
+      }
+      if (!contact) continue;
+      const existing = carts.get(entity.key);
+      const track = existing ? existing.track : candidateTrack(entity);
+      const rail = track && railFor(cellAt(track.x,track.y,track.z));
+      if (!rail) continue;
+      const [dx,,dz] = directionAt(track,rail);
+      const along = (contact[0] * dx + contact[1] * dz) / Math.hypot(...contact);
+      if (Math.abs(along) < .025) continue;
+      if (!existing) board(entity);
+      const cart = carts.get(entity.key);
+      const speed = 1.2 + 1.3 * Math.abs(along);
+      const direction = Math.sign(along);
+      if (cart && cart.speed * direction < speed) {
+        cart.speed = direction * speed;
+        dirty = true;
+      }
+    }
+  }
+
   function advance(riders, updateRider) {
     const now = clock();
     const seconds = Math.max(0,Math.min((now - lastTick) / 1000,.15));
@@ -222,7 +287,7 @@ export function createMinecarts({base,store,clock,cellAt,solidAt,canMove}) {
   }
 
   return {
-    place, remove, current, recent, board, steering, advance,
+    place, remove, current, recent, board, steering, pushAlongPath, advance,
     accept(cart, removed) {
       if (cart) carts.set(cart.entity.key,cart);
       if (removed) { carts.delete(removed); drivers.delete(removed); history.delete(removed); }

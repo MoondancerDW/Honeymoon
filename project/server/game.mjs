@@ -4,6 +4,7 @@ import { RequestError } from './errors.mjs';
 import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
 import { createMinecarts } from './minecarts.mjs';
+import { createBoats } from './boats.mjs';
 import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
@@ -11,9 +12,11 @@ import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
 import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
+import { isRideableBoat,boatHeading,boatHit,boatSeat } from '../world/boats.mjs';
 import { orientedRail, railFor } from '../world/rails.mjs';
 import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
-import { CREATIVE_FRAME_KEY, CREATIVE_MINECART_KEY, shapedLampData } from '../world/creative-items.mjs';
+import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData } from '../world/creative-items.mjs';
+import { liquidLevel } from '../world/block-movement.mjs';
 import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush,
   VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
@@ -21,8 +24,10 @@ import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxe
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
 const frameActions = new Set(['frame_item','frame_use','frame_remove']);
+const vehiclePlacements = new Map([['place_minecart',CREATIVE_MINECART_KEY],['place_boat',CREATIVE_BOAT_KEY]]);
+const vehicleRemovals = new Map([['remove_minecart','not_a_minecart'],['remove_boat','not_a_boat']]);
 const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', 'edit_sign',
-  'place_minecart', 'remove_minecart', 'place_frame', ...frameActions, ...partActions, ...voxelActions]);
+  'place_frame', ...vehiclePlacements.keys(), ...vehicleRemovals.keys(), ...frameActions, ...partActions, ...voxelActions]);
 const axes = ['x', 'y', 'z'];
 const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 const bedDirections = [[0,1], [-1,0], [0,-1], [1,0]];
@@ -53,8 +58,8 @@ function normalizeAction(body) {
   if (!actions.has(body.type)) throw new RequestError(400, 'unknown_action');
   if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw new RequestError(400, 'invalid_revision');
   const input = { type: body.type, ...point(body, true), expectedRevision: body.expectedRevision };
-  if (body.type === 'place_minecart') {
-    if (body.creativeItem !== CREATIVE_MINECART_KEY) throw new RequestError(400, 'unknown_cell_type');
+  if (vehiclePlacements.has(body.type)) {
+    if (body.creativeItem !== vehiclePlacements.get(body.type)) throw new RequestError(400,'unknown_cell_type');
     input.creativeItem = body.creativeItem;
   } else if (body.type === 'place_frame' || body.type === 'frame_item') {
     if (body.type === 'place_frame' && body.creativeItem !== CREATIVE_FRAME_KEY ||
@@ -72,17 +77,18 @@ function normalizeAction(body) {
     input.creativeItem = body.creativeItem;
   }
   if (body.hit !== undefined) input.hit = point(body.hit);
-  if (body.type === 'remove_minecart' || frameActions.has(body.type)) {
+  if (vehicleRemovals.has(body.type) || frameActions.has(body.type)) {
     if (typeof body.entity !== 'string' || body.entity.length > 160) {
-      throw new RequestError(400,frameActions.has(body.type) ? 'not_a_frame' : 'not_a_minecart');
+      throw new RequestError(400,vehicleRemovals.get(body.type) ?? 'not_a_frame');
     }
     input.entity = body.entity;
   }
-  if ((body.type.endsWith('_minecart') || body.type === 'place_frame' || frameActions.has(body.type)) && !input.hit) {
+  if ((vehiclePlacements.has(body.type) || vehicleRemovals.has(body.type) ||
+      body.type === 'place_frame' || frameActions.has(body.type)) && !input.hit) {
     throw new RequestError(400,'invalid_coordinates');
   }
   if (body.type === 'remove_microblocks' && !input.hit) throw new RequestError(400, 'invalid_coordinates');
-  if (['interact','place','place_minecart','place_frame'].includes(body.type) && body.yaw !== undefined) {
+  if ((['interact','place','place_frame'].includes(body.type) || vehiclePlacements.has(body.type)) && body.yaw !== undefined) {
     if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
     input.yaw = body.yaw % (2 * Math.PI);
   }
@@ -279,6 +285,7 @@ export function createGame(base, store, geometry, {
     protectedCell:(x,y,z) => reserved(x,y,z) || spawnProtected(x,y,z)});
   const carts = createMinecarts({
     base,store,clock,cellAt:getCurrent,
+    canTouch:physical.visiblePoint,
     solidAt:(x,y,z) => (geometry.collisionFor ?? geometry.shapeFor)(cellView(getCurrent(x,y,z)))
       .some(box => box.solid !== false && box.x0 < .5 && box.x1 > .5 && box.z0 < .5 && box.z1 > .5),
     canMove(entity,rider,track,rail) {
@@ -289,6 +296,17 @@ export function createGame(base, store, geometry, {
       return bodyWithinMap(feet) && !physical.collides(feet,rider ? SEATED_HEIGHT : .44,ignored);
     },
   });
+  const boats = createBoats({base,store,clock,cellAt:getCurrent,canMove(entity,rider) {
+    const [x,y,z] = entity.position;
+    const yaw = boatHeading(entity), cos = Math.cos(yaw), sin = Math.sin(yaw);
+    const anchor = boatSeat(entity);
+    if (!bodyWithinMap(anchor) || rider && physical.collides(anchor,SEATED_HEIGHT)) return false;
+    return [[0,0],[-.31,-.43],[-.31,.43],[.31,-.43],[.31,.43]].every(([side,end]) => {
+      const sample = {x:x + side*cos + end*sin,y:y-.12,z:z - side*sin + end*cos};
+      return base.inBounds(Math.floor(sample.x),Math.floor(sample.y),Math.floor(sample.z)) &&
+        !physical.collides(sample,.56);
+    });
+  }});
 
   function playerAt(player) {
     return positions.get(player)?.position ?? spawn;
@@ -332,15 +350,36 @@ export function createGame(base, store, geometry, {
     const nearby = offsets.flatMap(([dx, dz]) => [y, y + .5, y + 1].map(level =>
       ({x:x + dx, y:level, z:z + dz})));
     const stillNearby = !seat.ridden || Math.hypot(prior.x - x,prior.y - y,prior.z - z) < 2;
-    const position = [...(stillNearby ? [prior] : []), ...nearby, {x,y,z}].find(standable) ?? spawn;
+    const shore = seat.anchor.kind === 'boat' ? boatLanding(seat.anchor) : null;
+    const position = shore ?? [...(stillNearby ? [prior] : []),...nearby,{x,y,z}].find(standable) ?? spawn;
     releaseSeat(player);
     movePlayer(player, position);
     return position;
   }
 
+  function boatLanding({x,y,z}) {
+    const candidates = [];
+    for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
+      const distance = dx*dx + dz*dz;
+      if (distance && distance <= 5) candidates.push({dx,dz,distance});
+    }
+    candidates.sort((a,b) => a.distance-b.distance);
+    for (const {dx,dz} of candidates) {
+      const stand = physical.standAbove({x:x+dx,y:y-.18,z:z+dz},y+1.12);
+      if (!stand || !bodyWithinMap(stand)) continue;
+      const floor = [stand.x,stand.y+.01,stand.z].map(Math.floor);
+      if (liquidLevel(getCurrent(...floor).cell) !== null) continue;
+      if (physical.visiblePoint([x,y+SEATED_EYE,z],[stand.x,stand.y+.85,stand.z])) return stand;
+    }
+    return null;
+  }
+
   function releaseSeat(player) {
-    const entity = seats.get(player)?.entity;
-    if (entity) carts.steering(entity,0);
+    const seat = seats.get(player);
+    if (seat?.entity) {
+      if (seat.anchor.kind === 'boat') boats.steering(seat.entity,null);
+      else carts.steering(seat.entity,0);
+    }
     seats.delete(player);
   }
 
@@ -353,30 +392,36 @@ export function createGame(base, store, geometry, {
     return {seat:anchor, position};
   }
 
-  function visibleMinecart(player, address, hit, key, missing) {
+  function visibleVehicle(player,address,hit,key,missing,vehicle) {
     const position = playerSight(player);
     const eye = [position.x, position.y + (position.eye ?? PLAYER.eye), position.z];
     const target = [hit.x, hit.y, hit.z];
     const delta = target.map((value,axis) => value - eye[axis]);
     const distance = Math.hypot(...delta);
     if (distance > 6 || distance < .00001) throw new RequestError(403, 'outside_reach');
-    const entity = typeof key === 'string' && key.length <= 160 ? carts.current(address.x,address.z,key) : null;
-    if (!isRideableMinecart(entity)) throw new RequestError(409,missing);
-    const poses = carts.recent(entity).filter(pose => axes.every((axis,index) => Math.floor(pose.position[index]) === address[axis]));
+    const validKey = typeof key === 'string' && key.length <= 160;
+    const boat = validKey && vehicle !== 'minecart' ? boats.current(address.x,address.z,key) : null;
+    const entity = boat ?? (validKey && vehicle !== 'boat' ? carts.current(address.x,address.z,key) : null);
+    if (!isRideableBoat(entity) && !isRideableMinecart(entity)) throw new RequestError(409,missing);
+    const hitVehicle = boat ? boatHit : minecartHit;
+    const recent = boat ? boats.recent : carts.recent;
+    const poses = recent(entity).filter(pose => axes.every((axis,index) => Math.floor(pose.position[index]) === address[axis]));
     if (!poses.length) throw new RequestError(409,missing);
     const direction = delta.map(value => value / distance);
     if (!physical.visiblePoint(eye,target) || !poses.some(pose =>
-      Math.abs(minecartHit(pose,eye,direction,distance + .08) - distance) <= .08)) {
+      Math.abs(hitVehicle(pose,eye,direction,distance + .08) - distance) <= .08)) {
       throw new RequestError(403, 'outside_reach');
     }
     return entity;
   }
 
-  function sitInMinecart(player, previous, pose, address, hit, key) {
-    const entity = visibleMinecart(player,address,hit,key,'not_a_seat');
+  function sitInVehicle(player,previous,pose,address,hit,key) {
+    const entity = visibleVehicle(player,address,hit,key,'not_a_seat');
     if ([...seats.values()].some(seat => seat.entity === entity.key)) throw new RequestError(409, 'seat_taken');
-    const result = takeSeat(player, previous, {...minecartSeat(entity, pose.yaw),entity:entity.key}, [], entity.key);
-    carts.board(entity);
+    const ship = isRideableBoat(entity);
+    const anchor = ship ? boatSeat(entity) : minecartSeat(entity,pose.yaw);
+    const result = takeSeat(player,previous,{...anchor,entity:entity.key},[],entity.key);
+    (ship ? boats : carts).board(entity);
     seats.get(player).pose = pose;
     return result;
   }
@@ -393,7 +438,7 @@ export function createGame(base, store, geometry, {
     const hit = point(target.hit);
     const {x, y, z} = address;
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
-    if (target.entity !== undefined) return sitInMinecart(player, previous, pose, address, hit, target.entity);
+    if (target.entity !== undefined) return sitInVehicle(player,previous,pose,address,hit,target.entity);
     const current = getCurrent(x, y, z);
     const profile = seatFor(cellView(current), models, pose.yaw,
       (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz)));
@@ -846,11 +891,13 @@ export function createGame(base, store, geometry, {
       }
       return frames.edit(input,playerSight(player),stack);
     }
-    if (type === 'remove_minecart') {
-      const entity = visibleMinecart(player,input,input.hit,input.entity,'not_a_minecart');
+    if (vehicleRemovals.has(type)) {
+      const ship = type === 'remove_boat';
+      const entity = visibleVehicle(player,input,input.hit,input.entity,vehicleRemovals.get(type),ship ? 'boat' : 'minecart');
       if ([...seats.values()].some(seat => seat.entity === entity.key)) throw new RequestError(409,'seat_taken');
-      carts.remove(entity.key);
-      return {worldRevision:store.worldRevision(),changes:[],effects:[],removedMinecart:entity.key};
+      (ship ? boats : carts).remove(entity.key);
+      return {worldRevision:store.worldRevision(),changes:[],effects:[],
+        ...(ship ? {removedBoat:entity.key} : {removedMinecart:entity.key})};
     }
     const current = getCurrent(x, y, z);
     if (input.expectedRevision !== current.revision) {
@@ -867,6 +914,13 @@ export function createGame(base, store, geometry, {
       if (!physical.targetAtHit(playerSight(player),x,y,z,input.hit)) throw new RequestError(403,'outside_reach');
       transport.placed = carts.place(input,rail);
       return {worldRevision:store.worldRevision(),changes:[],effects:[],minecart:transport.placed.entity};
+    }
+    if (type === 'place_boat') {
+      if (creativeItems.get(input.creativeItem)?.kind !== 'boat') throw new RequestError(400,'unknown_cell_type');
+      if (liquidLevel(current.cell) === null) throw new RequestError(409,'boat_requires_water');
+      if (!physical.targetAtHit(playerSight(player),x,y,z,input.hit)) throw new RequestError(403,'outside_reach');
+      transport.placedBoat = boats.place(input);
+      return {worldRevision:store.worldRevision(),changes:[],effects:[],boat:transport.placedBoat.entity};
     }
     if (partActions.has(type)) return editMicroParts(player, input, current);
     if (voxelActions.has(type)) return editVoxels(player, input, current);
@@ -988,6 +1042,7 @@ export function createGame(base, store, geometry, {
     if (!result.replay && result.status === 200) {
       if (result.output.changes.length) refreshMechanicCells();
       carts.accept(transport.placed,result.output.removedMinecart);
+      boats.accept(transport.placedBoat,result.output.removedBoat);
     }
     return result;
   }
@@ -1110,6 +1165,7 @@ export function createGame(base, store, geometry, {
 
     const entry = observing ? passivePosition(target) : enterPosition(player, target, previous);
     positions.set(player, { position: target, updated: now, budget: budget - distance, requestId });
+    if (!observing) carts.pushAlongPath(previous,steps);
     return entry;
   }
 
@@ -1144,19 +1200,21 @@ export function createGame(base, store, geometry, {
     const riders = new Map([...seats].filter(([,seat]) => seat.entity)
       .map(([player,seat]) => [seat.entity,{player,yaw:seat.anchor.yaw}]));
     const updates = [];
-    const changed = carts.advance(riders,(player,entity) => {
+    function updateRider(player,entity) {
       const seat = seats.get(player);
       let position;
       if (entity) {
-        const anchor = {...minecartSeat(entity,seat.anchor.yaw),entity:entity.key};
+        const anchor = {...(isRideableBoat(entity) ? boatSeat(entity) : minecartSeat(entity,seat.anchor.yaw)),entity:entity.key};
         seat.anchor = anchor;
         seat.ridden = true;
         position = {x:anchor.x,y:anchor.y,z:anchor.z};
         movePlayer(player,position);
       } else position = leaveSeat(player);
       updates.push({player,position,pose:poseFor(player,seat.pose)});
-    });
-    return changed ? updates : null;
+    }
+    const cartsChanged = carts.advance(riders,updateRider);
+    const boatsChanged = boats.advance(riders,updateRider);
+    return cartsChanged || boatsChanged ? updates : null;
   }
 
   const descriptions = player => diagnostic?.describe(player) ?? null;
@@ -1168,16 +1226,18 @@ export function createGame(base, store, geometry, {
     setSpectator,
     advance,
     advanceMinecarts,
-    driveMinecart(player,pose,direction) {
+    driveMinecart(player,pose,direction,boatDrive) {
       const seat = seats.get(player);
       if (!seat?.entity) return;
       seat.pose = pose;
-      if (direction !== undefined) carts.steering(seat.entity,direction);
+      if (seat.anchor.kind === 'boat') {
+        if (boatDrive !== undefined) boats.steering(seat.entity,boatDrive);
+      } else if (direction !== undefined) carts.steering(seat.entity,direction);
     },
     minecartSnapshot(player) {
-      return {entities:carts.snapshot(),position:playerAt(player),seat:publicSeat(player)};
+      return {entities:carts.snapshot(),boats:boats.snapshot(),position:playerAt(player),seat:publicSeat(player)};
     },
-    flushMinecarts: carts.flush,
+    flushMinecarts() { carts.flush(); boats.flush(); },
     sit,
     leaveSeat,
     poseFor,

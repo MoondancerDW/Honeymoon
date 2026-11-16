@@ -37,6 +37,7 @@ export class World {
     this.indices = new Map(this.palette.map((key, index) => [key, index]));
     this.chunks = new Map();
     this.minecarts = new Map();
+    this.boats = new Map();
     this.frames = new Map();
     this.frameRevision = -1;
     this.minecartSnapshotTime = undefined;
@@ -52,12 +53,11 @@ export class World {
     this.frames = new Map(frames.map(frame => [frame.key,frame]));
   }
 
-  setMinecarts(entities, now) {
+  setMinecarts(entities, now, boats = []) {
     const duration = Math.min(150, Math.max(50, now - (this.minecartSnapshotTime ?? now - 100)));
     this.minecartSnapshotTime = now;
-    const next = new Map();
-    for (const target of entities) {
-      const existing = this.minecarts.get(target.key)?.entity;
+    const interpolate = (targets,previousTargets) => new Map(targets.map(target => {
+      const existing = previousTargets.get(target.key)?.entity;
       const previous = existing && Math.hypot(...target.position.map((value, axis) => value - existing.position[axis])) < 3
         ? existing : target;
       const position = [...previous.position];
@@ -65,17 +65,20 @@ export class World {
       const targetYaw = target.data.Rotation?.[0] ?? 0;
       const yawOffset = ((targetYaw - rotation[0] + 540) % 360 + 360) % 360 - 180;
       const entity = {...target, position:[...position], data:{...target.data, Rotation:[...rotation]}};
-      next.set(target.key, {entity, position, rotation, target, yawOffset, at:now, duration});
-    }
-    this.minecarts = next;
+      return [target.key,{entity,position,rotation,target,yawOffset,at:now,duration}];
+    }));
+    this.minecarts = interpolate(entities,this.minecarts);
+    this.boats = interpolate(boats,this.boats);
   }
 
   stepMinecarts(now) {
-    for (const {entity, position, rotation, target, yawOffset, at, duration} of this.minecarts.values()) {
-      const progress = Math.min(1, Math.max(0, (now - at) / duration));
-      for (let axis = 0; axis < 3; axis++) entity.position[axis] = position[axis] + (target.position[axis] - position[axis]) * progress;
-      entity.data.Rotation[0] = rotation[0] + yawOffset * progress;
-      entity.data.Rotation[1] = rotation[1] + ((target.data.Rotation?.[1] ?? 0) - rotation[1]) * progress;
+    for (const vehicles of [this.minecarts,this.boats]) {
+      for (const {entity,position,rotation,target,yawOffset,at,duration} of vehicles.values()) {
+        const progress = Math.min(1,Math.max(0,(now-at)/duration));
+        for (let axis = 0; axis < 3; axis++) entity.position[axis] = position[axis] + (target.position[axis]-position[axis])*progress;
+        entity.data.Rotation[0] = rotation[0] + yawOffset*progress;
+        entity.data.Rotation[1] = rotation[1] + ((target.data.Rotation?.[1] ?? 0)-rotation[1])*progress;
+      }
     }
   }
 

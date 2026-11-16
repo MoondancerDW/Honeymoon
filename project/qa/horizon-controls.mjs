@@ -107,9 +107,20 @@ try {
   await page.waitForFunction(() => !honeymoon.stats().spectator && honeymoon.perspective().mode === 'back');
   const stood = (await stats()).position;
   assert.ok(stood.y > clipped.y && worldPhysics.collides({...stood,y:stood.y-.01}) && !worldPhysics.collides(stood));
+
+  // This landing area contains a procedurally coloured, untextured minecart.
+  await page.evaluate(() => honeymoon.setDistance(4));
+  const cartArea = {x:491.5,y:157.5,z:-442.5};
+  await teleport(cartArea);
+  await black.waitFor({state:'visible',...timeout});
+  await black.waitFor({state:'hidden',...timeout});
+  await page.waitForFunction(() => !document.querySelector('#teleport-send').disabled);
+  const arrived = (await stats()).position;
+  assert.deepEqual(arrived,cartArea);
+
   assert.deepEqual(errors,[]);
   assert.deepEqual(rejected,[]);
-  const report = {far,clipped,stood,movement:(await stats()).movementSync,errors};
+  const report = {far,clipped,stood,arrived,movement:(await stats()).movementSync,errors};
   await writeFile(join(output,'result.json'),JSON.stringify(report,null,2) + '\n');
   console.log(report);
 } finally {

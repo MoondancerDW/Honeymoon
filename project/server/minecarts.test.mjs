@@ -73,6 +73,55 @@ test('a powered rail launches a resting cart away from a solid end stop', t => {
   assert.ok(carts.snapshot()[0].position[0] > 3);
 });
 
+test('an on-foot collision pushes a cart along its rail and saves only one cart', t => {
+  const {store,carts,blocks,options,tick} = fixture(t);
+  for (let x = 1; x < 6; x++) blocks.set(`${x},1,2`,'legacy:66:1');
+  const placed = carts.place({x:2,y:1,z:2,yaw:-Math.PI/2},railFor(blocks.get('2,1,2')));
+  carts.accept(placed);
+  const walk = (from,to,y = 1,z = 2.5) => carts.pushAlongPath({x:from,y,z},[{x:to,y,z}]);
+  for (const otherPath of [[1.1,1.5],[1.95,1.75],[1.5,1.95,3],[1.5,1.95,1,3.5]]) {
+    walk(...otherPath);
+    tick();
+    carts.advance(new Map(), assert.fail);
+    assert.deepEqual(carts.snapshot(),[placed.entity]);
+  }
+  walk(1.5,1.95);
+  for (let i = 0; i < 9; i++) {
+    tick();
+    carts.advance(new Map(), assert.fail);
+  }
+  const [pushed] = carts.snapshot();
+  assert.ok(pushed.position[0] > 3.25);
+  assert.equal(pushed.position[2],2.5);
+  carts.flush();
+  const restarted = createMinecarts(options);
+  assert.deepEqual(restarted.snapshot(),[pushed]);
+  restarted.remove(pushed.key);
+  restarted.accept(undefined,pushed.key);
+  assert.deepEqual(createMinecarts({...options,store}).snapshot(),[]);
+});
+
+test('contact respects obstructions and can move an imported cart without changing its key', t => {
+  const {blocks,options,tick} = fixture(t);
+  const entity = {type:'Minecart', key:'entity:fixture:cart', position:[2.5,1.375,2.5], data:{Type:0, Rotation:[180]}};
+  options.base.publicChunk = (x,z) => x === 0 && z === 0 ? {entities:[entity]} : null;
+  for (const x of [1,2,3]) blocks.set(`${x},1,2`,'legacy:66:1');
+  const from = {x:1.5,y:1,z:2.5}, trail = [{x:1.75,y:1,z:2.5}];
+  const blocked = createMinecarts({...options,canTouch:() => false});
+  blocked.pushAlongPath(from,trail);
+  assert.deepEqual(blocked.snapshot(),[]);
+  const open = createMinecarts(options);
+  open.pushAlongPath(from,trail);
+  tick();
+  open.advance(new Map(),assert.fail);
+  assert.equal(open.snapshot().length,1);
+  assert.equal(open.snapshot()[0].key,entity.key);
+  assert.ok(open.snapshot()[0].position[0] > entity.position[0]);
+  open.flush();
+  assert.deepEqual(createMinecarts(options).snapshot(),open.snapshot());
+  assert.throws(() => open.remove(entity.key),{code:'protected_cell'});
+});
+
 test('a session places and rides a cart across a supported grade without changing block revisions', t => {
   const store = openStore(':memory:');
   t.after(() => store.close());

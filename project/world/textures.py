@@ -506,6 +506,7 @@ def build(source, output, vanilla_jar=None):
         atlas.image.save(output / "atlas.png", optimize=True)
         atlas.resolve("art/kz.png", "vanilla").save(output / "paintings.png", optimize=True)
         atlas.resolve("item/cart.png", "vanilla").save(output / "minecart.png", optimize=True)
+        atlas.resolve("item/boat.png", "vanilla").save(output / "boat.png", optimize=True)
         (output / "atlas.json").write_text(json.dumps({
             "schemaVersion": 11, "grid": GRID, "rows": atlas_rows, "tileSize": TILE, "resources": atlas.resources,
             "creativeMissingTiles":missing, "carpentryModel":carpentry_model,

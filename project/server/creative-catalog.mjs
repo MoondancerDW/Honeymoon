@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {CREATIVE_FRAME_KEY, CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
+import {CREATIVE_BOAT_KEY, CREATIVE_FRAME_KEY, CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
 import {isCoverMaterial} from '../world/geometry.mjs';
 
 const rails = [
@@ -12,6 +12,8 @@ const rails = [
 const railState = /^legacy:(?:27|28|66):\d+$/;
 const minecart = {key:CREATIVE_MINECART_KEY, id:328, damage:0, kind:'minecart', name:'Пассажирская вагонетка',
   english:'Passenger Minecart', mod:'Minecraft', category:'redstone', technical:false, placeable:true};
+const boat = {key:CREATIVE_BOAT_KEY,id:333,damage:0,kind:'boat',name:'Лодка',
+  english:'Boat',mod:'Minecraft',category:'items',technical:false,placeable:true};
 const frame = {key:CREATIVE_FRAME_KEY,id:389,damage:0,kind:'item-frame',name:'Рамка для предметов',
   english:'Item Frame',mod:'Minecraft',category:'items',technical:false,placeable:true};
 
@@ -31,13 +33,13 @@ export function readCreativeCatalog(generated, project = fileURLToPath(new URL('
   // Rail neighbors determine orientation at placement time. Expose one item per rail type, even with an older catalog.
   const captured = new Map(catalog.entries.map(entry => [entry.key, entry]));
   catalog.entries = catalog.entries.filter(entry => !railState.test(entry.key) &&
-    entry.key !== CREATIVE_MINECART_KEY && entry.key !== CREATIVE_FRAME_KEY);
+    entry.key !== CREATIVE_MINECART_KEY && entry.key !== CREATIVE_FRAME_KEY && entry.key !== CREATIVE_BOAT_KEY);
   for (const [id, name, english] of rails) {
     const key = `legacy:${id}:0`;
     catalog.entries.push({...captured.get(key), key, id, meta:0, name, english, mod:'Minecraft', category:'redstone',
       technical:false, placeable:true});
   }
-  const extra = new Map([[minecart.key,minecart],[frame.key,frame]]);
+  const extra = new Map([[minecart.key,minecart],[frame.key,frame],[boat.key,boat]]);
   for (const {id,damage,name,english,mod} of flatItems) {
     if (!Number.isInteger(id) || id < 1 || id > 32767 || !Number.isInteger(damage) || damage < 0 || damage > 32767 ||
         typeof name !== 'string' || !name) continue;

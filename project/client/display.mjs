@@ -4,6 +4,8 @@ import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
 import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 import {itemFrameModel} from '../world/item-frames.mjs';
 import {isRideableMinecart, minecartQuads, minecartRotation, minecartTilt} from '../world/minecarts.mjs';
+import {boatHeading,isRideableBoat} from '../world/boats.mjs';
+import {boatModel} from '../world/boat-model.mjs';
 import {RemotePlayers} from './remote-players.mjs';
 import {createPonyAvatar, createPonyFacing} from './pony-avatar.mjs';
 import {cameraClearance} from './movement.mjs';
@@ -106,12 +108,12 @@ export class Display {
     this.visualEntities.visible = false;
     this.scene.add(this.visualEntities);
     this.entityLights = new Map();
-    this.importedMinecarts = new Map();
+    this.importedVehicles = new Map();
     this.importedFrames = new Map();
     this.editedFrames = new Map();
     this.dispenserItems = [];
     this.frameChunksDirty = true;
-    this.movingMinecarts = new Map();
+    this.movingVehicles = new Map();
     this.chunkEntities = new Map();
     this.exactChunks = new Set();
     this.preciseLevels = new Map();
@@ -233,6 +235,15 @@ export class Display {
     this.useLightmap(this.materials.pane);
     this.minecartMaterial = new THREE.MeshBasicMaterial({color:'#aeb3bc',vertexColors:true});
     this.useLightmap(this.minecartMaterial);
+    const boatMap = this.world.boatTexture ? await loader.loadAsync('/generated/textures/boat.png').catch(() => null) : null;
+    if (boatMap) {
+      boatMap.colorSpace = THREE.SRGBColorSpace;
+      boatMap.magFilter = boatMap.minFilter = THREE.NearestFilter;
+      boatMap.generateMipmaps = false;
+      this.materials.boat = new THREE.MeshBasicMaterial({map:boatMap,vertexColors:true});
+      this.useLightmap(this.materials.boat);
+    }
+    this.boatQuads = boatModel(boatMap ? undefined : this.atlasRows);
     if (this.world.models?.redpower) {
       const glow = new THREE.MeshBasicMaterial({vertexColors:true, transparent:true, opacity:.3,
         blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide});
@@ -516,10 +527,10 @@ export class Display {
       for (const entity of chunk.entities) {
         const object = this.makeEntity(entity);
         if (!object) continue;
-        if (isRideableMinecart(entity)) {
-          object.userData.minecartKey = entity.key;
-          object.visible = !this.world.minecarts.has(entity.key);
-          this.importedMinecarts.set(entity.key, object);
+        if (isRideableMinecart(entity) || isRideableBoat(entity)) {
+          object.userData.vehicleKey = entity.key;
+          object.visible = !this.world.minecarts.has(entity.key) && !this.world.boats.has(entity.key);
+          this.importedVehicles.set(entity.key,object);
         } else if (entity.type === 'ItemFrame') {
           object.userData.frameKey = entity.key;
           object.visible = !this.world.frames?.has(entity.key);
@@ -552,7 +563,7 @@ export class Display {
         removedEntities.add(entities);
         this.chunkEntities.delete(key);
         for (const object of entities.children) {
-          this.importedMinecarts.delete(object.userData.minecartKey);
+          this.importedVehicles.delete(object.userData.vehicleKey);
           this.importedFrames.delete(object.userData.frameKey);
         }
         this.discardGroup(entities);
@@ -752,6 +763,7 @@ export class Display {
   makeEntity(entity) {
     if (entity.type === 'ItemFrame') return this.makeItemFrame(entity);
     if (isRideableMinecart(entity)) return this.makeMinecart(entity);
+    if (isRideableBoat(entity)) return this.makeBoat(entity);
     if (!this.paint || entity.type !== 'Painting') return;
     const art = paintings[entity.data.Motive];
     const dir = entity.data.Dir ?? entity.data.Direction;
@@ -801,18 +813,28 @@ export class Display {
     return mesh;
   }
 
-  updateMinecarts() {
-    const carts = this.world.minecarts;
-    for (const [key, mesh] of this.importedMinecarts) mesh.visible = !carts.has(key);
+  makeBoat(entity) {
+    const position = entity.position.map(Math.floor);
+    const geometry = quadGeometry(this.boatQuads,this.world.lightAt(...position),255);
+    const mesh = new THREE.Mesh(geometry,this.materials.boat ?? this.materials.opaque);
+    mesh.position.set(...entity.position);
+    mesh.rotation.y = boatHeading(entity);
+    this.trackEntityLight(mesh,position);
+    return mesh;
+  }
+
+  updateVehicles() {
+    const {minecarts,boats} = this.world;
+    for (const [key,mesh] of this.importedVehicles) mesh.visible = !minecarts.has(key) && !boats.has(key);
     const visible = new Set();
-    for (const {entity} of carts.values()) {
+    for (const {entity} of [...minecarts.values(),...boats.values()]) {
       const [x,y,z] = entity.position.map(Math.floor);
       if (!this.world.chunks.has(chunkKey(x >> 4,z >> 4)) || !this.isPreciseVisible(x >> 4,z >> 4)) continue;
       visible.add(entity.key);
-      let mesh = this.movingMinecarts.get(entity.key);
+      let mesh = this.movingVehicles.get(entity.key);
       if (!mesh) {
-        mesh = this.makeMinecart(entity);
-        this.movingMinecarts.set(entity.key,mesh);
+        mesh = this.makeEntity(entity);
+        this.movingVehicles.set(entity.key,mesh);
         this.scene.add(mesh);
       }
       const previous = this.entityLights.get(mesh.userData.lightSection)?.get(mesh)?.position;
@@ -826,13 +848,14 @@ export class Display {
         light.needsUpdate = true;
       }
       mesh.position.set(...entity.position);
-      mesh.rotation.set(0,minecartRotation(entity),minecartTilt(entity),'YXZ');
+      if (isRideableBoat(entity)) mesh.rotation.y = boatHeading(entity);
+      else mesh.rotation.set(0,minecartRotation(entity),minecartTilt(entity),'YXZ');
       mesh.updateMatrixWorld();
     }
-    for (const [key, mesh] of this.movingMinecarts) {
+    for (const [key,mesh] of this.movingVehicles) {
       if (visible.has(key)) continue;
       this.discardGroup(mesh);
-      this.movingMinecarts.delete(key);
+      this.movingVehicles.delete(key);
     }
   }
 
@@ -1043,7 +1066,8 @@ export class Display {
         staged.push({data, ...data.drawRange});
         data.setDrawRange(0, 0);
         this.uploadScene.add(staging);
-        if (mesh.userData.sign || !job.result && !job.far) this.renderer.initTexture(mesh.material.map);
+        const map = mesh.material.map;
+        if (map && (mesh.userData.sign || !job.result && !job.far)) this.renderer.initTexture(map);
         job.meshes.shift();
         bytes += size;
         count++;

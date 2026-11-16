@@ -165,6 +165,7 @@ export function createHoneymoonServer({
   const publicWorld = base.publicManifest ?? base.manifest;
   const manifest = lod ? {...publicWorld, lod:lod.descriptor} : publicWorld;
   const sounds = statSync(join(generated, 'sounds', 'sounds.json'), {throwIfNoEntry: false})?.isFile() ?? false;
+  const boatTexture = statSync(join(generated,'textures','boat.png'),{throwIfNoEntry:false})?.isFile() ?? false;
   for (const family of modelFamilies) {
     try {
       const file = readFileSync(join(generated, 'models', `${family}.json`), 'utf8');
@@ -205,7 +206,7 @@ export function createHoneymoonServer({
   const serveWorld = serveWorldJson();
   const session = player => {
     const time = worldTime.snapshot();
-    return { ...game.session(player), modelFamilies: Object.keys(models), sounds, dayTick: time.tick, time, creative:Boolean(creative),
+    return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,creative:Boolean(creative),
       profile: publicProfile(player, store.getProfile(player)) };
   };
 
@@ -286,7 +287,9 @@ export function createHoneymoonServer({
           const body = await readBody(request);
           const pose = readPose(body);
           if (body.cartDrive !== undefined && ![-1,0,1].includes(body.cartDrive)) throw new RequestError(400,'invalid_pose');
-          game.driveMinecart(player,pose,body.cartDrive);
+          if (body.boatDrive !== undefined && (!Array.isArray(body.boatDrive) || body.boatDrive.length !== 2 ||
+              body.boatDrive.some(value => ![-1,0,1].includes(value)))) throw new RequestError(400,'invalid_pose');
+          game.driveMinecart(player,pose,body.cartDrive,body.boatDrive);
           const {position, seat} = game.session(player);
           presence.join(player, position, game.poseFor(player, pose));
           return json(response, 200, {ok:true, position, seat});
@@ -342,7 +345,7 @@ export function createHoneymoonServer({
         if (!result.replay && result.status === 200) {
           afterCommit?.(request, response, result.output);
           broadcast(player, result.output);
-          if (result.output.minecart || result.output.removedMinecart) broadcastMinecarts();
+          if (result.output.minecart || result.output.removedMinecart || result.output.boat || result.output.removedBoat) broadcastMinecarts();
         }
         if (!response.destroyed) json(response, result.status, result.output);
         return;
