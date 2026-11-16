@@ -112,11 +112,12 @@ test('disk-backed server writes private chat logs beside its save and drains the
   } finally {
     await feed?.body?.cancel();
     await app?.close();
-    for(const file of await readdir(directory)) {
-      if(file==='chat-logs') {
-        for(const day of await readdir(logDirectory)) await unlink(join(logDirectory,day));
-        await rmdir(logDirectory);
-      } else await unlink(join(directory,file));
+    for (const entry of await readdir(directory,{withFileTypes:true})) {
+      const path=join(directory,entry.name);
+      if (entry.isDirectory() && ['chat-logs','load-logs'].includes(entry.name)) {
+        for (const day of await readdir(path)) await unlink(join(path,day));
+        await rmdir(path);
+      } else await unlink(path);
     }
     await rmdir(directory);
   }

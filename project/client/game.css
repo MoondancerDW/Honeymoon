@@ -62,6 +62,20 @@ button:disabled { cursor: wait; opacity: .45; }
 .paused .tools > :not([hidden]) { display: inline-flex; }
 .playing .tools { padding: 0; border: 0; background: none; box-shadow: none; }
 .paused .tools { flex-wrap: wrap; justify-content: flex-end; }
+#connection-metrics {
+  display: none; gap: .6rem; align-items: center; white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: #14242dcc; color: #edf2f1; padding: .35rem .5rem; border-radius: .38rem; font-size: .74rem;
+}
+#game.playing #connection-metrics { display: flex; }
+#connection-alert:not([hidden]) {
+  position: fixed; z-index: 16; top: calc(max(.5rem,env(safe-area-inset-top)) + 3.2rem); left: 50%; transform: translateX(-50%);
+  display: grid; justify-items: center; gap: .5rem; width: max-content; max-width: calc(100vw - 2rem);
+  background: #162932f2; border: 1px solid #bb946e; border-radius: .55rem; color: #fff1da;
+  padding: .6rem .8rem; font-size: .86rem; text-align: center;
+}
+#game.touch #connection-metrics { position: absolute; right: 0; top: 3rem; }
+#game.touch #connection-alert { top: calc(max(.5rem,env(safe-area-inset-top)) + 5.75rem); }
+@media (orientation: portrait) { #game.touch #connection-metrics { top: .55rem; } }
 #resume-help { margin-top: .5rem; line-height: 1.4; }
 .distance { display: flex; gap: .45rem; align-items: center; }
 .bottom { font-size: .77rem; }

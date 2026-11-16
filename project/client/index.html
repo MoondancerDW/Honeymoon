@@ -9,6 +9,9 @@
   <link rel="stylesheet" href="/game.css">
   <link rel="stylesheet" href="/npc-menu.css">
   <link rel="stylesheet" href="/access-menu.css">
+  <script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.mjs',{type:'module'}).catch(()=>{});
+  </script>
 </head>
 <body>
   <main id="game" aria-label="Игровой мир Honeymoon">
@@ -29,6 +32,10 @@
       </form>
     </section>
     <div id="health" role="meter" aria-label="Здоровье" aria-valuemin="0" aria-valuemax="10" hidden></div>
+    <section id="connection-alert" aria-label="Соединение с сервером" hidden>
+      <span id="connection-message" role="status"></span>
+      <button id="connection-retry" type="button" hidden>Повторить подключение</button>
+    </section>
     <section id="death-screen" aria-labelledby="death-title" hidden>
       <h2 id="death-title">Помер</h2>
       <button id="revive" type="button" hidden>Ожить</button>
@@ -64,6 +71,10 @@
         <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled>Телепорт</button>
         <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
       </div>
+      <aside id="connection-metrics" aria-label="Производительность и задержка">
+        <span id="connection-fps" title="Отрисованных кадров в секунду">— FPS</span>
+        <span id="connection-ping" title="Время ответа сервера по HTTP">Пинг —</span>
+      </aside>
     </header>
     <section id="entry" class="entry">
       <div class="panel">

@@ -28,7 +28,11 @@ export function decodeIndices(encoded) {
 
 export async function json(url, init) {
   const response = await fetch(url, init);
-  if (!response.ok) throw new Error(url + ' — ' + response.status);
+  if (!response.ok) {
+    const error=new Error(url + ' — ' + response.status);
+    error.status=response.status;
+    throw error;
+  }
   return response.json();
 }
 

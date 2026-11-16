@@ -35,9 +35,11 @@ import {positionBatch} from './position-packet.mjs';
 import {supportsFarTerrain} from './far-terrain.mjs';
 import {bindTouchControls} from './touch-controls.mjs';
 import {createPlayerModeUi} from './player-mode-ui.mjs';
+import {createConnectionStatus} from './connection-status.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
+const connection=createConnectionStatus({element,onRecover:()=>location.reload()});
 const entry = element('entry');
 const loading = element('loading');
 const button = element('play');
@@ -100,7 +102,7 @@ let signTarget;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
 let arrivalVersion = 0;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
-let feed;
+let feed,feedRetry;
 let nearbyStream;
 let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
@@ -393,6 +395,8 @@ const messages = {
   inventory_full: 'В инвентаре нет места',
   occupied_inventory_slot: 'Освободите ячейку для этой стопки',
   too_many_dropped_items: 'Рядом слишком много выброшенных предметов',
+  action_rate_limit:'Слишком много действий подряд. Попробуйте через секунду.',
+  action_result_expired:'Состояние мира и инвентаря обновлено.',
   drop_obstructed: 'Здесь нельзя выбросить предмет',
   invalid_nickname: 'Проверьте ник · от 2 до 24 символов',
   invalid_skin: 'Скин должен быть изображением PNG поддерживаемого размера',
@@ -404,6 +408,11 @@ async function post(path, payload, signal) {
   const response = await fetch('/api/' + path, {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload), signal
   });
+  if ([502,503,504].includes(response.status)) {
+    const error=new Error('Сервер недоступен');
+    error.status=response.status;
+    throw error;
+  }
   const body = await response.json();
   return {ok: response.ok, body};
 }
@@ -456,8 +465,11 @@ function requestId() {
 }
 
 async function postAction(request) {
-  try { return await post('action', request); }
-  catch { return post('action', request); }
+  let result;
+  try { result=await post('action',request); }
+  catch { result=await post('action',request); }
+  if (result.body.error==='action_result_expired') await refresh();
+  return result;
 }
 
 function effects(data, showMessages = true) {
@@ -497,8 +509,14 @@ async function refresh() {
 }
 
 function stream() {
-  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1&npcs=1');
-  feed.addEventListener('open', () => { presenceDirty = true; social.refreshWarps(); });
+  clearTimeout(feedRetry);
+  feed?.close();
+  const source=feed=new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1&npcs=1');
+  feed.addEventListener('open', () => { connection.stream(true); presenceDirty = true; social.refreshWarps(); });
+  feed.addEventListener('error',()=>{
+    connection.stream(false);
+    if (source.readyState===EventSource.CLOSED) feedRetry=setTimeout(stream,2500);
+  });
   feed.addEventListener('presence', event => {
     const {players, selfOnline} = JSON.parse(event.data);
     view.players.replace(players);
@@ -1377,6 +1395,7 @@ function tick(now) {
     nextMobileFrame=Math.max(deadline+mobileFrameMs,now+mobileFrameMs/2);
   }
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
+  const canMove=connection.canMove();
   let seatedSpeed = 0;
   if (emote && (flying || seat || jump || forwardInput() || turnInput() || movement.stance!=='stand' ||
       emote.id==='wave'&&Date.now()-emote.started>2200)) {
@@ -1386,14 +1405,14 @@ function tick(now) {
   lastFrame = now;
   world.stepMinecarts(now);
   const vehicle = seat?.entity && (seat.kind === 'boat' ? world.boats : world.minecarts).get(seat.entity)?.entity;
-  if (vehicle && !resetting) {
+  if (vehicle && !resetting && canMove) {
     const anchor = seat.kind === 'boat' ? boatSeat(vehicle) : minecartSeat(vehicle,seat.yaw);
     const turn = anchor.yaw - seat.yaw;
     heading.yaw += Math.atan2(Math.sin(turn), Math.cos(turn));
     Object.assign(position, {x:anchor.x, y:anchor.y, z:anchor.z});
     Object.assign(seat, anchor);
   }
-  if (seat?.kind === 'ground' && playing && !menuOpen() && !orbitHeading && (forwardInput() || turnInput())) {
+  if (seat?.kind === 'ground' && playing && canMove && !menuOpen() && !orbitHeading && (forwardInput() || turnInput())) {
     seatedMoveSince ??= now;
     if (!acting && !seatPending && !resetting) {
       if (now-seatedMoveSince >= 1000) {
@@ -1410,7 +1429,7 @@ function tick(now) {
       }
     }
   } else seatedMoveSince = undefined;
-  if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending && teleportLoading.hidden) {
+  if (playing && canMove && !menuOpen() && !orbitHeading && !seat && !seatPending && teleportLoading.hidden) {
     const startX = position.x, startZ = position.z;
     const fallSpeed = movement.fall;
     const forward = forwardInput();
@@ -1455,8 +1474,8 @@ function tick(now) {
       biome:view.climate?.biomeAt(position.x,position.z),night:hour > 13000 && hour < 23000,
       windStrength:windAt(now,view.weather).strength});
   }
-  if (!resetting && teleportLoading.hidden && now >= nextPositionSync && !acting) syncPosition();
-  if (!sync || presenceDirty) sendPresence(now);
+  if (!resetting && canMove && teleportLoading.hidden && now >= nextPositionSync && !acting) syncPosition();
+  if (canMove && (!sync || presenceDirty)) sendPresence(now);
   if (playing && !menuOpen() && !seat && !flying && movement.stance === 'stand') {
     view.viewBob.step(horizontalSpeed * dt, dt, movement.grounded && !movement.medium, movement.fall);
   } else {
@@ -1469,7 +1488,7 @@ function tick(now) {
   updateSelection();
   worldEdit.frame();
   updatePlacement(npcTarget||hitPlayer?null:selection);
-  if (repeatPlacement && now >= nextPlacement && !acting && !resetting && !menuOpen() && playing &&
+  if (repeatPlacement && canMove && now >= nextPlacement && !acting && !resetting && !menuOpen() && playing &&
       !spectator && !orbitHeading && (touchMode || document.pointerLockElement === view.renderer.domElement)) {
     nextPlacement = now + 150;
     if ((clipboard || heldPart || chiseling) && !frameTarget && !seatTarget && !npcTarget) void action('place');
@@ -1496,6 +1515,7 @@ function tick(now) {
   touchControls?.update({flying,spectator,stance:movement.stance,crawlRequested,seated:seat?.kind==='ground',
     orbit:Boolean(orbitHeading),chisel:chiseling});
   view.render(now, npcTarget||hitPlayer?null:selection, playing && !menuOpen(), placement, document.hasFocus(),{x:eye[0],y:eye[1],z:eye[2]});
+  connection.frames(view.renderedFrames,now);
   requestAnimationFrame(tick);
 }
 
@@ -2041,7 +2061,14 @@ async function start() {
   }
 }
 
-start().catch(error => {
+void connection.check();
+start().catch(async error => {
   console.error(error);
+  const reachable=await connection.check();
+  if (!reachable || error.status>=502 && error.status<=504) {
+    loading.textContent='Сервер недоступен';
+    connection.startupFailed(!reachable);
+    return;
+  }
   loading.textContent = 'Ошибка загрузки. ' + error.message;
 });

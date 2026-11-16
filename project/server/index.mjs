@@ -10,6 +10,7 @@ import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { createChat } from './chat.mjs';
+import { createLoadLog } from './load-log.mjs';
 import {loadLodAssets,loadVistaAssets,serveClimateMap,serveLodTile,serveVistaTile} from './lod-assets.mjs';
 import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
@@ -28,6 +29,7 @@ const MAX_BODY = 4096;
 const MAX_ACTION_BODY = 16384;
 const MAX_NPC_EDITOR_BODY = 4 * 1024 * 1024;
 const MAX_STREAMS = 64;
+const MAX_PROFILE_STREAMS = 3;
 const parallelDeviceRoutes=new Set(['/api/profile','/api/time','/api/weather','/api/modes','/api/npcs/editor']);
 const MAX_STREAM_BACKLOG = 256 * 1024;
 const MAX_BULK_COMMIT = 3 * 1024 * 1024;
@@ -264,6 +266,9 @@ export function createHoneymoonServer({
     throw error;
   }
   const streams = new Set();
+  const loadLog=state===':memory:' ? undefined : createLoadLog({
+    directory:join(dirname(state),'load-logs'),onlineStreams:()=>streams.size,
+  });
   const access=createAccess(store,{inviteRequired,ownerKey:npcAdminKey,publicOrigin,now:clock,
     revokeStream:device=>{
       for (const stream of streams) if (stream.deviceId===device) {
@@ -291,6 +296,7 @@ export function createHoneymoonServer({
     },
   });
   const presence = createPresence({store, profileFor, send:writeEvent, onVisibility(profile, online, player) {
+    loadLog?.player(player,online);
     if (!online) {
       game.leaveSeat(player);
       npcs.leave(player);
@@ -438,12 +444,18 @@ export function createHoneymoonServer({
   async function dispatch(request, response, owner, requestSecure, requestOrigin) {
     const url = new URL(request.url, 'http://localhost');
     const path = url.pathname;
+    loadLog?.request(path,response);
     const method = request.method;
     const isApi=path.startsWith('/api/');
     const gameAsset=path.startsWith('/generated/') || path.startsWith('/skins/');
-    const credential=isApi||inviteRequired&&gameAsset ? access.authenticate(readAccessCookie(request)) : undefined;
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
+    if (path==='/api/ping' && (method==='GET'||method==='HEAD')) {
+      response.writeHead(204,{'Cache-Control':'no-store'});
+      response.end();
+      return;
+    }
+    const credential=isApi||inviteRequired&&gameAsset ? access.authenticate(readAccessCookie(request)) : undefined;
     if (isApi) {
       if (method === 'POST' || method === 'DELETE') requireSameOrigin(request,requestSecure,requestOrigin);
       const player=credential?.uid;
@@ -705,6 +717,9 @@ export function createHoneymoonServer({
         return;
       }
       if (path === '/api/events' && method === 'GET') {
+        if ([...streams].filter(stream=>stream.player===player).length>=MAX_PROFILE_STREAMS) {
+          throw new RequestError(429,'profile_stream_limit');
+        }
         if (streams.size >= MAX_STREAMS) throw new RequestError(503, 'stream_limit');
         const presenceEntry = presenceStream && presence.prepare(player);
         response.writeHead(200, {
@@ -822,6 +837,7 @@ export function createHoneymoonServer({
     return http;
   }
   const server=listener(false);
+  server.once('listening',()=>loadLog?.start());
   const ownerServer=listener(true);
   const heartbeat = setInterval(() => {
     for (const { player, response } of streams) {
@@ -891,7 +907,7 @@ export function createHoneymoonServer({
       })));
       game.flushMinecarts();
       game.clearDroppedItems();
-      await chat.close();
+      await Promise.all([chat.close(),loadLog?.close()]);
       store.close();
     },
   };

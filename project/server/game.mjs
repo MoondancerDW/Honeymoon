@@ -53,6 +53,8 @@ const MOVEMENT_GRACE = 0.24;
 const RUN_SPEED = FLIGHT_SPRINT_SPEED + 1;
 const MAX_ACTIVE_IDLE_MS = 30000;
 const REQUEST_ID = /^[A-Za-z0-9_-]{8,100}$/;
+const actionRate = {player:24,playerBurst:48,total:192,totalBurst:384};
+const receiptCleanupInterval=60_000;
 
 function point(input, integers = false) {
   const valid = integers ? Number.isSafeInteger : Number.isFinite;
@@ -242,6 +244,9 @@ export function createGame(base, store, geometry, {
   const eyes = new Map();
   const spectators = new Set();
   const seats = new Map();
+  const actionBudgets=new Map();
+  const globalActionBudget={tokens:actionRate.totalBurst,at:clock()};
+  let nextReceiptCleanup=0;
   let occupiedDetectors = new Map();
   const mechanics = modules ?? registerMechanics(base, store, geometry);
   const [sx, sy, sz] = base.manifest.spawn;
@@ -1354,21 +1359,40 @@ export function createGame(base, store, geometry, {
     if (id && !itemKey && catalog.has(cell)) return {...tags,id,Damage:meta,Block:true};
   }
 
+  function chargeAction(player,at) {
+    const local=actionBudgets.get(player)??{tokens:actionRate.playerBurst,at};
+    function replenish(bucket,rate,capacity) {
+      bucket.tokens=Math.min(capacity,bucket.tokens+Math.max(0,at-bucket.at)*rate/1000);
+      bucket.at=Math.max(at,bucket.at);
+    }
+    replenish(local,actionRate.player,actionRate.playerBurst);
+    replenish(globalActionBudget,actionRate.total,actionRate.totalBurst);
+    if (local.tokens<1||globalActionBudget.tokens<1) throw new RequestError(429,'action_rate_limit',{retryAfter:1});
+    local.tokens--;
+    globalActionBudget.tokens--;
+    actionBudgets.set(player,local);
+  }
+
   function action(player, body) {
     if (survival?.dead(player)) throw new RequestError(409,'player_dead');
     if (spectators.has(player)) throw new RequestError(403, 'spectator_action');
     const input = normalizeAction(body);
-    if (input.eye) eyes.set(player,input.eye);
-    else eyes.delete(player);
     const encoded = JSON.stringify(input);
     const { requestId } = body;
+    const at=clock();
+    function replay(receipt) {
+      if (receipt.input!==encoded) throw new RequestError(409,'request_id_reused');
+      return {status:receipt.status,output:receipt.output,replay:true};
+    }
+    const existing=store.getReceipt(player,requestId,at);
+    if (existing) return replay(existing);
+    chargeAction(player,at);
+    if (input.eye) eyes.set(player,input.eye);
+    else eyes.delete(player);
     const transport = {};
     const result = store.atomic(() => {
-      const receipt = store.getReceipt(player, requestId);
-      if (receipt) {
-        if (receipt.input !== encoded) throw new RequestError(409, 'request_id_reused');
-        return { status: receipt.status, output: receipt.output, replay: true };
-      }
+      const receipt = store.getReceipt(player,requestId,at);
+      if (receipt) return replay(receipt);
 
       let status = 200;
       let output;
@@ -1383,7 +1407,7 @@ export function createGame(base, store, geometry, {
         output = { error: error.code, ...error.details };
       }
       store.db.exec('RELEASE action');
-      store.putReceipt(player, requestId, encoded, status, output);
+      store.putReceipt(player, requestId, encoded, status, output,at);
       return { status, output, replay: false };
     });
     if (!result.replay && result.status === 200) {
@@ -1599,6 +1623,12 @@ export function createGame(base, store, geometry, {
   }
 
   function advance() {
+    const now=clock();
+    if (now>=nextReceiptCleanup) {
+      store.pruneReceipts(now);
+      for (const [uid,budget] of actionBudgets) if (now-budget.at>=receiptCleanupInterval) actionBudgets.delete(uid);
+      nextReceiptCleanup=now+receiptCleanupInterval;
+    }
     const plans = mechanics.flatMap(module => {
       const plan = module.prepareTick?.(moduleContext(module, null, {}));
       return plan ? [[module, plan]] : [];
