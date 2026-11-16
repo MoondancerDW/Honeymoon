@@ -1,7 +1,7 @@
 import * as geometry from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
-import {movementMedium} from '../world/block-movement.mjs';
-import {FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, PLAYER, WALK_SPEED, isPlayerStance, playerBody} from '../world/player-body.mjs';
+import {fluidAt,fluidCurrent,movementMedium} from '../world/block-movement.mjs';
+import {CRAWL_SPEED, FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, PLAYER, WALK_SPEED, isPlayerStance, playerBody} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
 import {withLoggedFluid} from '../world/logged-fluid.mjs';
 import {isRideableMinecart, minecartHit} from '../world/minecarts.mjs';
@@ -21,7 +21,8 @@ const framesByChunk = new WeakMap();
 
 export function movementSpeed({flying = false, sprint = false, stance = 'stand'} = {}) {
   if (flying) return sprint ? FLIGHT_SPRINT_SPEED : FLIGHT_SPEED;
-  if (stance !== 'stand') return WALK_SPEED * (stance === 'crawl' ? .26 : .3);
+  if (stance === 'swim') return WALK_SPEED;
+  if (stance !== 'stand') return stance === 'crawl' ? CRAWL_SPEED : WALK_SPEED * .3;
   return sprint ? GROUND_SPRINT_SPEED : WALK_SPEED;
 }
 
@@ -140,9 +141,17 @@ export class Movement {
 
   setStance({x,y,z}, stance) {
     if (stance === this.stance || !isPlayerStance(stance)) return this.stance;
-    if (stance !== 'stand' && (!this.grounded || movementMedium(this.cellAt,x,y,z,this.world.models))) return this.stance;
+    if (stance === 'swim') {
+      if (movementMedium(this.cellAt,x,y,z,this.world.models) !== 'water') return this.stance;
+    } else if (stance !== 'stand' && (!this.grounded || movementMedium(this.cellAt,x,y,z,this.world.models))) return this.stance;
     if (!this.blocked(x,y,z,playerBody(this.size, stance))) this.stance = stance;
     return this.stance;
+  }
+
+  wantsSwim({x,y,z}, sprinting) {
+    if (!sprinting && this.stance !== 'swim') return false;
+    const depth = this.stance === 'swim' ? .24 : Math.max(.5,this.body.height - .18);
+    return fluidAt(this.cellAt,x,y+depth,z,this.world.models) === 'water';
   }
 
   blocked(x, y, z, body = this.body) {
@@ -230,9 +239,23 @@ export class Movement {
     return true;
   }
 
-  update(position, dx, dz, jump, dt, {descend = false, rise = jump, recordStep} = {}) {
+  slideSeated(position, dx, dz, dt, body, recordStep) {
+    const steps = Math.max(1,Math.ceil(dt / .016));
+    for (let i = 0; i < steps; i++) {
+      for (const [axis,amount] of [['x',dx],['z',dz]]) {
+        if (!amount) continue;
+        const next = {...position,[axis]:position[axis]+amount*dt/steps};
+        if (this.blocked(next.x,next.y,next.z,body) || !this.blocked(next.x,next.y-.03,next.z,body) ||
+            movementMedium(this.cellAt,next.x,next.y,next.z,this.world.models)) continue;
+        position[axis] = next[axis];
+      }
+      recordStep?.(position);
+    }
+  }
+
+  update(position, dx, dz, jump, dt, {descend = false, rise = jump, swimPitch = 0, recordStep} = {}) {
     this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
-    if (!this.medium && jump && this.grounded && this.stance !== 'crawl') {
+    if (!this.medium && jump && this.grounded) {
       this.fall = Math.sqrt(40 * this.body.jumpHeight);
       this.grounded = false;
     }
@@ -240,11 +263,16 @@ export class Movement {
     const step = dt / n;
     for (let i = 0; i < n; i++) {
       const startMedium = this.medium;
+      const submerged = startMedium === 'water' || startMedium === 'lava';
+      const swimming = this.stance === 'swim' && startMedium === 'water';
+      const current = submerged ? fluidCurrent(this.cellAt,position.x,position.y,position.z,startMedium) : [0,0,0];
       let deltaY;
       if (startMedium === 'ladder') {
         this.fall = descend ? -1.8 : rise ? 2.4 : Math.max(-1.8, this.fall - 12 * step);
       } else if (startMedium === 'water') {
-        this.fall = descend ? -2 : rise ? 2.5 : Math.max(-.85, this.fall - 5 * step);
+        this.fall = descend ? -2 : rise ? 2.5 : swimming ? swimPitch*2.6 : Math.max(-.85,this.fall-5*step);
+      } else if (startMedium === 'lava') {
+        this.fall = descend ? -1.04 : rise ? 1.15 : Math.max(-.63,this.fall-3.5*step);
       } else {
         const initial = this.fall;
         this.fall = Math.max(-16, initial - 20 * step);
@@ -258,15 +286,16 @@ export class Movement {
       }
       // Resolve Y before X and Z, including when leaving a ledge or climbing
       // past a ceiling. Contact with a wall can start ascent on the next step.
-      this.vertical(position, deltaY ?? this.fall * step);
-      const drag = startMedium === 'water' ? .48 : startMedium === 'ladder' ? .62 : 1;
-      const swimOut = startMedium === 'water' && rise && !descend;
-      const wallX = this.horizontal(position, 'x', dx * step * drag, swimOut);
-      const wallZ = this.horizontal(position, 'z', dz * step * drag, swimOut);
+      this.vertical(position,(deltaY ?? this.fall*step)+current[1]*step);
+      const drag = swimming ? .88 : startMedium === 'water' ? .48 : startMedium === 'lava' ? .29 : startMedium === 'ladder' ? .62 : 1;
+      const swimOut = submerged && rise && !descend;
+      const wallX = this.horizontal(position, 'x',(dx*drag+current[0])*step,swimOut);
+      const wallZ = this.horizontal(position, 'z',(dz*drag+current[2])*step,swimOut);
       this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
       if (!descend && (wallX || wallZ)) {
         if (this.medium === 'ladder') this.fall = 2.4;
         if (this.medium === 'water') this.fall = 2.5;
+        if (this.medium === 'lava') this.fall = 1.15;
       }
       recordStep?.(position);
     }

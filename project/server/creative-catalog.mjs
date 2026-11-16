@@ -3,6 +3,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {CREATIVE_BOAT_KEY, CREATIVE_FRAME_KEY, CREATIVE_INVISIBLE_FRAME_KEY, CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
 import {isCoverMaterial} from '../world/geometry.mjs';
+import {FAKE_WATER} from '../world/fluid-state.mjs';
 
 const rails = [
   [66, 'Рельсы', 'Rail'],
@@ -41,6 +42,8 @@ export function readCreativeCatalog(generated, project = fileURLToPath(new URL('
     catalog.entries.push({...captured.get(key), key, id, meta:0, name, english, mod:'Minecraft', category:'redstone',
       technical:false, placeable:true});
   }
+  if (!captured.has(FAKE_WATER)) catalog.entries.push({key:FAKE_WATER,id:4095,meta:0,
+    name:'Фальшивая вода',english:'Fake Water',mod:'Honeymoon',category:'nature',technical:false,placeable:true});
   const extra = new Map([minecart,frame,invisibleFrame,boat].map(item => [item.key,item]));
   for (const {id,damage,name,english,mod} of flatItems) {
     if (!Number.isInteger(id) || id < 1 || id > 32767 || !Number.isInteger(damage) || damage < 0 || damage > 32767 ||

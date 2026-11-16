@@ -994,17 +994,27 @@ function vanillaShape(id, meta, neighbors) {
       const [sprite] = cross(31, 1, undefined, .04);
       return [{...sprite, mode:'fire', emissive:true}];
     }
-    case 2: return [
-      box(CUBE, topSides(3, 0, 2), { tintFaces: [null, null, null, WARM_GRASS, null, null] }),
-    ];
+    case 2: {
+      const connected = neighbors && [[1,0],[-1,0],[0,1],[0,-1]].some(([x,z])=>
+        unpack(neighbors(x,0,z))[0] === 2 || unpack(neighbors(x,-1,z))[0] === 2);
+      return [box(CUBE,topSides(connected ? 0 : 3,0,2),{
+        tintFaces:connected ? [WARM_GRASS,WARM_GRASS,null,WARM_GRASS,WARM_GRASS,WARM_GRASS] :
+          [null,null,null,WARM_GRASS,null,null]})];
+    }
     case 5: return uniform(planks[meta & 3]);
     case 8:
-    case 9: {
-      const depth = neighbors && [8, 9].includes(unpack(neighbors(0, 1, 0))[0]) ? 1 : (meta < 8 ? 1 - (meta + 1) / 9 : 1);
+    case 9:
+    case 4095: {
+      const above = neighbors?.(0,1,0);
+      const depth = above?.fluid === 'water' || [8, 9, 4095].includes(unpack(above)[0]) ? 1 : (meta < 8 ? 1 - (meta + 1) / 9 : 1);
       return [box([0, 0, 0, 1, depth, 1], tiles.water, { mode: 'blend', solid: false })];
     }
     case 10:
-    case 11: return [box([0, 0, 0, 1, meta < 8 ? 1 - (meta + 1) / 9 : 1, 1], tiles.lava, { solid: false, emissive: true })];
+    case 11: {
+      const above = neighbors?.(0,1,0);
+      const depth = above?.fluid === 'lava' || [10,11].includes(unpack(above)[0]) ? 1 : (meta < 8 ? 1 - (meta + 1) / 9 : 1);
+      return [box([0, 0, 0, 1, depth, 1], tiles.lava, { solid: false, emissive: true })];
+    }
     case 17: return uniform(log(meta));
     case 18: return uniform([52, 132, 52, 196][meta & 3],
       {mode:'cutout', tint:[WARM_LEAVES, 0x619961, 0x80a755, WARM_LEAVES][meta & 3]});
@@ -1192,7 +1202,7 @@ function registryShape(id, meta) {
 }
 
 const simpleCache = new Map();
-const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 132, 139, 750, 1527, 2802, 2803,
+const neighborDependent = new Set([2, 8, 9, 10, 11, 54, 64, 71, 85, 101, 102, 107, 113, 132, 139, 750, 1527, 2802, 2803, 4095,
   ...Array.from({length:24}, (_, i) => 2808 + i),
   ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
 const dynamic = new Set([...neighborDependent, 751, 763, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);

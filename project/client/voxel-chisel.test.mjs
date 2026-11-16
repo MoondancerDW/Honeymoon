@@ -49,7 +49,7 @@ test('a pending material placement prevents local movement into its eighth until
   assert.equal(overlapsPlacement(feet, placement), false);
   movement.pendingPlacement = placement;
   movement.fly(feet, 5.1, 0, 0, .05);
-  assert.ok(feet.x <= -.4999);
+  assert.ok(feet.x <= -.2999);
   assert.equal(overlapsPlacement(feet, placement), false);
   movement.pendingPlacement = null;
   movement.fly(feet, 5.1, 0, 0, .05);

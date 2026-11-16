@@ -48,9 +48,10 @@ export function updateBlockLight(world, x, y, z, previousCenter) {
   const values = new Uint8Array(SIDE ** 3);
   const attenuation = new Uint8Array(values.length).fill(255);
   const buckets = Array.from({length: 16}, () => []);
+  const {minY=0,maxY=255} = world.manifest?.bounds ?? {};
   for (const {dx, dy, dz, distance, i} of samples) {
     const xx = x + dx, yy = y + dy, zz = z + dz;
-    if (yy < 0 || yy > 255 || !world.chunks.has(`${xx >> 4},${zz >> 4}`)) continue;
+    if (yy < minY || yy > maxY || !world.chunks.has(`${xx >> 4},${zz >> 4}`)) continue;
     if (distance === MIDDLE) {
       values[i] = world.lightAt(xx, yy, zz) & 15;
     } else {

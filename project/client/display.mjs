@@ -21,7 +21,12 @@ import {DroppedItemView} from './dropped-items.mjs';
 import {HeldLights} from './held-light.mjs';
 import {groundSurface} from './audio.mjs';
 import {Rain} from './rain.mjs';
+import {Climate} from './climate.mjs';
+import {detailCoverage} from '../world/full-detail.mjs';
 import {isWeather} from '../world/weather.mjs';
+import {fluidAt} from '../world/block-movement.mjs';
+import {FallingLeaves} from './falling-leaves.mjs';
+import {attachFoliageWind,windAt} from './wind.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -98,6 +103,8 @@ export class Display {
     this.scene.matrixWorldAutoUpdate = false;
     this.scene.background = new THREE.Color('#86acfa');
     this.scene.fog = new THREE.Fog('#95aad5', 70, 175);
+    this.fluidFog = {water:new THREE.Fog('#285473',.7,28),lava:new THREE.Fog('#b04608',.1,2.4)};
+    this.fluidCellAt = (x,y,z) => this.world.cellAt(x,y,z);
     this.sky = createSky();
     this.scene.add(this.sky);
     this.worldTime = {tick:dayTick, frozen:false, received:performance.now()};
@@ -111,8 +118,13 @@ export class Display {
     this.nightHorizon = new THREE.Color('#0c1326');
     this.nightZenith = new THREE.Color('#040716');
     this.cloudyHorizon = new THREE.Color('#69727d');
-    this.cloudyNight = new THREE.Color('#070a10');
+    this.cloudyNight = new THREE.Color('#020406');
     this.weather = 'clear';
+    this.foliageEnabled = new URLSearchParams(location.search).get('foliage') !== '0';
+    this.foliageDirection = {value:new THREE.Vector2()};
+    this.foliagePhase = {value:0};
+    this.climate = new Climate();
+    this.climate.load().catch(error=>console.warn('Weather biomes could not be loaded',error));
     this.nightVision = false;
     this.updateSky(dayTick);
     this.visualEntities = new THREE.Group();
@@ -151,6 +163,7 @@ export class Display {
     this.lastViewDirection = new THREE.Vector3();
     this.expectedChunks = new Set([...world.manifest.chunks, ...(world.manifest.visualChunks ?? [])]
       .map(([x, z]) => chunkKey(x, z)));
+    this.fullDetail = detailCoverage(world.manifest.fullChunks);
     this.installedVersions = new Map();
     container.append(this.renderer.domElement);
     new ResizeObserver(() => this.resize()).observe(container);
@@ -234,7 +247,11 @@ export class Display {
     this.materials = {...materialsFor(map), ...Object.fromEntries(additional.flat())};
     const textures = terrainFilter(map,this.atlasRows);
     this.useLightmap(this.materials.opaque,textures);
+    this.useLightmap(this.materials.cutout,textures);
+    if (this.foliageEnabled) attachFoliageWind(this.materials.cutout,this.foliageDirection,this.foliagePhase);
     this.useLightmap(this.materials.blend,textures);
+    const multisample = Boolean(this.renderer.getContext().getContextAttributes()?.antialias);
+    this.materials.cutout.alphaToCoverage = multisample;
     this.materials.water = this.materials.blend.clone();
     this.useLightmap(this.materials.water,textures,true);
     if (supportsFarTerrain(this.world.manifest)) this.farTerrain = new FarTerrain(this,textures);
@@ -243,8 +260,8 @@ export class Display {
     this.fireTexture.repeat.y = 1 / FIRE_FRAMES;
     this.fireTexture.needsUpdate = true;
     this.materials.fire = new THREE.MeshBasicMaterial({map:this.fireTexture, alphaTest:.1, side:THREE.DoubleSide});
-    this.materials.pane = new THREE.MeshBasicMaterial({map, vertexColors: true, alphaTest: .47});
-    this.useLightmap(this.materials.pane);
+    this.materials.pane = new THREE.MeshBasicMaterial({map, vertexColors: true, alphaTest:.47,alphaToCoverage:multisample});
+    this.useLightmap(this.materials.pane,textures);
     this.minecartMaterial = new THREE.MeshBasicMaterial({color:'#aeb3bc',vertexColors:true});
     this.useLightmap(this.minecartMaterial);
     const boatMap = this.world.boatTexture ? await loader.loadAsync('/generated/textures/boat.png').catch(() => null) : null;
@@ -405,7 +422,10 @@ export class Display {
     this.weather = mode;
     this.lastSun = undefined;
     this.nextSkyUpdate = 0;
-    if (mode !== 'rain') this.rain?.visible(false);
+    if (mode !== 'rain') {
+      this.rain?.visible(false);
+      this.precipitationKind = null;
+    }
     this.visibleRain = 0;
   }
 
@@ -508,7 +528,7 @@ export class Display {
 
   updateLocalAvatar(now, dt, position, pose, speed, seat, spectator) {
     this.localPonyFacing ??= createPonyFacing();
-    const facing = this.localPonyFacing(position, pose.yaw, dt, seat?.yaw);
+    const facing = this.localPonyFacing(position, pose.yaw, dt, seat?.yaw, pose.motion);
     if (!this.localAvatar) {
       this.localAvatar = createPonyAvatar(this.ponyAirAt);
       this.scene.add(this.localAvatar.object);
@@ -524,8 +544,9 @@ export class Display {
     object.position.set(position.x, position.y, position.z);
     object.rotation.y = facing.bodyYaw;
     this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion, stance:pose.stance, boost:pose.boost,
-      yawOffset:facing.yawOffset, strideDirection:facing.strideDirection, position, swing:pose.swing, held:pose.held,
-      itemAssets:this.heldItemAssets()});
+      yawOffset:facing.yawOffset, strideDirection:facing.strideDirection, strafe:facing.strafe,
+      position, groundSeat:pose.groundSeat || seat?.kind === 'ground', swing:pose.swing, held:pose.held,
+      equipment:pose.equipment, itemAssets:this.heldItemAssets()});
     object.updateMatrixWorld(true);
   }
 
@@ -545,7 +566,8 @@ export class Display {
   }
 
   schedule(cx, cy, cz, edit = false) {
-    if (cy < 0 || cy >= 16) return;
+    const {minY,maxY} = this.world.manifest.bounds;
+    if (cy < Math.floor(minY / 16) || cy > Math.floor(maxY / 16)) return;
     const id = sectionKey(cx, cy, cz);
     const chunk = this.world.chunks.get(chunkKey(cx, cz));
     if (!chunk) return;
@@ -629,7 +651,8 @@ export class Display {
         }
         this.discardGroup(entities);
       }
-      for (let y = 0; y < 16; y++) {
+      const {minY,maxY} = this.world.manifest.bounds;
+      for (let y = Math.floor(minY / 16); y <= Math.floor(maxY / 16); y++) {
         const id = sectionKey(x, y, z);
         this.sectionVisibility.invalidate(id);
         const group = this.groups.get(id);
@@ -693,7 +716,8 @@ export class Display {
       }
     }
     const visible = this.isPreciseVisible(x,z);
-    for (let y = 0; y < 16; y++) {
+    const {minY,maxY} = this.world.manifest.bounds;
+    for (let y = Math.floor(minY / 16); y <= Math.floor(maxY / 16); y++) {
       const group = this.groups.get(sectionKey(x,y,z));
       if (!group) continue;
       group.userData.preciseVisible = visible;
@@ -1064,6 +1088,7 @@ export class Display {
       group.userData.visualOnly = this.world.chunks.get(chunkKey(coords[0], coords[2]))?.visualOnly === true;
       group.userData.sectionCoords = coords;
       group.userData.fitForOcclusion = result.fitsSection === true;
+      group.userData.foliageQuads = result.foliageQuads ?? 0;
     }
     for (const [mode, data] of Object.entries(result.layers)) {
       const geometry = new THREE.BufferGeometry();
@@ -1071,6 +1096,7 @@ export class Display {
       geometry.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
       geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3, true));
       geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(data.lightLevels, 1));
+      if (data.wind) geometry.setAttribute('foliageWind',new THREE.BufferAttribute(data.wind,1));
       geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
       const {center, radius} = data.bounds;
       geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(...center), radius);
@@ -1192,7 +1218,7 @@ export class Display {
       const key = chunkKey(cx + dx, cz + dz);
       const area = this.streamArea;
       if (area && Math.max(Math.abs(cx + dx - area.x), Math.abs(cz + dz - area.z)) > area.radius) continue;
-      if (this.expectedChunks.has(key) && !this.world.chunks.has(key)) return false;
+      if ((this.expectedChunks.has(key) || this.fullDetail(cx+dx,cz+dz)) && !this.world.chunks.has(key)) return false;
     }
     return true;
   }
@@ -1261,6 +1287,7 @@ export class Display {
         }
         worker.postMessage({id: job.id, type: job.type, version: job.version, paletteAppend,
           collectVisibility:this.sectionVisibility.enabled,
+          foliage:this.foliageEnabled && !job.visualOnly ? [job.cx*16,job.cy*16,job.cz*16] : null,
           atlasRows: this.atlasRows, connectedTextures: this.connectedTextures,
           chiselConnectedTextures: this.chiselConnectedTextures, carpentryModel: this.carpentryModel, ...halo},
           [halo.indices.buffer, halo.light.buffer]);
@@ -1344,6 +1371,13 @@ export class Display {
     // Inactive tabs keep receiving player and world updates while limiting GPU work.
     if (foreground || now >= (this.nextIdleRender ?? 0)) {
       if (this.fireTexture) this.fireTexture.offset.y = (Math.floor(now / FIRE_STEP_MS) % FIRE_FRAMES) / FIRE_FRAMES;
+      if (this.foliageEnabled && this.materials?.cutout) {
+        const wind = windAt(now,this.weather);
+        this.foliageDirection.value.set(wind.x,wind.z);
+        this.foliagePhase.value = wind.phase;
+        this.fallingLeaves ??= new FallingLeaves(this.scene,this.world,this.materials.cutout,this.atlasRows);
+        this.visibleLeaves = this.fallingLeaves.update(now,this.camera,wind);
+      }
       this.sky.position.copy(this.camera.position);
       this.sky.updateMatrixWorld();
       this.sky.material.uniforms.windTime.value = now * .001;
@@ -1351,8 +1385,9 @@ export class Display {
       if (this.localAvatar) ponies.push({object:this.localAvatar.object, avatar:this.localAvatar});
       this.heldLights.update(ponies, this.camera.position, this.spectating ? null : this.localAvatar);
       if (this.weather === 'rain') {
-        this.rain ??= new Rain(this.scene,this.world);
+        this.rain ??= new Rain(this.scene,this.world,this.climate);
         const {x,y,z}=this.camera.position;
+        this.precipitationKind = this.climate.snowAt(x,y,z) ? 'snow' : 'rain';
         const bx=Math.floor(x), by=Math.floor(y), bz=Math.floor(z);
         const packed=this.world.lightAt(bx,by,bz);
         const nearby=this.heldLights.levelAt(bx,by,bz);
@@ -1375,16 +1410,31 @@ export class Display {
         return this.lightBytes[offset] << 16 | this.lightBytes[offset + 1] << 8 | this.lightBytes[offset + 2];
       },(x,z) => this.isPreciseVisible(x,z));
       this.updateOcclusion(now);
-      this.renderer.render(this.scene, this.camera);
+      const eye=this.camera.position;
+      const medium=fluidAt(this.fluidCellAt,eye.x,eye.y,eye.z,this.world.models);
+      const immersed=this.fluidFog[medium];
+      if (immersed) {
+        const {fog,background}=this.scene;
+        this.sky.visible=false;
+        this.scene.fog=immersed;
+        this.scene.background=immersed.color;
+        try { this.renderer.render(this.scene,this.camera); }
+        finally {
+          this.scene.fog=fog;
+          this.scene.background=background;
+          this.sky.visible=true;
+        }
+      } else this.renderer.render(this.scene,this.camera);
       this.nextIdleRender = now + 100;
     }
   }
 
   statistics() {
     const {render, memory} = this.renderer.info;
-    let preciseBytes = 0, coarseBytes = 0, preciseTriangles = 0, coarseTriangles = 0;
+    let preciseBytes = 0, coarseBytes = 0, preciseTriangles = 0, coarseTriangles = 0, foliageQuads = 0;
     for (const [id, group] of this.groups) {
       if (!group.visible) continue;
+      foliageQuads += group.userData.foliageQuads ?? 0;
       const coarse = id.startsWith('lod:');
       for (const mesh of group.children) {
         const data = mesh.geometry;
@@ -1397,6 +1447,7 @@ export class Display {
     return {calls: render.calls, triangles: render.triangles, geometries: memory.geometries, textures: memory.textures,
       occlusion:this.sectionVisibility.statistics(), heldLights:this.heldLights.statistics(),
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles, farTerrain:this.farTerrain?.stats(),
+      foliageQuads, fallingLeaves:this.visibleLeaves ?? 0,
       pending: this.pendingWork, weather:this.weather, nightVision:this.nightVision, rainDrops:this.visibleRain ?? 0,
       loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
   }
@@ -1465,7 +1516,7 @@ function createSky() {
           vec3 darkCloud = vec3(.12,.145,.175);
           vec3 highCloud = mix(vec3(.20,.235,.27),vec3(.33,.365,.39),shoulders);
           vec3 deck = mix(highCloud,darkCloud + vec3(.08)*smoothstep(.48,.72,lower),distinct);
-          float light = mix(.022,1.0,1.0-night);
+          float light = mix(.009,1.0,pow(1.0-night,1.26));
           skyColor = mix(horizon,deck*light,smoothstep(-.01,.17,ray.y));
           gl_FragColor = vec4(skyColor,1.0);
           #include <colorspace_fragment>

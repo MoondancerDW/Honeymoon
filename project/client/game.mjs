@@ -1,21 +1,26 @@
 import {Display} from './display.mjs';
 import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickItemFrame, pickVehicle} from './movement.mjs';
 import {World, chunkKey, json} from './world-data.mjs';
-import {WorldAudio} from './audio.mjs';
+import {WorldAudio,audioDefaults} from './audio.mjs';
+import {windAt} from './wind.mjs';
 import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
 import {createSocialHud} from './social-hud.mjs';
 import {createCreativeMenu} from './creative-menu.mjs';
+import {renderCreativeIcon} from './creative-icons.mjs';
+import {renderInventoryPreview} from './inventory-preview.mjs';
 import {blockState, jammyUseSound} from '../world/block-interactions.mjs';
-import {seatFor, SEATED_EYE} from '../world/seats.mjs';
+import {seatFor, SEATED_EYE, SEATED_HEIGHT} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
-import {FLIGHT_VERTICAL_MULTIPLIER,POSITION_TRAIL_LIMIT,playerBody} from '../world/player-body.mjs';
+import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,POSITION_TRAIL_LIMIT,playerBody} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
 import {canLogLiquid, liquidKind} from '../world/logged-fluid.mjs';
-import {ATLAS_GRID, TILE_SIZE, chiselMaterialShape, coverBoxes, creativeIcon, signFor} from '../world/geometry.mjs';
-import {creativeMicroblock, shapedLampData} from '../world/creative-items.mjs';
+import {FAKE_WATER,bucketCell,bucketKeys,fluidState} from '../world/fluid-state.mjs';
+import {detailCoverage} from '../world/full-detail.mjs';
+import {chiselMaterialShape, coverBoxes, signFor} from '../world/geometry.mjs';
+import {creativeMicroblock} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselPlacementAtHit, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 import {positionBatch} from './position-packet.mjs';
@@ -41,6 +46,7 @@ const signEditor = element('sign-editor');
 const signFields = [...element('sign-form').querySelectorAll('input')];
 const signStatus = element('sign-status');
 const signSave = element('sign-save');
+const audioSettings = element('audio-settings');
 const teleportLoading = element('teleport-loading');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
@@ -60,7 +66,6 @@ const creativeEntries = new Map();
 let catalogRequest, inventoryRequest = Promise.resolve();
 let inventory = {slots:Array(36).fill(null),selected:0};
 let heldSignature = '';
-let iconImage, itemIconImage;
 let selectionInputs, selectionRevision = 0;
 let seatTarget = null;
 let frameTarget = null, rayFrameTarget;
@@ -113,12 +118,14 @@ function resume() {
 }
 const social = createSocialHud({post, notice, pause, resume, teleport});
 const creative = createCreativeMenu({load:loadCreative,
-  choose:(entry,slot)=>inventoryAction('inventory_give',{key:entry.key,slot}),
+  choose:(entry,slot,count)=>inventoryAction('inventory_give',{key:entry.key,slot,count}),
   select:slot=>inventoryAction('inventory_select',{slot}),
   move:(from,to,count)=>inventoryAction('inventory_move',{from,to,count}),
   trash:slot=>inventoryAction('inventory_trash',{slot}),
+  drop:fields=>inventoryAction('drop_item',{...fields,yaw:heading.yaw,eye:view.eyeOffset()}),
+  preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin),
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
-const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open;
+const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open || audioSettings?.open;
 
 async function loadCreative() {
   catalogRequest ??= json('/generated/creative/catalog.json').then(catalog=>{
@@ -158,7 +165,7 @@ function applyInventory(value) {
   heldVersion++;
   fromCreative = Boolean(stack && !stack.copied);
   heldCreativeItem = entry?.kind && !stack.copied ? entry : null;
-  clipboard = stack?.part ? null : stack?.cell ?? null;
+  clipboard = stack?.part ? null : stack?.cell ?? bucketCell(stack?.key);
   heldSofa = isJammyConnectableSeat(world.models?.jammy,clipboard) ? {object:stack.object} : null;
   sofaTurns = 0;
   chiselMaterial = isChiselMaterial(clipboard) ? chiselMaterialKey(clipboard) : null;
@@ -169,67 +176,7 @@ function applyInventory(value) {
 }
 
 async function drawCreativeIcon(entry, canvas) {
-  const sprite = world.models.biblio?.items?.[entry.id + ':' + (entry.invisible ? 0 : entry.damage ?? 0)];
-  if (sprite?.uv && ['flat-item','item-frame','minecart','boat'].includes(entry.kind)) {
-    if (!itemIconImage) {
-      const image = new Image();
-      image.src = '/generated/models/biblio.png';
-      itemIconImage = image.decode().then(() => image).catch(error => { itemIconImage = undefined; throw error; });
-    }
-    const image = await itemIconImage;
-    const [u0,v0,u1,v1] = sprite.uv;
-    const context = canvas.getContext('2d');
-    context.imageSmoothingEnabled = false;
-    context.clearRect(0,0,canvas.width,canvas.height);
-    context.drawImage(image,u0*image.width,v0*image.height,(u1-u0)*image.width,(v1-v0)*image.height,
-      0,0,canvas.width,canvas.height);
-    return true;
-  }
-  if (entry.kind === 'minecart') {
-    const context = canvas.getContext('2d');
-    context.fillStyle = '#333a44';
-    context.fillRect(3, 8, 26, 7);
-    context.fillRect(7, 21, 6, 5);
-    context.fillRect(19, 21, 6, 5);
-    context.fillStyle = '#aeb3bc';
-    context.beginPath();
-    context.moveTo(3, 11);
-    context.lineTo(29, 11);
-    context.lineTo(25, 22);
-    context.lineTo(7, 22);
-    context.fill();
-    context.fillStyle = '#d3d8df';
-    context.fillRect(3, 9, 26, 2);
-    return true;
-  }
-  const model = entry.kind === 'microblock' ? {part:entry.part ?? creativeMicroblock(entry)} :
-    entry.kind === 'shaped-lamp' ? {data:shapedLampData(entry.damage), lit:Boolean(entry.damage & 16)} : undefined;
-  const info = creativeIcon({...entry, ...model, key:entry.blockKey ?? entry.key});
-  if (!info || !Number.isInteger(info.tile) || info.tile < 0) return false;
-  if (!iconImage) {
-    const image = new Image();
-    image.src = '/generated/textures/atlas.png';
-    iconImage = image.decode().then(() => image).catch(error => { iconImage = undefined; throw error; });
-  }
-  const image = await iconImage;
-  const tile = info.tile;
-  const left = tile % ATLAS_GRID * TILE_SIZE;
-  const top = Math.floor(tile / ATLAS_GRID) * TILE_SIZE;
-  if (top + TILE_SIZE > image.naturalHeight) return false;
-  const context = canvas.getContext('2d');
-  if (!context) return false;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.imageSmoothingEnabled = false;
-  context.drawImage(image, left, top, TILE_SIZE, TILE_SIZE, 0, 0, canvas.width, canvas.height);
-  const tint = Number.isInteger(info.tint) ? [info.tint >> 16 & 255, info.tint >> 8 & 255, info.tint & 255] : info.tint;
-  if (Array.isArray(tint) && tint.some(channel => channel !== 255)) {
-    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-    for (let offset = 0; offset < pixels.data.length; offset += 4) {
-      for (let channel = 0; channel < 3; channel++) pixels.data[offset + channel] *= tint[channel] / 255;
-    }
-    context.putImageData(pixels, 0, 0);
-  }
-  return true;
+  return renderCreativeIcon(entry,canvas,world?.models?.biblio?.items);
 }
 
 if (touchMode) {
@@ -283,6 +230,7 @@ const messages = {
   drain_liquid_first: 'Сначала уберите воду или лаву',
   incompatible_liquid: 'Здесь нет места для жидкости',
   liquid_missing: 'Здесь больше нет жидкости',
+  invalid_equipment: 'Этот предмет нельзя надеть в эту ячейку',
   missing_support: 'Для этого блока нужна твёрдая опора',
   empty_inventory_slot: 'Активная ячейка пуста',
   inventory_full: 'В инвентаре нет места',
@@ -397,12 +345,13 @@ function heldPonyItem() {
 }
 
 function playerPose() {
-  const motion = seat ? 'sit' : !playing ? 'idle' : flying ? 'fly' : movement.medium === 'water' ? 'swim' :
+  const motion = seat ? 'sit' : !playing ? 'idle' : flying ? 'fly' : movement.stance === 'swim' ? 'swim' :
     !movement.grounded && !movement.medium && movement.stance === 'stand' ? 'air' : horizontalSpeed > .15 ?
       (sprinting() && movement.stance === 'stand' ? 'run' : 'walk') : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
     stance:seat?.bed ? 'crawl' : movement.stance, boost:!seat && flying && playing && sprinting(), eye:view.eyeOffset(),
-    typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(),
+    typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(), groundSeat:seat?.kind === 'ground',
+    equipment:inventory.equipment,
     seq:Math.round(performance.timeOrigin + performance.now())};
 }
 
@@ -602,7 +551,8 @@ function setSeat(next, feet, stance) {
   status.hidden = !seat;
   status.textContent = seat?.kind === 'boat' ? (touchMode ? 'Лодка · стик — управление · Действие — выйти' :
     'Лодка · WASD или стрелки · E — выйти') : seat?.entity ? (touchMode ? 'Вагонетка · стик — движение · Действие — встать' :
-      'Вагонетка · W/S или ↑/↓ — движение · E — встать') : seat?.bed ? 'Лежите · E — встать' : 'Сидите · E — встать';
+      'Вагонетка · W/S или ↑/↓ — движение · E — встать') : seat?.bed ? 'Лежите · E — встать' :
+    seat?.kind === 'ground' ? 'Сидите · X — встать' : 'Сидите · E — встать';
   if (seat) {
     setFlight(false);
     heading.yaw = seat.yaw;
@@ -682,7 +632,6 @@ function interact(sneaking = false) {
   if (!sign) return action('interact', sneaking);
   const {x, y, z, hit} = selection;
   const expectedRevision = world.revisionAt(x, y, z);
-  if (!expectedRevision) { notice('Исходную табличку карты нельзя редактировать'); return; }
   signTarget = {x, y, z, hit, expectedRevision};
   signFields.forEach((field, index) => { field.value = sign.lines[index]; });
   signStatus.textContent = '';
@@ -976,6 +925,7 @@ async function action(type, sneaking = false) {
   if (!target) return;
   const selectedVersion = heldVersion;
   const cell = getKey(target.cell);
+  const bucket = bucketCell(heldCreativeItem?.key);
   const neighbors = (dx,dy,dz) => world.cellAt(target.x+dx,target.y+dy,target.z+dz);
   let pendingPlacement;
   if (frame) {
@@ -988,11 +938,14 @@ async function action(type, sneaking = false) {
     type = 'place_boat';
   } else if (removingVehicle) {
     type = target.kind === 'boat' ? 'remove_boat' : 'remove_minecart';
-  } else if (type === 'remove' && target.cell?.fluid) {
+  } else if (type === 'place' && heldCreativeItem?.key === bucketKeys.empty && fluidState(target.cell)) {
+    type = 'scoop_liquid';
+  } else if (type === 'remove' && target.cell?.fluid &&
+      (target.liquid || target.cell.voxels || isMicroblockCell(target.cell))) {
     type = 'remove_liquid';
   } else if (type === 'copy' && target.liquid && target.cell?.fluid) {
     type = 'copy_liquid';
-  } else if (type === 'place' && !chiseling && liquidKind(clipboard) && canLogLiquid(target.cell,neighbors,world.models)) {
+  } else if (type === 'place' && !chiseling && clipboard !== FAKE_WATER && liquidKind(clipboard) && canLogLiquid(target.cell,neighbors,world.models)) {
     type = 'place_liquid';
   } else if (type === 'remove' && target.part && !isMicroblockCell(target.cell) && !target.cell?.voxels) {
     type = 'remove';
@@ -1037,10 +990,10 @@ async function action(type, sneaking = false) {
     }
   }
   if (type === 'place') {
-    if (heldCreativeItem?.kind === 'flat-item') { notice('Наведите прицел на рамку'); return; }
+    if (heldCreativeItem?.kind === 'flat-item' && !bucket) { notice('Наведите прицел на рамку'); return; }
     if (!clipboard) { notice(messages.nothing_to_copy); return; }
     request.against = {x: target.x, y: target.y, z: target.z};
-    const embedsInLiquid = liquidKind(target.cell) && world.revisionAt(target.x,target.y,target.z) &&
+    const embedsInLiquid = getKey(target.cell) !== FAKE_WATER && liquidKind(target.cell) &&
       canLogLiquid(clipboard,neighbors,world.models);
     if (!embedsInLiquid) {
       request.x += target.offset[0];
@@ -1050,8 +1003,8 @@ async function action(type, sneaking = false) {
     request.cell = clipboard;
     request.yaw = heading.yaw;
     request.pitch = heading.pitch;
-    if (fromCreative) request.creative = true;
-    if (heldCreativeItem) request.creativeItem = heldCreativeItem.key;
+    if (fromCreative && !bucket) request.creative = true;
+    if (heldCreativeItem && !bucket) request.creativeItem = heldCreativeItem.key;
     if (heldSofa) {
       updatePlacement(target);
       if (!placement || placement.blocked) { notice(messages.occupied); return; }
@@ -1061,7 +1014,7 @@ async function action(type, sneaking = false) {
   }
   if (type === 'place_liquid') {
     request.cell = clipboard;
-    if (fromCreative) request.creative = true;
+    if (fromCreative && !bucket) request.creative = true;
   }
   if (type === 'place_part') {
     updatePlacement(target);
@@ -1136,6 +1089,7 @@ async function action(type, sneaking = false) {
 
 function tick(now) {
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
+  let seatedSpeed = 0;
   lastFrame = now;
   world.stepMinecarts(now);
   const vehicle = seat?.entity && (seat.kind === 'boat' ? world.boats : world.minecarts).get(seat.entity)?.entity;
@@ -1148,9 +1102,19 @@ function tick(now) {
   }
   if (seat?.kind === 'ground' && playing && !menuOpen() && !orbitHeading && (forwardInput() || turnInput())) {
     seatedMoveSince ??= now;
-    if (now-seatedMoveSince >= 1000 && !acting && !seatPending && !resetting) {
-      seatedMoveSince = now;
-      void toggleSeat(false);
+    if (!acting && !seatPending && !resetting) {
+      if (now-seatedMoveSince >= 1000) {
+        seatedMoveSince = now;
+        void toggleSeat(false);
+      } else if (positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
+        const forward = forwardInput(), strafe = turnInput();
+        const speed = CRAWL_SPEED / Math.max(1,Math.hypot(forward,strafe));
+        const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
+        const startX=position.x, startZ=position.z;
+        const body = {...movement.body,height:Math.min(movement.body.height,SEATED_HEIGHT)};
+        movement.slideSeated(position,(-sin*forward+cos*strafe)*speed,(-cos*forward-sin*strafe)*speed,dt,body,recordPosition);
+        if (dt) seatedSpeed=Math.hypot(position.x-startX,position.z-startZ)/dt;
+      }
     }
   } else seatedMoveSince = undefined;
   if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending) {
@@ -1158,13 +1122,14 @@ function tick(now) {
     const fallSpeed = movement.fall;
     const forward = forwardInput();
     const strafe = turnInput();
-    const descending = flying ? keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC') : sprinting();
+    const descending = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
     const vertical = flying ? Number(keys.has('Space')) - Number(descending) : 0;
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
     if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
       if (!flying) {
         const previous = movement.stance;
-        const stance = crawlRequested ? 'crawl' : keys.has('KeyC') || now < crouchUntil ? 'crouch' : 'stand';
+        const stance = movement.wantsSwim(position,sprinting()) ? 'swim' :
+          crawlRequested ? 'crawl' : keys.has('KeyC') || now < crouchUntil ? 'crouch' : 'stand';
         if (movement.setStance(position,stance) !== previous) recordPosition(position);
       }
       const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance}) / Math.max(1,Math.hypot(forward,strafe,vertical));
@@ -1172,7 +1137,8 @@ function tick(now) {
       const dz = (-cos * forward - sin * strafe) * speed;
       if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, dt, recordPosition, spectator);
       else movement.update(position, dx, dz, jump, dt,
-        {rise: jump || keys.has('Space'), descend: descending, recordStep: recordPosition});
+        {rise: jump || keys.has('Space'), descend: descending || movement.medium === 'ladder' && sprinting(),
+          swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition});
     }
     horizontalSpeed = dt > 0 ? Math.hypot(position.x - startX, position.z - startZ) / dt : 0;
     if (!resetting && !flying && movement.grounded && !movement.medium) {
@@ -1182,10 +1148,16 @@ function tick(now) {
         view.groundDust(position,movement.body,[(position.x-startX)/dt,(position.z-startZ)/dt],0,now);
       }
     }
-    audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw, body:movement.body,
-      climbing:movement.medium === 'ladder', swimming:movement.medium === 'water'});
     jump = false;
-  } else horizontalSpeed = 0;
+  } else horizontalSpeed = seatedSpeed;
+  if (playing && !menuOpen()) {
+    const hour = view.dayTick(now);
+    audio.frame(world,position,{grounded:movement.grounded && !seat && !flying,
+      yaw:heading.yaw,body:movement.body,climbing:movement.medium === 'ladder',swimming:movement.medium === 'water',
+      precipitation:view.precipitationKind,sheltered:view.rain?.listenerSheltered,
+      biome:view.climate?.biomeAt(position.x,position.z),night:hour > 13000 && hour < 23000,
+      windStrength:windAt(now,view.weather).strength});
+  }
   if (!resetting && now >= nextPositionSync && !acting) syncPosition();
   if (!sync || presenceDirty) sendPresence(now);
   if (playing && !menuOpen() && !seat && !flying && movement.stance === 'stand') {
@@ -1210,12 +1182,10 @@ function tick(now) {
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
   const targetSeat = !seat && !seatTarget && !frameTarget && seatFor(selection?.cell,world.models);
   const interaction = targetSeat ? targetSeat.bed ? 'E — лечь' : 'E — сесть' :
-    !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) &&
-    world.revisionAt(selection.x,selection.y,selection.z) ? 'E — редактировать' : '';
-  const held = chiseling ? labelFor(chiselMaterial) : heldCreativeItem?.name ?? (heldPart ? partLabel(heldPart) : labelFor(clipboard));
+    !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) ? 'E — редактировать' : '';
   const fluidHint = selection?.cell?.fluid === 'water' ? 'ЛКМ — убрать воду' :
     selection?.cell?.fluid === 'lava' ? 'ЛКМ — убрать лаву' : '';
-  const status = [selected, interaction, fluidHint, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
+  const status = [selected,interaction,fluidHint].filter(Boolean).join('  /  ');
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
   const coordinates = `X ${position.x.toFixed(2)}  Y ${position.y.toFixed(2)}  Z ${position.z.toFixed(2)}`;
   if (coordinateStatus.textContent !== coordinates) coordinateStatus.textContent = coordinates;
@@ -1290,7 +1260,7 @@ function bindControls() {
   });
   document.addEventListener('keydown', event => {
     if (!teleportLoading.hidden && event.target !== element('teleport-reload')) return;
-    if (signEditor.open) return;
+    if (signEditor.open || audioSettings?.open) return;
     if ((event.code === 'F5' || event.code === 'KeyY' || event.code === 'KeyU') && playing && !menuOpen()) {
       event.preventDefault();
       if (!spectator && !event.repeat) {
@@ -1490,6 +1460,30 @@ function bindControls() {
     }
   });
   const sound = element('audio-toggle');
+  const soundLevel=element('audio-volume'), musicLevel=element('music-volume');
+  const settingsKey='honeymoon-audio-settings';
+  const settings={...audioDefaults,soundVolume:.13,musicVolume:.16};
+  try { Object.assign(settings,JSON.parse(localStorage.getItem(settingsKey)) ?? {}); } catch {}
+  audio.setEnvironment(settings);
+  audio.setVolume(settings.soundVolume);
+  soundLevel.value=String(Math.round(settings.soundVolume*100));
+  musicLevel.value=String(Math.round(settings.musicVolume*100));
+  const environmentProfileSelect=element('audio-profile');
+  environmentProfileSelect.value=settings.profile;
+  const persist=()=>localStorage.setItem(settingsKey,JSON.stringify(settings));
+  element('audio-settings-toggle').addEventListener('click',()=>audioSettings.showModal());
+  element('audio-settings-close').addEventListener('click',()=>audioSettings.close());
+  environmentProfileSelect.addEventListener('change',()=>{
+    settings.profile=environmentProfileSelect.value;
+    audio.setEnvironment(settings);
+    persist();
+  });
+  for (const group of ['nature','animals','other']) for (const type of ['Volume','Frequency']) {
+    const range=element(group+'-'+type.toLowerCase());
+    const key=group+type;
+    range.value=String(Math.round(settings[key]*100));
+    range.addEventListener('input',()=>{settings[key]=Number(range.value)/100; audio.setEnvironment(settings); persist();});
+  }
   const showSound = muted => {
     sound.textContent = muted ? 'Звук выкл.' : 'Звук вкл.';
     sound.setAttribute('aria-pressed', String(!muted));
@@ -1501,17 +1495,32 @@ function bindControls() {
     localStorage.setItem('honeymoon-muted', muted ? '1' : '0');
     showSound(muted);
   });
+  soundLevel.addEventListener('input',()=>{
+    settings.soundVolume=Number(soundLevel.value)/100;
+    audio.setVolume(settings.soundVolume);
+    const muted=!settings.soundVolume;
+    localStorage.setItem('honeymoon-muted',muted ? '1' : '0');
+    showSound(muted);
+    persist();
+  });
   const music = element('music-toggle');
   const showMusic = enabled => {
     music.textContent = enabled ? 'Музыка вкл.' : 'Музыка выкл.';
     music.setAttribute('aria-pressed', String(enabled));
-    audio.setMusicVolume(enabled ? .16 : 0);
+    audio.setMusicVolume(enabled ? settings.musicVolume || .16 : 0);
   };
   showMusic(localStorage.getItem('honeymoon-music') === '1');
   music.addEventListener('click', () => {
     const enabled = music.getAttribute('aria-pressed') !== 'true';
     localStorage.setItem('honeymoon-music', enabled ? '1' : '0');
     showMusic(enabled);
+  });
+  musicLevel.addEventListener('input',()=>{
+    settings.musicVolume=Number(musicLevel.value)/100;
+    const enabled=Boolean(settings.musicVolume);
+    localStorage.setItem('honeymoon-music',enabled ? '1' : '0');
+    showMusic(enabled);
+    persist();
   });
   element('reset').addEventListener('click', async () => {
     if (resetting || acting) return;
@@ -1569,6 +1578,7 @@ async function streamChunks(chunks, scenery) {
 function streamNearby(chunks, scenery) {
   const playable = new Set(chunks.map(([x, z]) => chunkKey(x, z)));
   const visual = new Set(scenery.map(([x, z]) => chunkKey(x, z)));
+  const inFullWorld=detailCoverage(world.manifest.fullChunks);
   const inFlight = new Map();
   const retryAt = new Map();
   let area, planned = [];
@@ -1595,7 +1605,7 @@ function streamNearby(chunks, scenery) {
       const coordinate = [x + dx, z + dz];
       const key = chunkKey(...coordinate);
       const visualOnly = !playable.has(key);
-      if (visualOnly && !visual.has(key) || world.chunks.has(key)) continue;
+      if (visualOnly && !visual.has(key) && !inFullWorld(...coordinate) || world.chunks.has(key)) continue;
       planned.push({coordinate, key, visualOnly, distance:Math.max(Math.abs(dx), Math.abs(dz)), order:dx * dx + dz * dz});
     }
     planned.sort((a, b) => a.distance - b.distance || Number(a.visualOnly) - Number(b.visualOnly) || a.order - b.order);

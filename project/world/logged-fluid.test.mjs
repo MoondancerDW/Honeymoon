@@ -25,7 +25,7 @@ test('static liquids occupy only the free parts of slabs, stairs and microblocks
     assert.deepEqual(clipLiquidFace(surface, 5, liquidCavity(lower)), []);
     assert.deepEqual(clipLiquidFace(surface, 5, liquidCavity(upper)), [surface]);
     assert.equal(movementMedium((x,y,z) => x === 0 && y === 0 && z === 0 ? lower : null, .5, .5, .5),
-      fluid === 'water' ? fluid : null);
+      fluid);
   }
   assert.equal(canLogLiquid('legacy:1:0'), false);
   assert.equal(canLogLiquid('legacy:9:0'), false);

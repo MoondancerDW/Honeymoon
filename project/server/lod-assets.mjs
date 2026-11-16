@@ -3,7 +3,7 @@ import {stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {pipeline} from 'node:stream/promises';
 import {lodDistance,supportedLodVersion} from '../client/far-tile-format.mjs';
-import {VISTA_VERSION} from '../client/vista-format.mjs';
+import {supportedVistaVersion} from '../client/vista-format.mjs';
 
 const coordinate = point => Array.isArray(point) && point.length === 2 && point.every(Number.isSafeInteger);
 
@@ -36,7 +36,7 @@ export function loadVistaAssets(generated) {
     throw error;
   }
   const {version,hash,regions} = manifest;
-  if (version !== VISTA_VERSION || !/^[0-9a-f]{64}$/.test(hash) ||
+  if (!supportedVistaVersion(version) || !/^[0-9a-f]{64}$/.test(hash) ||
       !Array.isArray(regions) || !regions.length || !regions.every(coordinate)) throw new Error('Invalid vista manifest');
   return {directory,packs:new Set(regions.map(([x,z]) => `${x}.${z}`)),descriptor:{version,hash,regions}};
 }

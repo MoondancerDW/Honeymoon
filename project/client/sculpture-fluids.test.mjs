@@ -47,14 +47,14 @@ test('the client and server pick the solid eighth when its face coincides with a
   assert.equal(voxelAtHit(target, hit.hit, hit.face, true, mixed.voxels), target.voxel);
 });
 
-test('the player swims only where their feet meet a sculpted water eighth', () => {
+test('sculpted water and lava affect movement only inside their occupied eighth', () => {
   const mixed = sculpture(writeVoxel(writeVoxel(null, voxelIndex(7,0,0), water), voxelIndex(6,0,0), lava));
   const cellAt = (x,y,z) => x === -1 && y === 1 && z === -2 ? mixed : null;
   assert.equal(movementMedium(cellAt, -.01, 1, -1.98), 'water');
   assert.equal(movementMedium(cellAt, -.01, 0.95, -1.98), 'water');
   assert.equal(movementMedium(cellAt, -.01, 1.09, -1.98), null);
   assert.equal(movementMedium(cellAt, -.01, 1, -1.7), null);
-  assert.equal(movementMedium(cellAt, -.2, 1, -1.98), null);
+  assert.equal(movementMedium(cellAt, -.2, 1, -1.98), 'lava');
 });
 
 test('full sculpted water preserves absorption and lava eighths emit block light', () => {

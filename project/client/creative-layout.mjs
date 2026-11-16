@@ -2,7 +2,7 @@ import nativeTabs from '../world/creative-tab-order.mjs';
 
 // The original game stocks these as items. Honeymoon places their block states.
 const placementAliases = new Map([
-  ['323:0','legacy:63:0'], ['324:0','legacy:64:0'], ['326:0','legacy:9:0'], ['327:0','legacy:11:0'],
+  ['323:0','legacy:63:0'], ['324:0','legacy:64:0'],
   ['330:0','legacy:71:0'], ['331:0','legacy:55:0'], ['355:0','legacy:26:0'], ['356:0','legacy:93:0'],
 ]);
 

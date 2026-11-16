@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {decodeVista, VISTA_STEP, VISTA_VERSION, vistaBytes, vistaCell} from './vista-format.mjs';
+import {decodeVista, VISTA_LOFT, VISTA_STEP, VISTA_VERSION, vistaBytes, vistaCell} from './vista-format.mjs';
 
 function vistaFixture() {
   const data = new DataView(new ArrayBuffer(vistaBytes));
@@ -54,4 +54,28 @@ test('the far tier keeps edge samples and merges equal adjacent cliff faces', ()
   const cliff = faces.find(({face,origin}) => face === 0 && origin[0] === 16*8 && origin[2] === 16*8);
   assert.deepEqual(cliff.span,[128,224]);
   assert.equal(data.getUint16(vistaCell(2,2),true),60*8);
+});
+
+test('elevated structures retain their underside and a real gap even in the coarser tier',()=>{
+  const {data,height}=vistaFixture();
+  for (let z=2;z<4;z++) for (let x=2;x<4;x++) height(x,z,66);
+  for (const [x,mask] of [[2,0b1100],[3,0b0011]]) {
+    const at=vistaCell(x,2)+VISTA_LOFT;
+    data.setUint16(at,131*8,true);
+    data.setUint16(at+2,35,true);
+    data.setUint16(at+4,240,true);
+    data.setUint16(at+9,129*8,true);
+    data.setUint16(at+11,mask,true);
+  }
+  for (const coarse of [false,true]) {
+    const [mesh]=decodeVista(data.buffer,coarse).layers;
+    const faces = Array.from({length:mesh.count},(_,index)=>({face:mesh.surface[index*2+1],
+      x:mesh.offset[index*3]/8,y:mesh.offset[index*3+1]/8,tile:mesh.surface[index*2]}));
+    assert.ok(faces.some(face=>face.y===66 && face.face===3));
+    const elevated=faces.filter(face=>face.tile===35);
+    assert.ok(elevated.some(face=>face.y===129 && face.face===2));
+    assert.ok(elevated.some(face=>face.y===131 && face.face===3));
+    assert.ok(elevated.every(face=>face.y>=129));
+    assert.ok(elevated.every(face=>face.x!==24 || face.face!==0 && face.face!==1));
+  }
 });

@@ -5,9 +5,9 @@ import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {gzipSync} from 'node:zlib';
 import {readRegionChunk} from './nbt.mjs';
-import {makeMaterials} from './lod-mesh.mjs';
+import {makeMaterials,LEAVES,LIQUID,NATURAL} from './lod-mesh.mjs';
 import {findStraySnow,SNOW_CONTEXT_RADIUS} from './snow-cleanup.mjs';
-import {VISTA_VERSION,VISTA_STEP,VISTA_SIDE,VISTA_RECORD,vistaBytes,vistaCell} from '../client/vista-format.mjs';
+import {VISTA_VERSION,VISTA_STEP,VISTA_SIDE,VISTA_RECORD,VISTA_LOFT,vistaBytes,vistaCell} from '../client/vista-format.mjs';
 
 const regionName = /^r\.(-?\d+)\.(-?\d+)\.mca$/;
 const atlas = makeMaterials();
@@ -19,7 +19,8 @@ function material(id,meta) {
     const part = atlas.materials[atlas.materialFor(`legacy:${id}:${meta}`)];
     const shape = part?.shape;
     const style = part?.sides[3] && atlas.styles[part.sides[3]];
-    atlasEntry.set(key,shape && style ? {tile:style[0],light:style[1],rgb:style.slice(3),height:shape.y1} : null);
+    atlasEntry.set(key,shape && style ? {tile:style[0],light:style[1],rgb:style.slice(3),height:shape.y1,bottom:shape.y0,
+      kind:part.kind} : null);
   }
   return atlasEntry.get(key);
 }
@@ -29,11 +30,11 @@ function sourceId(section,index) {
   return section.Blocks[index] | ((section.Add?.[index>>1] >> shift & 15) << 8);
 }
 
-function sampleColumn(sections, height, x, z, removedSnow) {
+function sampleSurface(sections,height,column,removedSnow) {
   for (let y=Math.min(255,height); y>=0; y--) {
     const section = sections[y>>4];
     if (!section) { y &= ~15; continue; }
-    const index = x+16*z+256*(y&15);
+    const index = column+256*(y&15);
     const shift = (index & 1) * 4;
     const id = sourceId(section,index);
     if (!id) continue;
@@ -43,8 +44,55 @@ function sampleColumn(sections, height, x, z, removedSnow) {
     if (!style) continue;
     const packed = style.light === 256 ? 256 : ((section.SkyLight?.[index>>1] >> shift & 15) << 4) |
       (section.BlockLight?.[index>>1] >> shift & 15);
-    return {height:y+style.height,tile:style.tile,light:packed || 240,rgb:style.rgb,thinSnow:id === 78 && (metadata&7) < 2};
+    return {height:y+style.height,y,id,kind:style.kind,tile:style.tile,light:packed || 240,rgb:style.rgb,
+      bottom:y+style.bottom,thinSnow:id === 78 && (metadata&7) < 2};
   }
+}
+
+function separatedByAir(sections,column,surface,removedSnow) {
+  // Crowns and ordinary terrain belong to the ground silhouette. Isolated
+  // constructed shapes, or rock high above the terrain, need an underside.
+  if (surface.kind===LEAVES || surface.kind===LIQUID || surface.id===17 || surface.id===162) return;
+  if (surface.kind===NATURAL && surface.y<92) return;
+  const gapDepth = surface.kind===NATURAL ? 22 : 7;
+  let bottom = surface.bottom, empty = 0, earth = 0;
+  for (let y=surface.y-1;y>=0;y--) {
+    const section = sections[y>>4];
+    const index = column+256*(y&15);
+    const id = section ? sourceId(section,index) : 0;
+    if (!id || id===31 || id===50 || id===65 || id===106 || id===78 && removedSnow?.has(y*256+column)) {
+      if (++empty>=gapDepth) return {bottom,below:y-1};
+      earth=0;
+      continue;
+    }
+    const terrain = id<5 || id>=7 && id<=9 || id>=12 && id<=13 || id===24 || id===80;
+    earth = terrain ? earth+1 : 0;
+    if (earth>=12) return;
+    bottom=y;
+    empty=0;
+  }
+}
+
+function sampleColumn(sections,height,x,z,removedSnow) {
+  const column = x+16*z;
+  let ground = sampleSurface(sections,height,column,removedSnow);
+  let loft;
+  while (ground) {
+    const gap = separatedByAir(sections,column,ground,removedSnow);
+    if (!gap) break;
+    const below = sampleSurface(sections,gap.below,column,removedSnow);
+    if (!below && gap.bottom<=80) break;
+    loft ??= {...ground,bottom:gap.bottom};
+    ground = below;
+  }
+  return {ground,loft};
+}
+
+function writeSurface(content,index,{height,tile,light,rgb}) {
+  content.writeUInt16LE(Math.round(height * 8),index);
+  content.writeUInt16LE(tile,index+2);
+  content.writeUInt16LE(light,index+4);
+  content.set(rgb,index+6);
 }
 
 function chunkSections(chunk) {
@@ -58,35 +106,38 @@ function setChunk(content,chunk,cx,cz,removedSnow) {
   const highest = (sections.length << 4) - 1;
   if (highest < 0) return null;
   const cells = 16 / VISTA_STEP;
-  const samples = [];
+  const samples = [], elevated = [];
   let thinSnow;
   for (let sz=0; sz<cells; sz++) for (let sx=0; sx<cells; sx++) {
     samples.length = 0;
+    elevated.length = 0;
     for (let dz=1; dz<VISTA_STEP; dz+=2) for (let dx=1; dx<VISTA_STEP; dx+=2) {
       const x = sx*VISTA_STEP+dx, z = sz*VISTA_STEP+dz;
       const height = chunk.HeightMap?.[x+z*16];
-      const sample = sampleColumn(sections,Number.isInteger(height) ? Math.min(highest,height) : highest,x,z,removedSnow);
-      if (sample) {
-        samples.push(sample);
-        if (sample.thinSnow) {
-          thinSnow ??= new Set();
-          thinSnow.add(z*16+x);
-        }
+      const {ground,loft} = sampleColumn(sections,Number.isInteger(height) ? Math.min(highest,height) : highest,x,z,removedSnow);
+      if (ground) samples.push(ground);
+      if (loft) elevated.push({...loft,bit:1<<((dx>>1)+(dz>>1)*4)});
+      if (ground?.thinSnow || loft?.thinSnow) {
+        thinSnow ??= new Set();
+        thinSnow.add(z*16+x);
       }
     }
     const index = vistaCell(cx*cells+sx,cz*cells+sz);
-    if (!samples.length) {
-      if (removedSnow) content.fill(0,index,index+VISTA_RECORD);
-      continue;
-    }
+    if (removedSnow) content.fill(0,index,index+VISTA_RECORD);
     samples.sort((a,b) => a.height-b.height);
     // Use the upper half of the height distribution so a roof or tree does
     // not flatten to the height of the surrounding path at the next tier.
-    const {height,tile,light,rgb} = samples[Math.floor(samples.length * .6)];
-    content.writeUInt16LE(Math.round(height * 8),index);
-    content.writeUInt16LE(tile,index+2);
-    content.writeUInt16LE(light,index+4);
-    content.set(rgb,index+6);
+    const surface = samples[Math.floor(samples.length * .6)];
+    if (surface) writeSurface(content,index,surface);
+    const detached = elevated.filter(part=>part.bottom>(surface?.height ?? -Infinity)+2);
+    if (!detached.length) continue;
+    detached.sort((a,b)=>a.height-b.height);
+    const part = detached[Math.floor(detached.length*.6)];
+    const mask = detached.reduce((bits,sample)=>sample.bottom<=part.height+3 && sample.height>=part.bottom-3
+      ? bits|sample.bit : bits,0);
+    writeSurface(content,index+VISTA_LOFT,part);
+    content.writeUInt16LE(Math.round(part.bottom*8),index+VISTA_LOFT+9);
+    content.writeUInt16LE(mask,index+VISTA_LOFT+11);
   }
   return thinSnow;
 }

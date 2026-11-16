@@ -6,13 +6,14 @@ import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
 import { createMinecarts } from './minecarts.mjs';
 import { createDroppedItems } from './dropped-items.mjs';
+import { createFluidSimulation } from './fluids.mjs';
 import { createInventory, inventoryInput, isInventoryAction } from './inventory.mjs';
 import { createBoats } from './boats.mjs';
 import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
-import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT,
+import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT,
   isPlayerStance, playerBody, positionCost } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
@@ -21,15 +22,16 @@ import { pistonHead } from './pistons.mjs';
 import { orientedRail, railFor } from '../world/rails.mjs';
 import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
 import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData } from '../world/creative-items.mjs';
-import { liquidLevel, movementMedium } from '../world/block-movement.mjs';
+import { fluidAt, fluidCurrent, liquidLevel, movementMedium } from '../world/block-movement.mjs';
 import { canLogLiquid, liquidCell, liquidKind } from '../world/logged-fluid.mjs';
+import { FAKE_WATER, bucketKeys, fluidState, plantBlock } from '../world/fluid-state.mjs';
 import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush,
   VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
-const liquidActions = new Set(['place_liquid', 'remove_liquid', 'copy_liquid']);
+const liquidActions = new Set(['place_liquid', 'remove_liquid', 'copy_liquid', 'scoop_liquid']);
 const dryOnlyActions = new Set(['remove', 'remove_microblocks', 'place_part', 'remove_part', 'place_voxel', 'remove_voxel']);
 const frameActions = new Set(['frame_item','frame_use','frame_remove']);
 const vehiclePlacements = new Map([['place_minecart',CREATIVE_MINECART_KEY],['place_boat',CREATIVE_BOAT_KEY]]);
@@ -254,6 +256,8 @@ export function createGame(base, store, geometry, {
     }
   }
   for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(34,meta));
+  for (const id of [8,9,10,11]) for (let meta=0;meta<16;meta++) catalog.add(blockKey(id,meta));
+  catalog.add(FAKE_WATER);
   if ([...catalog].some(key => signBlocks.has(blockState(key)[0]))) {
     for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(63, meta));
     for (let meta = 2; meta <= 5; meta++) catalog.add(blockKey(68, meta));
@@ -306,7 +310,16 @@ export function createGame(base, store, geometry, {
   };
   const physical = physics(base, geometry, cellAt, models);
   const inventory = createInventory(store, creativeBlocks, creativeItems);
-  const drops = createDroppedItems({base, store, clock, collides:physical.collides, visible:physical.visiblePoint});
+  const drops = createDroppedItems({base, store, clock, collides:physical.collides, visible:physical.visiblePoint,
+    liquidAt:(x,y,z)=>fluidAt(cellAt,x,y,z,models),
+    currentAt:(x,y,z,kind)=>fluidCurrent(cellAt,x,y,z,kind)});
+  const fluids = createFluidSimulation({read:getCurrent, clock, model:models, shape:geometry.shapeFor,
+    collision:geometry.collisionFor ?? geometry.shapeFor,
+    topSupports:(x,y,z)=>faceSupports(x,y,z,1,.35),
+    canWrite:(x,y,z)=>base.inBounds(x,y,z) && (!base.hasPlayableChunk || base.hasPlayableChunk(x>>4,z>>4)) &&
+      !reserved(x,y,z) && !spawnProtected(x,y,z) && !seatsAt(x,y,z) &&
+      (allowRemoval || base.getCell(x,y,z).key === 'air')});
+  fluids.changed(store.edits().filter(cell=>fluidState(cell)));
   const frames = createItemFrames({base,store,physical,getCurrent,faceSupports,
     protectedCell:(x,y,z) => reserved(x,y,z) || spawnProtected(x,y,z)});
   const carts = createMinecarts({
@@ -377,10 +390,12 @@ export function createGame(base, store, geometry, {
   function poseFor(player, pose) {
     if (pose?.eye) eyes.set(player,pose.eye);
     else if (pose) eyes.delete(player);
-    if (spectators.has(player)) return {...pose, spectator:true, stance:'stand'};
+    const armor = inventory.read(player).equipment;
+    const equipment = armor?.some(Boolean) ? armor : undefined;
+    if (spectators.has(player)) return {...pose, equipment, spectator:true, stance:'stand'};
     const seat = publicSeat(player);
-    if (!seat) return {...pose, stance:stanceFor(player), ...(pose?.motion === 'sit' && {motion:'idle'})};
-    return {...pose, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit',
+    if (!seat) return {...pose, equipment, stance:stanceFor(player), ...(pose?.motion === 'sit' && {motion:'idle'})};
+    return {...pose, equipment, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit', groundSeat:seat.kind === 'ground',
       stance:seat.bed ? 'crawl' : 'stand', boost:false};
   }
 
@@ -514,7 +529,9 @@ export function createGame(base, store, geometry, {
     const address = point(target, true);
     const hit = point(target.hit);
     const {x, y, z} = address;
-    if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
+    if (!base.inBounds(x, y, z) || base.hasPlayableChunk && !base.hasPlayableChunk(x>>4,z>>4)) {
+      throw new RequestError(403, 'outside_playable_area');
+    }
     if (target.entity !== undefined) return sitInVehicle(player,previous,pose,address,hit,target.entity);
     const current = getCurrent(x, y, z);
     const profile = seatFor(cellView(current), models, pose.yaw,
@@ -576,18 +593,18 @@ export function createGame(base, store, geometry, {
   function writePlan(module, plan, placement) {
     const revision = plan.cells?.length ? store.nextRevision() : store.worldRevision();
     const changes = [];
-    for (const {moveOwner,...cell} of plan.cells ?? []) {
+    for (const {moveOwner,preserveParts,...cell} of plan.cells ?? []) {
       const { x, y, z } = cell;
       const reservedCell = module.reserved?.(x, y, z);
       const previous = reservedCell ? null : store.getEdit(x,y,z);
-      const keepLiquid = previous?.fluid && cell.cell !== null && blockState(previous)[0] === blockState(cell)[0];
+      const keepLiquid = cell.fluid === undefined && previous?.fluid && cell.cell !== null && blockState(previous)[0] === blockState(cell)[0];
       const change = {...cell,revision, ...(keepLiquid && {fluid:previous.fluid})};
       changes.push(change);
       if (reservedCell) continue;
       const placed = change.cell !== null && (placement?.key === cellAddress(x, y, z) ||
         placement?.keys?.has(cellAddress(x, y, z)));
       const owner = moveOwner ?? (placed ? placement.player : null);
-      store.writeEdit(change, originalAt(x, y, z), owner, keepLiquid ? store.getMicroParts(x,y,z) : null);
+      store.writeEdit(change, originalAt(x, y, z), owner, keepLiquid || preserveParts ? store.getMicroParts(x,y,z) : null);
     }
     for (const entry of plan.state ?? []) {
       const value = entry.useRevision ? { ...entry.value, revision } : entry.value;
@@ -1003,6 +1020,21 @@ export function createGame(base, store, geometry, {
     if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
     const target = physical.targetAtHit(playerSight(player), x, y, z, hit, true);
     if (!target) throw new RequestError(403, 'outside_reach');
+    if (type === 'scoop_liquid') {
+      const existing=fluidState(current);
+      if (!allowRemoval && !existing?.logged && base.getCell(x,y,z).key !== 'air') {
+        throw new RequestError(403,'protected_cell');
+      }
+      const state=inventory.read(player);
+      if (state.slots[state.selected]?.key !== bucketKeys.empty || !existing || existing.falling || existing.level) {
+        throw new RequestError(409,'liquid_missing');
+      }
+      const key=bucketKeys[existing.kind];
+      const items=inventory.replaceSelectedOne(player,key);
+      const result=existing.logged ? editLiquid(player,{...input,type:'remove_liquid'},current) :
+        writeCell(player,current,null,null);
+      return {...result,inventory:items,effects:[{type:'sound',sound:'liquid.splash',position:[x,y,z],volume:.4}]};
+    }
     if (type === 'copy_liquid') {
       if (!target.liquid) throw new RequestError(409, 'liquid_missing');
       const cell = liquidCell(target.liquid);
@@ -1013,6 +1045,7 @@ export function createGame(base, store, geometry, {
     let fluid;
     if (type === 'place_liquid') {
       const kind = liquidKind(input.cell);
+      if (input.cell === FAKE_WATER) throw new RequestError(409,'incompatible_liquid');
       if (!(input.creative ? creativeBlocks.has(input.cell) : catalog.has(input.cell) || store.getClipboard(player)?.cell === input.cell)) {
         throw new RequestError(400, 'unknown_cell_type');
       }
@@ -1040,7 +1073,7 @@ export function createGame(base, store, geometry, {
     if (isInventoryAction(type)) {
       const output = {worldRevision:store.worldRevision(), changes:[], effects:[]};
       if (type === 'drop_item') {
-        const taken = inventory.take(player,input.all);
+        const taken = inventory.take(player,input);
         transport.drop = drops.drop(taken.stack,playerAt(player),playerSight(player),input.yaw);
         return {...output, inventory:taken.inventory, droppedItem:transport.drop.key};
       }
@@ -1054,7 +1087,9 @@ export function createGame(base, store, geometry, {
       }
       return {...output, inventory:inventory.edit(player,input)};
     }
-    if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
+    if (!base.inBounds(x, y, z) || base.hasPlayableChunk && !base.hasPlayableChunk(x>>4,z>>4)) {
+      throw new RequestError(403, 'outside_playable_area');
+    }
     if (frameActions.has(type)) {
       let stack;
       if (type === 'frame_item') {
@@ -1096,7 +1131,10 @@ export function createGame(base, store, geometry, {
       return {worldRevision:store.worldRevision(),changes:[],effects:[],boat:transport.placedBoat.entity};
     }
     if (liquidActions.has(type)) return editLiquid(player, input, current);
-    if (current.fluid && dryOnlyActions.has(type)) throw new RequestError(409, 'drain_liquid_first');
+    const lockedLiquid = current.voxels || current.parts || isMicroblockCell(cellView(current));
+    if (current.fluid && dryOnlyActions.has(type) && (type !== 'remove' || lockedLiquid)) {
+      throw new RequestError(409, 'drain_liquid_first');
+    }
     if (partActions.has(type)) return editMicroParts(player, input, current);
     if (voxelActions.has(type)) return editVoxels(player, input, current);
     if (type === 'remove_microblocks') return removeMicroblocks(player, input, current);
@@ -1115,7 +1153,7 @@ export function createGame(base, store, geometry, {
       }
       const neighbors = (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz));
       const fluid = liquidKind(current.cell);
-      const intoLiquid = fluid && store.getEditOwner(x, y, z) && (allowRemoval || base.getCell(x,y,z).key === 'air')
+      const intoLiquid = fluid && current.cell !== FAKE_WATER && (allowRemoval || store.getEditOwner(x, y, z) && base.getCell(x,y,z).key === 'air')
         && canLogLiquid(input.cell, neighbors, models);
       if (current.cell !== null && !intoLiquid) throw new RequestError(409, 'occupied');
       if (!allowRemoval && base.getCell(x, y, z).key !== 'air') throw new RequestError(403, 'protected_cell');
@@ -1133,7 +1171,14 @@ export function createGame(base, store, geometry, {
       const actual = input.creative ? creativePlacement(input, current, player) : input;
       const [actualId] = blockState(actual.cell);
       const isGroundSprite = geometry.shapeFor?.(actual.cell,neighbors).some(box=>box.kind === 'cross');
-      if ((isGroundSprite || liquidKind(actual.cell) || actualId === 51) && !faceSupports(x,y-1,z,1,.35)) {
+      const plant = plantBlock.ground.includes(actualId) || plantBlock.aquatic.includes(actualId) || isGroundSprite && actualId > 255;
+      const floor = faceSupports(x,y-1,z,1,.35);
+      const supportiveAnchor = input.against && signalSides.findIndex(offset => axes.every((axis,i)=>
+        input[axis] - input.against[axis] === offset[i]));
+      const backedLiquid = floor || allowRemoval && supportiveAnchor >= 0 && input.against &&
+        faceSupports(input.against.x,input.against.y,input.against.z,supportiveAnchor,.35);
+      if (plant && !intoLiquid && !floor && ![8,9,18,60,243,4095].includes(blockState(getCurrent(x,y-1,z))[0]) ||
+          ((!allowRemoval && isGroundSprite) || actualId === 51) && !floor || liquidKind(actual.cell) && !backedLiquid) {
         throw new RequestError(409,'missing_support');
       }
       const copied = input.creative ? null : clipboardFor(player, actual.cell);
@@ -1164,8 +1209,10 @@ export function createGame(base, store, geometry, {
     if (!physical.visible(playerSight(player), x, y, z, input.hit)) throw new RequestError(403, 'outside_reach');
     if (type === 'edit_sign') {
       if (!signBlocks.has(blockState(current)[0])) throw new RequestError(409, 'not_a_sign');
-      if (!store.getEditOwner(x, y, z) || reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
-      const change = {...current, object:signObject([x, y, z], input.lines, current.object)};
+      if ((!allowRemoval && !store.getEditOwner(x, y, z)) || reserved(x, y, z) || spawnProtected(x, y, z)) {
+        throw new RequestError(403, 'protected_cell');
+      }
+      const change = {...current, moveOwner:store.getEditOwner(x,y,z), object:signObject([x, y, z], input.lines, current.object)};
       return writePlan({}, {cells:[change]});
     }
     if (type === 'interact') {
@@ -1181,6 +1228,10 @@ export function createGame(base, store, geometry, {
       const object = current.object?.type === 'WestCellarHatch' ? null : displayObject(current.object);
       store.putClipboard(player, { cell: current.cell, object });
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
+    }
+    if (type === 'remove' && current.fluid) {
+      const replacement = writeCell(player,current,liquidCell(current.fluid),null);
+      return {...replacement,effects:[breakEffect(current)]};
     }
     const adjusted = railFor(current) ? updateRailNeighbors(current, null) : [];
     const mate = breakCompanion(current);
@@ -1245,9 +1296,13 @@ export function createGame(base, store, geometry, {
 
   function bodyWithinMap({x, y, z}, {halfWidth,height} = PLAYER) {
     const bounds = base.manifest.bounds;
-    return x - halfWidth >= bounds.minX && x + halfWidth <= bounds.maxX + 1
+    const inBox=x - halfWidth >= bounds.minX && x + halfWidth <= bounds.maxX + 1
       && z - halfWidth >= bounds.minZ && z + halfWidth <= bounds.maxZ + 1
       && y >= bounds.minY && y + height <= bounds.maxY + 1;
+    if (!inBox || !base.hasPlayableChunk) return inBox;
+    const margin=Math.max(0,halfWidth-.00001);
+    return [x-margin,x+margin].every(xx=>[z-margin,z+margin].every(zz=>
+      base.hasPlayableChunk(Math.floor(xx/16),Math.floor(zz/16))));
   }
 
   function teleport(player, body) {
@@ -1317,8 +1372,9 @@ export function createGame(base, store, geometry, {
   function position(player, body) {
     const target = point(body);
     const previous = playerAt(player);
-    if (seats.has(player)) {
-      const seat = publicSeat(player);
+    const seat = publicSeat(player);
+    const groundSeat = seat?.kind === 'ground';
+    if (seat && !groundSeat) {
       const stance = seat.bed ? 'crawl' : 'stand';
       if (!samePoint(previous, target)) throw new RequestError(409, 'movement_blocked', {position:previous, seat, stance});
       return {...passivePosition(previous), seat, stance};
@@ -1326,10 +1382,11 @@ export function createGame(base, store, geometry, {
     const now = clock();
     const old = positions.get(player);
     const elapsed = Math.min(0.65, (now - (old?.updated ?? now - 100)) / 1000);
-    const budget = Math.min(POSITION_BATCH_LIMIT + .4, (old?.budget ?? 1) + elapsed * RUN_SPEED);
+    const budget = groundSeat ? Math.min(.65 * CRAWL_SPEED + .14,Math.min(.14,old?.budget ?? 0) + elapsed * CRAWL_SPEED) :
+      Math.min(POSITION_BATCH_LIMIT + .4, (old?.budget ?? 1) + elapsed * RUN_SPEED);
     const hasTrail = body.trail !== undefined || body.from !== undefined;
     const reject = () => {
-      throw new RequestError(409, 'movement_blocked', {position:previous, stance:stanceFor(player)});
+      throw new RequestError(409, 'movement_blocked', {position:previous, stance:stanceFor(player), ...(groundSeat && {seat})});
     };
     let steps = [target];
     let requestId;
@@ -1353,7 +1410,7 @@ export function createGame(base, store, geometry, {
     let distance = 0, drop = 0, from = previous;
     let stance = stanceFor(player);
     const size = playerSize(player);
-    let dimensions = playerBody(size,stance);
+    let dimensions = groundSeat ? bodyAtSeat(player,seat) : playerBody(size,stance);
     let segmentStart = previous, segment = [];
     const observing = spectators.has(player);
     const validateSegment = () => {
@@ -1363,13 +1420,17 @@ export function createGame(base, store, geometry, {
     };
     for (const step of steps) {
       const nextStance = observing ? 'stand' : step.stance ?? stance;
+      if (groundSeat && (nextStance !== 'stand' || Math.abs(step.y - previous.y) > .002 ||
+          !supportedGroundSeat(step,dimensions))) reject();
       if (nextStance !== stance) {
         validateSegment();
         segmentStart = from;
         segment = [];
         const next = playerBody(size,nextStance);
-        if (!samePoint(from,step) || physical.collides(from,next) || nextStance !== 'stand' &&
-            (!physical.supported(from,dimensions) || movementMedium(cellAt,from.x,from.y,from.z,models))) reject();
+        const medium = movementMedium(cellAt,from.x,from.y,from.z,models);
+        const valid = nextStance === 'swim' ? medium === 'water' : nextStance === 'stand' ||
+          !medium && physical.supported(from,dimensions);
+        if (!samePoint(from,step) || physical.collides(from,next) || !valid) reject();
         stance = nextStance;
         dimensions = next;
       }
@@ -1380,12 +1441,17 @@ export function createGame(base, store, geometry, {
           !physical.supported({...step,y:from.y},dimensions,.5)) reject();
       distance += positionCost(planar,vertical);
       drop += Math.max(-vertical, 0);
-      if (distance > budget + MOVEMENT_GRACE || drop > 6) reject();
+      if (distance > budget + (groundSeat ? .035 : MOVEMENT_GRACE) || drop > 6) reject();
       segment.push(step);
       from = step;
     }
     validateSegment();
 
+    if (groundSeat) {
+      Object.assign(seat,target);
+      positions.set(player,{position:target,stance,updated:now,budget:budget-distance,requestId});
+      return {...passivePosition(target),seat,stance};
+    }
     const entry = observing ? passivePosition(target) : enterPosition(player, target, previous,stance);
     positions.set(player, {position:target, stance, updated:now, budget:budget-distance, requestId});
     if (!observing) carts.pushAlongPath(previous,steps.map(step => ({...step,body:playerBody(size,step.stance ?? stance)})));
@@ -1402,18 +1468,29 @@ export function createGame(base, store, geometry, {
     const detectors = [...active].filter(([key]) => !occupiedDetectors.has(key))
       .map(([,point]) => ({point,occupied:true}));
     detectors.push(...[...occupiedDetectors].filter(([key]) => !active.has(key)).map(([,point]) => ({point,occupied:false})));
-    if (!plans.length && !detectors.length) return null;
-    const results = store.atomic(() => {
-      const written = plans.map(([module,plan]) => writePlan(module,plan));
-      if (detectors.length) {
-        for (const module of mechanics) {
-          const plan = module.prepareCartChange?.(moduleContext(module,null,{detectors}));
-          if (plan) written.push(writePlan(module,plan));
+    if (!plans.length && !detectors.length && !fluids.ready()) return null;
+    let fluidPlan;
+    let results;
+    try {
+      results = store.atomic(() => {
+        const written = plans.map(([module,plan]) => writePlan(module,plan));
+        if (detectors.length) {
+          for (const module of mechanics) {
+            const plan = module.prepareCartChange?.(moduleContext(module,null,{detectors}));
+            if (plan) written.push(writePlan(module,plan));
+          }
         }
-      }
-      return written;
-    });
+        fluidPlan = fluids.advance();
+        if (fluidPlan) written.push(writePlan({},fluidPlan));
+        return written;
+      });
+    } catch (error) {
+      if (fluidPlan) fluids.retry(fluidPlan);
+      throw error;
+    }
+    if (fluidPlan) for (const {at,cell} of fluidPlan.detached) drops.scatter(cell,at);
     occupiedDetectors = active;
+    if (!results.length) return null;
     const changes = results.flatMap(result => result.changes);
     if (changes.length) refreshMechanicCells();
     return {changes, effects: results.flatMap(result => result.effects), worldRevision: store.worldRevision()};
@@ -1481,7 +1558,7 @@ export function createGame(base, store, geometry, {
     advance,
     advanceMinecarts,
     advanceDroppedItems: drops.advance,
-    flushDroppedItems: drops.flush,
+    clearDroppedItems: drops.clear,
     droppedItemSnapshot: player => drops.snapshot(playerAt(player)),
     droppedItemView: player => {
       const {x,y,z} = playerAt(player);
@@ -1540,6 +1617,7 @@ export function createGame(base, store, geometry, {
     },
     didCommit(event) {
       drops.terrainChanged(event.changes);
+      fluids.changed(event.changes);
       for (const module of mechanics) module.onCommitted?.(event);
     },
   };

@@ -1,65 +1,43 @@
 import {arrangeCreativeCatalog} from './creative-layout.mjs';
+import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
+import {itemStackLimit} from '../world/item-stack.mjs';
 
-const pageSize = 108;
-const hotbarSize = 9;
+const columns = 9;
+const visibleRows = 5;
 const inventorySize = 36;
 const dragType = 'application/x-honeymoon-inventory';
 const normalized = text => String(text ?? '').normalize('NFKC').toLocaleLowerCase('ru').replaceAll('ё','е');
+const maxStack = entry => itemStackLimit(entry?.key);
 
 function cardData({entry,icon,code}) {
   const name = entry.name || entry.english || entry.key;
-  const description = [entry.mod, code].filter(Boolean).join(' · ');
-  return {entry,icon,name,description,
+  return {entry,icon,name,code,
     search:normalized([name,entry.english,entry.mod,entry.key,icon.name,icon.key,code,entry.variant].filter(Boolean).join(' '))};
 }
 
-function missingIcon(canvas) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.beginPath();
-  ctx.moveTo(16,4);
-  ctx.lineTo(27,10);
-  ctx.lineTo(27,23);
-  ctx.lineTo(16,29);
-  ctx.lineTo(5,23);
-  ctx.lineTo(5,10);
-  ctx.closePath();
-  ctx.moveTo(5,10);
-  ctx.lineTo(16,16);
-  ctx.lineTo(27,10);
-  ctx.moveTo(16,16);
-  ctx.lineTo(16,29);
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = '#555';
-  ctx.stroke();
-}
-
-export function createCreativeMenu({load,choose,select,move,trash,pause,resume,notice,icon}) {
+export function createCreativeMenu({load,choose,select,move,trash,drop,pause,resume,notice,icon,preview}) {
   const byId = id => document.getElementById(id);
   const dialog = byId('creative-menu');
   const toggle = byId('creative-toggle');
-  const search = byId('creative-search');
-  const tabsBar = byId('creative-tabs');
-  const list = byId('creative-list');
-  const grid = byId('creative-grid');
-  const more = byId('creative-more');
-  const count = byId('creative-count');
-  const retry = byId('creative-retry');
-  const previousPage = byId('creative-prev-page');
-  const nextPage = byId('creative-next-page');
-  const trashTarget = byId('inventory-trash');
-  const hotbar = byId('hotbar');
-  const touch = matchMedia('(pointer: coarse)').matches;
-  let catalog, allCards, pending, choosing = false, active = 'buildingBlocks', tabPage = 0;
-  let matches = [], shown = 0, dragging, picked, requestedSlot;
-  let state = {slots:Array(inventorySize).fill(null),selected:0};
+  const search = byId('creative-search'), scrollbar = byId('creative-scroll');
+  const tabsBar = byId('creative-tabs'), list = byId('creative-list'), grid = byId('creative-grid');
+  const status = byId('creative-count'), retry = byId('creative-retry');
+  const previousPage = byId('creative-prev-page'), nextPage = byId('creative-next-page');
+  const trashTarget = byId('inventory-trash'), carried = byId('inventory-carried');
+  const hotbar = byId('hotbar'), equipmentPanel = byId('inventory-equipment');
+  const slotsPanel = byId('inventory-slots'), previewCanvas = byId('inventory-preview');
+  const cache = new Map();
+  const storageMode = () => active === 'inventory';
+  let catalog, allCards, pending, active = 'buildingBlocks', tabPage = 0;
+  let matches = [], firstRow = -1, dragging, picked, requestedSlot, underCursor, openedFromPause;
+  let state = {slots:Array(inventorySize).fill(null), selected:0, equipment:Array(equipmentLabels.length).fill(null)};
   let queued = Promise.resolve();
 
   function request(callback,...args) {
     if (!callback) return Promise.resolve(false);
     const operation = queued.then(()=>callback(...args)).catch(error => {
-      count.textContent = error.message || 'Ошибка инвентаря';
-      notice?.(count.textContent);
+      status.textContent = error.message || 'Ошибка инвентаря';
+      notice?.(status.textContent);
       return false;
     });
     queued = operation;
@@ -70,41 +48,116 @@ export function createCreativeMenu({load,choose,select,move,trash,pause,resume,n
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 32;
     canvas.setAttribute('aria-hidden','true');
-    Promise.resolve().then(()=>icon?.(entry,canvas) ?? false).then(result => {
-      if (result === false) missingIcon(canvas);
-    },() => missingIcon(canvas));
+    if (!entry) return canvas;
+    const id = entry.part ? JSON.stringify(entry.part) : entry.key;
+    if (!cache.has(id)) {
+      cache.set(id,Promise.resolve().then(async()=> {
+        const result = await icon?.(entry,canvas);
+        return result === false ? null : canvas;
+      }).catch(()=>null));
+    }
+    cache.get(id).then(image=>{
+      if (image && image !== canvas) canvas.getContext('2d').drawImage(image,0,0);
+    });
     return canvas;
+  }
+
+  function stackAt(slot) { return slot < inventorySize ? state.slots[slot] : state.equipment[slot-inventorySize]; }
+
+  function entryFor(stack) {
+    if (!stack) return null;
+    const entry = catalog?.byKey.get(stack.key);
+    if (entry && !stack.copied) return entry;
+    const id = Number(/^legacy:(\d+):/.exec(stack.cell ?? stack.key)?.[1]);
+    if (stack.part) return {key:stack.key,kind:'microblock',part:stack.part,name:stack.name || 'Микроблок'};
+    return entry ?? {key:stack.cell ?? stack.key,id,name:stack.name || (id ? `Блок ${id}` : stack.key),data:stack.object?.data};
+  }
+
+  function iconFor(entry) { return catalog?.icons.get(entry?.key) ?? entry; }
+
+  function paintStack(target,entry,quantity) {
+    target.replaceChildren();
+    if (!entry) return;
+    target.append(draw(iconFor(entry)));
+    if (quantity > 1) {
+      const counter = document.createElement('span');
+      counter.className = 'stack-count';
+      counter.textContent = quantity;
+      target.append(counter);
+    }
   }
 
   function close(continuePlaying = true) {
     if (!dialog.open) return;
-    clearTransfer();
+    setPicked(null);
     dialog.close();
-    if (continuePlaying) resume();
+    if (continuePlaying && !openedFromPause) resume();
   }
 
-  async function chooseBlock(entry,slot = state.selected,closeMenu = true) {
-    if (choosing || entry.placeable === false) return false;
-    choosing = true;
-    try {
-      const chosen = await request(choose,entry,slot);
-      if (chosen !== false && closeMenu) close();
-      return chosen;
-    } finally { choosing = false; }
+  function setPicked(source) {
+    picked = source;
+    updateCarried();
+    paintInventory();
+  }
+
+  function updateCarried() {
+    const entry = picked?.entry ?? entryFor(stackAt(picked?.slot));
+    carried.hidden = !entry || !!dragging;
+    paintStack(carried,entry,picked?.count ?? 1);
+  }
+
+  function countAt(source) {
+    return source.count ?? (source.entry ? 1 : stackAt(source.slot)?.count ?? 0);
+  }
+
+  function mayMove(source,slot) {
+    const entry = source.entry ?? entryFor(stackAt(source.slot));
+    return slot < inventorySize || ponyArmor(entry?.key)?.slot === slot - inventorySize;
+  }
+
+  async function transferTo(source,destination,single = false) {
+    if (!source || source.slot === destination || !mayMove(source,destination)) return;
+    const available = countAt(source);
+    const amount = single ? 1 : available;
+    if (!available) return;
+    const target = stackAt(destination);
+    if (source.entry) {
+      const {entry} = source;
+      const same = target?.key === entry.key && !target.copied;
+      const count = Math.min(amount + (same ? target.count : 0),maxStack(entry));
+      const added = count - (same ? target.count : 0);
+      if (added <= 0) return;
+      let displaced;
+      if (target && !same) {
+        displaced = state.slots.indexOf(null);
+        if (displaced < 0 || await request(move,destination,displaced) === false) return;
+      }
+      if (await request(choose,entry,destination,count) === false) return;
+      if (picked === source) setPicked(displaced !== undefined ? {slot:displaced,count:target.count} :
+        available > added ? {...source,count:available-added} : null);
+      return;
+    }
+
+    const original = stackAt(source.slot);
+    if (!original || await request(move,source.slot,destination,amount) === false) return;
+    if (picked !== source) return;
+    const remaining = stackAt(source.slot);
+    const transferred = remaining?.key === original.key ? original.count-remaining.count : original.count;
+    if (remaining && remaining.key !== original.key) setPicked({slot:source.slot,count:remaining.count});
+    else setPicked(available > transferred ? {...source,count:available-transferred} : null);
   }
 
   function beginDrag(event,source) {
-    if (!event.dataTransfer) return;
-    picked = null;
+    if (!event.dataTransfer || !countAt(source)) { event.preventDefault(); return; }
     dragging = source;
     event.dataTransfer.setData(dragType,source.entry?.key ?? String(source.slot));
     event.dataTransfer.effectAllowed = source.entry ? 'copy' : 'move';
-    highlightPicked();
+    setPicked(null);
   }
 
-  function clearTransfer() {
-    dragging = picked = null;
-    highlightPicked();
+  function endDrag() {
+    dragging = null;
+    dialog.querySelectorAll('.drop-target').forEach(target=>target.classList.remove('drop-target'));
   }
 
   function acceptDrop(target,callback,allowed = () => true) {
@@ -114,27 +167,49 @@ export function createCreativeMenu({load,choose,select,move,trash,pause,resume,n
       event.dataTransfer.dropEffect = dragging.entry ? 'copy' : 'move';
       target.classList.add('drop-target');
     });
-    target.addEventListener('dragleave',() => target.classList.remove('drop-target'));
+    target.addEventListener('dragleave',()=>target.classList.remove('drop-target'));
     target.addEventListener('drop',event => {
-      target.classList.remove('drop-target');
       if (!dragging || !allowed(dragging)) return;
       event.preventDefault();
+      event.stopPropagation();
       const source = dragging;
-      clearTransfer();
-      callback(source);
+      endDrag();
+      callback(source,event);
     });
   }
 
-  function transferTo({entry,slot},destination) {
-    if (entry) void chooseBlock(entry,destination,false);
-    else if (slot !== destination && state.slots[slot]) void request(move,slot,destination);
-  }
-
   function selectSlot(slot) {
-    if (!Number.isInteger(slot) || slot < 0 || slot >= hotbarSize || (requestedSlot ?? state.selected) === slot) return;
-    if (!select) return;
+    if (!Number.isInteger(slot) || slot < 0 || slot >= columns || (requestedSlot ?? state.selected) === slot) return;
     requestedSlot = slot;
     return request(select,slot).finally(()=>{ if (requestedSlot === slot) requestedSlot = undefined; });
+  }
+
+  function quickMove(slot) {
+    const stack = stackAt(slot);
+    if (!stack) return;
+    const armor = ponyArmor(stack.key);
+    if (armor && slot < inventorySize && !state.equipment[armor.slot]) {
+      void request(move,slot,inventorySize+armor.slot);
+      return;
+    }
+    const start = slot < columns ? columns : 0;
+    const end = slot < columns ? inventorySize : columns;
+    const match = state.slots.findIndex((other,index)=>index >= start && index < end && other?.key === stack.key &&
+      other.count < maxStack(entryFor(other)));
+    const available = state.slots.findIndex((other,index)=>index >= start && index < end && !other);
+    if (match >= 0) void request(move,slot,match);
+    else if (available >= 0) void request(move,slot,available);
+  }
+
+  function clickSlot(slot,event,secondary) {
+    if (event.shiftKey && !picked) { quickMove(slot); return; }
+    if (picked) {
+      if (picked.slot === slot) setPicked(null);
+      else void transferTo(picked,slot,secondary);
+      return;
+    }
+    const stack = stackAt(slot);
+    if (stack) setPicked({slot,count:secondary ? Math.ceil(stack.count/2) : stack.count});
   }
 
   function makeSlot(slot,inWorld) {
@@ -142,157 +217,150 @@ export function createCreativeMenu({load,choose,select,move,trash,pause,resume,n
     button.type = 'button';
     button.className = 'inventory-slot';
     button.dataset.slot = slot;
-    button.addEventListener('click',() => {
-      if (inWorld) { void selectSlot(slot); return; }
-      if (picked) {
-        const source = picked;
-        clearTransfer();
-        transferTo(source,slot);
-      } else if (state.slots[slot]) {
-        picked = {slot};
-        highlightPicked();
-      }
-    });
+    button.addEventListener('click',event=>inWorld ? void selectSlot(slot) : clickSlot(slot,event,false));
     if (!inWorld) {
-      button.addEventListener('dragstart',event => {
-        if (!state.slots[slot]) { event.preventDefault(); return; }
-        beginDrag(event,{slot});
-      });
-      button.addEventListener('dragend',clearTransfer);
-      acceptDrop(button,source=>transferTo(source,slot));
+      button.addEventListener('pointerenter',()=>{ underCursor = {slot}; });
+      button.addEventListener('pointerleave',()=>{ if (underCursor?.slot === slot) underCursor = null; });
+      button.addEventListener('contextmenu',event=>{ event.preventDefault(); clickSlot(slot,event,true); });
+      button.addEventListener('dragstart',event=>beginDrag(event,{slot}));
+      button.addEventListener('dragend',endDrag);
+      acceptDrop(button,source=>void transferTo(source,slot),source=>mayMove(source,slot));
     }
     return button;
   }
 
-  const worldSlots = Array.from({length:hotbarSize},(_,i)=>makeSlot(i,true));
-  const menuSlots = Array.from({length:inventorySize},(_,i)=>makeSlot(i,false));
+  const worldSlots = Array.from({length:columns},(_,i)=>makeSlot(i,true));
+  const menuSlots = Array.from({length:inventorySize+equipmentLabels.length},(_,i)=>makeSlot(i,false));
   hotbar.replaceChildren(...worldSlots);
-  byId('inventory-hotbar').replaceChildren(...menuSlots.slice(0,hotbarSize));
-  byId('inventory-slots').replaceChildren(...menuSlots.slice(hotbarSize));
-
-  function highlightPicked() {
-    for (let slot=0;slot<menuSlots.length;slot++) {
-      const button = menuSlots[slot];
-      button.classList.toggle('picked-slot',picked?.slot === slot);
-      if (!dragging) button.classList.remove('drop-target');
-    }
-    if (!dragging) trashTarget.classList.remove('drop-target');
-  }
-
-  function inventoryEntry(stack) {
-    if (!stack) return null;
-    const entry = catalog?.byKey.get(stack.key);
-    if (entry) return entry;
-    const id = Number(/^legacy:(\d+):/.exec(stack.cell ?? stack.key)?.[1]);
-    if (stack.part) return {key:stack.key,kind:'microblock',part:stack.part,name:stack.name || 'Микроблок'};
-    return {key:stack.cell ?? stack.key,id,name:stack.name || (id ? `Блок ${id}` : stack.key),data:stack.object?.data};
+  byId('inventory-hotbar').replaceChildren(...menuSlots.slice(0,columns));
+  slotsPanel.replaceChildren(...menuSlots.slice(columns,inventorySize));
+  equipmentPanel.replaceChildren(...menuSlots.slice(inventorySize));
+  for (let i=0;i<equipmentLabels.length;i++) {
+    const button = menuSlots[inventorySize+i];
+    button.style.setProperty('--equipment-index',i);
+    button.style.setProperty('--equipment-x',i < 2 ? 8 : 62);
+    button.style.setProperty('--equipment-y',i % 2 === 0 ? 6 : 33);
   }
 
   function paintInventory() {
-    for (let slot=0;slot<state.slots.length;slot++) {
-      const stack = state.slots[slot];
-      const entry = inventoryEntry(stack);
-      const renditions = slot < hotbarSize ? [menuSlots[slot],worldSlots[slot]] : [menuSlots[slot]];
-      const selected = state.selected === slot;
-      const quantity = stack?.count ?? 1;
-      const name = entry ? entry.name || entry.key : 'Пусто';
+    for (let slot=0;slot<menuSlots.length;slot++) {
+      const stack = stackAt(slot);
+      const entry = entryFor(stack);
+      const visible = slot === picked?.slot ? Math.max(0,(stack?.count ?? 0)-countAt(picked)) : stack?.count ?? 0;
+      const renditions = slot < columns ? [menuSlots[slot],worldSlots[slot]] : [menuSlots[slot]];
       for (const button of renditions) {
-        button.classList.toggle('selected-slot',selected);
-        if (slot < hotbarSize) button.setAttribute('aria-pressed',String(selected));
-        button.draggable = Boolean(stack) && button === menuSlots[slot];
-        const label = `Ячейка ${slot+1} · ${name}${quantity > 1 ? ' ×'+quantity : ''}`;
+        const world = button === worldSlots[slot];
+        const count = world ? stack?.count ?? 0 : visible;
+        if (world) {
+          button.classList.toggle('selected-slot', state.selected === slot);
+          button.setAttribute('aria-pressed',String(state.selected === slot));
+        }
+        button.draggable = Boolean(stack) && !world;
+        const title = slot < inventorySize ? `Ячейка ${slot+1}` : equipmentLabels[slot-inventorySize];
+        const label = `${title} · ${entry?.name ?? 'Пусто'}${count > 1 ? ' ×'+count : ''}`;
         button.title = label;
         button.setAttribute('aria-label',label);
-        const image = entry ? `${entry.key}:${quantity}:${stack?.part?.material ?? ''}:${stack?.part?.shape ?? ''}` : '';
-        if (button.dataset.image === image) continue;
-        button.dataset.image = image;
-        button.replaceChildren();
-        if (entry) {
-          button.append(draw(entry));
-          if (quantity > 1) {
-            const count = document.createElement('span');
-            count.className = 'stack-count';
-            count.textContent = quantity;
-            button.append(count);
-          }
+        const signature = count && entry ? `${entry.key}:${count}:${entry.part?.material ?? ''}:${entry.part?.shape ?? ''}` : '';
+        if (button.dataset.image === signature) continue;
+        button.dataset.image = signature;
+        paintStack(button,count ? entry : null,count);
+        if (!entry && slot >= inventorySize) {
+          const outline = document.createElement('div');
+          outline.className = 'equipment-empty';
+          button.append(outline);
         }
       }
     }
+    if (storageMode() && dialog.open) preview?.(previewCanvas,state.equipment);
   }
 
   function setInventory(next) {
     if (!Array.isArray(next?.slots) || next.slots.length !== inventorySize ||
-        !Number.isInteger(next.selected) || next.selected < 0 || next.selected >= hotbarSize) return false;
-    state = next;
-    if (picked?.slot !== undefined && !state.slots[picked.slot]) clearTransfer();
+        !Number.isInteger(next.selected) || next.selected < 0 || next.selected >= columns) return false;
+    state = {...next,equipment:next.equipment ?? Array(equipmentLabels.length).fill(null)};
+    if (picked?.slot !== undefined && !stackAt(picked.slot)) picked = null;
     hotbar.hidden = false;
     paintInventory();
+    updateCarried();
     if (!catalog && next.slots.some(Boolean)) fetchCatalog();
     return true;
   }
 
-  const discard = source => { if (state.slots[source.slot]) void request(trash,source.slot); };
-  acceptDrop(trashTarget,discard,source=>source.slot !== undefined);
-  trashTarget.addEventListener('click',() => {
-    if (picked?.slot === undefined) return;
-    const source = picked;
-    clearTransfer();
-    discard(source);
-  });
+  const discard = source => { if (source?.slot !== undefined && stackAt(source.slot)) void request(trash,source.slot); };
+  acceptDrop(trashTarget,discard);
+  trashTarget.addEventListener('click',() => { discard(picked); setPicked(null); });
 
-  function blockButton({entry,icon,name,description}) {
+  function blockButton({entry,icon,name,code}) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'creative-card';
     card.dataset.key = entry.key;
     card.disabled = entry.placeable === false;
     card.draggable = !card.disabled;
-    card.title = [name,description,entry.variant].filter(Boolean).join('\n');
+    card.title = [name[0]?.toLocaleUpperCase('ru') + name.slice(1),entry.mod,code].filter(Boolean).join(' · ');
     card.setAttribute('aria-label',name);
     card.append(draw(icon));
-    card.addEventListener('click',event => {
-      if (touch && event.detail) {
-        picked = {entry};
-        count.textContent = `${name} · выберите ячейку`;
-      } else void chooseBlock(entry);
+    const source = {entry};
+    card.addEventListener('click',event=>{
+      if (picked && picked.entry?.key !== entry.key) { setPicked(null); return; }
+      const count = event.shiftKey ? maxStack(entry) : Math.min(maxStack(entry),(picked?.count ?? 0)+1);
+      setPicked({entry,count});
     });
-    card.addEventListener('dragstart',event=>beginDrag(event,{entry}));
-    card.addEventListener('dragend',clearTransfer);
+    card.addEventListener('contextmenu',event=>{
+      if (card.disabled) return;
+      event.preventDefault();
+      if (!picked) setPicked({entry,count:1});
+      else setPicked(picked.entry?.key === entry.key && picked.count > 1 ? {...picked,count:picked.count-1} : null);
+    });
+    card.addEventListener('auxclick',event=>{
+      if (card.disabled || event.button !== 1) return;
+      event.preventDefault();
+      if (!picked) setPicked({entry,count:maxStack(entry)});
+    });
+    card.addEventListener('pointerenter',()=>{ underCursor = source; });
+    card.addEventListener('pointerleave',()=>{ if (underCursor === source) underCursor = null; });
+    card.addEventListener('dragstart',event=>beginDrag(event,source));
+    card.addEventListener('dragend',endDrag);
     return card;
   }
 
-  function appendPage() {
-    const end = Math.min(matches.length,shown+pageSize);
-    const cards = matches.slice(shown,end).map(blockButton);
-    grid.append(...cards);
-    shown = end;
-    more.hidden = shown >= matches.length;
-    more.textContent = `Показать ещё ${Math.min(pageSize,matches.length-shown)}`;
-    count.textContent = !matches.length ? 'Нет подходящих предметов' : shown < matches.length
-      ? `Показано ${shown} из ${matches.length}` : `Предметов: ${matches.length}`;
-    return cards;
+  function renderRows() {
+    if (storageMode() || !list.clientHeight || !matches.length) { grid.replaceChildren(); return; }
+    const rowHeight = list.clientHeight / visibleRows;
+    const row = Math.max(0,Math.floor(list.scrollTop / rowHeight)-1);
+    scrollbar.value = String(list.scrollTop);
+    if (firstRow === row) return;
+    firstRow = row;
+    underCursor = null;
+    const end = Math.min(matches.length,(row+visibleRows+3)*columns);
+    grid.style.minHeight = `${Math.ceil(matches.length/columns)*rowHeight}px`;
+    grid.style.paddingTop = `${row*rowHeight}px`;
+    grid.replaceChildren(...matches.slice(row*columns,end).map(blockButton));
+    scrollbar.max = String(Math.max(0,list.scrollHeight - list.clientHeight));
+    scrollbar.disabled = Number(scrollbar.max) === 0;
   }
 
   function render() {
-    const storage = active === 'inventory';
+    const storage = storageMode();
     dialog.classList.toggle('inventory-only',storage);
-    byId('creative-title').textContent = storage ? 'Инвентарь' : 'Креатив';
-    search.hidden = list.hidden = storage;
-    if (!catalog) return;
+    dialog.classList.toggle('search-tab',active === 'all');
+    previewCanvas.hidden = equipmentPanel.hidden = slotsPanel.hidden = trashTarget.hidden = storage === false;
+    list.hidden = scrollbar.hidden = storage;
+    search.hidden = active !== 'all';
+    if (!catalog) { paintInventory(); return; }
     const currentTab = catalog.tabs.find(tab=>tab.id === active);
+    byId('creative-title').textContent = currentTab?.label ?? 'Предметы';
     const terms = normalized(search.value).trim().split(/\s+/).filter(Boolean);
     const available = active === 'all' ? allCards : (currentTab?.cards ?? []).map(cardData);
-    matches = available.filter(card=>terms.every(term=>card.search.includes(term)));
-    if (active === 'all' && !matches.length && terms.length === 1) {
-      const entry = catalog.byKey.get(terms[0]);
-      if (entry) matches = [cardData({entry,icon:entry,code:entry.key})];
-    }
-    shown = 0;
+    matches = storage ? [] : available.filter(card=>terms.every(term=>card.search.includes(term)));
+    firstRow = -1;
+    grid.style.minHeight = grid.style.paddingTop = '0';
     list.scrollTop = 0;
-    grid.replaceChildren();
+    scrollbar.disabled = matches.length <= columns*visibleRows;
+    status.textContent = storage || matches.length ? '' : 'Нет подходящих предметов';
     updateTabs();
-    if (!storage) appendPage();
-    else count.textContent = '';
+    renderRows();
+    paintInventory();
   }
 
   function updateTabs() {
@@ -320,7 +388,7 @@ export function createCreativeMenu({load,choose,select,move,trash,pause,resume,n
     tabPage = page;
     active = first.id;
     search.value = '';
-    clearTransfer();
+    setPicked(null);
     render();
   }
 
@@ -328,6 +396,7 @@ export function createCreativeMenu({load,choose,select,move,trash,pause,resume,n
     const entries = Array.isArray(data) ? data : data?.entries;
     if (!Array.isArray(entries)) throw new Error('Неверный формат каталога');
     catalog = arrangeCreativeCatalog(entries);
+    catalog.icons = new Map(catalog.cards.filter(card=>card.entry !== card.icon).map(card=>[card.entry.key,card.icon]));
     allCards = catalog.cards.map(cardData);
     const buttons = catalog.tabs.map(({id,label,index,iconEntry}) => {
       const tab = document.createElement('button');
@@ -336,45 +405,63 @@ export function createCreativeMenu({load,choose,select,move,trash,pause,resume,n
       tab.dataset.tab = id;
       const position = index < 12 ? index : (index-12)%10 + Number((index-12)%10 >= 5);
       tab.dataset.position = position;
-      tab.style.gridColumn = position%6+1;
-      tab.style.gridRow = Math.floor(position/6)+1;
+      tab.dataset.row = Math.floor(position/6);
+      const column = position % 6;
+      tab.style.setProperty('--tab-x', column === 5 ? 168 : 1 + column * 28);
+      tab.style.setProperty('--tab-source-x',column*28);
       tab.title = label;
       tab.setAttribute('aria-label',label);
       tab.setAttribute('role','tab');
       tab.setAttribute('aria-controls',id === 'inventory' ? 'creative-inventory' : list.id);
       if (iconEntry) tab.append(draw(iconEntry));
-      const title = document.createElement('span');
-      title.textContent = label;
-      tab.append(title);
-      tab.addEventListener('click',() => { active = id; search.value = ''; clearTransfer(); render(); });
+      tab.addEventListener('click',() => {
+        active = id;
+        search.value = '';
+        setPicked(null);
+        render();
+        if (id === 'all') search.focus();
+      });
       return tab;
     });
     tabsBar.replaceChildren(...buttons);
     for (const button of [...menuSlots,...worldSlots]) delete button.dataset.image;
-    paintInventory();
     render();
   }
 
   function fetchCatalog() {
     if (catalog || pending) return;
     retry.hidden = true;
-    count.textContent = 'Загружаем каталог…';
+    status.textContent = 'Загружаем каталог…';
     pending = Promise.resolve().then(load).then(init).catch(() => {
-      count.textContent = 'Не удалось загрузить каталог';
+      status.textContent = 'Не удалось загрузить каталог';
       retry.hidden = false;
     }).finally(()=>{ pending = null; });
   }
 
   function open(storage = false) {
-    if (toggle.disabled || dialog.open) return;
+    if ((storage ? byId('inventory-toggle') : toggle).disabled || dialog.open) return;
     active = storage ? 'inventory' : active === 'inventory' ? 'buildingBlocks' : active;
     if (active === 'buildingBlocks') tabPage = 0;
+    openedFromPause = byId('game').classList.contains('paused');
     dialog.showModal();
     pause();
     fetchCatalog();
     render();
-    if (storage) menuSlots[state.selected].focus();
-    else search.focus();
+    if (storage) menuSlots[state.selected].focus({preventScroll:true});
+    else if (active === 'all') search.focus();
+    else dialog.focus();
+  }
+
+  function outside(point) {
+    const rect = dialog.getBoundingClientRect();
+    return point.clientX < rect.left || point.clientY < rect.top || point.clientX >= rect.right || point.clientY >= rect.bottom;
+  }
+
+  function dropSource(source,all) {
+    if (source?.entry) void request(drop,{key:source.entry.key,count:all ? countAt(source) : 1});
+    else if (source?.slot !== undefined && stackAt(source.slot)) {
+      void request(drop,{slot:source.slot,...(all && source.count ? {count:source.count} : {all})});
+    }
   }
 
   toggle.addEventListener('click',()=>open());
@@ -383,8 +470,26 @@ export function createCreativeMenu({load,choose,select,move,trash,pause,resume,n
   previousPage.addEventListener('click',()=>setPage(tabPage-1));
   nextPage.addEventListener('click',()=>setPage(tabPage+1));
   retry.addEventListener('click',fetchCatalog);
-  more.addEventListener('click',()=>appendPage().find(card=>!card.disabled)?.focus());
   dialog.addEventListener('cancel',event=>{ event.preventDefault(); close(); });
+  dialog.addEventListener('pointermove',event=>{
+    carried.style.left = `${event.clientX}px`;
+    carried.style.top = `${event.clientY}px`;
+  });
+  dialog.addEventListener('click',event=>{
+    if (event.target === dialog && picked && outside(event)) {
+      dropSource(picked,true);
+      setPicked(null);
+    }
+  });
+  dialog.addEventListener('contextmenu',event=>{
+    if (event.target !== dialog || !picked || !outside(event)) return;
+    event.preventDefault();
+    dropSource(picked,false);
+    setPicked(picked.count > 1 ? {...picked,count:picked.count-1} : null);
+  });
+  acceptDrop(dialog,(source,event)=>{ if (outside(event)) dropSource(source,true); });
+  list.addEventListener('scroll',renderRows,{passive:true});
+  scrollbar.addEventListener('input',()=>{ list.scrollTop = Number(scrollbar.value); });
   search.addEventListener('input',render);
   search.addEventListener('keydown',event => {
     if (event.isComposing || !['ArrowDown','Enter'].includes(event.code)) return;
@@ -406,21 +511,39 @@ export function createCreativeMenu({load,choose,select,move,trash,pause,resume,n
     visible[next].click();
     visible[next].focus();
   });
+  new ResizeObserver(()=>{ if (dialog.open) { firstRow = -1; renderRows(); } }).observe(list);
   paintInventory();
 
   return {
     open:()=>open(), openInventory:()=>open(true), close, isOpen:()=>dialog.open, setInventory, selectSlot,
     scrollHotbar(direction) {
-      if (direction) return selectSlot(((requestedSlot ?? state.selected)+Math.sign(direction)+hotbarSize)%hotbarSize);
+      if (direction) return selectSlot(((requestedSlot ?? state.selected)+Math.sign(direction)+columns)%columns);
     },
     keydown(event) {
       if (!dialog.open) return false;
-      if (event.code === 'Escape') { event.preventDefault(); close(); }
-      if (event.code === 'Delete' && picked?.slot !== undefined && event.target !== search) {
+      if (event.code === 'Escape' || ['KeyI','KeyB'].includes(event.code) && event.target !== search) {
         event.preventDefault();
-        const source = picked;
-        clearTransfer();
+        close();
+      }
+      if (event.target === search) return true;
+      const source = picked ?? underCursor;
+      if (source && event.code === 'KeyQ') {
+        event.preventDefault();
+        if (event.repeat) return true;
+        dropSource(source,event.ctrlKey);
+        if (source === picked) setPicked(!event.ctrlKey && picked.count > 1 ? {...picked,count:picked.count-1} : null);
+      }
+      if (source && event.code === 'Delete') {
+        event.preventDefault();
         discard(source);
+        setPicked(null);
+      }
+      if (source && /^Digit[1-9]$/.test(event.code)) {
+        event.preventDefault();
+        const slot = Number(event.code.slice(-1)) - 1;
+        if (source === picked) void transferTo(source,slot);
+        else if (source.entry) void transferTo({entry:source.entry,count:maxStack(source.entry)},slot);
+        else if (slot !== source.slot) void request(move,source.slot,slot);
       }
       return true;
     },

@@ -133,6 +133,7 @@ async function serveFile(request, response, path) {
 
 function staticPath(path, project, generated) {
   if (path === '/') return join(project, 'client', 'index.html');
+  if (path === '/generated/weather/biomes.json') return join(generated, 'weather', 'biomes.json');
   const vendor = path.match(/^\/vendor\/(?:three\/)?(three\.(?:module|core)\.js)$/);
   if (vendor) return join(project, 'node_modules', 'three', 'build', vendor[1]);
   const name = path.match(/^\/(?:client\/)?([a-zA-Z0-9][a-zA-Z0-9_.-]*\.(?:m?js|css|html|png|svg|webp))$/);
@@ -391,6 +392,10 @@ export function createHoneymoonServer({
         if (!result.replay && result.status === 200) {
           afterCommit?.(request, response, result.output);
           broadcast(player, result.output);
+          if (result.output.inventory) {
+            const online=presence.onlinePosition(player);
+            if (online) presence.update(player,online,{equipment:result.output.inventory.equipment});
+          }
           if (result.output.minecart || result.output.removedMinecart || result.output.boat || result.output.removedBoat) broadcastMinecarts();
           if (result.output.droppedItem || result.output.pickedItem) broadcastDroppedItems(true);
         }
@@ -522,7 +527,7 @@ export function createHoneymoonServer({
         server.closeAllConnections();
       });
       game.flushMinecarts();
-      game.flushDroppedItems();
+      game.clearDroppedItems();
       store.close();
     },
   };

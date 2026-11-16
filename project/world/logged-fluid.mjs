@@ -1,5 +1,6 @@
 import {extractedModel} from './extracted-models.mjs';
 import {shapeFor} from './geometry.mjs';
+import {FAKE_WATER, plantBlock} from './fluid-state.mjs';
 
 const min = ['x0', 'y0', 'z0'];
 const max = ['x1', 'y1', 'z1'];
@@ -8,6 +9,7 @@ const sources = {water:'legacy:9:0', lava:'legacy:11:0'};
 
 export function liquidKind(cell) {
   const key = typeof cell === 'string' ? cell : cell?.key ?? cell?.cell;
+  if (key === FAKE_WATER) return 'water';
   const match = /^legacy:(8|9|10|11):\d+$/.exec(key ?? '');
   if (match) return Number(match[1]) < 10 ? 'water' : 'lava';
 }
@@ -44,6 +46,8 @@ export function liquidCavity(cell, neighbors, models) {
   if (!key || key === 'air' || liquidKind(key)) return [];
   const boxes = (extractedModel(models, cell, neighbors)?.collision ?? shapeFor(cell, neighbors))
     .filter(box => !box.kind && (box.solid !== false || box.climbable || box.fluid));
+  if (!boxes.length && (plantBlock.ground.includes(Number(key.split(':')[1])) ||
+      shapeFor(cell,neighbors).some(box => box.kind === 'cross'))) return [cube];
   if (!boxes.length) return [];
   // Subtract the host in local block space, preserving thin covers and exact stair corners.
   let volume = [cube];

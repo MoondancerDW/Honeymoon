@@ -6,12 +6,14 @@ import {extractedModel, isJammyConnectableSeat} from '/world/extracted-models.mj
 import {crossSpriteCorners} from '/world/cross-sprites.mjs';
 import {isOpaqueFullVoxels, voxelFaces} from '/world/voxel-chisel.mjs';
 import {clipLiquidFace, liquidCavity, liquidKind} from '/world/logged-fluid.mjs';
+import {FAKE_WATER,fluidState,fluidSurface} from '/world/fluid-state.mjs';
 import {buildSectionVisibility, isOcclusionBlock, markOcclusionBlock} from './section-visibility.mjs';
+import {appendFoliage} from './foliage-mesh.mjs';
 
 const {shapeFor, ATLAS_GRID, TILE_SIZE, FACES} = geometry;
 const SIDE = 18;
 const STRIDE = [1, SIDE * SIDE, SIDE];
-const waterKey = key => key?.startsWith('legacy:8:') || key?.startsWith('legacy:9:');
+const waterKey = key => key === FAKE_WATER || key?.startsWith('legacy:8:') || key?.startsWith('legacy:9:');
 const usesNeighborLight = key => /^legacy:(44|53|67|108|109|113|114|126|128|134|135|136|156|4039):/.test(key ?? '');
 const MAX = ['x1', 'y1', 'z1'];
 const MIN = ['x0', 'y0', 'z0'];
@@ -27,8 +29,9 @@ function layer() {
   return {positions: [], colors: [], lightLevels: [], uvs: [], indices: []};
 }
 
-function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding = .25 / TILE_SIZE, shadow) {
+function quad(out, corners, tile, uv, light, tint = 0xffffff, shade = 1, padding = .25 / TILE_SIZE, shadow, wind = 0) {
   const start = out.positions.length / 3;
+  if (wind && out.windMarks) out.windMarks.push(start+2,wind,start+3,wind);
   if (tile >= ATLAS_GRID * atlasRows) tile = geometry.tiles.unknown;
   const u0 = (tile % ATLAS_GRID) / ATLAS_GRID;
   const v0 = 1 - Math.floor(tile / ATLAS_GRID) / atlasRows;
@@ -111,6 +114,11 @@ function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], sh
     point[axis] = box[outward ? MAX[axis] : MIN[axis]];
     point[uAxis] = box[u ? MAX[uAxis] : MIN[uAxis]];
     point[vAxis] = box[v ? MAX[vAxis] : MIN[vAxis]];
+    if (box.liquidSurface && face !== 2 && point[1] === box.y1) {
+      const [h00,h10,h01,h11] = box.liquidSurface;
+      const [x,,z] = point;
+      point[1] = (h00+(h10-h00)*x)*(1-z)+(h01+(h11-h01)*x)*z;
+    }
     let horizontal = point[textureU];
     let vertical = point[textureV];
     if (box.uv === 'box') {
@@ -229,8 +237,9 @@ function makeShape(key, at, cell, neighbors, edited) {
 }
 
 function precise({indices, light, objects, microblocks, sculpted, logged, connectedTextures, chiselConnectedTextures,
-  palette = cells, compositions: definitions = compositions, collectVisibility = false}) {
+  palette = cells, compositions: definitions = compositions, collectVisibility = false, foliage}) {
   const layers = {opaque: layer(), cutout: layer(), blend: layer()};
+  if (foliage) layers.cutout.windMarks = [];
   const indexedObjects = new Map(objects);
   const editedParts = new Map(microblocks);
   const voxelCells = new Map(sculpted);
@@ -387,7 +396,25 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
           const sign = geometry.signFor?.(cell(at));
           if (sign) signs.push({...sign, x: x + sign.x, y: y + sign.y, z: z + sign.z});
         }
-        for (const box of boxes) {
+        for (let box of boxes) {
+          const fluid = !box.solid && liquidKind(blockKey);
+          if (fluid && boxes.length === 1) {
+            function corner(sx,sz) {
+              const sideX=sx*STRIDE[0], sideZ=sz*STRIDE[2];
+              let sum=0, mass=0;
+              for (const offset of [0,sideX,sideZ,sideX+sideZ]) {
+                const other = fluidState(palette[indices[at+offset]]);
+                if (other?.kind !== fluid) continue;
+                const height=fluidSurface(other,fluidState(palette[indices[at+offset+STRIDE[1]]]));
+                if (height === 1) return 1;
+                const weight = height >= .8 ? 5 : 1;
+                sum+=height*weight;
+                mass+=weight;
+              }
+              return mass ? sum/mass : box.y1;
+            }
+            box={...box,liquidSurface:[corner(-1,-1),corner(1,-1),corner(-1,1),corner(1,1)]};
+          }
           const pane = box.mode === 'pane';
           if (box.mode === 'fire') {
             const fire = layers.fire ??= layer();
@@ -408,8 +435,10 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
             continue;
           }
           if (box.kind === 'cross') {
+            const wind = blockKey.startsWith('legacy:31:') ? 225 : 0;
             for (const corners of crossSpriteCorners(box, origin)) {
-              quad(out, corners, box.faces[0], FULL_UV, box.emissive ? 256 : light[at], box.tint);
+              quad(out, corners, box.faces[0], FULL_UV, box.emissive ? 256 : light[at], box.tint,
+                1,undefined,undefined,wind);
             }
             continue;
           }
@@ -423,7 +452,7 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
               continue;
             }
             const onEdge = box.angle === undefined && !box.redPowerOffset && (f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0);
-            if (water && (onEdge || f === 3) && waterKey(palette[indices[adjacent]])) continue;
+            if (fluid && (onEdge || f === 3) && liquidKind(palette[indices[adjacent]]) === fluid) continue;
             if (onEdge) {
               const neighbor = shape(adjacent)?.full;
               if (neighbor?.mode === 'opaque' || hasSculptures && isOpaqueFullVoxels(voxelCells.get(adjacent)) ||
@@ -471,7 +500,12 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
     }
   }
   const visibility = occlusionCells ? buildSectionVisibility(occlusionCells, opaqueCells) : null;
-  return {layers, signs, visibility};
+  const cutoutTerrainVertices = layers.cutout.positions.length;
+  const foliageQuads = foliage ? appendFoliage({indices,palette,light,origin:foliage,
+    emit:(corners,tile,packed,tint,shade,wind) => quad(layers.cutout,corners,tile,FULL_UV,
+      packed,tint,shade,undefined,undefined,wind),
+  }) : 0;
+  return {layers, signs, visibility, foliageQuads, cutoutTerrainVertices};
 }
 
 function coarse({chunks, origin, stride}) {
@@ -525,7 +559,8 @@ self.onmessage = ({data}) => {
   carpentryModel = data.carpentryModel === true;
   const start = performance.now();
   try {
-    const {layers, signs, visibility} = data.type === 'precise' ? precise(data) : coarse(data);
+    const {layers, signs, visibility, foliageQuads = 0, cutoutTerrainVertices} =
+      data.type === 'precise' ? precise(data) : coarse(data);
     const transfers = [];
     let fitsSection = !signs.length;
     for (const [mode, out] of Object.entries(layers)) {
@@ -539,14 +574,25 @@ self.onmessage = ({data}) => {
       out.lightLevels = new Uint16Array(out.lightLevels);
       out.indices = out.positions.length / 3 <= 65535 ? new Uint16Array(out.indices) : new Uint32Array(out.indices);
       out.bounds = boundingSphere(out.positions);
-      fitsSection &&= out.bounds.fitsSection;
+      if (out.windMarks?.length) {
+        out.wind = new Uint8Array(out.positions.length/3);
+        for (let i=0;i<out.windMarks.length;i+=2) out.wind[out.windMarks[i]] = out.windMarks[i+1];
+        out.bounds.radius += .23;
+        transfers.push(out.wind.buffer);
+      }
+      delete out.windMarks;
+      if (mode === 'cutout' && foliageQuads) {
+        // Decoration is supported by this section; only structural geometry
+        // participates in the portal bounds test.
+        fitsSection &&= !cutoutTerrainVertices || boundingSphere(out.positions,cutoutTerrainVertices).fitsSection;
+      } else fitsSection &&= out.bounds.fitsSection;
       transfers.push(out.positions.buffer, out.uvs.buffer, out.colors.buffer, out.lightLevels.buffer, out.indices.buffer);
     }
     if (visibility) {
       transfers.push(visibility.links.buffer);
       if (visibility.cells) transfers.push(visibility.cells.buffer);
     }
-    self.postMessage({id: data.id, version: data.version, layers, signs, visibility, fitsSection,
+    self.postMessage({id: data.id, version: data.version, layers, signs, visibility, fitsSection, foliageQuads,
       visibilityClassified: data.collectVisibility === true,
       elapsed: performance.now() - start}, transfers);
   } catch (error) {
@@ -554,10 +600,10 @@ self.onmessage = ({data}) => {
   }
 };
 
-function boundingSphere(positions) {
+function boundingSphere(positions, end = positions.length) {
   const min = [Infinity, Infinity, Infinity];
   const max = [-Infinity, -Infinity, -Infinity];
-  for (let i = 0; i < positions.length; i++) {
+  for (let i = 0; i < end; i++) {
     const axis = i % 3;
     min[axis] = Math.min(min[axis], positions[i]);
     max[axis] = Math.max(max[axis], positions[i]);

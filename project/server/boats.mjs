@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {displayEntity} from './base.mjs';
 import {RequestError} from './errors.mjs';
-import {liquidLevel} from '../world/block-movement.mjs';
+import {fluidCurrent,liquidLevel} from '../world/block-movement.mjs';
 import {blockState} from '../world/block-interactions.mjs';
 import {boatHeading,isRideableBoat} from '../world/boats.mjs';
 
@@ -128,12 +128,14 @@ export function createBoats({base,store,clock,cellAt,canMove}) {
       let nextSpeed = (speed+throttle*8*seconds) * .93 ** (seconds/.05);
       nextSpeed = Math.max(-maxSpeed*.55,Math.min(maxSpeed,nextSpeed));
       if (Math.abs(nextSpeed) < .025) nextSpeed = 0;
-      if (!nextSpeed && !turn && y === level) {
+      const [flowX,,flowZ]=fluidCurrent(cellAt,x,level-.35,z,'water');
+      if (!nextSpeed && !turn && !flowX && !flowZ && y === level) {
         if (speed) { record.speed = 0; dirty = true; }
         continue;
       }
       const yaw = angle(boatHeading(entity)-turn*2.15*seconds);
-      const nx = x - Math.sin(yaw)*nextSpeed*seconds, nz = z - Math.cos(yaw)*nextSpeed*seconds;
+      const nx = x + (flowX*.54-Math.sin(yaw)*nextSpeed)*seconds;
+      const nz = z + (flowZ*.54-Math.cos(yaw)*nextSpeed)*seconds;
       const destination = surface(nx,y,nz);
       let next = {...entity,position:[nx,destination,nz],data:{Rotation:[yawDegrees(yaw),0]}};
       if (destination === null || occupied(next) || !canMove(next,rider)) {

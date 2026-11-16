@@ -1,3 +1,4 @@
+import * as THREE from '/vendor/three/three.module.js';
 import {createPonyHeldItem} from './pony-held-item.mjs';
 import {chunkKey, droppedItemPosition} from './world-data.mjs';
 
@@ -14,6 +15,7 @@ export class DroppedItemView {
     this.scene = scene;
     this.world = world;
     this.meshes = new Map();
+    this.bounds = new THREE.Box3();
   }
 
   update(now, camera, assets, light, chunkVisible) {
@@ -30,23 +32,27 @@ export class DroppedItemView {
         mesh = createPonyHeldItem();
         mesh.object.scale.setScalar(.26);
         mesh.phase = (Number.parseInt(key.slice(0,6),16) % 1024) / 1024 * Math.PI * 2;
-        mesh.spin = mesh.phase;
-        mesh.tilt = 0;
-        mesh.bob = 0;
+        mesh.tumble = mesh.phase;
         mesh.updated = now;
         mesh.show(appearance(tracked.target.item),assets,null);
+        const model = mesh.object.children.find(child => child.isMesh && child.visible);
+        model.geometry.computeBoundingBox();
+        const {min,max} = model.geometry.boundingBox;
+        const flat = max.z - min.z < .15;
+        mesh.restAngle = flat ? -Math.PI / 2 : 0;
+        mesh.object.rotation.set(mesh.restAngle,mesh.phase,0,'YXZ');
+        mesh.object.updateMatrixWorld(true);
+        this.bounds.setFromObject(model,true);
+        mesh.floorOffset = -this.bounds.min.y + .001;
         this.scene.add(mesh.object);
         this.meshes.set(key,mesh);
       }
       const {resting} = tracked.target;
       const dt = Math.min(80,now - mesh.updated);
       mesh.updated = now;
-      const blend = 1 - Math.exp(-dt / 55);
-      mesh.spin = (mesh.spin + dt * (resting ? .00165 : .006)) % (Math.PI * 2);
-      mesh.bob += ((resting ? .042 + Math.sin(now * .004 + mesh.phase) * .025 : 0) - mesh.bob) * blend;
-      mesh.tilt += ((resting ? 0 : .28 * Math.sin(now * .018 + mesh.phase)) - mesh.tilt) * blend;
-      mesh.object.position.set(x,y + .038 + mesh.bob,z);
-      mesh.object.rotation.set(mesh.tilt,mesh.spin,0);
+      if (!resting) mesh.tumble = (mesh.tumble + dt * .009) % (Math.PI * 2);
+      mesh.object.position.set(x,y + (resting ? mesh.floorOffset : Math.max(.09,mesh.floorOffset)),z);
+      mesh.object.rotation.set(resting ? mesh.restAngle : mesh.tumble,mesh.phase,0,'YXZ');
       mesh.setLight(light(x,y,z));
       mesh.object.updateMatrixWorld(true);
     }

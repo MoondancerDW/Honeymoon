@@ -6,6 +6,7 @@ import { isRideableMinecart } from '../world/minecarts.mjs';
 import { isRideableBoat } from '../world/boats.mjs';
 import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
 import { loadSnowCleanup } from './snow-cleanup.mjs';
+import { loadFullDetail } from './full-detail.mjs';
 
 const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
 const MAX_CACHED_CHUNKS = 80;
@@ -123,11 +124,13 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
   const coordinates = new Set([...manifest.chunks, ...(manifest.visualChunks ?? [])].map(([x, z]) => `${x}.${z}`));
   const playableCoordinates = new Set(manifest.chunks.map(([x, z]) => `${x}.${z}`));
   const chunks = new Map();
-  const bounds = manifest.bounds;
+  const bounds = {...manifest.bounds, maxY:Math.max(manifest.bounds.maxY,511)};
   const originalHash = manifest.contentHash ?? createHash('sha256').update(rawManifest).digest('hex');
+  const fullDetail = manifest.chunkPalettes ? loadFullDetail(join(directory,'..','full-world'),originalHash) : null;
   const cleanup = cleanSnow ? loadSnowCleanup(directory,originalHash) : null;
   const hash = cleanup?.hash ?? originalHash;
-  const publicManifest = publicWorld(manifest, hash);
+  const publicManifest = publicWorld({...manifest,bounds}, hash);
+  if (fullDetail) publicManifest.fullChunks=fullDetail.descriptor;
   const corePalette = manifest.palette.slice(0, manifest.corePaletteSize ?? manifest.palette.length);
   const catalog = new Set(corePalette);
   for (const key of corePalette) {
@@ -141,14 +144,15 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
 
   function getChunk(cx, cz) {
     const chunkKey = `${cx}.${cz}`;
-    if (!coordinates.has(chunkKey)) return null;
+    const local=coordinates.has(chunkKey);
+    if (!local && !fullDetail?.hasChunk(cx,cz)) return null;
     const cached = chunks.get(chunkKey);
     if (cached) {
       chunks.delete(chunkKey);
       chunks.set(chunkKey, cached);
       return cached;
     }
-    const source = JSON.parse(readFileSync(join(directory, 'chunks', `${chunkKey}.json`), 'utf8'));
+    const source = local ? JSON.parse(readFileSync(join(directory,'chunks',`${chunkKey}.json`),'utf8')) : fullDetail.chunkAt(cx,cz);
     if (source.x !== cx || source.z !== cz) throw new Error(`Mismatched chunk coordinates ${chunkKey}`);
     cleanup?.apply(source,manifest.palette);
     const palette = manifest.chunkPalettes ? source.palette : manifest.palette;
@@ -208,7 +212,7 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
     return getChunk(cx, cz)?.source.entities.find(entity => entity.key === key);
   }
 
-  return { manifest, publicManifest, hash, catalog, inBounds, getCell, getEntity, publicChunk,
+  return { manifest:{...manifest,bounds}, publicManifest, hash, catalog, inBounds, getCell, getEntity, publicChunk,
     hasPlayableChunk: (x, z) => playableCoordinates.has(`${x}.${z}`),
   };
 }

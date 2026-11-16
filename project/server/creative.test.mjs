@@ -65,7 +65,7 @@ test('creative places registered off-map states with normal ownership, and build
   const response = await fetch(url + '/generated/creative/catalog.json');
   const served = (await response.json()).entries;
   assert.deepEqual(served.slice(0, entries.length), entries);
-  const transport = served.slice(entries.length,entries.length + 4);
+  const transport = served.filter(entry=>[66,27,28,328].includes(entry.id));
   assert.deepEqual(transport.map(entry => entry.key), ['legacy:66:0', 'legacy:27:0', 'legacy:28:0', CREATIVE_MINECART_KEY]);
   assert.ok(transport.every(entry => entry.placeable && entry.category === 'redstone'));
   assert.equal(served.find(entry => entry.key === 'creative:264:0')?.kind,'flat-item');
@@ -114,7 +114,9 @@ test('creative places registered off-map states with normal ownership, and build
   assert.equal(stale.body.error,'stale_cell');
   const rewrite = await command(b,'edit_sign',[8,1,7],{lines:['Тихая улица','','',''], expectedRevision:write.body.worldRevision});
   assert.equal(rewrite.status,200,JSON.stringify(rewrite));
-  assert.equal((await command(a,'edit_sign',[9,1,6],{lines})).body.error,'protected_cell');
+  const original = await command(a,'edit_sign',[9,1,6],{lines});
+  assert.equal(original.status,200);
+  assert.equal(original.body.changes[0].object.data.Text1,lines[0]);
   const support = await place(9,7,'legacy:4:0');
   assert.equal(support.status,200,JSON.stringify(support));
   const wall = await command(a,'place',[9,1,8],{cell:'legacy:68:0', creative:true,

@@ -81,6 +81,86 @@ function makeEntities(level) {
   });
 }
 
+export function createChunkEncoder({chunkPalettes=true,palette=['air'],indexByKey=new Map([['air',0]]),
+  compositions=Object.create(null),trackCatalog=false}={}) {
+  const byLegacy = new Uint16Array(65536);
+  function register(key,entries,indices) {
+    if (!indices.has(key)) {
+      indices.set(key,entries.length);
+      entries.push(key);
+    }
+    return indices.get(key);
+  }
+  return function encode(chunk,statistics) {
+    const {xPos:x,zPos:z} = chunk;
+    const objects = makeObjects(chunk), entities = makeEntities(chunk);
+    if (statistics) {
+      countTypes(statistics.objectCounts,objects);
+      countTypes(statistics.entityCounts,entities);
+    }
+    const objectsAt = new Map(objects.map(object=>[positionKey(...object.position),object]));
+    const sections=[], byY=new Map();
+    const entries=chunkPalettes ? ['air'] : palette;
+    const indicesByKey=chunkPalettes ? new Map([['air',0]]) : indexByKey;
+    const definitions=chunkPalettes ? Object.create(null) : compositions;
+    if (chunkPalettes) byLegacy.fill(0);
+    function paletteIndex(key) {
+      const index=register(key,entries,indicesByKey);
+      if (index>65535) throw new Error(`Chunk ${x},${z} exceeds the uint16 palette`);
+      if (chunkPalettes && trackCatalog) register(key,palette,indexByKey);
+      return index;
+    }
+    for (const source of [...(chunk.Sections??[])].sort((a,b)=>a.Y-b.Y)) {
+      const {blocks,variants}=sectionBlocks(source);
+      if (byY.has(source.Y)) throw new Error(`Duplicate section ${source.Y} in chunk ${x},${z}`);
+      if (statistics) {
+        statistics.counts.sections++;
+        statistics.counts.cells+=blocks.length;
+      }
+      const indices=Buffer.alloc(blocks.length*2), tiles=new Map();
+      for (const object of objects) {
+        const [tx,ty,tz]=object.position;
+        if (ty>>4===source.Y && tx>>4===x && tz>>4===z) tiles.set(cellOffset(tx,ty,tz),object);
+      }
+      for (let index=0;index<blocks.length;index++) {
+        const id=blocks[index], meta=variants[index], legacy=id*16+meta;
+        if (statistics) statistics.variantCounts[legacy]++;
+        if (id===0) continue;
+        if (!byLegacy[legacy]) byLegacy[legacy]=paletteIndex(`legacy:${id}:${meta}`);
+        let selected=byLegacy[legacy];
+        const tile=tiles.size && tiles.get(index);
+        const part=tile && partData(tile.data,id,meta);
+        if (part) {
+          const {key,definition}=part;
+          selected=paletteIndex(key);
+          if (trackCatalog) compositions[key]=definition;
+          definitions[key]=definition;
+          if (statistics) {
+            if (definition.malformed) statistics.counts.malformedCompositions++;
+            if (tile.type==='Covers') {
+              statistics.counts.covers++;
+              statistics.coverPatterns.add(`${definition.cvm}:${definition.cvs}`);
+            }
+          }
+        }
+        if (statistics) {
+          statistics.counts.occupied++;
+          const key=entries[selected];
+          statistics.countsByKey[key]=(statistics.countsByKey[key]??0)+1;
+        }
+        indices.writeUInt16LE(selected,index*2);
+      }
+      const section={y:source.Y,indices:indices.toString('base64')};
+      if (source.SkyLight?.length===2048) section.skyLight=source.SkyLight.toString('base64');
+      if (source.BlockLight?.length===2048) section.blockLight=source.BlockLight.toString('base64');
+      sections.push(section);
+      byY.set(source.Y,indices);
+    }
+    const value={x,z,sections,objects,entities,...(chunkPalettes && {palette:entries,compositions:definitions})};
+    return {bytes:`${canonicalJson(value)}\n`,entries,byY,objectsAt};
+  };
+}
+
 function configEvidence(config, missingIds) {
   const evidence = Object.create(null);
   if (!existsSync(config)) return evidence;
@@ -157,7 +237,6 @@ function detailedMap({ world, out, area, visualArea, visualRadius, chunkPalettes
   const allRegistry = new Map((level.FML?.ModItemData ?? []).map((item) => [item.ItemId, item]));
   const palette = ['air'];
   const indexByKey = new Map([['air', 0]]);
-  const byLegacy = new Uint16Array(65536);
   const compositions = Object.create(null);
   const variantCounts = new Uint32Array(65536);
   const legacyRegistry = Object.create(null);
@@ -170,13 +249,8 @@ function detailedMap({ world, out, area, visualArea, visualRadius, chunkPalettes
   const counts = { sections: 0, cells: 0, occupied: 0, covers: 0, malformedCompositions: 0 };
   const coverPatterns = new Set();
   const knownVariants = Object.create(null);
-  function register(key, entries, indices) {
-    if (!indices.has(key)) {
-      indices.set(key, entries.length);
-      entries.push(key);
-    }
-    return indices.get(key);
-  }
+  const encode=createChunkEncoder({chunkPalettes,palette,indexByKey,compositions,trackCatalog:true});
+  const statistics={counts,objectCounts,entityCounts,variantCounts,coverPatterns,countsByKey};
   const directory = join(out, 'chunks');
   mkdirSync(directory);
 
@@ -186,81 +260,7 @@ function detailedMap({ world, out, area, visualArea, visualRadius, chunkPalettes
       if (playable) throw new Error(`Detailed map missing chunk ${x},${z}`);
       return false;
     }
-    const objects = makeObjects(chunk);
-    const entities = makeEntities(chunk);
-    if (playable) {
-      countTypes(objectCounts, objects);
-      countTypes(entityCounts, entities);
-    }
-    const objectsAt = new Map(objects.map((object) => [positionKey(...object.position), object]));
-    const sections = [];
-    const byY = new Map();
-    const entries = chunkPalettes ? ['air'] : palette;
-    const indicesByKey = chunkPalettes ? new Map([['air', 0]]) : indexByKey;
-    const definitions = chunkPalettes ? Object.create(null) : compositions;
-    if (chunkPalettes) byLegacy.fill(0);
-    function getPaletteIndex(key) {
-      const index = register(key, entries, indicesByKey);
-      if (index > 65535) throw new Error(`Chunk ${x},${z} exceeds the uint16 palette`);
-      if (chunkPalettes) register(key, palette, indexByKey);
-      return index;
-    }
-    for (const source of [...(chunk.Sections ?? [])].sort((left, right) => left.Y - right.Y)) {
-      const { blocks, variants } = sectionBlocks(source);
-      if (byY.has(source.Y)) throw new Error(`Duplicate section ${source.Y} in chunk ${x},${z}`);
-      if (playable) {
-        counts.sections += 1;
-        counts.cells += blocks.length;
-      }
-      const indices = Buffer.alloc(blocks.length * 2);
-      const tiles = new Map();
-      for (const object of objects) {
-        const [tx, ty, tz] = object.position;
-        if (Math.floor(ty / 16) === source.Y && Math.floor(tx / 16) === x && Math.floor(tz / 16) === z) {
-          tiles.set(cellOffset(tx, ty, tz), object);
-        }
-      }
-
-      for (let index = 0; index < blocks.length; index += 1) {
-        const id = blocks[index];
-        const meta = variants[index];
-        const legacy = id * 16 + meta;
-        if (playable) variantCounts[legacy] += 1;
-        if (id === 0) continue;
-        if (playable) counts.occupied += 1;
-        if (!byLegacy[legacy]) byLegacy[legacy] = getPaletteIndex(`legacy:${id}:${meta}`);
-        let paletteIndex = byLegacy[legacy];
-        const tile = tiles.get(index);
-        if (tile) {
-          const composition = partData(tile.data, id, meta);
-          if (composition) {
-            const { key, definition } = composition;
-            paletteIndex = getPaletteIndex(key);
-            compositions[key] = definition;
-            definitions[key] = definition;
-            if (playable) {
-              if (definition.malformed) counts.malformedCompositions += 1;
-              if (tile.type === 'Covers') {
-                counts.covers += 1;
-                coverPatterns.add(`${definition.cvm}:${definition.cvs}`);
-              }
-            }
-          }
-        }
-        const key = entries[paletteIndex];
-        if (playable) countsByKey[key] = (countsByKey[key] ?? 0) + 1;
-        indices.writeUInt16LE(paletteIndex, index * 2);
-      }
-
-      const section = { y: source.Y, indices: indices.toString('base64') };
-      if (source.SkyLight?.length === 2048) section.skyLight = source.SkyLight.toString('base64');
-      if (source.BlockLight?.length === 2048) section.blockLight = source.BlockLight.toString('base64');
-      sections.push(section);
-      byY.set(source.Y, indices);
-    }
-
-    const data = `${canonicalJson({ x, z, sections, objects, entities,
-      ...(chunkPalettes && {palette:entries, compositions:definitions}) })}\n`;
+    const {bytes:data,entries,byY,objectsAt}=encode(chunk,playable ? statistics : undefined);
     const file = `${x}.${z}.json`;
     hashes[file] = sha256(data);
     writeFileSync(join(directory, file), data);

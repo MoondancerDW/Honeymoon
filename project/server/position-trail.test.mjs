@@ -24,7 +24,7 @@ const tuple = ({x, y, z}) => [x, y, z];
 const point = ([x, y, z]) => ({x, y, z});
 
 test('position packets follow the client around the spawn cover corner, with retry and bounds checks', async t => {
-  const feet = {x:-8.48, y:65, z:-17.76};
+  const feet = {x:-8.26, y:65, z:-17.55};
   const movement = new Movement({manifest: {bounds}, hasChunk: () => true, cellAt});
   movement.grounded = true;
   const samples = [];
@@ -68,7 +68,7 @@ test('position packets follow the client around the spawn cover corner, with ret
   const loop = Array.from({length: POSITION_TRAIL_LIMIT}, (_, index) => tuple(index % 2 === 0 ? {...end, z: end.z + .3} : end));
   assert.deepEqual(await post('position', {...end, from: tuple(end), trail: loop, requestId: 'excessive-loop'}),
     {status: 409, body: {error: 'movement_blocked', position: end, stance:'stand'}});
-  const throughCover = [end.x + .31, end.y, end.z - .13];
+  const throughCover = [end.x + .28, end.y, end.z - .03];
   assert.deepEqual(await post('position', {...end, from: tuple(end), trail: [throughCover, tuple(end)], requestId: 'blocked-piece'}),
     {status: 409, body: {error: 'movement_blocked', position: end, stance:'stand'}});
   assert.equal((await post('position', {...next, from: tuple(end), trail: [tuple(next)], requestId: 'after-reject'})).status, 200);
@@ -89,8 +89,8 @@ test('positions validate body changes at their own step and do not stand through
   assert.throws(() => send(spawn,[[1.55,1,.5,'crawl']],'false-transition'),{code:'movement_blocked'});
   const crouch = send(spawn,[[...spawn,'crouch']],'begin-crouch');
   assert.equal(crouch.stance,'crouch');
-  assert.throws(() => send(spawn,[[1.55,1,.5,'crouch']],'blocked-crouch'),{code:'movement_blocked'});
-  const trail = [[...spawn,'crawl'],[1.55,1,.5,'crawl']];
+  assert.throws(() => send(spawn,[[1.76,1,.5,'crouch']],'blocked-crouch'),{code:'movement_blocked'});
+  const trail = [[...spawn,'crawl'],[1.76,1,.5,'crawl']];
   const moved = send(spawn,trail,'crawl-under-roof');
   assert.equal(moved.stance,'crawl');
   assert.equal(send(spawn,trail,'crawl-under-roof').stance,'crawl');
@@ -98,8 +98,8 @@ test('positions validate body changes at their own step and do not stand through
   assert.throws(() => send(tuple(moved.position),[[...tuple(moved.position),'stand']],'blocked-stand'),{code:'movement_blocked'});
   const clear = send(tuple(moved.position),[[...spawn,'crawl'],[...spawn,'stand']],'back-to-standing');
   assert.equal(clear.stance,'stand');
-  const edge = [4.49,1,.5];
+  const edge = [4.29,1,.5];
   game.teleport(player,point(edge));
   send(edge,[[...edge,'crouch']],'crouch-at-edge');
-  assert.throws(() => send(edge,[[4.51,1,.5,'crouch']],'try-edge-step'),{code:'movement_blocked'});
+  assert.throws(() => send(edge,[[4.31,1,.5,'crouch']],'try-edge-step'),{code:'movement_blocked'});
 });

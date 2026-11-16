@@ -24,6 +24,32 @@ const blockId = cell => {
   return 0;
 };
 const pick = choices => choices?.[Math.floor(Math.random() * choices.length)];
+export const audioDefaults = Object.freeze({profile:'biome',natureVolume:.32,natureFrequency:.24,
+  animalsVolume:.22,animalsFrequency:.16,otherVolume:.46,otherFrequency:.24});
+const audioProfiles = new Set(['biome','minimal','acoustic']);
+const taiga = new Set([5,19,30,31,32,33,133,158,160,161]);
+const forest = new Set([4,18,27,28,29,132,155,156,157]);
+
+function noise(context, seconds, impulse = false) {
+  const size = Math.floor(seconds*context.sampleRate);
+  const result = context.createBuffer(1,size,context.sampleRate);
+  const data = result.getChannelData(0);
+  for (let i=0;i<size;i++) data[i]=(Math.random()*2-1)*(impulse ? (1-i/size)**3 : 1);
+  return result;
+}
+
+function obstructed(world, listener, destination) {
+  const start = [listener.x,listener.y,listener.z];
+  const delta = destination.map((value,i)=>value+.5-start[i]);
+  const steps = Math.ceil(Math.hypot(...delta)*3);
+  for (let i=1;i<steps;i++) {
+    const point = start.map((value,axis)=>value+delta[axis]*i/steps);
+    const block = point.map(Math.floor), local = point.map((value,axis)=>value-block[axis]);
+    if (collisionFor(world.cellAt(...block)).some(box=>local[0]>box.x0 && local[0]<box.x1 &&
+        local[1]>box.y0 && local[1]<box.y1 && local[2]>box.z0 && local[2]<box.z1)) return true;
+  }
+  return false;
+}
 
 export function blockSoundProfile(catalog, cell, material) {
   const id = catalog?.covers[material] ?? blockId(cell);
@@ -94,6 +120,15 @@ export class WorldAudio {
   #right = [1, 0];
   #nextAmbience = 0;
   #nextCave;
+  #nextAnimal = 0;
+  #environment = {...audioDefaults};
+  #air;
+  #airFilter;
+  #airGain;
+  #indoor = false;
+  #skySampleAt = 0;
+  #windSampleAt = 0;
+  #echo;
   #previous;
   #moved = 0;
   #airborne = 0;
@@ -167,6 +202,13 @@ export class WorldAudio {
     else if (this.#playing) this.#music.play().catch(() => {});
   }
 
+  setEnvironment(settings) {
+    if (audioProfiles.has(settings.profile)) this.#environment.profile = settings.profile;
+    for (const key of Object.keys(audioDefaults).filter(key=>key!=='profile')) {
+      if (Number.isFinite(settings[key])) this.#environment[key]=clamp(settings[key],0,1);
+    }
+  }
+
   #updateGain() {
     if (this.#master) this.#master.gain.value = this.#playing && !this.#muted ? this.#volume : 0;
   }
@@ -209,7 +251,25 @@ export class WorldAudio {
     const source = this.#context.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = clamp(speed, .25, 4);
-    source.connect(gain);
+    gain.gain.value *= options.occluded ? .4 : 1;
+    const context = this.#context;
+    let occlusion;
+    if (options.occluded) {
+      occlusion=context.createBiquadFilter();
+      occlusion.type='lowpass';
+      occlusion.frequency.value=740;
+      source.connect(occlusion).connect(gain);
+    } else source.connect(gain);
+    if (options.echo) {
+      if (!this.#echo) {
+        this.#echo=context.createConvolver();
+        this.#echo.buffer=noise(context,.68,true);
+        const wet=context.createGain();
+        wet.gain.value=.16;
+        this.#echo.connect(wet).connect(this.#master);
+      }
+      gain.connect(this.#echo);
+    }
     let pan;
     if (position && this.#listener && this.#context.createStereoPanner) {
       const dx = position[0] + .5 - this.#listener.x, dz = position[2] + .5 - this.#listener.z;
@@ -223,6 +283,7 @@ export class WorldAudio {
       source.disconnect();
       gain.disconnect();
       pan?.disconnect();
+      occlusion?.disconnect();
     };
     source.start();
     this.#played++;
@@ -252,12 +313,14 @@ export class WorldAudio {
     void this.play(event, position, {volume: (volume + 1) / 2, pitch: pitch * .8});
   }
 
-  frame(world, position, {grounded = false, swimming = false, climbing = false, yaw = 0, body = PLAYER} = {}) {
+  frame(world, position, {grounded = false, swimming = false, climbing = false, yaw = 0, body = PLAYER,
+    precipitation = null, sheltered = false, biome, night = false, windStrength = .3} = {}) {
     if (!this.#playing || !this.#catalog) return;
     this.#listener = {x: position.x, y: position.y + 1.62, z: position.z};
     this.#right = [Math.cos(yaw), -Math.sin(yaw)];
     if (this.#context?.state === 'running') {
       this.#playMusic();
+      this.#atmosphere(world,precipitation,sheltered,biome,night,windStrength);
       this.#ambience(world, position);
       this.#caveMood(world);
     }
@@ -295,9 +358,55 @@ export class WorldAudio {
     }
   }
 
+  #atmosphere(world, precipitation, sheltered, biome, night, windStrength) {
+    const settings=this.#environment, now=this.#context.currentTime;
+    if (now >= this.#skySampleAt) {
+      this.#skySampleAt=now+.35;
+      const {x,y,z}=this.#listener;
+      this.#indoor=((world.lightAt?.(Math.floor(x),Math.floor(y),Math.floor(z)) ?? 240)>>4)<5;
+    }
+    if (this.#muted) return;
+    if (!this.#air && settings.natureVolume) {
+      this.#air=this.#context.createBufferSource();
+      this.#air.loop=true;
+      this.#air.buffer=noise(this.#context,3);
+      this.#airFilter=this.#context.createBiquadFilter();
+      this.#airFilter.type='lowpass';
+      this.#airGain=this.#context.createGain();
+      this.#airGain.gain.value=0;
+      this.#air.connect(this.#airFilter).connect(this.#airGain).connect(this.#master);
+      this.#air.start();
+    }
+    if (this.#air && now>=this.#windSampleAt) {
+      this.#windSampleAt=now+.075;
+      const roof = sheltered || this.#indoor;
+      const rain = precipitation === 'rain', snow = precipitation === 'snow';
+      const breeze = taiga.has(biome) ? 1 : forest.has(biome) ? .82 : .61;
+      const gust = .42+.58*clamp(windStrength,0,1)**(2.6-2*settings.natureFrequency);
+      const volume = settings.natureVolume*(rain ? .42 : snow ? .22 : .10*breeze)*gust*(roof ? .21 : 1);
+      this.#airGain.gain.setTargetAtTime(volume,now,.12);
+      this.#airFilter.frequency.setTargetAtTime(roof ? 270 : rain ? 1800 : snow ? 520 : 410,now,.3);
+    }
+    if (!settings.animalsFrequency || !settings.animalsVolume || this.#indoor && settings.profile === 'minimal' || now<this.#nextAnimal) return;
+    if (!this.#nextAnimal) {
+      this.#nextAnimal=now+24+Math.random()*25;
+      return;
+    }
+    this.#nextAnimal=now+(18+Math.random()*25)/settings.animalsFrequency;
+    const sound=this.#indoor ? 'mob.bat.idle' : night && (taiga.has(biome) || forest.has(biome)) ? 'mob.wolf.howl' :
+      night ? null : settings.profile==='minimal' ? 'mob.chicken.say' : pick(['mob.chicken.say','mob.sheep.say','mob.cow.say']);
+    if (!sound) return;
+    const direction=Math.random()*2*Math.PI, radius=8+Math.random()*4;
+    const {x,y,z}=this.#listener;
+    const point=[x+Math.sin(direction)*radius,y-1,z+Math.cos(direction)*radius];
+    void this.play(sound,point,{volume:settings.animalsVolume*.47,pitch:.92+Math.random()*.14,
+      occluded:settings.profile==='acoustic' && obstructed(world,this.#listener,point),echo:settings.profile==='acoustic' && this.#indoor});
+  }
+
   #ambience(world, position) {
-    if (this.#muted || this.#context.currentTime < this.#nextAmbience) return;
-    this.#nextAmbience = this.#context.currentTime + 1.5 + Math.random() * 2;
+    const settings=this.#environment;
+    if (this.#muted || !settings.otherFrequency || !settings.otherVolume || this.#context.currentTime < this.#nextAmbience) return;
+    this.#nextAmbience = this.#context.currentTime + (2.5 + Math.random()*3)/settings.otherFrequency;
     const cx = Math.floor(position.x), cy = Math.floor(position.y + 1.62), cz = Math.floor(position.z);
     const nearest = new Map();
     for (let y = cy - 4; y <= cy + 4; y++) {
@@ -312,6 +421,7 @@ export class WorldAudio {
           else if (id === 10 || id === 11) sound = 'liquid.lava';
           else if (id === 51 || id === 3000) sound = 'fire.fire';
           else if (id === 90) sound = 'portal.portal';
+          if (settings.profile === 'minimal' && sound !== 'liquid.water') continue;
           if (sound && distance < (nearest.get(sound)?.distance ?? Infinity)) {
             nearest.set(sound, {position: [x, y, z], distance});
           }
@@ -320,20 +430,24 @@ export class WorldAudio {
     }
     for (const [sound, source] of nearest) {
       const volume = sound === 'liquid.water' ? .75 + Math.random() * .25 : .3;
-      void this.play(sound, source.position, {volume, pitch: .9 + Math.random() * .15});
+      const acoustic=settings.profile==='acoustic';
+      void this.play(sound, source.position, {volume:volume*settings.otherVolume,pitch:.9+Math.random()*.15,
+        occluded:acoustic && obstructed(world,this.#listener,source.position),echo:acoustic && this.#indoor});
     }
   }
 
   #caveMood(world) {
-    if (!this.#catalog.sounds[CAVE_MOOD]) return;
+    if (!this.#catalog.sounds[CAVE_MOOD] || !this.#environment.otherVolume || !this.#environment.otherFrequency ||
+        this.#environment.profile==='minimal') return;
     const now = this.#context.currentTime;
     this.#nextCave ??= now + Math.floor(Math.random() * 12000) * TICK_SECONDS;
     if (now < this.#nextCave) return;
     this.#nextCave = now + TICK_SECONDS;
     const source = caveMoodSource(world, this.#listener);
     if (!source) return;
-    this.#nextCave = now + (6000 + Math.floor(Math.random() * 12000)) * TICK_SECONDS;
-    void this.play(CAVE_MOOD, source, {volume: .7, pitch: .8 + Math.random() * .2});
+    this.#nextCave = now + (6000 + Math.floor(Math.random() * 12000))*TICK_SECONDS/this.#environment.otherFrequency;
+    void this.play(CAVE_MOOD, source, {volume:.7*this.#environment.otherVolume,pitch:.8+Math.random()*.2,
+      echo:this.#environment.profile==='acoustic'});
   }
 
   #playMusic() {

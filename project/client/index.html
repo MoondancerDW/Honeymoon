@@ -31,6 +31,7 @@
         </label>
         <button id="audio-toggle" type="button" aria-pressed="false" hidden>Звук</button>
         <button id="music-toggle" type="button" aria-pressed="false" hidden>Музыка</button>
+        <button id="audio-settings-toggle" type="button" aria-haspopup="dialog" aria-controls="audio-settings">Громкость и окружение</button>
         <button id="night-vision" type="button" aria-pressed="false">Ночное зрение выкл.</button>
         <label class="distance" for="weather">Погода
           <select id="weather" disabled>
@@ -58,9 +59,37 @@
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
         <small id="resume-help" hidden>Esc или Enter — продолжить с захватом мыши</small>
-        <small id="entry-help">WASD — ходьба · Пробел — прыжок · C — присесть / подобрать · V — ползти · X — сесть / встать · Shift — ускорение · F — полёт · F5/Y — камера · U — обзор · P — наблюдатель · I — креатив · B — инвентарь · Z — резец · G — телепорт · Esc — пауза</small>
+        <div class="pause-inventory">
+          <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>
+          <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="B" disabled>Инвентарь</button>
+        </div>
+        <small id="entry-help" hidden></small>
       </div>
     </section>
+    <span id="selected" class="target-tag"></span>
+    <aside id="keys" aria-label="Управление">
+      <dl>
+        <dt>WASD</dt><dd>Движение</dd><dt>Пробел</dt><dd>Прыгнуть</dd>
+        <dt>Shift</dt><dd>Ускориться</dd><dt>C</dt><dd>Присесть / подобрать</dd>
+        <dt>V</dt><dd>Ползти</dd><dt>X</dt><dd>Сесть / встать</dd>
+        <dt>ЛКМ</dt><dd>Сломать</dd><dt>ПКМ</dt><dd>Поставить</dd>
+        <dt>СКМ / O</dt><dd>Копировать</dd><dt>E</dt><dd>Действие</dd>
+        <dt>Q</dt><dd>Выбросить</dd><dt>1–9</dt><dd>Выбрать ячейку</dd>
+        <dt>I / B</dt><dd>Предметы / инвентарь</dd><dt>F</dt><dd>Полёт</dd>
+        <dt>F5 / Y</dt><dd>Сменить вид</dd><dt>U</dt><dd>Свободный обзор</dd>
+        <dt>P</dt><dd>Наблюдатель</dd><dt>Z</dt><dd>Резец</dd>
+        <dt>G</dt><dd>Телепорт</dd><dt>T / Enter</dt><dd>Чат</dd>
+        <dt>Esc</dt><dd>Пауза</dd>
+      </dl>
+      <div class="context-keys">
+        <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
+        <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · O/СКМ взять материал</span>
+        <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift ×2</span>
+        <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
+        <span id="orbit-status" role="status" hidden>Свободный обзор · U — выйти</span>
+        <span id="spectator-status" role="status" hidden>Наблюдатель · Пробел вверх · Ctrl/C вниз · P — выйти</span>
+      </div>
+    </aside>
     <div id="toast" role="status" aria-live="polite"></div>
     <aside id="online" class="social-panel" aria-label="Игроки онлайн" hidden>
       <strong>Онлайн · <span id="online-count">0</span></strong>
@@ -91,9 +120,8 @@
     </form>
     <dialog id="creative-menu" aria-labelledby="creative-title">
       <div class="creative-header">
-        <h2 id="creative-title">Креатив</h2>
-        <input id="creative-search" type="search" aria-label="Поиск в креативе" placeholder="Предмет, блок или ID" autocomplete="off" spellcheck="false">
-        <button id="creative-close" type="button">Закрыть</button>
+        <h2 id="creative-title">Предметы</h2>
+        <input id="creative-search" type="text" aria-label="Поиск предметов" autocomplete="off" spellcheck="false" hidden>
       </div>
       <div class="creative-tabs-row">
         <button id="creative-prev-page" type="button" aria-label="Предыдущая страница вкладок" hidden>‹</button>
@@ -102,24 +130,49 @@
       </div>
       <div id="creative-list" role="tabpanel" tabindex="0">
         <div id="creative-grid"></div>
-        <button id="creative-more" type="button" hidden>Показать ещё</button>
       </div>
+      <input id="creative-scroll" type="range" min="0" max="0" value="0" step="1" aria-label="Прокрутка предметов">
       <div class="creative-footer">
         <span id="creative-count" role="status"></span>
         <button id="creative-retry" type="button" hidden>Повторить загрузку</button>
       </div>
       <section id="creative-inventory" aria-labelledby="inventory-title">
         <h3 id="inventory-title">Инвентарь</h3>
-        <div class="inventory-layout">
-          <div class="inventory-storage">
-            <div id="inventory-slots" class="inventory-grid" role="group" aria-label="Основной инвентарь"></div>
-            <div id="inventory-hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа"></div>
-          </div>
-          <button id="inventory-trash" type="button" aria-label="Корзина" title="Перетащить сюда, чтобы удалить">
-            <span class="trash-icon" aria-hidden="true"></span>
-          </button>
-        </div>
+        <canvas id="inventory-preview" width="96" height="130" aria-label="Пони в экипировке"></canvas>
+        <div id="inventory-equipment" role="group" aria-label="Броня"></div>
+        <div id="inventory-slots" class="inventory-grid" role="group" aria-label="Основной инвентарь"></div>
+        <div id="inventory-hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа"></div>
+        <button id="inventory-trash" type="button" aria-label="Корзина" title="Перетащить сюда, чтобы удалить"></button>
       </section>
+      <div id="inventory-carried" aria-hidden="true" hidden></div>
+      <button id="creative-close" type="button" aria-label="Закрыть" title="Закрыть · Esc">×</button>
+    </dialog>
+    <dialog id="audio-settings" aria-labelledby="audio-settings-title">
+      <h2 id="audio-settings-title">Звук и окружение</h2>
+      <div class="audio-options">
+        <label>Звуки <input id="audio-volume" type="range" min="0" max="100" value="100"></label>
+        <label>Музыка <input id="music-volume" type="range" min="0" max="100" value="50"></label>
+        <label>Режим окружения
+          <select id="audio-profile">
+            <option value="biome">По биомам</option>
+            <option value="minimal">Редкие звуки</option>
+            <option value="acoustic">Акустика местности</option>
+          </select>
+        </label>
+        <fieldset><legend>Природа</legend>
+          <label>Громкость <input id="nature-volume" type="range" min="0" max="100" value="60"></label>
+          <label>Частота <input id="nature-frequency" type="range" min="0" max="100" value="25"></label>
+        </fieldset>
+        <fieldset><legend>Животные</legend>
+          <label>Громкость <input id="animals-volume" type="range" min="0" max="100" value="55"></label>
+          <label>Частота <input id="animals-frequency" type="range" min="0" max="100" value="20"></label>
+        </fieldset>
+        <fieldset><legend>Остальное окружение</legend>
+          <label>Громкость <input id="other-volume" type="range" min="0" max="100" value="55"></label>
+          <label>Частота <input id="other-frequency" type="range" min="0" max="100" value="25"></label>
+        </fieldset>
+      </div>
+      <button id="audio-settings-close" type="button">Готово</button>
     </dialog>
     <dialog id="sign-editor" aria-labelledby="sign-title">
       <form id="sign-form">
@@ -152,16 +205,6 @@
         <div id="hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа" hidden></div>
       </div>
       <span id="coords" aria-label="Координаты"></span>
-      <span id="selected">Ячейка не выбрана</span>
-      <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" title="Креатив · I" disabled>Креатив</button>
-      <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" disabled>Инвентарь</button>
-      <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
-      <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · O/СКМ взять материал</span>
-      <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift ×2</span>
-      <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
-      <span id="orbit-status" role="status" hidden>Свободный обзор · U — выйти</span>
-      <span id="spectator-status" role="status" hidden>Наблюдатель · Пробел вверх · Ctrl/C вниз · P — выйти</span>
-      <span id="keys">ЛКМ — сломать · ПКМ — поставить · E — действие · СКМ/O — копировать · Q — выбросить · C — присесть / подобрать · 1–9 — панель · V — ползти · X — сесть / встать · F5/Y — камера · F — полёт · Z — резец</span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>

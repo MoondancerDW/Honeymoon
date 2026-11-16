@@ -59,10 +59,11 @@ export function createPresence({store, profileFor = player => publicProfile(play
     return players.get(player);
   }
 
-  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, spectator, stance, boost}) => ({
+  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, spectator, stance, boost,equipment,groundSeat}) => ({
     id:profile.id, position, yaw, pitch, motion, lookYaw,
     ...(typing !== undefined && {typing}), ...(swing !== undefined && {swing}), ...(held !== undefined && {held}),
-    ...(spectator !== undefined && {spectator}), ...(stance !== undefined && {stance}), ...(boost !== undefined && {boost})});
+    ...(spectator !== undefined && {spectator}), ...(stance !== undefined && {stance}), ...(boost !== undefined && {boost}),
+    ...(equipment !== undefined && {equipment}), ...(groundSeat !== undefined && {groundSeat})});
   const snapshot = except => [...players].flatMap(([player, entry]) => player !== except && entry.visible
     ? [{ ...entry.profile, ...motionOf(entry) }] : []);
   const roster = stream => ({players:snapshot(stream.player),
@@ -88,6 +89,16 @@ export function createPresence({store, profileFor = player => publicProfile(play
         entry[key] = pose[key];
         dirty = true;
       }
+    }
+    if (pose && (pose.groundSeat !== undefined || pose.motion !== undefined) &&
+        (pose.groundSeat === true) !== (entry.groundSeat === true)) {
+      entry.groundSeat = pose.groundSeat === true;
+      dirty = true;
+    }
+    if (pose?.equipment !== undefined && (!entry.equipment ||
+        pose.equipment.some((stack,index)=>stack?.key !== entry.equipment[index]?.key))) {
+      entry.equipment = pose.equipment.map(stack=>stack ? {key:stack.key} : null);
+      dirty = true;
     }
     if (pose && (pose.seq === undefined || entry.seq === undefined || pose.seq >= entry.seq)) {
       const motion = pose.motion ?? entry.motion;
@@ -146,7 +157,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
         entry.yaw = 0;
         entry.pitch = 0;
         entry.motion = 'idle';
-        entry.typing = entry.swing = entry.held = entry.spectator = entry.stance = entry.boost = undefined;
+        entry.typing = entry.swing = entry.held = entry.spectator = entry.stance = entry.boost = entry.equipment = entry.groundSeat = undefined;
       }
       if (entry.connections) visibility(player, entry, true);
       update(player, position, pose);

@@ -30,14 +30,14 @@ test('walks up a lower slab with room above', () => {
 test('cannot step into a full block or under a low ceiling', () => {
   const wall = walk([['0,1,0','legacy:1:0']]);
   const blocked = walk([['0,1,0','legacy:44:0'],['0,2,0','legacy:44:8']]);
-  assert.ok(wall.x <= -.499 && Math.abs(wall.y - 1) < .002);
-  assert.ok(blocked.x <= -.499 && Math.abs(blocked.y - 1) < .002);
+  assert.ok(wall.x <= -.299 && Math.abs(wall.y - 1) < .002);
+  assert.ok(blocked.x <= -.299 && Math.abs(blocked.y - 1) < .002);
 });
 
 test('a RedPower cover blocks the half-block step into a low ceiling', () => {
   const cover = {key:'cover:750:0:tread', parts:[{slot:0, shape:0, material:2}]};
   const position = walk([['0,1,0',cover], ['0,2,0','legacy:44:8']]);
-  assert.ok(Math.abs(position.x + .5) < .002);
+  assert.ok(Math.abs(position.x + .3) < .002);
   assert.ok(Math.abs(position.y - 1) < .002);
 });
 
@@ -53,8 +53,9 @@ test('uses the three pony sizes for standing, crouching and crawling clearance',
   assert.equal(movement.blocked(.5, 1.49, .5), false);
   assert.equal(movement.blocked(.5, 1.52, .5), true);
   assert.equal(movement.blocked(.5, 1, .5), false);
-  assert.equal(movement.blocked(.51, 1, .5), true);
-  for (const [size, expected] of Object.entries({normal:[[1.5,1],[1,1],[.5,1]],small:[[1,1],[.5,.5],[.25,.25]],large:[[2,1],[1.5,1],[1,1]],tall:[[2,1],[1.5,1],[1,1]]})) {
+  assert.equal(movement.blocked(.71, 1, .5), true);
+  for (const [size, expected] of Object.entries({normal:[[1.5,.6],[1,.6],[.5,.6]],small:[[1,.6],[.5,.6],[.25,.6]],
+    large:[[2,.6],[1.5,.6],[1,.6]],tall:[[2,.6],[1.5,.6],[1,.6]]})) {
     assert.deepEqual(['stand','crouch','crawl'].map(stance => {
       const {height,halfWidth} = playerBody(size,stance);
       return [height,halfWidth * 2];
@@ -81,7 +82,7 @@ test('crouching stops at the edge and jump heights match the pony size', () => {
   movement.grounded = true;
   assert.equal(movement.setStance(position,'crouch'),'crouch');
   for (let i=0; i<120; i++) movement.update(position,1.14,0,false,.016);
-  assert.ok(position.x > 1.45 && position.x < 1.5);
+  assert.ok(position.x > 1.25 && position.x < 1.3);
   assert.ok(Math.abs(position.y - 1) < .001);
   for (const [size,height] of [['small',1],['normal',1],['large',1.5]]) {
     const flight = new Movement(world);
@@ -108,10 +109,10 @@ test('crouching stops at the edge and jump heights match the pony size', () => {
 
 test('finishes a dry vertical collision before leaving the edge horizontally', () => {
   const movement = new Movement(worldFor(new Map([['0,1,0','legacy:44:0']])));
-  const position = {x:1.45, y:1.5, z:.5};
+  const position = {x:1.25, y:1.5, z:.5};
   movement.grounded = true;
   movement.update(position, 3.8, 0, false, .016);
-  assert.ok(position.x > 1.5);
+  assert.ok(position.x > 1.3);
   assert.equal(position.y, 1.5);
   movement.update(position, 3.8, 0, false, .016);
   assert.ok(position.y < 1.5);
@@ -149,7 +150,7 @@ test('flight hovers, uses physical colliders and records each movement step', ()
   movement.fly(position, 0, 0, 0, .05);
   assert.equal(position.y, 4);
   for (let i = 0; i < 8; i++) movement.fly(position, 5.1, 5.1, 0, .05, p => trail.push({...p}));
-  assert.ok(position.x <= .50002);
+  assert.ok(position.x <= .70002);
   assert.ok(position.y > 4.49 && position.y <= 4.50002);
   assert.equal(trail.length, 32);
   const {y} = position;

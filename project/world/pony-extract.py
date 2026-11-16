@@ -47,9 +47,23 @@ def capture(java_home, source, lwjgl):
             part[1].extend(quad)
         else:
             raise ValueError(f'Invalid capture line {line!r}')
-    if models.keys() != {'basic', 'advanced'} or any('head' not in model for model in models.values()):
-        raise ValueError('Both renderer variants must contain a pony model')
+    if models.keys() != {'basic', 'advanced', 'armor'} or any('head' not in model for model in models.values()):
+        raise ValueError('Expected both pony renderers and the equipment renderer')
     return models
+
+
+def write_model_data(output, variable, models):
+    with output.open('w', encoding='utf-8', newline='\n') as file:
+        file.write('// Mine Little Pony 1.4.7 meshes captured by pony-extract.py.\n')
+        file.write('// Per part: [x,y,z,rotationX,rotationY,rotationZ], then quad vertices [x,y,z,u,v].\n')
+        file.write(f'export const {variable} = {{\n')
+        for name, parts in models.items():
+            file.write(f'  {name}: {{\n')
+            for key, part in parts.items():
+                data = json.dumps(part, separators=(',', ':'))
+                file.write(f'    "{key}": {data},\n')
+            file.write('  },\n')
+        file.write('};\n')
 
 
 def main():
@@ -60,18 +74,9 @@ def main():
     parser.add_argument('--lwjgl', type=Path)
     args = parser.parse_args()
     models = capture(args.java_home, args.source, args.lwjgl)
-    output = WORLD / 'pony-model-data.mjs'
-    with output.open('w', encoding='utf-8', newline='\n') as file:
-        file.write('// Mine Little Pony 1.4.7 meshes captured by pony-extract.py.\n')
-        file.write('// Per part: [x,y,z,rotationX,rotationY,rotationZ], then quad vertices [x,y,z,u,v].\n')
-        file.write('export const ponyModels = {\n')
-        for name, parts in models.items():
-            file.write(f'  {name}: {{\n')
-            for key, part in parts.items():
-                data = json.dumps(part, separators=(',', ':'))
-                file.write(f'    "{key}": {data},\n')
-            file.write('  },\n')
-        file.write('};\n')
+    armor = models.pop('armor')
+    write_model_data(WORLD / 'pony-model-data.mjs', 'ponyModels', models)
+    write_model_data(WORLD / 'pony-armor-data.mjs', 'ponyArmorModel', {'native': armor})
 
 
 if __name__ == '__main__':

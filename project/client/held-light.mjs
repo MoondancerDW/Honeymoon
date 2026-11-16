@@ -45,8 +45,9 @@ export class HeldLights {
   constructor(world) {
     this.world = world;
     this.opacityAt = (x,y,z) => {
+      const {minY=0,maxY=255}=world.manifest.bounds ?? {};
       const chunk = world.chunks.get(`${x >> 4},${z >> 4}`);
-      if (!chunk || chunk.visualOnly || y < 0 || y >= 256) return 15;
+      if (!chunk || chunk.visualOnly || y < minY || y > maxY) return 15;
       const cell = world.lightCell(x,y,z,false,chunk);
       if (!cell.parts && cell.key?.startsWith('cover:')) {
         cell.parts = (chunk.compositions ?? world.manifest.compositions)?.[cell.key]?.parts;

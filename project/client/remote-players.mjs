@@ -77,10 +77,12 @@ function setPose(player, pose) {
   player.motion = pose.motion;
   player.stance = pose.stance ?? 'stand';
   player.boost = pose.boost === true;
+  player.groundSeat = pose.groundSeat === true;
   player.spectator = pose.spectator === true;
   player.typing = pose.typing === true;
   player.swing = pose.swing ?? 0;
   player.held = pose.held;
+  player.equipment = pose.equipment;
   setNameplate(player);
 }
 
@@ -144,7 +146,8 @@ export class RemotePlayers {
       const {x, z} = object.position;
       object.position.lerp(target, mix);
       player.drawnLookYaw += angleBetween(player.drawnLookYaw, player.lookYaw) * mix;
-      const facing = player.facing(object.position, player.drawnLookYaw, dt, player.motion === 'sit' ? player.yaw : undefined);
+      const seatYaw = player.motion === 'sit' ? player.yaw : undefined;
+      const facing = player.facing(object.position, player.drawnLookYaw, dt, seatYaw, player.motion);
       object.rotation.y = facing.bodyYaw;
       if (!object.visible) {
         player.landing = 0;
@@ -161,9 +164,10 @@ export class RemotePlayers {
           [(object.position.x-x)/dt,(object.position.z-z)/dt],0,now);
       }
       player.avatar.animate({time: now / 1000, dt, speed, pitch: player.drawnPitch,
-        yawOffset:facing.yawOffset, strideDirection:facing.strideDirection,
-        motion:player.motion, stance:player.stance, boost:player.boost, position:object.position,
-        swing:player.swing, held:player.held, itemAssets:this.itemAssets?.()});
+        yawOffset:facing.yawOffset, strideDirection:facing.strideDirection, strafe:facing.strafe,
+        motion:player.motion, stance:player.stance, boost:player.boost, groundSeat:player.groundSeat,
+        position:object.position,
+        swing:player.swing, held:player.held, equipment:player.equipment, itemAssets:this.itemAssets?.()});
       player.label.visible = player.stance === 'stand' && distance < maxNameplateDistance ** 2;
       player.label.position.y = player.avatar.labelHeight - .12;
       object.updateMatrixWorld(true);
@@ -181,6 +185,7 @@ export class RemotePlayers {
       player.avatar.object.traverse(mesh => { if (mesh.isMesh && mesh.visible) meshCount++; });
       return {...player.avatar.inspect(), id, nickname:player.nickname, skin:player.skin, position:{x:target.x, y:target.y, z:target.z},
         yaw:player.yaw, bodyYaw:object.rotation.y, pitch:player.pitch, motion:player.motion, visible:object.visible, meshCount,
+        equipment:player.equipment,
         typing:player.typing, nameplate:object.visible && player.label.visible,
         onScreen:object.visible && Math.abs(x) <= 1 && Math.abs(y) <= 1 && z >= -1 && z <= 1};
     });

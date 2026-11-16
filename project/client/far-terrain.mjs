@@ -1,7 +1,7 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {DEFAULT_DETAILED_LOD_DISTANCE,lodDistance,supportedLodVersion,validateDetailedLodDistance} from './far-tile-format.mjs';
 import {terrainFilterShader} from './terrain-filter.mjs';
-import {VISTA_BLOCKS, VISTA_VERSION} from './vista-format.mjs';
+import {VISTA_BLOCKS,supportedVistaVersion} from './vista-format.mjs';
 
 const PACK_CHUNKS = 4;
 const PACK_BLOCKS = PACK_CHUNKS * 16;
@@ -25,7 +25,7 @@ export function supportsFarTerrain({lod}) {
     /^[0-9a-f]{64}$/.test(lod.contentHash ?? '');
 }
 
-function farMaterial(textures, lightmap, rows, {water = false, outer = false, rail = false, vista = false} = {}) {
+function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=false,vista=false,micro=false,antialias=false} = {}) {
   const uniforms = {
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
     atlas:{value:textures.source}, terrainMid:{value:textures.mid}, terrainAverage:{value:textures.average},
@@ -36,6 +36,7 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
     seamMasks:{value:new THREE.Vector4()},
   };
   return new THREE.ShaderMaterial({uniforms, fog:true, transparent:water, depthWrite:!water,
+    alphaToCoverage:antialias && !water, polygonOffset:micro, polygonOffsetUnits:-1,
     side:water || rail ? THREE.DoubleSide : THREE.FrontSide,
     vertexShader:`
       attribute vec3 faceOrigin;
@@ -107,7 +108,7 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
         #endif
       }`,
     fragmentShader:`
-      ${water ? 'uniform sampler2D terrainWater;' : rail ? 'uniform float terrainRows;' : terrainFilterShader}
+      ${water ? 'uniform sampler2D terrainWater;' : terrainFilterShader}
       uniform sampler2D atlas;
       varying vec2 localUv;
       varying float tile;
@@ -122,14 +123,11 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
           if (dot(delta,delta) <= vistaRadius && all(greaterThanEqual(chunk,vistaBounds.xy)) &&
               all(lessThanEqual(chunk,vistaBounds.zw))) discard;
         ` : ''}
+        float coverage = 1.0;
         ${water ? 'vec4 color = texture2D(terrainWater,vec2(localUv.x,-localUv.y));' : `
         float tileIndex = floor(tile + .5);
         vec2 cell = vec2(mod(tileIndex,64.0),terrainRows - 1.0 - floor(tileIndex / 64.0));
-        ${rail ? `
-          vec4 color = texture2D(atlas,(cell + .015625 + localUv * .96875) / vec2(64.0,terrainRows));
-          if (color.a < .47) discard;
-        ` : `
-          vec2 within = vec2(fract(localUv.x),1.0 - fract(localUv.y));
+          vec2 within = ${rail ? 'clamp(localUv,vec2(.03125),vec2(.96875))' : 'vec2(fract(localUv.x),1.0 - fract(localUv.y))'};
           float footprint = terrainFootprint(localUv);
           ${vista ? `
           vec2 meanUv = (cell + .5) / vec2(64.0,terrainRows);
@@ -140,16 +138,22 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false, ra
             color.rgb = mix(color.rgb,close.rgb,detail);
           }
           ` : `
-          vec4 color = terrainSample(atlas,cell,within,${outer
-            ? 'max(footprint,.16 + .50 * smoothstep(256.0,456.0,vFogDepth))' : 'footprint'});
+          // As block patterns shrink toward a pixel, prefilter before the
+          // detail begins to flicker. This also covers rails and glass.
+          float blur = ${outer ? '.24+.42*smoothstep(180.0,384.0,vFogDepth)' : '.42*smoothstep(90.0,312.0,vFogDepth)'};
+          footprint = max(footprint,blur);
+          vec4 color = terrainSample(atlas,cell,within,footprint);
+          if (${rail ? 'true' : 'cutout>.5 || tileIndex==49.0 || tileIndex>=3328.0 && tileIndex<3388.0'}) {
+            ${antialias ? `
+              float edge = max(.025,.45*fwidth(color.a));
+              float nearCoverage = smoothstep(.47-edge,.47+edge,color.a);
+              coverage = mix(nearCoverage,color.a,smoothstep(.08,.42,footprint));
+              if (coverage<.035) discard;
+            ` : 'if (color.a<.47) discard;'}
+          }
           `}
-        if (${vista ? 'false' : 'tileIndex == 49.0 || tileIndex >= 3328.0 && tileIndex < 3388.0'}) {
-          vec2 glassUv = vec2(fract(localUv.x),1.0 - fract(localUv.y));
-          color = texture2D(atlas,(cell + clamp(glassUv,vec2(.03125),vec2(.96875))) / vec2(64.0,terrainRows));
-          if (color.a < .47) discard;
-        } ${vista ? '' : `else if (cutout > .5 && color.a < .47) discard;`}
-        `}`}
-        gl_FragColor = vec4(color.rgb * tint, ${water ? 'color.a' : '1.0'});
+        `}
+        gl_FragColor = vec4(color.rgb * tint, ${water ? 'color.a' : 'coverage'});
         #include <colorspace_fragment>
         #ifdef USE_FOG
           float farFog = smoothstep(fogNear,fogFar,vFogDepth);
@@ -191,9 +195,11 @@ export class FarTerrain {
     this.lod = lod;
     this.bounds = {minX:Math.floor(bounds.minX / PACK_BLOCKS),maxX:Math.floor(bounds.maxX / PACK_BLOCKS),
       minZ:Math.floor(bounds.minZ / PACK_BLOCKS),maxZ:Math.floor(bounds.maxZ / PACK_BLOCKS)};
-    const material = options => farMaterial(textures,display.lightmap,display.atlasRows,options);
-    this.materials = {inner:material(),water:material({water:true}),outer:material({outer:true}),rail:material({rail:true})};
-    if (vista?.version === VISTA_VERSION && /^[0-9a-f]{64}$/.test(vista.hash) && Array.isArray(vista.regions)) {
+    const antialias = Boolean(display.renderer.getContext().getContextAttributes()?.antialias);
+    const material = options => farMaterial(textures,display.lightmap,display.atlasRows,{antialias,...options});
+    this.materials = {inner:material(),water:material({water:true}),outer:material({outer:true}),rail:material({rail:true}),
+      micro:material({micro:true}),outerMicro:material({outer:true,micro:true})};
+    if (supportedVistaVersion(vista?.version) && /^[0-9a-f]{64}$/.test(vista.hash) && Array.isArray(vista.regions)) {
       this.vista = {...vista,packs:new Set(vista.regions.map(([x,z]) => vistaKey(x,z)))};
       const {uniforms} = this.materials.vista = material({vista:true});
       uniforms.vistaBounds.value.set(...[bounds.minX,bounds.minZ,bounds.maxX,bounds.maxZ].map(value => Math.floor(value / 16)));
@@ -411,7 +417,8 @@ export class FarTerrain {
       mask:65535,seams:new THREE.Vector4(),installed:false};
     for (const [index,layer] of tile.layers.entries()) {
       if (!layer.count) continue;
-      const material = this.materials[vista ? 'vista' : index === 1 ? 'water' : index === 3 ? 'rail' : outer ? 'outer' : 'inner'];
+      const material = this.materials[vista ? 'vista' : index === 1 ? 'water' : index === 3 ? 'rail' :
+        index === 4 ? (outer ? 'outerMicro' : 'micro') : outer ? 'outer' : 'inner'];
       const mesh = meshFor(layer,material,region,extent);
       if (index === 2) region.transition = mesh;
       group.add(mesh);

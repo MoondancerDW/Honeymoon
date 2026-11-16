@@ -1,12 +1,12 @@
-const stances = ['stand','crouch','crawl'];
+const stances = ['stand','crouch','crawl','swim'];
 const bodies = {
-  normal: [[1.5,1],[1,1],[.5,1]],
-  small: [[1,1],[.5,.5],[.25,.25]],
-  large: [[2,1],[1.5,1],[1,1]],
+  normal: [1.5,1,.5,.6],
+  small: [1,.5,.25,.6],
+  large: [2,1.5,1,.6],
 };
-for (const [size, dimensions] of Object.entries(bodies)) {
-  bodies[size] = Object.fromEntries(dimensions.map(([height,width], index) => [stances[index], Object.freeze({
-    size, height, halfWidth:width / 2, eye:1.62, jumpHeight:size === 'large' ? 1.5 : 1,
+for (const [size, heights] of Object.entries(bodies)) {
+  bodies[size] = Object.fromEntries(heights.map((height,index) => [stances[index], Object.freeze({
+    size, height, halfWidth:.3, eye:1.62, jumpHeight:stances[index] === 'crawl' ? .5 : size === 'large' ? 1.5 : 1,
   })]));
 }
 
@@ -20,6 +20,7 @@ export function playerBody(size, stance) {
 }
 
 export const WALK_SPEED = 3.8;
+export const CRAWL_SPEED = WALK_SPEED * .26;
 export const GROUND_SPRINT_SPEED = 5.1 * 1.4;
 export const FLIGHT_SPEED = 7.65;
 export const FLIGHT_SPRINT_SPEED = FLIGHT_SPEED * 2;

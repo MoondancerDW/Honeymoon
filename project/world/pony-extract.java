@@ -107,8 +107,36 @@ final class PonyExtract {
         renderers("wingRightOpen", pony.RightWingExt);
     }
 
+    private static void captureArmor() throws ReflectiveOperationException {
+        pm_newPonyArmor pony = new pm_newPonyArmor("");
+        pony.init(0f,.55f);
+        pony.p = -9999;
+        pony.animate(new AniParams(0, 0, 0, 0, 0));
+        System.out.println("model\tarmor");
+        renderer("head", pony.head);
+        renderers("ear", pony.extHead);
+        renderer("chest", pony.Body);
+        renderer("back", pony.Bodypiece);
+        renderer("saddle", pony.extBody);
+        renderer("frontRight", pony.RightArm);
+        renderer("frontLeft", pony.LeftArm);
+        renderer("frontRight.top", pony.RightShoulder);
+        renderer("frontLeft.top", pony.LeftShoulder);
+        renderer("hindRight", pony.RightLeg);
+        renderer("hindLeft", pony.LeftLeg);
+        renderer("hindRight.joint", pony.RightLegJoint);
+        renderer("hindLeft.joint", pony.LeftLegJoint);
+        renderer("hindRight.ext", pony.extLegs[0]);
+        renderer("hindLeft.ext", pony.extLegs[1]);
+        renderer("hindRight.extJoint", pony.extLegs[2]);
+        renderer("hindLeft.extJoint", pony.extLegs[3]);
+        renderers("hindRight", pony.RightSubLeg);
+        renderers("hindLeft", pony.LeftSubLeg);
+    }
+
     public static void main(String[] args) throws ReflectiveOperationException {
         capture(false);
         capture(true);
+        captureArmor();
     }
 }

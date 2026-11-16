@@ -42,7 +42,7 @@ function fixture(t, wall = false) {
   };
   return {player,observer,request,action,move,tick, nearby:person => game.droppedItemSnapshot(person),
     inventory:person => game.session(person).inventory,
-    reload() { game.flushDroppedItems(); game = open(); }};
+    reload() { game.clearDroppedItems(); game = open(); }};
 }
 
 test('indexed inventory moves, splits, swaps and caps matching stacks', t => {
@@ -68,8 +68,8 @@ test('indexed inventory moves, splits, swaps and caps matching stacks', t => {
   assert.equal(after.slots[32],null);
 });
 
-test('drops toss, settle and persist, and one manual pickup cannot claim a placed block or the same item twice', t => {
-  const {player,observer,action,request,move,tick,nearby,inventory,reload} = fixture(t);
+test('drops fall and settle, and manual pickup cannot claim a placed block or the same item twice', t => {
+  const {player,observer,action,request,move,tick,nearby,inventory} = fixture(t);
   action(player,'inventory_give',{slot:0,key:dirt,count:4});
   const first = action(player,'drop_item',{yaw:0},'repeat-drop-command');
   assert.equal(first.inventory.slots[0].count,3);
@@ -79,15 +79,14 @@ test('drops toss, settle and persist, and one manual pickup cannot claim a place
   assert.equal(nearby(observer).length,2);
   const original = nearby(player)[0].position;
   tick(1);
-  assert.ok(nearby(player)[0].position[1] > original[1]);
+  assert.ok(nearby(player)[0].position[1] < original[1]);
   tick(60);
   const resting = nearby(observer);
-  assert.ok(resting.every(item => item.resting && item.position[1] >= 1.09 && item.position[1] < 1.11));
+  assert.ok(resting.every(item => item.resting && Math.abs(item.position[1] - 1) < .01));
   assert.ok(resting[0].position[2] < original[2] - .8);
   assert.equal(inventory(observer).slots[0],null);
+  move(observer,12,1,12);
   assert.equal(action(observer,'pickup_item').pickedItem,undefined);
-  reload();
-  assert.deepEqual(nearby(observer),resting);
   const [x,,z] = resting[0].position;
   move(observer,x,1,z);
   move(player,x,1,z);
@@ -119,7 +118,7 @@ test('a wall stops thrown items and blocks pickup from the other side', t => {
 });
 
 test('collecting a dropped stack transfers one unit while keeping its remaining entity and pose', t => {
-  const {player,observer,action,nearby,reload} = fixture(t);
+  const {player,observer,action,nearby} = fixture(t);
   action(player,'inventory_give',{slot:0,key:dirt,count:3});
   const thrown = action(player,'drop_item',{yaw:0,all:true});
   assert.equal(thrown.inventory.slots[0],null);
@@ -130,10 +129,23 @@ test('collecting a dropped stack transfers one unit while keeping its remaining 
     assert.equal(selected.pickedItem,original.key);
     assert.equal(selected.inventory.slots[0].count,count);
     assert.deepEqual(nearby(observer),[{...original,item:{...original.item,count:3-count}}]);
-    reload();
   }
   assert.equal(action(observer,'pickup_item').inventory.slots[0].count,3);
   assert.deepEqual(nearby(observer),[]);
+});
+
+test('drops expire ten minutes after being thrown and are cleared on restart', t => {
+  const {player,action,nearby,tick,reload} = fixture(t);
+  action(player,'inventory_give',{slot:0,key:dirt,count:3});
+  const first = action(player,'drop_item',{yaw:0}).droppedItem;
+  tick(11_999);
+  assert.equal(nearby(player)[0].key,first);
+  tick();
+  assert.deepEqual(nearby(player),[]);
+  const second = action(player,'drop_item',{yaw:0}).droppedItem;
+  assert.equal(nearby(player)[0].key,second);
+  reload();
+  assert.deepEqual(nearby(player),[]);
 });
 
 test('other sessions receive dropped item events without receiving the thrower inventory', async t => {
