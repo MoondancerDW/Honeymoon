@@ -1,0 +1,90 @@
+#npc-menu {
+  width: min(45rem, calc(100vw - 1.25rem)); max-height: min(90dvh, 58rem); padding: 0;
+  overflow: auto; overscroll-behavior: contain; color: #fbf7ed; background: #142832;
+  border: 1px solid var(--line); border-radius: .75rem; box-shadow: 0 1rem 4rem #0a1119ae;
+}
+#npc-menu.npc-editor-menu { width: min(66rem, calc(100vw - 1.25rem)); }
+#npc-menu::backdrop { background: #0b161b80; }
+#npc-menu .npc-header {
+  display: flex; align-items: start; justify-content: space-between; gap: 1rem; padding: .85rem 1rem;
+  position: sticky; top: 0; z-index: 1; background: #172e3a; border-bottom: 1px solid var(--line);
+}
+#npc-menu h2, #npc-menu h3, #npc-menu p { margin: 0; overflow-wrap: anywhere; }
+#npc-menu h2 { font-size: clamp(1.02rem, 2.5vw, 1.28rem); line-height: 1.2; }
+#npc-menu h3 { font-size: .95rem; }
+#npc-menu #npc-menu-subtitle { margin-top: .16rem; font-size: .82rem; color: #cbdcde; }
+#npc-menu #npc-menu-status { padding: .55rem 1rem; color: var(--gold); }
+#npc-menu #npc-menu-content { padding: .85rem 1rem 1rem; }
+#npc-menu :is(.npc-conversation, .npc-sections, .npc-list-pane, .npc-section, .npc-record, .npc-picker, .npc-unlock) {
+  display: grid; align-content: start; gap: .7rem; min-width: 0;
+}
+#npc-menu :is(.npc-section, .npc-record) { background: #1a3641; padding: .65rem; border-radius: .45rem; }
+#npc-menu .npc-section .npc-section { background: #162f39; }
+#npc-menu .npc-speech { white-space: pre-wrap; line-height: 1.48; }
+#npc-menu .npc-result { color: var(--gold); }
+#npc-menu .npc-dialog-choices, #npc-menu .npc-trade-list { display: grid; gap: .4rem; }
+#npc-menu .npc-dialog-choices button { text-align: start; }
+#npc-menu .npc-trade { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) auto; align-items: center; gap: .45rem; }
+#npc-menu .npc-trade-arrow { color: var(--gold); }
+#npc-menu .npc-stacks { display: flex; flex-wrap: wrap; align-items: center; gap: .28rem .45rem; min-width: 0; }
+#npc-menu .npc-stack { display: inline-flex; align-items: center; text-align: start; gap: .3rem; min-width: 0; overflow-wrap: anywhere; }
+#npc-menu canvas.npc-stack-icon { image-rendering: pixelated; width: 1.5rem; height: 1.5rem; flex: 0 0 auto; }
+#npc-menu canvas.npc-stack-icon[hidden] { display: none; }
+#npc-menu .npc-stack-count, #npc-menu small { color: #cbdcde; font-size: .75rem; }
+#npc-menu .npc-rewards { display: grid; gap: .3rem; }
+#npc-menu .npc-empty, #npc-menu .npc-picker-status { color: #d1dee0; padding: .1rem 0; }
+#npc-menu .npc-edit-selected { justify-self: start; }
+#npc-menu .npc-bank-slots { display: flex; flex-wrap: wrap; gap: .4rem; }
+#npc-menu .npc-unlock { max-width: 25rem; }
+#npc-menu .npc-editor { display: grid; grid-template-columns: minmax(11rem, 16rem) minmax(0,1fr); align-items: start; gap: .85rem; }
+#npc-menu .npc-editor-main { display: grid; min-width: 0; gap: .7rem; }
+#npc-menu .npc-list-pane { padding: .65rem; background: #172f39; border-radius: .45rem; }
+#npc-menu .npc-editor-list { display: grid; gap: .28rem; max-height: min(60dvh, 34rem); overflow: auto; }
+#npc-menu .npc-editor-list button { display: grid; gap: .12rem; text-align: start; overflow-wrap: anywhere; }
+#npc-menu button[aria-pressed="true"] { border-color: var(--gold); background: #354e56; }
+#npc-menu .npc-tabs, #npc-menu .npc-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .36rem; }
+#npc-menu .npc-tabs button { padding-inline: .58rem; }
+#npc-menu .npc-primary { background: #ecd198; color: #18272e; font-weight: 650; }
+#npc-menu .npc-primary:hover { background: #fbddab; }
+#npc-menu .npc-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .55rem; }
+#npc-menu .npc-coordinates { grid-template-columns: repeat(3,minmax(0,1fr)); }
+#npc-menu .npc-field { display: grid; min-width: 0; gap: .25rem; font-size: .85rem; }
+#npc-menu .npc-field :is(input, select, textarea), #npc-menu .npc-model-list, #npc-menu .npc-shared-list {
+  width: 100%; min-width: 0; padding: .45rem .55rem; border: 1px solid var(--line);
+  border-radius: .35rem; color: inherit; background: #112630; font: inherit;
+}
+#npc-menu .npc-field :is(input, select, textarea):focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+#npc-menu .npc-field textarea { min-height: 4.5rem; resize: vertical; }
+#npc-menu textarea.npc-json-field { min-height: 9rem; font: .8rem ui-monospace, Consolas, monospace; }
+#npc-menu .npc-field.npc-check { display: flex; align-items: center; gap: .42rem; }
+#npc-menu .npc-field.npc-check input { width: auto; margin: 0; accent-color: var(--gold); }
+#npc-menu .npc-bindings { display: grid; min-width: 0; max-height: 12rem; gap: .35rem; overflow: auto; border: 1px solid var(--line); }
+#npc-menu .npc-appearance { display: grid; grid-template-columns: minmax(8rem, .85fr) minmax(0,1fr); align-items: start; gap: .7rem; }
+#npc-menu .npc-appearance-controls, #npc-menu .npc-model-picker { display: grid; gap: .5rem; min-width: 0; }
+#npc-menu .npc-model-list { height: auto; padding: .3rem; }
+#npc-menu .npc-model-list option { padding: .25rem .22rem; }
+#npc-menu .npc-preview { width: 100%; height: auto; border-radius: .4rem; background: radial-gradient(ellipse at 50% 55%, #436270, #10242c 78%); }
+#npc-menu .npc-stack-edit { display: flex; align-items: end; flex-wrap: wrap; gap: .5rem; }
+#npc-menu .npc-stack-edit .npc-field { max-width: 7rem; }
+#npc-menu .npc-item-results { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .36rem; }
+#npc-menu .npc-item-card { text-align: start; min-width: 0; }
+#npc-menu .npc-editor-footer { padding-top: .55rem; border-top: 1px solid var(--line); }
+
+@media (pointer:coarse) {
+  #npc-menu button { min-height: 2.75rem; }
+  #npc-menu .npc-field :is(input,select,textarea) { font-size: 1rem; }
+  #npc-menu .npc-model-list option { padding: .38rem .3rem; }
+}
+@media (max-width: 640px) {
+  #npc-menu { width: calc(100vw - .6rem); max-height: 92dvh; }
+  #npc-menu.npc-editor-menu { width: calc(100vw - .6rem); }
+  #npc-menu #npc-menu-content, #npc-menu .npc-header { padding: .65rem; }
+  #npc-menu .npc-editor { grid-template-columns: 1fr; }
+  #npc-menu .npc-editor-list { grid-template-columns: repeat(2,minmax(0,1fr)); max-height: 9rem; }
+  #npc-menu .npc-item-results { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  #npc-menu .npc-trade > button { grid-column: 1 / -1; }
+}
+@media (max-width: 400px) {
+  #npc-menu .npc-appearance { grid-template-columns: 1fr; }
+  #npc-menu .npc-preview { width: min(100%, 15rem); justify-self: center; }
+}

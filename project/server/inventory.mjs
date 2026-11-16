@@ -1,6 +1,8 @@
 import {RequestError} from './errors.mjs';
 import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
 import {itemStackLimit} from '../world/item-stack.mjs';
+import {bookPageLimit,bookPages,bookPagesLimit,bookTitleLimit,bookType,itemNameLimit,loreLimit,loreLineLimit,
+  stackRevision,stackType,writtenBook} from '../world/item-text.mjs';
 
 const inventorySize = 36;
 const hotbarSize = 9;
@@ -11,26 +13,49 @@ const itemSlot = slot => Number.isInteger(slot) && slot >= 0 && slot < inventory
 const anySlot = slot => itemSlot(slot) || Number.isInteger(slot) && slot >= inventorySize &&
   slot < inventorySize + equipmentLabels.length;
 const quantity = count => Number.isInteger(count) && count >= 1 && count <= stackLimit;
-const stackType = ({count: _, copied: _copied, ...type}) => JSON.stringify(type);
 const inventoryKey = key => typeof key === 'string' && key.length > 0 && key.length <= 128;
 
-const inventoryTypes = new Set(['inventory_select','inventory_give','inventory_move','inventory_trash','inventory_copy']);
+const documentActions=new Set(['inventory_annotate','inventory_book_page','inventory_book_sign']);
+const inventoryTypes = new Set(['inventory_select','inventory_give','inventory_move','inventory_trash','inventory_copy',
+  'inventory_clone',...documentActions]);
 const transportTypes = new Set(['drop_item','pickup_item']);
 export const isInventoryAction = type => inventoryTypes.has(type) || transportTypes.has(type);
 
 export function inventoryInput(body, input) {
-  const {type, slot, from, to, count, key, yaw, all} = body;
+  const {type, slot, from, to, count, key, yaw, all,clone} = body;
   if (type === 'drop_item') {
     if (!Number.isFinite(yaw) || all !== undefined && typeof all !== 'boolean' ||
         slot !== undefined && !anySlot(slot) || key !== undefined && (!inventoryKey(key) || slot !== undefined) ||
-        count !== undefined && !quantity(count)) throw new RequestError(400, 'invalid_drop');
-    return {...input, yaw:yaw % (2 * Math.PI), all, slot, key, count};
+        count !== undefined && !quantity(count) || clone !== undefined && (clone!==true || !anySlot(slot) || key!==undefined)) {
+      throw new RequestError(400, 'invalid_drop');
+    }
+    return {...input, yaw:yaw % (2 * Math.PI), all, slot, key, count,clone};
   }
   if (type === 'pickup_item') return input;
-  if (type === 'inventory_move') {
+  if (type === 'inventory_move' || type === 'inventory_clone') {
     if (!anySlot(from) || !anySlot(to)) throw new RequestError(400, 'invalid_inventory_slot');
     if (count !== undefined && !quantity(count)) throw new RequestError(400, 'invalid_inventory_count');
     return {...input, from, to, ...(count !== undefined && {count})};
+  }
+  if (documentActions.has(type)) {
+    const validText=(value,cap,multiline=false)=>typeof value==='string' && value.length<=cap &&
+      !(multiline ? /[\u0000-\u0008\u000b-\u001f\u007f]/ : /[\u0000-\u001f\u007f]/).test(value);
+    if (!anySlot(slot) || !/^[\da-f]{16}$/.test(body.expected??'')) throw new RequestError(400,'invalid_inventory_slot');
+    const document={...input,slot,expected:body.expected};
+    if (type==='inventory_annotate') {
+      if (!validText(body.name,itemNameLimit) || !Array.isArray(body.lore) || body.lore.length>loreLineLimit ||
+          body.lore.some(line=>!validText(line,loreLimit)) || body.lore.join('\n').length>loreLimit) {
+        throw new RequestError(400,'invalid_item_text');
+      }
+      return {...document,name:body.name,lore:body.lore};
+    }
+    if (type==='inventory_book_sign') {
+      if (!validText(body.title,bookTitleLimit) || !body.title.trim()) throw new RequestError(400,'invalid_book_title');
+      return {...document,title:body.title.trim()};
+    }
+    if (!Number.isInteger(body.page) || body.page<0 || body.page>=bookPagesLimit ||
+        !validText(body.text,bookPageLimit,true)) throw new RequestError(400,'invalid_book_page');
+    return {...document,page:body.page,text:body.text};
   }
   if (!anySlot(slot) || type === 'inventory_select' && slot >= hotbarSize ||
       type === 'inventory_copy' && !itemSlot(slot)) throw new RequestError(400, 'invalid_inventory_slot');
@@ -94,11 +119,51 @@ export function createInventory(store, creativeBlocks, creativeItems) {
     setStack(state,from,source.count > moved ? {...source,count:source.count-moved} : null);
   }
 
+  function cloneStack(state, {from,to,count}) {
+    const source=stackAt(state,from),target=stackAt(state,to);
+    if (!source) throw new RequestError(409,'empty_inventory_slot');
+    if (!accepts(to,source)) throw new RequestError(409,'invalid_equipment');
+    if (target && stackType(source)!==stackType(target)) throw new RequestError(409,'occupied_inventory_slot');
+    const limit=itemStackLimit(source.key);
+    setStack(state,to,{...source,count:Math.min(limit,(target?.count??0)+(count??limit))});
+  }
+
+  function updateDocument(player,state,input) {
+    const {slot,expected,type}=input;
+    const stack=stackAt(state,slot);
+    if (!stack || stackRevision(stack)!==expected) throw new RequestError(409,'stale_inventory_item',{inventory:state});
+    const nbt={...stack.nbt};
+    if (type==='inventory_annotate') {
+      const display={...nbt.display};
+      if (input.name) display.Name=input.name; else delete display.Name;
+      if (input.lore.some(Boolean)) display.Lore=input.lore; else delete display.Lore;
+      if (Object.keys(display).length) nbt.display=display; else delete nbt.display;
+    } else {
+      if (bookType(stack)!=='draft') throw new RequestError(409,'book_already_signed');
+      if (type==='inventory_book_sign') {
+        nbt.title=input.title;
+        nbt.author=store.getProfile(player)?.nickname || 'Гость';
+        nbt.pages=bookPages(stack);
+        setStack(state,slot,{...stack,key:writtenBook,count:1,nbt,damage:0});
+        return;
+      }
+      const pages=[...bookPages(stack)];
+      while (pages.length<=input.page) pages.push('');
+      pages[input.page]=input.text;
+      nbt.pages=pages;
+    }
+    const changed={...stack};
+    if (Object.keys(nbt).length) changed.nbt=nbt; else delete changed.nbt;
+    setStack(state,slot,changed);
+  }
+
   function edit(player, input) {
     const state = read(player);
     const {type, slot, key, count} = input;
     if (type === 'inventory_select') state.selected = slot;
     else if (type === 'inventory_move') move(state, input);
+    else if (type === 'inventory_clone') cloneStack(state,input);
+    else if (documentActions.has(type)) updateDocument(player,state,input);
     else if (type === 'inventory_trash') setStack(state,slot,null);
     else {
       const stack = type === 'inventory_copy' ? copiedStack(player) : creativeStack(key, count);
@@ -111,12 +176,13 @@ export function createInventory(store, creativeBlocks, creativeItems) {
 
   function take(player, input) {
     const state = read(player);
-    const {slot = state.selected, all, key, count} = typeof input === 'object' && input !== null ? input : {all:input};
+    const {slot = state.selected, all, key, count,clone} = typeof input === 'object' && input !== null ? input : {all:input};
     if (key !== undefined) {
       return {stack:creativeStack(key,count ?? (all ? stackLimit : 1)), inventory:state};
     }
     const stack = stackAt(state,slot);
     if (!stack) throw new RequestError(409, 'empty_inventory_slot');
+    if (clone) return {stack:{...stack,count:Math.min(count??itemStackLimit(stack.key),itemStackLimit(stack.key))},inventory:state};
     const taken = Math.min(stack.count,count ?? (all ? stack.count : 1));
     setStack(state,slot,taken < stack.count ? {...stack,count:stack.count-taken} : null);
     return {stack:{...stack,count:taken}, inventory:write(player, state)};
@@ -165,5 +231,5 @@ export function createInventory(store, creativeBlocks, creativeItems) {
     const state = read(player);
     return state.slots[state.selected];
   }
-  return {read, edit, take, put, selected, replaceSelectedOne};
+  return {read, edit, take, put, selected, replaceSelectedOne,replace:write,stackAt,setStack,accepts,insert};
 }

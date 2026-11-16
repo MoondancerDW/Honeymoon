@@ -166,6 +166,19 @@ public final class CreativeRegistryProbe {
     }
   }
 
+  private static void captureStackLimits(Class<?> item, Object[] items, String output) throws Exception {
+    Method limit = item.getMethod("k");
+    try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(Paths.get(output + ".limits"), StandardCharsets.UTF_8))) {
+      row(out, "id", "limit");
+      for (int id = 1; id < items.length; id++) {
+        if (items[id] == null) continue;
+        Object count = safe(limit, items[id]);
+        if (count instanceof Integer && (Integer) count > 0) row(out, id, count);
+      }
+      if (out.checkError()) throw new IllegalStateException("Failed to write the item stack limits");
+    }
+  }
+
   private static void capture(ClassLoader loader, String output) throws Exception {
     Class<?> block = loader.loadClass("amq"), item = loader.loadClass("up"), stack = loader.loadClass("ur");
     Class<?> tab = loader.loadClass("tj"), material = loader.loadClass("agi");
@@ -199,6 +212,7 @@ public final class CreativeRegistryProbe {
     Method coverName = covers.getMethod("getName", int.class);
 
     captureTabs(tab, stack, output);
+    captureStackLimits(item, items, output);
     captureFlatItems(loader, output, items, english, russian);
     try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(Paths.get(output), StandardCharsets.UTF_8));
          PrintWriter inventory = new PrintWriter(Files.newBufferedWriter(Paths.get(output + ".items"), StandardCharsets.UTF_8))) {

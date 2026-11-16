@@ -457,6 +457,7 @@ def build(source, output, vanilla_jar=None):
         alloy_furnace = atlas.resolve("eloraam/base/base1.png", "redpower-core")
         for offset in range(4):
             atlas.legacy_crop(3794 + offset, alloy_furnace, (offset, 1, offset + 1, 2), (16, 16))
+            atlas.legacy_crop(3206 + offset, alloy_furnace, (offset, 2, offset + 1, 3), (16, 16))
         add_campfire(atlas)
         add_fruit_crops(atlas, 3264, ("cinnamon", "vanillabean"))
         add_fruit_crops(atlas, 3286, ("apple", "olive", "lime", "lemon"))

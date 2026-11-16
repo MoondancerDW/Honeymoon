@@ -38,7 +38,7 @@ export async function acquireInstance(project) {
       socket.on('end',() => {
         try {
           const info = JSON.parse(data);
-          if (info.projectKey !== projectKey || !['local','lan','internet'].includes(info.mode) ||
+          if (info.projectKey !== projectKey || !['local','lan','tailscale','internet'].includes(info.mode) ||
               !/^http:\/\/127\.0\.0\.1:\d+\/$/.test(info.url)) throw new Error('Invalid Honeymoon instance response.');
           resolve(info);
         } catch (error) { fail(error); }

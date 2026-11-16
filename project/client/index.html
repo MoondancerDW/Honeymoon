@@ -7,10 +7,32 @@
   <link rel="icon" href="data:,">
   <title>Honeymoon — Equestria</title>
   <link rel="stylesheet" href="/game.css">
+  <link rel="stylesheet" href="/npc-menu.css">
+  <link rel="stylesheet" href="/access-menu.css">
 </head>
 <body>
   <main id="game" aria-label="Игровой мир Honeymoon">
     <div id="scene"></div>
+    <section id="access-gate" aria-labelledby="access-title" hidden>
+      <form id="access-form">
+        <h1 id="access-title">Вход в Honeymoon</h1>
+        <label id="access-name-row" for="access-name" hidden>
+          Имя профиля
+          <input id="access-name" type="text" maxlength="48" autocomplete="nickname">
+        </label>
+        <label id="access-key-row" for="access-key" hidden>
+          Ключ владельца
+          <input id="access-key" type="password" maxlength="256" autocomplete="off">
+        </label>
+        <small id="access-error" role="status" aria-live="polite"></small>
+        <button id="access-submit" type="submit" hidden>Войти</button>
+      </form>
+    </section>
+    <div id="health" role="meter" aria-label="Здоровье" aria-valuemin="0" aria-valuemax="10" hidden></div>
+    <section id="death-screen" aria-labelledby="death-title" hidden>
+      <h2 id="death-title">Помер</h2>
+      <button id="revive" type="button" hidden>Ожить</button>
+    </section>
     <section id="teleport-loading" role="status" aria-live="polite" hidden>
       <span id="teleport-loading-text">Загрузка, подождите...</span>
       <button id="teleport-reload" type="button" hidden>Перезагрузить игру</button>
@@ -20,7 +42,7 @@
       <div class="brand"><strong>Honeymoon</strong><span>Equestria</span></div>
       <div class="tools">
         <span id="player-name" hidden></span>
-        <button id="clock-toggle" type="button" aria-label="Игровое время (K)" disabled>12:00</button>
+        <button id="clock-toggle" type="button" aria-label="Игровое время (L)" disabled>12:00</button>
         <button id="chat-toggle" type="button" title="Чат · T / Enter" disabled>Чат</button>
         <label class="distance" for="detail-distance">Подробный дальний вид
           <select id="detail-distance">
@@ -33,6 +55,7 @@
         <button id="music-toggle" type="button" aria-pressed="false" hidden>Музыка</button>
         <button id="audio-settings-toggle" type="button" aria-haspopup="dialog" aria-controls="audio-settings">Громкость и окружение</button>
         <button id="night-vision" type="button" aria-pressed="false">Ночное зрение выкл.</button>
+        <button id="low-device" type="button" aria-pressed="false">Слабое устройство: выкл.</button>
         <label class="distance" for="weather">Погода
           <select id="weather" disabled>
             <option value="clear">Ясно</option><option value="cloudy">Облачно</option><option value="rain">Дождь</option>
@@ -48,6 +71,7 @@
         <h1>Honeymoon</h1>
         <p id="loading" role="status">Загружаем район Equestria…</p>
         <div class="profile">
+          <p id="access-profile" hidden></p>
           <label for="nickname">Ник</label>
           <input id="nickname" type="text" autocomplete="nickname" spellcheck="false" disabled>
           <div class="skin-option">
@@ -61,7 +85,12 @@
         <small id="resume-help" hidden>Esc или Enter — продолжить с захватом мыши</small>
         <div class="pause-inventory">
           <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>
-          <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="B" disabled>Инвентарь</button>
+          <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="J" disabled>Инвентарь</button>
+          <button id="warp-toggle" type="button" aria-controls="warps-menu" aria-expanded="false" disabled>Варпы</button>
+          <button id="craft-toggle" type="button" aria-controls="craft-menu" hidden>Изготовить</button>
+          <button id="mode-toggle" type="button" aria-controls="mode-menu" hidden>Режимы игроков</button>
+          <button id="npc-editor-toggle" type="button" aria-haspopup="dialog" aria-controls="npc-menu" disabled>Редактор NPC</button>
+          <button id="admin-toggle" type="button" aria-haspopup="dialog" aria-controls="admin-menu" hidden>Администрирование</button>
         </div>
         <small id="entry-help" hidden></small>
       </div>
@@ -75,9 +104,10 @@
         <dt>ЛКМ</dt><dd>Сломать</dd><dt>ПКМ</dt><dd>Поставить</dd>
         <dt>СКМ / O</dt><dd>Копировать</dd><dt>E</dt><dd>Действие</dd>
         <dt>Q</dt><dd>Выбросить</dd><dt>1–9</dt><dd>Выбрать ячейку</dd>
-        <dt>I / B</dt><dd>Предметы / инвентарь</dd><dt>F</dt><dd>Полёт</dd>
+        <dt>I / J</dt><dd>Предметы / инвентарь</dd><dt>F</dt><dd>Полёт</dd>
         <dt>F5 / Y</dt><dd>Сменить вид</dd><dt>U</dt><dd>Свободный обзор</dd>
-        <dt>P</dt><dd>Наблюдатель</dd><dt>Z</dt><dd>Резец</dd>
+        <dt>P</dt><dd>Наблюдатель</dd><dt>K</dt><dd>Резец</dd>
+        <dt>B</dt><dd>Помахать копытом</dd><dt>Z</dt><dd>Танец</dd>
         <dt>G</dt><dd>Телепорт</dd><dt>T / Enter</dt><dd>Чат</dd>
         <dt>Esc</dt><dd>Пауза</dd>
       </dl>
@@ -118,6 +148,24 @@
       </div>
       <div><button id="teleport-send" type="submit">Переместиться</button> <button id="teleport-close" type="button">Закрыть</button></div>
     </form>
+    <section id="warps-menu" class="social-panel" aria-labelledby="warp-heading" hidden>
+      <header>
+        <h2 id="warp-heading">Варпы</h2>
+        <button id="warp-close" type="button">Закрыть</button>
+      </header>
+      <p id="warp-status" role="status"></p>
+      <ul id="warp-list" aria-label="Список варпов"></ul>
+      <form id="warp-form" hidden>
+        <label for="warp-title">Название варпа</label>
+        <input id="warp-title" type="text" maxlength="64" autocomplete="off" required>
+        <div><button id="warp-save" type="submit">Сохранить</button> <button id="warp-cancel" type="button">Отмена</button></div>
+      </form>
+      <div id="warp-actions" hidden>
+        <button id="warp-travel" type="button">Телепортироваться</button>
+        <button id="warp-remove" type="button">Удалить варп</button>
+      </div>
+      <button id="warp-place" type="button">Поставить варп</button>
+    </section>
     <dialog id="creative-menu" aria-labelledby="creative-title">
       <div class="creative-header">
         <h2 id="creative-title">Предметы</h2>
@@ -143,9 +191,59 @@
         <div id="inventory-slots" class="inventory-grid" role="group" aria-label="Основной инвентарь"></div>
         <div id="inventory-hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа"></div>
         <button id="inventory-trash" type="button" aria-label="Корзина" title="Перетащить сюда, чтобы удалить"></button>
+        <button id="inventory-edit" type="button" aria-label="Редактор предмета" title="Перетащите предмет сюда, чтобы изменить название и описание">✎</button>
       </section>
       <div id="inventory-carried" aria-hidden="true" hidden></div>
       <button id="creative-close" type="button" aria-label="Закрыть" title="Закрыть · Esc">×</button>
+    </dialog>
+    <dialog id="mode-menu" class="inventory-document" aria-labelledby="mode-title">
+      <h2 id="mode-title">Режимы игроков</h2>
+      <div class="mode-row"><span>Режим сервера</span><div id="mode-default"></div></div>
+      <div id="mode-players"></div>
+      <p id="mode-error" role="status"></p>
+      <div class="document-actions"><button id="mode-close" type="button">Готово</button></div>
+    </dialog>
+    <dialog id="craft-menu" class="inventory-document" aria-labelledby="craft-title">
+      <h2 id="craft-title">Изготовить</h2>
+      <div id="craft-list"></div>
+      <p id="craft-error" role="status"></p>
+      <div class="document-actions"><button id="craft-close" type="button">Закрыть</button></div>
+    </dialog>
+    <dialog id="container-menu" class="inventory-document" aria-labelledby="container-title">
+      <h2 id="container-title">Хранилище</h2>
+      <div id="container-slots" class="container-grid" role="group" aria-label="Хранилище"></div>
+      <h3>Инвентарь</h3>
+      <div id="container-inventory" class="container-grid" role="group" aria-label="Инвентарь"></div>
+      <div id="container-carried" aria-hidden="true" hidden></div>
+      <div id="container-status" role="status"></div>
+      <div class="document-actions"><button id="container-close" type="button">Закрыть</button></div>
+    </dialog>
+    <dialog id="item-document" class="inventory-document" aria-labelledby="item-document-title">
+      <form id="item-document-form">
+        <h2 id="item-document-title">Название и описание</h2>
+        <div id="item-details">
+          <label>Название <input id="item-display-name" type="text" autocomplete="off"></label>
+          <label>Описание <textarea id="item-lore" rows="7" spellcheck="false"></textarea></label>
+          <div id="item-format" role="group" aria-label="Цвет и стиль текста"></div>
+          <pre id="item-text-preview" aria-label="Предпросмотр"></pre>
+        </div>
+        <div id="book-details" hidden>
+          <div id="book-author"></div>
+          <textarea id="book-page" aria-label="Текст страницы" rows="16" spellcheck="false"></textarea>
+          <div class="book-pagination">
+            <button id="book-previous" type="button">‹ Назад</button>
+            <span id="book-number" aria-live="polite"></span>
+            <button id="book-next" type="button">Далее ›</button>
+          </div>
+          <label id="book-signing">Название при подписании <input id="book-title" autocomplete="off"></label>
+        </div>
+        <div id="item-document-error" role="status"></div>
+        <div class="document-actions">
+          <button id="item-clear-text" type="button">Очистить</button>
+          <button id="item-document-submit" type="submit">Сохранить</button>
+          <button id="item-document-close" type="button">Закрыть</button>
+        </div>
+      </form>
     </dialog>
     <dialog id="audio-settings" aria-labelledby="audio-settings-title">
       <h2 id="audio-settings-title">Звук и окружение</h2>
@@ -188,16 +286,61 @@
         </div>
       </form>
     </dialog>
+    <dialog id="npc-menu" aria-labelledby="npc-menu-title">
+      <header class="npc-header">
+        <div><h2 id="npc-menu-title"></h2><div id="npc-menu-subtitle"></div></div>
+        <button id="npc-menu-close" type="button" aria-label="Закрыть">Закрыть</button>
+      </header>
+      <p id="npc-menu-status" role="status" aria-live="polite" hidden></p>
+      <div id="npc-menu-content"></div>
+    </dialog>
+    <dialog id="admin-menu" aria-labelledby="admin-title">
+      <header class="admin-header">
+        <h2 id="admin-title">Администрирование</h2>
+        <button id="admin-close" type="button">Закрыть</button>
+      </header>
+      <nav class="admin-tabs" aria-label="Разделы администрирования">
+        <button type="button" data-admin-tab="profiles" aria-pressed="true">Профили</button>
+        <button type="button" data-admin-tab="invites" aria-pressed="false">Приглашения</button>
+        <button type="button" data-admin-tab="world" aria-pressed="false">Мир</button>
+      </nav>
+      <p id="admin-status" aria-live="polite" role="status" hidden></p>
+      <div id="admin-body"></div>
+    </dialog>
     <div id="touch" aria-label="Сенсорное управление">
       <div id="stick"><i></i></div>
       <div class="touch-actions">
-        <button id="jump" type="button">↑</button>
-        <button id="touch-place" type="button" aria-label="Установить блок">+</button>
-        <button id="touch-copy" type="button">Копия</button>
+        <button id="jump" type="button">Прыжок</button>
+        <button id="touch-lower" type="button">Пригнуться</button>
         <button id="touch-use" type="button">Действие</button>
-        <button id="touch-remove" type="button" aria-label="Сломать блок, поставленный игроком">−</button>
-        <button id="touch-rotate" type="button" aria-label="Сменить позицию детали" hidden>↻</button>
+        <button id="touch-place" type="button">Поставить</button>
+        <button id="touch-remove" type="button">Сломать</button>
+        <button id="touch-copy" type="button">Копия</button>
+      </div>
+      <div class="touch-quick" aria-label="Меню и движение">
+        <button id="touch-sprint" type="button" aria-pressed="false">Разгон</button>
+        <button id="touch-inventory" type="button">Инвентарь</button>
+        <button id="touch-more" type="button" aria-expanded="false" aria-controls="touch-more-panel">Ещё</button>
+        <button id="touch-pause" type="button">Пауза</button>
+      </div>
+      <div id="touch-more-panel" aria-label="Дополнительные действия" hidden>
+        <button id="touch-flight" type="button" aria-pressed="false">Полёт</button>
+        <button id="touch-crawl" type="button" aria-pressed="false">Ползти</button>
+        <button id="touch-seat" type="button" aria-pressed="false">Сесть / встать</button>
+        <button id="touch-camera" type="button">Вид</button>
+        <button id="touch-orbit" type="button" aria-pressed="false">Обзор</button>
+        <button id="touch-spectator" type="button" aria-pressed="false">Наблюдатель</button>
+        <button id="touch-catalog" type="button">Предметы</button>
+        <button id="touch-chat" type="button">Чат</button>
+        <button id="touch-teleport" type="button">Телепорт</button>
+        <button id="touch-clock" type="button">Часы</button>
+        <button id="touch-drop" type="button">Выбросить</button>
+        <button id="touch-alternative" type="button">Другое действие</button>
         <button id="touch-chisel" type="button" aria-pressed="false">Резец</button>
+        <button id="touch-chisel-size" type="button">Размер резца</button>
+        <button id="touch-rotate" type="button" hidden>Поворот</button>
+        <button id="touch-wave" type="button">Приветствие</button>
+        <button id="touch-dance" type="button">Танец</button>
       </div>
     </div>
     <footer class="bottom">

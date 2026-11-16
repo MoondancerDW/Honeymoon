@@ -1,5 +1,6 @@
 import {lightChanged, updateBlockLight} from './block-light.mjs';
 import {skyCellProfile,skyProfile,updateSkyAccess} from './sky-access.mjs';
+import {detailCoverage} from '../world/full-detail.mjs';
 
 export const chunkKey = (x, z) => x + ',' + z;
 export const sectionKey = (x, y, z) => x + ',' + y + ',' + z;
@@ -39,6 +40,8 @@ export function droppedItemPosition({start, target, at, duration}, now) {
 export class World {
   constructor(manifest) {
     this.manifest = manifest;
+    this.playableChunks = new Set((manifest.chunks ?? []).map(([x,z])=>chunkKey(x,z)));
+    this.fullCoverage = detailCoverage(manifest.fullChunks);
     this.palette = manifest.palette.slice();
     this.indices = new Map(this.palette.map((key, index) => [key, index]));
     this.chunks = new Map();
@@ -54,6 +57,18 @@ export class World {
     this.pendingLights = new Map();
     this.skyLightOverrides = new Map();
     this.pendingSky = new Map();
+  }
+
+  isPlayableChunk(x,z) {
+    return this.playableChunks.has(chunkKey(x,z)) || this.manifest.fullWorldPlayable && this.fullCoverage(x,z);
+  }
+
+  playableAround(x,z,radius) {
+    const result=[];
+    for (let dz=-radius;dz<=radius;dz++) for (let dx=-radius;dx<=radius;dx++) {
+      if (this.isPlayableChunk(x+dx,z+dz)) result.push([x+dx,z+dz]);
+    }
+    return result;
   }
 
   setFrames(frames,revision) {

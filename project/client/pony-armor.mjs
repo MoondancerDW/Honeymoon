@@ -5,10 +5,9 @@ import {ponyArmor,ponyArmorFamilies} from '../world/pony-armor.mjs';
 const native = ponyArmorModel.native;
 const layers = [
   [['head',['head','ear.0','ear.1']]],
-  [['body',['chest','back','saddle']], [0,['frontRight.top']], [1,['frontLeft.top']]],
-  [['body',['back','saddle']], [2,['hindRight','hindRight.joint','hindRight.ext','hindRight.extJoint']],
-    [3,['hindLeft','hindLeft.joint','hindLeft.ext','hindLeft.extJoint']]],
-  [[0,['frontRight']], [1,['frontLeft']], [2,['hindRight','hindRight.ext']], [3,['hindLeft','hindLeft.ext']]],
+  [['body',['saddle']], [0,['frontRight.top']], [1,['frontLeft.top']]],
+  [['body',['saddle']], [2,['hindRight.ext','hindRight.extJoint']], [3,['hindLeft.ext','hindLeft.extJoint']]],
+  [[0,['frontRight']], [1,['frontLeft']], [2,['hindRight.ext']], [3,['hindLeft.ext']]],
 ];
 const scale = 1/16;
 let texture, ready;
@@ -51,6 +50,16 @@ function armorGeometry(row,slot,names) {
       const base = positions.length/3;
       for (let offset=0;offset<20;offset+=5) {
         vec.fromArray(quad,offset).applyEuler(rotation);
+        if (name === 'saddle' && slot === 2) {
+          vec.x *= .984;
+          vec.y = 8 + (vec.y - 8) * .984;
+          vec.z = 6 + (vec.z - 6) * .984;
+        }
+        if (name.endsWith('.top')) {
+          // The reference's shoulder plates are posed from the upper-arm pivot.
+          vec.x += name.startsWith('frontRight') ? -8 : 8;
+          vec.z -= 1;
+        }
         positions.push((vec.x+x-origin[0])*scale,(vec.y+y-origin[1])*scale,(vec.z+z-origin[2])*scale);
         if (proneLeg) proneLeg.push(0,0,name.toLowerCase().endsWith('joint') ? scale : 0);
         // Stay within each face's pixels before moving into the armor atlas.
@@ -100,14 +109,12 @@ export function createPonyArmor(rig) {
         const row = ponyArmorFamilies.indexOf(armor.material);
         equipmentTextureReady();
         const material = new THREE.MeshBasicMaterial({
-          map:texture, color:armorLight, alphaTest:.4, vertexColors:true, side:THREE.DoubleSide,
-          polygonOffset:true, polygonOffsetFactor:-3-slot, polygonOffsetUnits:-2-slot,
+          map:texture, color:armorLight, alphaTest:.4, alphaToCoverage:true, vertexColors:true, side:THREE.DoubleSide,
         });
         part.material = material;
         for (const [anchor,names] of layers[slot]) {
           const parent = typeof anchor === 'number' ? rig.legs[anchor] : rig[anchor];
           const mesh = new THREE.Mesh(armorGeometry(row,slot,names),material);
-          if (typeof anchor === 'number' && names[0].endsWith('.top')) mesh.position.y = -.035;
           parent.add(mesh);
           part.meshes.push(mesh);
         }
@@ -120,6 +127,7 @@ export function createPonyArmor(rig) {
       armorLight = color;
       for (const {material} of parts) material?.color.set(color);
     },
+    inspect() { return parts.map(part=>({key:part.key,meshes:part.meshes.length})); },
     dispose() { parts.forEach(clear); },
   };
 }

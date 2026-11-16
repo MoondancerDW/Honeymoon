@@ -115,6 +115,22 @@ export function createDroppedItems({base, store, clock, collides, visible, liqui
       velocity:[.28,.8,-.21],resting:false,expires:clock()+lifetime});
   }
 
+  function prepareScatter(stacks,[x,y,z]) {
+    if (!stacks.length) return [];
+    if (items.size+stacks.length > maxDrops) throw new RequestError(409,'too_many_dropped_items');
+    const center=[x+.5,y+.28,z+.5];
+    const position=[center,...escapeOffsets.map((offset)=>center.map((value,i)=>value+offset[i]))]
+      .find(point=>!blocked(point));
+    if (!position) throw new RequestError(409,'drop_obstructed');
+    const expires=clock()+lifetime;
+    return stacks.map((stack,index)=>{
+      const angle=index*2.399963229728653;
+      const speed=.46+(index%5)*.17;
+      return {key:randomUUID(),stack,position:[...position],velocity:[Math.cos(angle)*speed,.85,Math.sin(angle)*speed],
+        resting:false,expires};
+    });
+  }
+
   function terrainChanged(changes) {
     if (!changes.length || !items.size) return;
     for (const item of items.values()) {
@@ -177,5 +193,5 @@ export function createDroppedItems({base, store, clock, collides, visible, liqui
       .filter(item => item.expires > now)
       .map(publicItem);
   }
-  return {drop, nearest, pick, accept, scatter, terrainChanged, advance, clear, snapshot};
+  return {drop, nearest, pick, accept, scatter, prepareScatter, terrainChanged, advance, clear, snapshot};
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { displayObject } from '../server/base.mjs';
-import { ATLAS_GRID, collisionFor, redPowerWireMesh, shapeFor, signFor, standingSignMesh, tiles } from './geometry.mjs';
+import { ATLAS_GRID, collisionFor, itemShapeFor, redPowerWireMesh, shapeFor, signFor, standingSignMesh, tiles } from './geometry.mjs';
 
 const aabb = box => [box.x0, box.y0, box.z0, box.x1, box.y1, box.z1];
 const inside = (box, [x, y, z]) => x > box.x0 && x < box.x1
@@ -97,7 +97,22 @@ test('CustomNPC blood is a non-colliding source-textured decal on adjacent solid
   for (let meta=0; meta<4; meta++) {
     assert.deepEqual(shapeFor(`legacy:1527:${meta}`,()=> 'legacy:1:0')[0].faces,
       [4,5,0,1,2,3].map(side=>[4198,5758,5759][(meta+side)%3]));
+    const item=itemShapeFor(`legacy:1527:${meta}`)[0];
+    assert.deepEqual(item.faces,Array(6).fill(4198));
+    assert.equal(item.mode,'blend');
   }
+});
+
+test('RedPower items and placed machines use original renderer face tiles',()=>{
+  assert.deepEqual(itemShapeFor('legacy:751:3')[0].faces,[3207,3207,3209,3206,3207,3208]);
+  const tile=(key, data)=>shapeFor({key,object:{data}})[0].faces;
+  assert.deepEqual(tile('legacy:751:3',{rot:1}),[3207,3208,3209,3206,3207,3207]);
+  assert.deepEqual(tile('legacy:751:5',{ps:2,stor:3000}),[690,690,692,688,702,702]);
+  assert.deepEqual(tile('legacy:763:13',{ps:1}),[682,682,685,681,683,683]);
+  assert.deepEqual(tile('legacy:763:14',{ps:1}),[602,602,570,601,604,604]);
+  assert.deepEqual(tile('legacy:763:15',{ps:0}),[602,602,570,601,605,605]);
+  assert.deepEqual(tile('legacy:766:0',{ps:9}),[716,716,710,709,712,712]);
+  assert.deepEqual(tile('legacy:766:1',{ps:15}),[729,729,721,720,729,729]);
 });
 
 test('RedPower jacketed street light uses the silver wire cover and original post collision', () => {

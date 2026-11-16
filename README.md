@@ -1,13 +1,15 @@
 # Honeymoon
 
-Карта Equestria и самостоятельная браузерная игра на основе района
+Карта Equestria и самостоятельная браузерная игра на основе сборки
 Honeymoon. Здесь можно ходить, летать, строить из блоков и микроблоков RedPower
 и редактировать постройки резцом. Исходные блоки тоже доступны для разрушения.
 Отдельная копия карты позволяет восстановить оригинальные постройки.
-Правки сохраняются и видны другим гостевым сессиям.
+Правки сохраняются и видны другим игрокам. Сборка для Windows поддерживает
+вход по приглашениям и подключение через браузер с телефона.
 
 - [Подготовка и запуск](project/README.md)
-- [Готовая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-inventory-weather/Honeymoon-Creative-Weather-Windows-x64.zip)
+- [Веб-альфа для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/tag/alpha-2026-11-16)
+- [Предыдущая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-inventory-weather/Honeymoon-Creative-Weather-Windows-x64.zip)
 - [Архив браузерного клиента и Node.js-сервера](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-inventory-weather/honeymoon-browser-client.zip)
 - [Отдельная копия исходной карты для восстановления](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-inventory-weather/Honeymoon-Original-Map.zip)
 - [Тестовый релиз с инвентарём, погодой и восстановлением карты](https://github.com/MoondancerDW/Honeymoon/releases/tag/pc-test-inventory-weather)

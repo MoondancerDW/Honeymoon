@@ -1,4 +1,5 @@
 import {formatClock, tickFromTime} from '../world/world-time.mjs';
+import {createWarpMenu} from './warp-menu.mjs';
 
 const teleportErrors = {
   invalid_coordinates:'Введите числовые координаты X, Y и Z',
@@ -9,7 +10,7 @@ const teleportErrors = {
 };
 const historyLimit = 100;
 
-export function createSocialHud({post, notice, pause, resume, teleport}) {
+export function createSocialHud({post, notice, pause, resume, teleport, loadWarps, placeWarp, worldEditCommand}) {
   const byId = id => document.getElementById(id);
   const chat = byId('chat');
   const log = byId('chat-log');
@@ -23,12 +24,17 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
   const frozen = byId('clock-frozen');
   const teleportButton = byId('teleport-toggle');
   const teleportForm = byId('teleport-form');
+  const warpButton = byId('warp-toggle');
+  const warpMenu = createWarpMenu({load:loadWarps,add:placeWarp,
+    remove:id=>post('warps/remove',{id},AbortSignal.timeout(5000)),
+    teleport:warpId=>teleport({warpId}),close:()=>{ if (panel === 'warps') close(false); },notice,teleportErrors});
   const coordinateInputs = ['x','y','z'].map(axis => [axis, byId(`teleport-${axis}`)]);
   const online = byId('online');
   const names = byId('online-names');
   let panel, onlineVisible = false, connected = false, players = [], clockText, writingTime = false;
   let peers = [];
   let channel = 'global';
+  let canSetTime=true;
 
   function entry({id, kind, nickname, newNickname, text, channel:target = 'global'}, recent) {
     if (seen.has(id)) return;
@@ -48,7 +54,7 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
       row.append(sender, document.createTextNode(`  ${text}`));
     } else {
       row.className = 'chat-status';
-      const changes = kind === 'rename' ? `сменил ник на ${newNickname}` :
+      const changes = kind === 'death' ? 'помер' : kind === 'rename' ? `сменил ник на ${newNickname}` :
         kind === 'join' ? 'входит в игру' : 'выходит из игры';
       row.append(document.createTextNode(`${nickname} ${changes}`));
     }
@@ -70,13 +76,19 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
 
   function close(continuePlaying = true) {
     if (!panel) return;
+    const wasWarpMenu = panel === 'warps';
     panel = null;
     chat.classList.remove('expanded');
     chatForm.hidden = clockForm.hidden = teleportForm.hidden = true;
-    if (continuePlaying) resume();
+    if (wasWarpMenu) {
+      warpMenu.show(false);
+      warpButton.setAttribute('aria-expanded','false');
+      warpButton.focus({preventScroll:true});
+    } else if (continuePlaying) resume();
   }
 
   function open(next) {
+    if (next==='clock'&&!canSetTime) return;
     if (!connected) return;
     if (panel === next) return close();
     pause();
@@ -85,6 +97,9 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
     chatForm.hidden = panel !== 'chat';
     clockForm.hidden = panel !== 'clock';
     teleportForm.hidden = panel !== 'teleport';
+    warpButton.setAttribute('aria-expanded',String(panel === 'warps'));
+    warpMenu.show(panel === 'warps');
+    if (panel === 'warps') return;
     if (panel === 'clock') clockInput.value = clockText;
     const input = panel === 'chat' ? chatInput : panel === 'clock' ? clockInput : coordinateInputs[0][1];
     input.focus();
@@ -107,7 +122,8 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
       item.textContent = nick;
       return item;
     }));
-    clockButton.disabled = byId('chat-toggle').disabled = teleportButton.disabled = !connected;
+    byId('chat-toggle').disabled = teleportButton.disabled = warpButton.disabled = !connected;
+    clockButton.disabled=!connected||!canSetTime;
   }
 
   async function submit(path, payload, fallback) {
@@ -128,6 +144,12 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
     if (send.disabled) return;
     send.disabled = true;
     const destination = channel;
+    if (text.startsWith('//') && worldEditCommand) {
+      try {
+        if (await worldEditCommand(text) && chatInput.value.trim()===text) chatInput.value='';
+      } finally {send.disabled=false;}
+      return;
+    }
     const message = await submit('chat', {text, channel:destination}, 'Введите сообщение длиной до 240 символов');
     send.disabled = false;
     if (message) {
@@ -144,6 +166,7 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
   });
   clockButton.addEventListener('click', () => open('clock'));
   teleportButton.addEventListener('click', () => open('teleport'));
+  warpButton.addEventListener('click', () => open('warps'));
   byId('chat-close').addEventListener('click', () => close());
   byId('clock-close').addEventListener('click', () => close());
   byId('teleport-close').addEventListener('click', () => close());
@@ -173,6 +196,11 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
   });
 
   return {
+    setAdmin(allowed) {
+      canSetTime=allowed;
+      clockButton.disabled=!connected||!allowed;
+      if (!allowed&&panel==='clock') close(false);
+    },
     isOpen: () => !!panel,
     isChatOpen: () => panel === 'chat',
     close,
@@ -187,7 +215,7 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
         showOnline(true);
         return true;
       }
-      const next = {KeyT:'chat', Enter:'chat', NumpadEnter:'chat', KeyK:'clock', KeyG:'teleport'}[event.code];
+      const next = {KeyT:'chat', Enter:'chat', NumpadEnter:'chat', KeyL:'clock', KeyG:'teleport'}[event.code];
       if (!event.repeat && next) {
         event.preventDefault();
         open(next);
@@ -200,6 +228,8 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
     },
     blur() { showOnline(false); },
     roster,
+    warpsChanged:warpMenu.update,
+    refreshWarps() { if (panel === 'warps') void warpMenu.refresh(); },
     profileUpdated(profile) { if (connected) roster(peers, profile); },
     history(list) {
       for (const message of list) entry(message, false);
@@ -211,7 +241,7 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
         clockText = text;
         clockButton.textContent = text;
         clockButton.classList.toggle('frozen', isFrozen);
-        clockButton.title = isFrozen ? 'Время остановлено · K' : 'Игровое время · K';
+        clockButton.title = isFrozen ? 'Время остановлено · L' : 'Игровое время · L';
       }
     },
     clockState(state) { frozen.checked = state.frozen; },

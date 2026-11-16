@@ -1,6 +1,6 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {ATLAS_GRID,shapeFor} from '../world/geometry.mjs';
-import {leafBlock} from './foliage-mesh.mjs';
+import {biomeLeaf,leafBlock} from './foliage-mesh.mjs';
 
 const capacity = 20;
 const keyOf = cell => typeof cell === 'string' ? cell : cell?.key;
@@ -8,9 +8,10 @@ const corners = [[-1,0],[0,-1],[1,0],[0,1]];
 const uvCorners = [[.26,.74],[.74,.74],[.74,.26],[.26,.26]];
 
 export class FallingLeaves {
-  constructor(scene, world, material, rows) {
+  constructor(scene, world, material, rows, climate) {
     this.world = world;
     this.rows = rows;
+    this.climate = climate;
     this.particles = [];
     this.nextSpawn = 0;
     this.cameraForward = new THREE.Vector3();
@@ -44,7 +45,7 @@ export class FallingLeaves {
       const key = keyOf(this.world.cellAt(px,py,pz));
       if (!leafBlock(key) || this.world.cellAt(px,py-1,pz)) continue;
       const shape = shapeFor(key)[0];
-      const tint = shape.tint ?? 0x689c45;
+      const tint = (biomeLeaf(key) ? this.climate.tintAt(px,pz).leaves : shape.tint) ?? 0x689c45;
       this.particles.push({x:px+.16+Math.random()*.68, y:py-.08, z:pz+.16+Math.random()*.68,
         born:now, duration:3+Math.random()*2, drift:Math.random()*6.28, size:.073+Math.random()*.045,
         tile:shape.faces[0], color:[(tint>>16)&255,(tint>>8)&255,tint&255]});

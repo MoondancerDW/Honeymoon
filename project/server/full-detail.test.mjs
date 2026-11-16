@@ -7,7 +7,7 @@ import {gzipSync} from 'node:zlib';
 import {loadBase} from './base.mjs';
 import {DETAIL_HEADER_SIZE,DETAIL_INDEX_OFFSET,detailCoverage,detailSlot} from '../world/full-detail.mjs';
 
-test('full detail is streamed outside the existing mask while source and gameplay authority stay the same',()=>{
+test('full detail extends playable coverage without changing original chunks or the save hash',()=>{
   const folder=mkdtempSync(join(tmpdir(),'honeymoon-detail-assets-'));
   try {
     const world=join(folder,'world'), detail=join(folder,'full-world');
@@ -40,9 +40,12 @@ test('full detail is streamed outside the existing mask while source and gamepla
     assert.deepEqual(base.manifest.chunks,manifest.chunks);
     assert.equal(has(x,z),true);
     assert.equal(has(x+1,z),false);
-    assert.equal(base.hasPlayableChunk(x,z),false);
-    assert.equal(base.inBounds(x*16,64,z*16),false);
-    assert.equal(base.getCell(x*16,64,z*16).key,'air');
+    assert.equal(base.publicManifest.fullWorldPlayable,true);
+    assert.equal(base.hasPlayableChunk(x,z),true);
+    assert.equal(base.hasPlayableChunk(0,0),true);
+    assert.equal(base.hasPlayableChunk(x,z+1),false);
+    assert.equal(base.inBounds(x*16,64,z*16),true);
+    assert.equal(base.getCell(x*16,64,z*16).key,'legacy:1:0');
     assert.deepEqual(base.publicChunk(x,z),source);
     assert.equal(base.publicChunk(x+1,z),null);
 

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relatedBlockStates } from '../world/block-interactions.mjs';
+import { containerSpec } from '../world/containers.mjs';
 import { isRideableMinecart } from '../world/minecarts.mjs';
 import { isRideableBoat } from '../world/boats.mjs';
 import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
@@ -9,7 +10,7 @@ import { loadSnowCleanup } from './snow-cleanup.mjs';
 import { loadFullDetail } from './full-detail.mjs';
 
 const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
-const MAX_CACHED_CHUNKS = 80;
+const MAX_CACHED_CHUNKS = 160;
 const safeTileFields = new Set([
   'Text1', 'Text2', 'Text3', 'Text4', 'rotation', 'Rotation', 'direction', 'Direction',
   'orientation', 'Orientation', 'rot', 'Rot', 'facing', 'Facing', 'color', 'Color',
@@ -73,6 +74,9 @@ export function displayObject(object) {
   if (object.type === 'RPTube' && Number.isInteger(object.data?.pCol)) {
     data.pCol = object.data.pCol & 255;
   }
+  if (object.type === 'RPCharge' && Number.isInteger(object.data?.stor)) {
+    data.stor = Math.min(3000, Math.max(0, object.data.stor));
+  }
   if (object.type === 'Music' && Number.isInteger(object.data?.note)) {
     data.note = Math.min(24, Math.max(0, object.data.note));
   }
@@ -124,13 +128,21 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
   const coordinates = new Set([...manifest.chunks, ...(manifest.visualChunks ?? [])].map(([x, z]) => `${x}.${z}`));
   const playableCoordinates = new Set(manifest.chunks.map(([x, z]) => `${x}.${z}`));
   const chunks = new Map();
-  const bounds = {...manifest.bounds, maxY:Math.max(manifest.bounds.maxY,511)};
   const originalHash = manifest.contentHash ?? createHash('sha256').update(rawManifest).digest('hex');
   const fullDetail = manifest.chunkPalettes ? loadFullDetail(join(directory,'..','full-world'),originalHash) : null;
+  const bounds = {...manifest.bounds,maxY:Math.max(manifest.bounds.maxY,511)};
+  if (fullDetail) {
+    const [west,north,east,south]=fullDetail.descriptor.bounds;
+    Object.assign(bounds,{minX:Math.min(bounds.minX,west*16),maxX:Math.max(bounds.maxX,east*16+15),
+      minZ:Math.min(bounds.minZ,north*16),maxZ:Math.max(bounds.maxZ,south*16+15)});
+  }
   const cleanup = cleanSnow ? loadSnowCleanup(directory,originalHash) : null;
   const hash = cleanup?.hash ?? originalHash;
   const publicManifest = publicWorld({...manifest,bounds}, hash);
-  if (fullDetail) publicManifest.fullChunks=fullDetail.descriptor;
+  if (fullDetail) {
+    publicManifest.fullChunks=fullDetail.descriptor;
+    publicManifest.fullWorldPlayable=true;
+  }
   const corePalette = manifest.palette.slice(0, manifest.corePaletteSize ?? manifest.palette.length);
   const catalog = new Set(corePalette);
   for (const key of corePalette) {
@@ -157,14 +169,9 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
     cleanup?.apply(source,manifest.palette);
     const palette = manifest.chunkPalettes ? source.palette : manifest.palette;
     if (!Array.isArray(palette) || palette[0] !== 'air') throw new Error(`Malformed palette in ${chunkKey}`);
-    const sections = new Map();
-    for (const section of source.sections) {
-      const indices = Buffer.from(section.indices, 'base64');
-      if (indices.length !== CHUNK_BYTES_PER_SECTION) throw new Error(`Malformed section in ${chunkKey}`);
-      sections.set(section.y, indices);
-    }
+    const sections = new Map(source.sections.map(section=>[section.y,section.indices]));
     const objects = new Map(source.objects.map(object => [cellAddress(...object.position), object]));
-    const chunk = { source, palette, sections, objects };
+    const chunk = { source, palette, sections, objects, local };
     chunks.set(chunkKey, chunk);
     if (chunks.size > MAX_CACHED_CHUNKS) chunks.delete(chunks.keys().next().value);
     return chunk;
@@ -176,12 +183,24 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
     const cy = Math.floor(y / 16);
     const cz = Math.floor(z / 16);
     const chunk = getChunk(cx, cz);
-    const section = chunk?.sections.get(cy);
+    let section = chunk?.sections.get(cy);
     if (!section) return { key: 'air', object: null };
+    if (typeof section === 'string') {
+      section=Buffer.from(section,'base64');
+      if (section.length !== CHUNK_BYTES_PER_SECTION) throw new Error(`Malformed section in ${cx}.${cz}`);
+      chunk.sections.set(cy,section);
+    }
     const index = (x - cx * 16) + (z - cz * 16) * 16 + (y - cy * 16) * 256;
     const key = chunk.palette[section.readUInt16LE(index * 2)];
     if (!key) throw new Error(`Palette index outside catalog at ${cellAddress(x, y, z)}`);
-    const object = chunk.objects.get(cellAddress(x, y, z)) ?? null;
+    const address = cellAddress(x, y, z);
+    let object = chunk.objects.get(address) ?? null;
+    // Local compiled chunks carry public render data. Read private inventories from the original chunk pack.
+    if (containerSpec(key) && chunk.local && fullDetail?.hasChunk(cx,cz)) {
+      chunk.originalObjects ??= new Map(fullDetail.chunkAt(cx,cz).objects.map(entry=>[cellAddress(...entry.position),entry]));
+      const original = chunk.originalObjects.get(address);
+      if (original && (!object || object.type === original.type)) object = original;
+    }
     // The original save stays available for Minecraft comparison.
     if (isWestCellarHatch(x, y, z) && (key === 'legacy:96:12' || key === 'legacy:96:8') &&
         getCell(x, y - 1, z).key === `legacy:65:${westCellarLadder}`) {
@@ -213,6 +232,6 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
   }
 
   return { manifest:{...manifest,bounds}, publicManifest, hash, catalog, inBounds, getCell, getEntity, publicChunk,
-    hasPlayableChunk: (x, z) => playableCoordinates.has(`${x}.${z}`),
+    hasPlayableChunk: (x, z) => playableCoordinates.has(`${x}.${z}`) || Boolean(fullDetail?.hasChunk(x,z)),
   };
 }

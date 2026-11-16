@@ -2,7 +2,7 @@
 
 import argparse
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -11,26 +11,28 @@ PROJECT = Path(__file__).resolve().parents[1]
 def add_tree(archive, directory, relative_to, include=lambda _path: True):
     for path in sorted(directory.rglob("*")):
         if path.is_file() and include(path):
-            archive.write(path, f"{relative_to}/{path.relative_to(directory).as_posix()}")
+            mode = ZIP_STORED if path.suffix.lower() in {'.gz', '.bin', '.png', '.ogg', '.webp'} else ZIP_DEFLATED
+            archive.write(path, f"{relative_to}/{path.relative_to(directory).as_posix()}", compress_type=mode)
 
 
-def build(output, node, node_license, generated):
-    for asset in ("world/world.json", "textures/atlas.png", "models/redpower.json", "sounds/sounds.json"):
+def build(output, node, node_license, generated, state=None):
+    for asset in ("world/world.json", "full-world/manifest.json", "vista/manifest.json", "weather/biomes.bin",
+                  "textures/atlas.png", "models/redpower.json", "sounds/sounds.json", "npcs/original.json", "npcs/models.json"):
         if not (generated / asset).is_file():
             raise FileNotFoundError(generated / asset)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(".zip.part")
     try:
-        with ZipFile(temporary, "w", compression=ZIP_DEFLATED, compresslevel=6) as archive:
-            for name in ("Start-Honeymoon.cmd", "Start-Server.cmd", "Start-Internet.cmd", "Launch-Honeymoon.mjs", "single-instance.mjs", "ЧИТАЙ-МЕНЯ.txt"):
+        with ZipFile(temporary, "w", compression=ZIP_DEFLATED, compresslevel=3) as archive:
+            for name in ("Start-Honeymoon.cmd", "Start-Server.cmd", "Start-Tailscale.cmd", "Start-Internet.cmd", "Launch-Honeymoon.mjs", "single-instance.mjs", "ЧИТАЙ-МЕНЯ.txt"):
                 archive.write(PROJECT / "portable" / name, name)
             for name in ("package.json", "README.md"):
                 archive.write(PROJECT / name, name)
             for source in ("client", "server", "world"):
                 add_tree(archive, PROJECT / source, source, lambda path: path.suffix in {".mjs", ".html", ".css", ".json"}
                          and not path.name.endswith(".test.mjs"))
-            for family in ("world", "textures", "models", "sounds", "lod"):
+            for family in ("world", "full-world", "textures", "models", "sounds", "lod", "vista", "weather", "npcs"):
                 add_tree(archive, generated / family, f"generated/{family}")
             catalog = generated / "creative" / "catalog.json"
             if catalog.is_file():
@@ -40,6 +42,8 @@ def build(output, node, node_license, generated):
                 archive.write(three / name, (Path("node_modules/three") / name).as_posix())
             archive.write(node, "runtime/node.exe")
             archive.write(node_license, "runtime/LICENSE.txt")
+            if state:
+                archive.write(state, "state/honeymoon.sqlite")
         with ZipFile(temporary) as archive:
             bad_file = archive.testzip()
             if bad_file:
@@ -55,5 +59,6 @@ if __name__ == "__main__":
     parser.add_argument("node", type=Path, help="Windows x64 Node.js 24 executable")
     parser.add_argument("node_license", type=Path, help="LICENSE from the matching Node.js release")
     parser.add_argument("--generated", type=Path, default=PROJECT / "generated")
+    parser.add_argument("--state", type=Path, help="Optional SQLite snapshot prepared while the old server was running")
     args = parser.parse_args()
-    build(args.output, args.node, args.node_license, args.generated)
+    build(args.output, args.node, args.node_license, args.generated, args.state)

@@ -23,7 +23,7 @@ export function loadLodAssets(generated, worldHash) {
     throw new Error('Invalid far terrain manifest');
   }
   const packs = new Set(regions.map(([x,z]) => `${x}.${z}`));
-  return {directory, packs, descriptor:{version:schemaVersion, contentHash:assetHash, maxDistance, tileChunks}};
+  return {directory,packs,descriptor:{version:schemaVersion,contentHash:assetHash,maxDistance,tileChunks,regions}};
 }
 
 export function loadVistaAssets(generated) {
@@ -64,14 +64,20 @@ export async function serveVistaTile(assets, request, response, path, acceptsGzi
   return serveTile(join(assets.directory,`${tile[2]}.bin`),request,response,acceptsGzip);
 }
 
-async function serveTile(rawPath,request,response,acceptsGzip) {
+export function serveClimateMap(generated,request,response,acceptsGzip) {
+  return serveTile(join(generated,'weather','biomes.bin'),request,response,acceptsGzip,'no-cache');
+}
+
+async function serveTile(rawPath,request,response,acceptsGzip,cacheControl='public, max-age=31536000, immutable') {
   let length = acceptsGzip ? await fileSize(`${rawPath}.gz`) : null;
   const compressed = length !== null;
   if (!compressed) length = await fileSize(rawPath);
   if (length === null) return false;
+  const authenticated=response.getHeader('Vary')==='Cookie';
   response.writeHead(200, {
-    'Content-Type':'application/octet-stream', 'Content-Length':length, Vary:'Accept-Encoding',
-    'Cache-Control':'public, max-age=31536000, immutable', ...(compressed && {'Content-Encoding':'gzip'}),
+    'Content-Type':'application/octet-stream', 'Content-Length':length, Vary:authenticated?'Cookie, Accept-Encoding':'Accept-Encoding',
+    'Cache-Control':authenticated?`private, ${cacheControl.replace(/^public, /,'')}`:cacheControl,
+    ...(compressed && {'Content-Encoding':'gzip'}),
   });
   if (request.method === 'HEAD') response.end();
   else await pipeline(createReadStream(compressed ? `${rawPath}.gz` : rawPath), response);

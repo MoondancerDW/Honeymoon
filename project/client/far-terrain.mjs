@@ -12,6 +12,8 @@ export const VISTA_FOG_END = 1840;
 const MAX_FETCH = 2;
 const MAX_PENDING_UPLOADS = 6;
 const RETAIN_MARGIN = 1;
+const VISTA_MASK_SIDE=80;
+const paletteModes=new Set([0,1,2]);
 const keyOf = (x,z,outer = false) => `${x}.${z}${outer ? '.outer' : ''}`;
 const vistaKey = (x,z) => `vista:${x}.${z}`;
 const packAt = chunk => Math.floor(chunk / PACK_CHUNKS);
@@ -32,7 +34,8 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
     terrainWater:{value:textures.water},
     lightmap:{value:lightmap}, terrainRows:{value:rows}, visibilityMask:{value:65535}, heightScale:{value:1},
     coordinateScale:{value:1},
-    vistaChunk:{value:new THREE.Vector2()}, vistaBounds:{value:new THREE.Vector4()}, vistaRadius:{value:0},
+    vistaMask:{value:null}, vistaMaskOrigin:{value:new THREE.Vector2()},
+    paletteMode:{value:1},
     seamMasks:{value:new THREE.Vector4()},
   };
   return new THREE.ShaderMaterial({uniforms, fog:true, transparent:water, depthWrite:!water,
@@ -53,7 +56,7 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
       varying float tile;
       varying float cutout;
       varying vec3 tint;
-      ${vista ? 'varying vec2 vistaXZ;' : ''}
+      varying vec2 surfaceXZ;
       #include <fog_pars_vertex>
       vec3 srgbToLinear(vec3 encoded) {
         return mix(encoded / 12.92, pow((encoded + .055) / 1.055, vec3(2.4)), step(vec3(.04045), encoded));
@@ -98,7 +101,7 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
         else localUv = vec2(face < 4.5 ? -point.x : point.x, -point.y);`}
         tile = faceSurface.x;
         cutout = step(256.0,faceSurface.y);
-        ${vista ? 'vistaXZ = (modelMatrix * vec4(point,1.0)).xz;' : ''}
+        surfaceXZ = (modelMatrix * vec4(point,1.0)).xz;
         vec2 lightUv = vec2((mod(faceLight, 16.0) + .5) / 16.0, (floor(faceLight / 16.0) + .5) / 17.0);
         tint = srgbToLinear(faceColor * texture2D(lightmap, lightUv).rgb);
         vec4 mvPosition = modelViewMatrix * vec4(point, 1.0);
@@ -114,14 +117,15 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
       varying float tile;
       varying float cutout;
       varying vec3 tint;
-      ${vista ? 'varying vec2 vistaXZ; uniform vec2 vistaChunk; uniform vec4 vistaBounds; uniform float vistaRadius;' : ''}
+      varying vec2 surfaceXZ;
+      uniform float paletteMode;
+      ${vista ? 'uniform sampler2D vistaMask; uniform vec2 vistaMaskOrigin;' : ''}
       #include <fog_pars_fragment>
       void main() {
         ${vista ? `
-          vec2 chunk = floor(vistaXZ / 16.0);
-          vec2 delta = chunk - vistaChunk;
-          if (dot(delta,delta) <= vistaRadius && all(greaterThanEqual(chunk,vistaBounds.xy)) &&
-              all(lessThanEqual(chunk,vistaBounds.zw))) discard;
+          vec2 maskUv = (floor(surfaceXZ / 16.0) - vistaMaskOrigin + .5) / ${VISTA_MASK_SIDE}.0;
+          if (all(greaterThan(maskUv,vec2(0.0))) && all(lessThan(maskUv,vec2(1.0))) &&
+              texture2D(vistaMask,maskUv).r > .5) discard;
         ` : ''}
         float coverage = 1.0;
         ${water ? 'vec4 color = texture2D(terrainWater,vec2(localUv.x,-localUv.y));' : `
@@ -153,7 +157,20 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
           }
           `}
         `}
-        gl_FragColor = vec4(color.rgb * tint, ${water ? 'color.a' : 'coverage'});
+        vec3 terrainColor=color.rgb * tint;
+        // Filtering averages the little bright highlights toward darker
+        // texels. Keep the midtones closer to the nearby block material.
+        if (paletteMode > .5) {
+          float distanceWeight=smoothstep(70.0,380.0,vFogDepth);
+          float luminance=dot(terrainColor,vec3(.2126,.7152,.0722));
+          float vegetation=terrainColor.g>terrainColor.r*1.25 && terrainColor.g>terrainColor.b*1.18 ? 1.0 : 0.0;
+          terrainColor=mix(terrainColor,terrainColor*(1.0+.14*vegetation),distanceWeight);
+          if (paletteMode > 1.5) {
+            terrainColor=mix(terrainColor,vec3(luminance),.14*distanceWeight);
+            terrainColor=mix(terrainColor,terrainColor*1.14,.5*distanceWeight);
+          }
+        }
+        gl_FragColor = vec4(terrainColor, ${water ? 'color.a' : 'coverage'});
         #include <colorspace_fragment>
         #ifdef USE_FOG
           float farFog = smoothstep(fogNear,fogFar,vFogDepth);
@@ -191,8 +208,10 @@ function meshFor(layer, material, region, extent = PACK_BLOCKS) {
 export class FarTerrain {
   constructor(display, textures) {
     this.display = display;
-    const {lod,bounds,vista} = display.world.manifest;
+    const {lod,bounds,vista,fullWorldPlayable} = display.world.manifest;
     this.lod = lod;
+    this.fullWorldPlayable=Boolean(fullWorldPlayable);
+    this.definedPacks=Array.isArray(lod.regions) ? new Set(lod.regions.map(([x,z])=>keyOf(x,z))) : null;
     this.bounds = {minX:Math.floor(bounds.minX / PACK_BLOCKS),maxX:Math.floor(bounds.maxX / PACK_BLOCKS),
       minZ:Math.floor(bounds.minZ / PACK_BLOCKS),maxZ:Math.floor(bounds.maxZ / PACK_BLOCKS)};
     const antialias = Boolean(display.renderer.getContext().getContextAttributes()?.antialias);
@@ -202,7 +221,11 @@ export class FarTerrain {
     if (supportedVistaVersion(vista?.version) && /^[0-9a-f]{64}$/.test(vista.hash) && Array.isArray(vista.regions)) {
       this.vista = {...vista,packs:new Set(vista.regions.map(([x,z]) => vistaKey(x,z)))};
       const {uniforms} = this.materials.vista = material({vista:true});
-      uniforms.vistaBounds.value.set(...[bounds.minX,bounds.minZ,bounds.maxX,bounds.maxZ].map(value => Math.floor(value / 16)));
+      this.coveragePixels=new Uint8Array(VISTA_MASK_SIDE**2);
+      this.coverageTexture=new THREE.DataTexture(this.coveragePixels,VISTA_MASK_SIDE,VISTA_MASK_SIDE,THREE.RedFormat);
+      this.coverageTexture.minFilter=this.coverageTexture.magFilter=THREE.NearestFilter;
+      this.coverageTexture.needsUpdate=true;
+      uniforms.vistaMask.value=this.coverageTexture;
     }
     this.packs = new Map();
     this.pending = new Map();
@@ -221,6 +244,24 @@ export class FarTerrain {
     const layer = {count:1,offset:new Uint16Array(3),span:new Uint16Array([1,1]),
       surface:new Uint16Array([0,5]),color:new Uint8Array([255,255,255]),light:new Uint16Array([240]),minY:0,maxY:1};
     return Object.values(this.materials).map(material => meshFor(layer,material,{mask:65535,seams:new THREE.Vector4()}));
+  }
+
+  setPaletteMode(mode) {
+    if (!paletteModes.has(mode)) throw new RangeError('Unknown distant palette');
+    for (const material of Object.values(this.materials)) material.uniforms.paletteMode.value=mode;
+  }
+
+  updateVistaCoverage() {
+    if (!this.coverageDirty || !this.coverageTexture || this.cx===undefined) return;
+    this.coverageDirty=false;
+    const minX=this.cx-VISTA_MASK_SIDE/2, minZ=this.cz-VISTA_MASK_SIDE/2;
+    this.materials.vista.uniforms.vistaMaskOrigin.value.set(minX,minZ);
+    const exact=this.display.exactChunks;
+    for (let z=0;z<VISTA_MASK_SIDE;z++) for (let x=0;x<VISTA_MASK_SIDE;x++) {
+      const xx=minX+x,zz=minZ+z;
+      this.coveragePixels[x+z*VISTA_MASK_SIDE]=exact.has(`${xx},${zz}`) || this.regionAt(xx,zz) ? 255 : 0;
+    }
+    this.coverageTexture.needsUpdate=true;
   }
 
   setDistance(distance) {
@@ -276,12 +317,14 @@ export class FarTerrain {
     if (!this.active || this.cx === cx && this.cz === cz) return;
     this.cx = cx;
     this.cz = cz;
+    this.coverageDirty=true;
     this.targets.clear();
     const {minX,maxX,minZ,maxZ} = this.bounds;
     const radius = this.coverageRadius, {innerRadius} = this;
     const radius2 = radius ** 2, innerRadius2 = innerRadius ** 2;
     for (let rz = Math.max(minZ,packAt(cz-radius)); rz <= Math.min(maxZ,packAt(cz+radius)); rz++) {
       for (let rx = Math.max(minX,packAt(cx-radius)); rx <= Math.min(maxX,packAt(cx+radius)); rx++) {
+        if (this.definedPacks && !this.definedPacks.has(keyOf(rx,rz))) continue;
         const x0 = rx * PACK_CHUNKS - cx, z0 = rz * PACK_CHUNKS - cz;
         const x1 = x0 + PACK_CHUNKS - 1, z1 = z0 + PACK_CHUNKS - 1;
         const nearest = distanceSquared(Math.max(x0,-x1,0),Math.max(z0,-z1,0));
@@ -292,18 +335,16 @@ export class FarTerrain {
         }
       }
     }
-    if (this.vista && this.radius === 32) {
-      const uniforms = this.materials.vista.uniforms;
-      uniforms.vistaChunk.value.set(cx,cz);
-      uniforms.vistaRadius.value = radius2;
-      for (let rz=Math.floor((cz-VISTA_RADIUS)/VISTA_CHUNKS); rz<=Math.floor((cz+VISTA_RADIUS)/VISTA_CHUNKS); rz++) {
-        for (let rx=Math.floor((cx-VISTA_RADIUS)/VISTA_CHUNKS); rx<=Math.floor((cx+VISTA_RADIUS)/VISTA_CHUNKS); rx++) {
+    if (this.vista && (this.radius===32 || this.fullWorldPlayable)) {
+      const vistaRange=this.radius===32?VISTA_RADIUS:54;
+      for (let rz=Math.floor((cz-vistaRange)/VISTA_CHUNKS); rz<=Math.floor((cz+vistaRange)/VISTA_CHUNKS); rz++) {
+        for (let rx=Math.floor((cx-vistaRange)/VISTA_CHUNKS); rx<=Math.floor((cx+vistaRange)/VISTA_CHUNKS); rx++) {
           const key = vistaKey(rx,rz);
           if (!this.vista.packs.has(key)) continue;
           const dx = Math.max(rx*VISTA_CHUNKS-cx,cx-(rx+1)*VISTA_CHUNKS+1,0);
           const dz = Math.max(rz*VISTA_CHUNKS-cz,cz-(rz+1)*VISTA_CHUNKS+1,0);
           const distance = distanceSquared(dx,dz);
-          if (distance <= VISTA_RADIUS**2) this.targets.set(key,{rx,rz,vista:true,coarse:distance > VISTA_COARSE_AFTER**2});
+          if (distance <= vistaRange**2) this.targets.set(key,{rx,rz,vista:true,coarse:distance > VISTA_COARSE_AFTER**2});
         }
       }
     }
@@ -377,6 +418,7 @@ export class FarTerrain {
   }
 
   chunkChanged(x,z) {
+    this.coverageDirty=true;
     this.refreshAround(packAt(x),packAt(z));
   }
 
@@ -431,6 +473,7 @@ export class FarTerrain {
   evict(key) {
     const region = this.packs.get(key);
     this.packs.delete(key);
+    if (!region.vista) this.coverageDirty=true;
     if (region.previous) this.display.discardGroup(region.previous.group);
     this.display.discardGroup(region.group);
     if (!region.installed) this.display.uploads = this.display.uploads.filter(job => job.far !== region);
@@ -448,6 +491,7 @@ export class FarTerrain {
       region.group.visible = true;
       return;
     }
+    this.coverageDirty=true;
     for (let i=0; i<region.counts.length; i++) {
       if (region.counts[i]) this.display.updateChunkVisibility(region.rx * 4 + (i & 3),region.rz * 4 + (i >> 2));
     }
@@ -456,6 +500,7 @@ export class FarTerrain {
 
   step(now, stream) {
     if (!this.active || this.cx === undefined) return;
+    this.updateVistaCoverage();
     const uploads = this.display.uploads.filter(job => job.far).length;
     if (stream && uploads < MAX_PENDING_UPLOADS && this.decoded.length) this.add(this.decoded.shift());
     const busy = [...this.pending.values(),...this.decoded].map(({key}) => key);

@@ -71,6 +71,34 @@ function command(type, requestId, fields = {}) {
   return { type, requestId, x: 8, y: 1, z: 10, expectedRevision: 0, ...fields };
 }
 
+test('alpha requires the administrator key for weather, time, and player modes',async t=>{
+  const directory=makeWorkspace();
+  const base=writeFixture(directory);
+  const key='private-test-alpha-administrator';
+  const app=await start(base,':memory:',{initialMode:'game',npcAdminKey:key});
+  t.after(async()=>{await app.close();rmSync(directory,{recursive:true,force:true});});
+  const user=await request(app,'/api/session',{payload:{}});
+  const cookie=user.cookie;
+  assert.equal(user.data.gameMode.mode,'game');
+  assert.equal(user.data.gameMode.health,10);
+  assert.equal((await request(app,'/api/modes',{cookie})).status,403);
+  assert.equal((await request(app,'/api/weather',{cookie,payload:{mode:'rain'}})).status,403);
+  assert.equal((await request(app,'/api/time',{cookie,payload:{time:'11:30'}})).status,403);
+  const stream=await fetch(app.url+'/api/events?presence=1&social=1',{headers:{Cookie:cookie}});
+  const reader=stream.body.getReader();
+  t.after(()=>reader.cancel().catch(()=>{}));
+  assert.equal((await request(app,'/api/presence',{cookie,payload:{yaw:0,pitch:0,motion:'idle'}})).status,200);
+  assert.equal((await request(app,'/api/npcs/admin',{cookie,payload:{key}})).status,200);
+  assert.equal((await request(app,'/api/weather',{cookie,payload:{mode:'rain'}})).status,200);
+  const modes=(await request(app,'/api/modes',{cookie})).data;
+  assert.equal(modes.players.length,1);
+  assert.equal((await request(app,'/api/modes',{cookie,payload:{target:modes.players[0].id,mode:'creative'}})).status,200);
+  const switched=(await request(app,'/api/session',{cookie,payload:{}})).data;
+  assert.equal(switched.gameMode.mode,'creative');
+  assert.equal(switched.gameMode.admin,true);
+  assert.equal((await request(app,'/api/modes',{cookie,payload:{target:modes.players[0].id,mode:null}})).status,200);
+});
+
 test('the full city advertises and serves versioned prebuilt terrain without changing detailed chunks', async t => {
   const directory = makeWorkspace();
   t.after(() => rmSync(directory, {recursive:true, force:true}));
@@ -87,7 +115,7 @@ test('the full city advertises and serves versioned prebuilt terrain without cha
   t.after(() => app.close());
   const address = `${app.url}/generated/lod/${assetHash}/-1.0.bin`;
   const world = await request(app,'/generated/world/world.json');
-  assert.deepEqual(world.data.lod, {version:1, contentHash:assetHash, maxDistance:24, tileChunks:4});
+  assert.deepEqual(world.data.lod, {version:1, contentHash:assetHash, maxDistance:24, tileChunks:4, regions:[[-1,0]]});
   const plain = await fetch(address,{headers:{'Accept-Encoding':'identity'}});
   assert.equal(plain.status, 200);
   assert.equal(plain.headers.get('content-encoding'), null);

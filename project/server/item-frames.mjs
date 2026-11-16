@@ -77,8 +77,14 @@ export function createItemFrames({base,store,physical,getCurrent,faceSupports,pr
   }
 
   function removeSupported(x,y,z) {
+    return removeSupportedMany([{x,y,z}]);
+  }
+
+  function removeSupportedMany(cells) {
+    if (!cells.length) return;
+    const supports=new Set(cells.map(({x,y,z})=>`${x},${y},${z}`));
     const entries = snapshot();
-    const remaining = entries.filter(frame => !frame.placed || !samePoint(itemFrameMount(frame)?.support,[x,y,z]));
+    const remaining = entries.filter(frame => !frame.placed || !supports.has(itemFrameMount(frame)?.support.join(',')));
     if (remaining.length === entries.length) return undefined;
     store.putState(module,world,state,1,remaining);
     return remaining;
@@ -89,5 +95,5 @@ export function createItemFrames({base,store,physical,getCurrent,faceSupports,pr
       samePoint(frame.position.map(Math.floor),[x,y,z]));
   }
 
-  return {snapshot,place,edit,removeSupported,hasMountAt};
+  return {snapshot,place,edit,removeSupported,removeSupportedMany,hasMountAt};
 }

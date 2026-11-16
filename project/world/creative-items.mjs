@@ -6,6 +6,21 @@ export const CREATIVE_BOAT_KEY = 'creative:333:0';
 export const CREATIVE_FRAME_KEY = 'creative:389:0';
 export const CREATIVE_INVISIBLE_FRAME_KEY = 'creative:389:1';
 
+// RedPower's legacy item damage stores its material in the low byte and
+// selects a cover, corner, strip or post using the high byte.
+const coverDamage = [[0,0,0],[16,0,1],[17,0,2],[18,14,0],[19,14,1],[20,14,2],
+  [21,6,0],[22,6,1],[23,6,2],...Array.from({length:11},(_,i)=>[24+i,0,3+i]),
+  ...Array.from({length:4},(_,i)=>[35+i,14,3+i]),...Array.from({length:4},(_,i)=>[39+i,6,3+i]),
+  [43,26,0],[44,26,1],[45,26,2]];
+const coverDamageParts = new Map(coverDamage.map(([kind,slot,shape])=>[kind,{slot,shape}]));
+
+export function microblockPartFromDamage(damage) {
+  if (!Number.isInteger(damage) || damage < 0 || damage > 0xffff) return null;
+  const variant = coverDamageParts.get(damage >> 8);
+  const part = variant && {...variant,material:damage&255};
+  return isMicroPart(part) ? part : null;
+}
+
 // CoverLib.damageToCoverData stores the kind in the upper byte, then
 // thickness/flags, internal shape and material. Type 0 also covers hollow panels.
 export function creativeMicroblock(entry) {

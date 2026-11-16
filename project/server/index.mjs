@@ -3,25 +3,37 @@ import { createServer } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
 import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { createChat } from './chat.mjs';
-import { loadLodAssets, loadVistaAssets, serveLodTile, serveVistaTile } from './lod-assets.mjs';
+import {loadLodAssets,loadVistaAssets,serveClimateMap,serveLodTile,serveVistaTile} from './lod-assets.mjs';
 import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
 import { MAX_PROFILE_BODY, profileChanges, publicProfile, savedSkinSize } from './presence-profile.mjs';
 import { openStore } from './store.mjs';
 import { createWorldTime } from './world-time.mjs';
+import { createWarps } from './warps.mjs';
+import { createNpcs } from './npcs.mjs';
+import { createWorldEdit } from './world-edit.mjs';
+import { createSurvival } from './survival.mjs';
+import {accessCookie,createAccess,legacyClearCookie,legacyCookieName,readAccessCookie} from './access.mjs';
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
 
 const PROJECT = fileURLToPath(new URL('..', import.meta.url));
-const COOKIE = 'honeymoon_guest';
 const MAX_BODY = 4096;
+const MAX_ACTION_BODY = 16384;
+const MAX_NPC_EDITOR_BODY = 4 * 1024 * 1024;
 const MAX_STREAMS = 64;
-const MAX_WORLD_RESPONSES = 80;
-const MAX_WORLD_CACHE_BYTES = 32 * 1024 * 1024;
+const parallelDeviceRoutes=new Set(['/api/profile','/api/time','/api/weather','/api/modes','/api/npcs/editor']);
+const MAX_STREAM_BACKLOG = 256 * 1024;
+const MAX_BULK_COMMIT = 3 * 1024 * 1024;
+const MAX_WORLD_RESPONSES = 224;
+const MAX_WORLD_CACHE_BYTES = 48 * 1024 * 1024;
+const gzipWorld = promisify(gzip);
+const privateNpcFiles = new Set(['original.json']);
 const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -54,37 +66,72 @@ function acceptsGzip(header = '') {
 
 function serveWorldJson() {
   const entries = new Map();
+  const pending = new Map();
   let bytes = 0;
-  return (request, response, key, load) => {
-    const cached = entries.get(key);
-    let entry = cached;
-    if (!entry) {
-      const data = load();
-      if (!data) throw new RequestError(404, 'chunk_missing');
-      const identity = Buffer.isBuffer(data) ? data : Buffer.from(JSON.stringify(data));
-      const gzip = gzipSync(identity, { level: 4 });
-      entry = { identity, gzip, size: identity.length + gzip.length };
-      if (entry.size <= MAX_WORLD_CACHE_BYTES) {
-        while (entries.size >= MAX_WORLD_RESPONSES || bytes + entry.size > MAX_WORLD_CACHE_BYTES) {
-          const [oldKey, oldest] = entries.entries().next().value;
-          entries.delete(oldKey);
-          bytes -= oldest.size;
-        }
-        entries.set(key, entry);
-        bytes += entry.size;
+
+  async function loadEntry(key, load) {
+    const data = load();
+    if (!data) throw new RequestError(404, 'chunk_missing');
+    const identity = Buffer.isBuffer(data) ? data : Buffer.from(JSON.stringify(data));
+    const compressed = await gzipWorld(identity, {level:1});
+    const entry = {identity, compressed, size:identity.length+compressed.length};
+    if (entry.size <= MAX_WORLD_CACHE_BYTES) {
+      while (entries.size >= MAX_WORLD_RESPONSES || bytes + entry.size > MAX_WORLD_CACHE_BYTES) {
+        const [oldKey, oldest] = entries.entries().next().value;
+        entries.delete(oldKey);
+        bytes -= oldest.size;
       }
-    } else {
+      entries.set(key,entry);
+      bytes += entry.size;
+    }
+    return entry;
+  }
+
+  return async (request, response, key, load) => {
+    let entry = entries.get(key);
+    if (entry) {
       entries.delete(key);
       entries.set(key, entry);
+    } else {
+      if (!pending.has(key)) pending.set(key,loadEntry(key,load).finally(()=>pending.delete(key)));
+      entry = await pending.get(key);
     }
+    if (response.destroyed) return;
     const compressed = acceptsGzip(request.headers['accept-encoding']);
-    const body = compressed ? entry.gzip : entry.identity;
+    const body = compressed ? entry.compressed : entry.identity;
+    const authenticated=response.getHeader('Vary')==='Cookie';
     response.writeHead(200, {
-      'Content-Type': MIME['.json'], 'Content-Length': body.length, Vary: 'Accept-Encoding',
-      'Cache-Control': 'no-cache', ...(compressed && { 'Content-Encoding': 'gzip' }),
+      'Content-Type': MIME['.json'], 'Content-Length': body.length, Vary:authenticated?'Cookie, Accept-Encoding':'Accept-Encoding',
+      'Cache-Control':authenticated?'private, no-cache':'no-cache', ...(compressed && { 'Content-Encoding': 'gzip' }),
     });
     response.end(request.method === 'HEAD' ? undefined : body);
   };
+}
+
+async function serveNpcRecording(request,response,path) {
+  const file=statSync(path,{throwIfNoEntry:false});
+  if (!file?.isFile()) throw new RequestError(404,'not_found');
+  const requested=request.headers.range;
+  const headers={'Content-Type':MIME['.ogg'],'Accept-Ranges':'bytes',
+    'Cache-Control':response.getHeader('Vary')==='Cookie'?'private, max-age=3600':'public, max-age=3600'};
+  let start=0,end=file.size-1;
+  if (requested) {
+    const range=/^bytes=(\d*)-(\d*)$/.exec(requested);
+    if (range?.[1]) {
+      start=Number(range[1]);
+      if (range[2]) end=Math.min(end,Number(range[2]));
+    } else if (range?.[2]) start=Math.max(0,file.size-Number(range[2]));
+    else start=file.size;
+    if (start>end || start>=file.size || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
+      response.writeHead(416,{...headers,'Content-Range':`bytes */${file.size}`});
+      response.end();
+      return;
+    }
+    headers['Content-Range']=`bytes ${start}-${end}/${file.size}`;
+  }
+  response.writeHead(requested?206:200,{...headers,'Content-Length':end-start+1});
+  if (request.method==='HEAD') response.end();
+  else await pipeline(createReadStream(path,{start,end}),response);
 }
 
 async function readBody(request, limit = MAX_BODY) {
@@ -108,8 +155,14 @@ async function readBody(request, limit = MAX_BODY) {
   }
 }
 
-function tokenFrom(request) {
-  return request.headers.cookie?.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([A-Za-z0-9_-]+)(?:;|$)`))?.[1];
+function isLoopback(address) {
+  return address==='127.0.0.1' || address==='::1' || address==='::ffff:127.0.0.1';
+}
+
+function ownerRequest(request,address) {
+  if (!address || !isLoopback(address.address) || !isLoopback(request.socket.remoteAddress)) return false;
+  const host=/^(?:127\.0\.0\.1|localhost|\[::1\])(?::(\d+))?$/i.exec(request.headers.host??'');
+  return Boolean(host && Number(host[1]??80)===address.port);
 }
 
 function requireSameOrigin(request, secure, allowedOrigin) {
@@ -157,9 +210,14 @@ export function createHoneymoonServer({
   base = loadBase(join(generated, 'world')),
   secure = false,
   allowedOrigin,
+  publicOrigin = allowedOrigin,
+  inviteRequired = secure,
+  ownerOnPrimary = !inviteRequired && !secure,
+  npcAdminKey,
   clock,
   afterCommit,
   allowRemoval = true,
+  initialMode,
 } = {}) {
   const models = {};
   const lod = base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
@@ -180,6 +238,7 @@ export function createHoneymoonServer({
   const creative = readCreativeCatalog(generated, project, models.biblio?.flatItems);
   if (state !== ':memory:') mkdirSync(dirname(state), { recursive: true });
   const store = openStore(state);
+  const survival = createSurvival(store,initialMode,clock ? {now:clock} : undefined);
   const playerSizes = new Map();
   function rememberSize(player,size) {
     if (!playerSizes.has(player) && playerSizes.size >= 512) playerSizes.delete(playerSizes.keys().next().value);
@@ -197,15 +256,25 @@ export function createHoneymoonServer({
   let game;
   try {
     game = createGame(base, store, withExtractedModels(geometry, models),
-      {clock, allowRemoval, models, creativeBlocks:creative?.placeable, creativeItems:creative?.items, playerSize});
+      {clock, allowRemoval, models, creativeBlocks:creative?.placeable, creativeItems:creative?.items, playerSize,
+        survival,survivalChanged});
   } catch (error) {
     store.close();
     throw error;
   }
   const streams = new Set();
+  const access=createAccess(store,{inviteRequired,ownerKey:npcAdminKey,publicOrigin,now:clock,
+    revokeStream:device=>{
+      for (const stream of streams) if (stream.deviceId===device) {
+        writeEvent(stream.response,'access-revoked',{});
+        stream.response.end();
+      }
+    }});
+  const bulkWrites=new WeakMap();
   const worldTime = createWorldTime(store);
+  const warps = createWarps(store);
   const chat = createChat({
-    store,
+    store,now:clock,logDirectory:state===':memory:'?undefined:join(dirname(state),'chat-logs'),
     publish: (entry, audience) => sendSocial('chat', entry, player => !audience || audience.includes(player)),
     recipients(origin) {
       return [...streams].filter(({player, social}) => {
@@ -215,31 +284,114 @@ export function createHoneymoonServer({
     },
   });
   const presence = createPresence({store, profileFor, send:writeEvent, onVisibility(profile, online, player) {
-    if (!online) game.leaveSeat(player);
+    if (!online) {
+      game.leaveSeat(player);
+      npcs.leave(player);
+    }
     try { chat.playerStatus(profile, online); }
     catch (error) { console.error(error); }
   } });
+  const npcs=createNpcs({generated,store,creativeBlocks:creative?.placeable,creativeItems:creative?.items,
+    editorAuth:access.npcEditor,base,game,worldTime,profile:profileFor,now:clock,teleportPlayer,
+    damagePlayer:(player,amount,npc)=>game.damageFromNpc?.(player,amount,npc),
+    healPlayer:player=>game.healFromNpc?.(player)});
+  const worldEdit=createWorldEdit({game:game.worldEdit,isAdmin:npcs.isAdmin,isCreative:player=>!survival.isGame(player)});
   const serveWorld = serveWorldJson();
-  const session = player => {
+  const activeElsewhere=credential=>inviteRequired && Boolean(credential?.deviceId) &&
+    [...streams].some(stream=>stream.player===credential.uid && stream.presence &&
+      stream.deviceId!==credential.deviceId && !stream.response.destroyed && !stream.response.writableEnded);
+  function accessView(credential,owner) {
+    return {...access.view(credential,owner),...(activeElsewhere(credential)&&{activeElsewhere:true})};
+  }
+  const session = (credential, owner) => {
+    const player=credential.uid;
     const time = worldTime.snapshot();
     return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,
       weather:worldTime.weather(),creative:Boolean(creative),
-      profile:profileFor(player) };
+      ...(survival.enabled&&{gameMode:playerMode(player)}),profile:profileFor(player),access:accessView(credential,owner) };
   };
+
+  function playerMode(player) {
+    return {...survival.status(player),admin:npcs.isAdmin(player)};
+  }
+
+  function survivalChanged(player,state) {
+    sendSocial('game-mode',{...state,admin:npcs.isAdmin(player)},id=>id===player);
+    const position=presence.onlinePosition(player);
+    if (position) presence.update(player,game.session(player).position,{death:survival.avatarDeath(player)});
+    if (state.death) chat.playerDeath(profileFor(player));
+  }
+
+  function modeAdministration() {
+    if (inviteRequired) return {mode:survival.defaultMode(),players:access.profiles().map(({uid,nickname,profileName})=>({
+      id:uid,uid,nickname:nickname??profileName,profileName,online:Boolean(presence.onlineProfile(uid)),
+      mode:survival.mode(uid),override:survival.override(uid),
+    }))};
+    const players=[...new Set([...streams].map(stream=>stream.player))].flatMap(player=>{
+      const profile=presence.onlineProfile(player);
+      return profile ? [{id:profile.id,nickname:profile.nickname,mode:survival.mode(player),override:survival.override(player)}] : [];
+    });
+    return {mode:survival.defaultMode(),players};
+  }
 
   function writeEvent(response, name, event, revision) {
     const id = revision === undefined ? '' : `id: ${revision}\n`;
-    if (!response.write(`${id}event: ${name}\ndata: ${JSON.stringify(event)}\n\n`) && response.writableLength > 256 * 1024) {
-      response.destroy();
+    const packet=`${id}event: ${name}\ndata: ${JSON.stringify(event)}\n\n`;
+    const bytes=name==='commit'?Buffer.byteLength(packet):0;
+    if (bytes>MAX_STREAM_BACKLOG) {
+      // Keep one bounded region commit intact so reconnect never sees half of a revision.
+      if (bytes>MAX_BULK_COMMIT || bulkWrites.has(response) || response.writableLength>MAX_STREAM_BACKLOG) {
+        return writeEvent(response,'reset',{worldRevision:revision,contentHash:game.contentHash},revision);
+      }
+      if (response.destroyed || response.write(packet)) return;
+      bulkWrites.set(response,bytes);
+      response.once('drain',()=>bulkWrites.delete(response));
+      if (response.writableLength>MAX_STREAM_BACKLOG+bytes) response.destroy();
+      return;
     }
+    writeStream(response,packet);
+  }
+
+  function writeStream(response,packet) {
+    if (!response.destroyed && !response.write(packet) &&
+        response.writableLength>MAX_STREAM_BACKLOG+(bulkWrites.get(response)??0)) response.destroy();
   }
 
   function sendSocial(name, data, receives = () => true) {
     for (const stream of streams) if (stream.social && receives(stream.player)) writeEvent(stream.response, name, data);
   }
 
+  function teleportPlayer(player,target) {
+    const result=game.teleport(player,target);
+    presence.update(player,result.position,game.poseFor(player,{yaw:0,pitch:0,motion:'idle'}));
+    if (result.changes.length || result.effects.length) broadcast(player,result);
+    return result;
+  }
+
+  function sendNpcs(stream) {
+    if (!stream.npcs || stream.response.writableLength>64*1024) return;
+    const snapshot=npcs.snapshot(stream.player);
+    const updates=[];
+    const next=new Map();
+    let rosterChanged=!stream.npcRows || snapshot.npcs.length!==stream.npcRows.size ||
+      snapshot.editor!==stream.npcAdmin;
+    for (const npc of snapshot.npcs) {
+      const {id,position,yaw,pitch,animation,moving,health,line,revision}=npc;
+      const motion={id,position,yaw,pitch,animation,moving,health,line:line??null};
+      const entry={base:revision,motion:JSON.stringify(motion)};
+      const previous=stream.npcRows?.get(id);
+      if (previous?.base!==entry.base) rosterChanged=true;
+      else if (previous.motion!==entry.motion) updates.push(motion);
+      next.set(id,entry);
+    }
+    stream.npcRows=next;
+    stream.npcAdmin=snapshot.editor;
+    if (rosterChanged) writeEvent(stream.response,'npcs',snapshot);
+    else if (updates.length) writeEvent(stream.response,'npc-motion',{updates});
+  }
+
   function broadcast(player, output) {
-    const {inventory: _, ...publicOutput} = output;
+    const {inventory: _,container:_container,...publicOutput} = output;
     for (const stream of streams) {
       const effects = player === stream.player ? [] : output.effects.filter(effect => effect.sound)
         .map(({message: _, ...effect}) => effect);
@@ -271,37 +423,125 @@ export function createHoneymoonServer({
     for (const stream of streams) sendDroppedItems(stream,force);
   }
 
-  async function dispatch(request, response) {
+  async function dispatch(request, response, owner, requestSecure, requestOrigin) {
     const url = new URL(request.url, 'http://localhost');
     const path = url.pathname;
     const method = request.method;
+    const isApi=path.startsWith('/api/');
+    const gameAsset=path.startsWith('/generated/') || path.startsWith('/skins/');
+    const credential=isApi||inviteRequired&&gameAsset ? access.authenticate(readAccessCookie(request)) : undefined;
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
-    if (path.startsWith('/api/')) {
-      if (method === 'POST' || method === 'DELETE') requireSameOrigin(request, secure, allowedOrigin);
-      const player = store.playerFromToken(tokenFrom(request));
+    if (isApi) {
+      if (method === 'POST' || method === 'DELETE') requireSameOrigin(request,requestSecure,requestOrigin);
+      const player=credential?.uid;
+      if (path==='/api/access' && method==='GET') return json(response,200,accessView(credential,owner));
       if (path === '/api/session' && method === 'POST') {
-        await readBody(request);
-        if (player) return json(response, 200, session(player));
-        const newPlayer = store.createPlayer();
-        const cookie = `${COOKIE}=${newPlayer.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${secure ? '; Secure' : ''}`;
-        return json(response, 200, session(newPlayer.id), { 'Set-Cookie': cookie });
+        const input=await readBody(request);
+        const {credential:joined,token}=access.signIn(input,{credential,ownerBootstrap:accessView(undefined,owner).ownerBootstrap,
+          legacy:!inviteRequired?readAccessCookie(request,legacyCookieName):undefined});
+        return json(response,200,session(joined,owner),token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
+      }
+      if ((path==='/api/access/owner' || path==='/api/npcs/admin') && method==='POST') {
+        if (!owner) throw new RequestError(403,'owner_only');
+        const legacyRoute=path==='/api/npcs/admin';
+        const {credential:joined,token}=access.bootstrap(await readBody(request),{credential,legacyRoute,
+          legacy:readAccessCookie(request,legacyCookieName),source:request.socket.remoteAddress});
+        if (survival.enabled) sendSocial('game-mode',playerMode(joined.uid),id=>id===joined.uid);
+        const body=session(joined,owner);
+        return json(response,200,legacyRoute?{...body,editor:true}:body,token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
       }
       if (!player) throw new RequestError(401, 'session_required');
+      if (path==='/api/access/logout' && method==='POST') {
+        await readBody(request);
+        const result=access.revokeDevice(credential);
+        return json(response,200,result,{'Set-Cookie':[accessCookie('',requestSecure,0),legacyClearCookie(requestSecure)]});
+      }
+      if (path==='/api/admin/access' && method==='GET')
+        return json(response,200,access.listAdmin(credential,presence.onlineProfile));
+      if (path==='/api/admin/invites' && method==='POST')
+        return json(response,200,access.issue(player,await readBody(request)));
+      if (path==='/api/admin/invites/revoke' && method==='POST') {
+        const {id}=await readBody(request);
+        return json(response,200,access.revokeInvite(player,id));
+      }
+      if (path==='/api/admin/devices/revoke' && method==='POST') {
+        const {id}=await readBody(request);
+        const result=access.revokeDevice(credential,id,false);
+        return json(response,200,result,id===credential.deviceId?{'Set-Cookie':[accessCookie('',requestSecure,0),legacyClearCookie(requestSecure)]}:{});
+      }
+      const presenceStream=path==='/api/events' && url.searchParams.get('presence')==='1';
+      if ((presenceStream || (method==='POST'||method==='DELETE')&&!parallelDeviceRoutes.has(path)) && activeElsewhere(credential)) {
+        throw new RequestError(409,'profile_active_elsewhere');
+      }
+      if (path==='/api/worldedit' && method==='GET') return json(response,200,worldEdit.read(player));
+      if (path==='/api/worldedit' && method==='POST') {
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        const result=worldEdit.action(player,await readBody(request));
+        if (result.changes?.length) {
+          const {worldRevision,changes,effects,frames}=result;
+          broadcast(player,{worldRevision,changes,effects,frames});
+        }
+        return json(response,200,result);
+      }
+      if (path==='/api/npcs' && method==='GET') return json(response,200,npcs.snapshot(player));
+      if (path==='/api/npcs/editor' && method==='GET') return json(response,200,npcs.editor(player));
+      if (path==='/api/npcs/editor' && method==='POST') {
+        if (!npcs.isAdmin(player)) throw new RequestError(403,'npc_editor_required');
+        const next=npcs.edit(player,await readBody(request,MAX_NPC_EDITOR_BODY));
+        for (const stream of streams) sendNpcs(stream);
+        return json(response,200,next);
+      }
+      if (path==='/api/npcs/action' && method==='POST') {
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        if (survival.dead(player)) throw new RequestError(409,'player_dead');
+        return json(response,200,npcs.action(player,await readBody(request)));
+      }
+      if (path==='/api/modes' && survival.enabled) {
+        if (!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
+        if (method==='POST') {
+          const {mode,target}=await readBody(request);
+          const member=target===undefined ? undefined : access.account(target)?.uid??[...streams].map(stream=>stream.player)
+            .find(id=>presence.onlineProfile(id)?.id===target);
+          if (target!==undefined&&!member) throw new RequestError(404,'player_missing');
+          survival.setMode(member,mode);
+          for (const id of member?[member]:new Set([...streams].map(stream=>stream.player))) {
+            if (!survival.isGame(id)&&survival.status(id).death) survival.reset(id);
+            sendSocial('game-mode',playerMode(id),recipient=>recipient===id);
+            const position=presence.onlinePosition(id);
+            if (position) presence.update(id,position,{death:survival.avatarDeath(id)});
+          }
+        }
+        return json(response,200,modeAdministration());
+      }
+      if (path==='/api/combat' && method==='POST' && survival.enabled) {
+        const {target}=await readBody(request);
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        const defender=[...streams].map(stream=>stream.player).find(id=>presence.onlineProfile(id)?.id===target);
+        if (!defender) throw new RequestError(404,'player_missing');
+        return json(response,200,{hit:Boolean(game.hitPlayer(player,defender))});
+      }
+      if (path==='/api/craft' && method==='POST' && survival.enabled) {
+        const {recipe}=await readBody(request);
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        return json(response,200,{inventory:game.craft(player,recipe)});
+      }
       if (path === '/api/chat' && method === 'POST') {
         const body = await readBody(request);
         return json(response, 200, chat.message(presence.onlineProfile(player), body, player, presence.onlinePosition(player)));
       }
       if (path === '/api/time' && method === 'POST') {
+        if ((inviteRequired||survival.enabled)&&!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
         const body = await readBody(request);
-        if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
+        if (!inviteRequired&&!survival.enabled&&!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const time = worldTime.set(body);
         sendSocial('world-time', time);
         return json(response, 200, time);
       }
       if (path === '/api/weather' && method === 'POST') {
+        if ((inviteRequired||survival.enabled)&&!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
         const {mode} = await readBody(request);
-        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        if (!inviteRequired&&!survival.enabled&&!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
         const value = {mode:worldTime.setWeather(mode)};
         sendSocial('weather',value);
         return json(response,200,value);
@@ -323,7 +563,7 @@ export function createHoneymoonServer({
         const profile = profileFor(player, different ? store.getProfile(player) : saved);
         if (different) presence.profile(player, profile);
         if (relocation) presence.update(player,relocation.position,game.poseFor(player,{motion:'idle'}));
-        if (renamed) sendSocial('chat', renamed);
+        if (renamed) chat.publishRecorded(renamed);
         return json(response, 200, {...profile,...relocation});
       }
       if (path === '/api/presence') {
@@ -335,7 +575,8 @@ export function createHoneymoonServer({
               body.boatDrive.some(value => ![-1,0,1].includes(value)))) throw new RequestError(400,'invalid_pose');
           game.driveMinecart(player,pose,body.cartDrive,body.boatDrive);
           const {position, seat, stance} = game.session(player);
-          presence.join(player, position, game.poseFor(player, pose));
+          presence.join(player, position, {...game.poseFor(player,pose),
+            ...(survival.enabled&&{death:survival.avatarDeath(player)})});
           return json(response, 200, {ok:true, position, seat, stance});
         }
         if (method === 'DELETE') {
@@ -344,6 +585,7 @@ export function createHoneymoonServer({
         }
       }
       if (path === '/api/seat' && method === 'POST') {
+        if (survival.dead(player)) throw new RequestError(409,'player_dead');
         const body = await readBody(request);
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         if (body.ground !== undefined && (typeof body.ground !== 'boolean' || body.target !== undefined)) {
@@ -367,9 +609,12 @@ export function createHoneymoonServer({
       }
       if (path === '/api/respawn' && method === 'POST') {
         await readBody(request);
-        const result = game.respawn(player);
+        const death=survival.avatarDeath(player);
+        const result=death?game.revive(player,death):game.respawn(player);
+        if (death) survival.reset(player);
         presence.update(player, result.position, game.poseFor(player, {yaw:0, pitch:0, motion:'idle'}));
-        return json(response, 200, result);
+        if (death) survivalChanged(player,survival.status(player));
+        return json(response, 200, {...result,...(survival.enabled&&{gameMode:playerMode(player)})});
       }
       if (path === '/api/spectator' && method === 'POST') {
         const body = await readBody(request);
@@ -379,16 +624,22 @@ export function createHoneymoonServer({
         presence.update(player, result.position, {...pose, stance:result.stance, spectator:result.spectator});
         return json(response, 200, result);
       }
+      if (path === '/api/warps' && method === 'GET') return json(response,200,warps.list());
+      if ((path === '/api/warps' || path === '/api/warps/remove') && method === 'POST') {
+        const body = await readBody(request);
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        const next = path === '/api/warps' ? warps.add(body.title,game.session(player).position) : warps.remove(body.id);
+        sendSocial('warps',next);
+        return json(response,200,next);
+      }
       if (path === '/api/teleport' && method === 'POST') {
         const body = await readBody(request);
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
-        const result = game.teleport(player, body);
-        presence.update(player, result.position, game.poseFor(player, {yaw:0, pitch:0, motion:'idle'}));
-        if (result.changes.length || result.effects.length) broadcast(player, result);
-        return json(response, 200, result);
+        const target = body.warpId === undefined ? body : warps.get(body.warpId).position;
+        return json(response,200,teleportPlayer(player,target));
       }
       if (path === '/api/action' && method === 'POST') {
-        const result = game.action(player, await readBody(request));
+        const result = game.action(player, await readBody(request,MAX_ACTION_BODY));
         if (!result.replay && result.status === 200) {
           afterCommit?.(request, response, result.output);
           broadcast(player, result.output);
@@ -404,15 +655,16 @@ export function createHoneymoonServer({
       }
       if (path === '/api/events' && method === 'GET') {
         if (streams.size >= MAX_STREAMS) throw new RequestError(503, 'stream_limit');
-        const presenceEntry = url.searchParams.get('presence') === '1' && presence.prepare(player);
+        const presenceEntry = presenceStream && presence.prepare(player);
         response.writeHead(200, {
           'Content-Type': 'text/event-stream; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
           'X-Accel-Buffering': 'no',
         });
-        const stream = { player, response, social: url.searchParams.get('social') === '1',
+        const stream = { player, response, deviceId:credential.deviceId,presence:Boolean(presenceEntry),social: url.searchParams.get('social') === '1',
           minecarts: url.searchParams.get('minecarts') === '1',
-          droppedItems: url.searchParams.get('droppedItems') === '1' };
+          droppedItems: url.searchParams.get('droppedItems') === '1',
+          npcs: url.searchParams.get('npcs') === '1' };
         streams.add(stream);
         game.touch(player);
         response.on('close', () => {
@@ -428,15 +680,40 @@ export function createHoneymoonServer({
           writeEvent(response, 'chat-history', {entries:chat.history(player)});
           writeEvent(response, 'world-time', worldTime.snapshot());
           writeEvent(response, 'weather', {mode:worldTime.weather()});
+          if (survival.enabled) writeEvent(response,'game-mode',playerMode(player));
         }
         if (stream.minecarts) writeEvent(response,'minecarts',game.minecartSnapshot(player));
         sendDroppedItems(stream,true);
+        sendNpcs(stream);
         return;
       }
       throw new RequestError(404, 'not_found');
     }
 
     if (method !== 'GET' && method !== 'HEAD') throw new RequestError(405, 'method_not_allowed');
+    if (inviteRequired&&gameAsset) {
+      response.setHeader('Vary','Cookie');
+      if (!credential) throw new RequestError(401,'session_required');
+    }
+    if (path.startsWith('/generated/npcs/sound/')) {
+      let name;
+      try { name=decodeURIComponent(path.slice('/generated/npcs/sound/'.length)); }
+      catch { throw new RequestError(404,'not_found'); }
+      if (!npcs.sounds.has(name)) throw new RequestError(404,'not_found');
+      return serveNpcRecording(request,response,join(generated,'npcs','sound',name));
+    }
+    const npcModel=path.match(/^\/generated\/npcs\/([a-zA-Z0-9]+\.json)$/)?.[1];
+    if (npcModel && !privateNpcFiles.has(npcModel.toLowerCase()) &&
+        await serveFile(request,response,join(generated,'npcs',npcModel))) return;
+    if (path.startsWith('/generated/npcs/skins/')) {
+      let segments;
+      try { segments=path.slice('/generated/npcs/skins/'.length).split('/').map(decodeURIComponent); }
+      catch { throw new RequestError(404,'not_found'); }
+      if (segments.length<=8 && segments.every(segment=>segment.length<=150 &&
+          /^(?!\.{1,2}$)[\p{L}\p{N} ._()-]+$/u.test(segment) && !segment.endsWith('.') && !segment.endsWith(' ')) &&
+          /\.png$/i.test(segments.at(-1)) && await serveFile(request,response,join(generated,'npcs','skins',...segments))) return;
+      throw new RequestError(404,'not_found');
+    }
     if (creative && path === '/generated/creative/catalog.json') {
       return serveWorld(request, response, path, () => creative.catalog);
     }
@@ -445,12 +722,15 @@ export function createHoneymoonServer({
       const png = store.getSkin(skin[1]);
       if (!png) throw new RequestError(404, 'not_found');
       response.writeHead(200, { 'Content-Type': MIME['.png'], 'Content-Length': png.length,
-        'Cache-Control': 'public, max-age=31536000, immutable' });
+        'Cache-Control':`${inviteRequired?'private':'public'}, max-age=31536000, immutable` });
       response.end(method === 'HEAD' ? undefined : png);
       return;
     }
     if (path === '/generated/world/world.json') {
       return serveWorld(request, response, path, () => manifest);
+    }
+    if (path === '/generated/weather/biomes.bin') {
+      if (await serveClimateMap(generated,request,response,acceptsGzip(request.headers['accept-encoding']))) return;
     }
     if (path.startsWith('/generated/lod/')) {
       if (await serveLodTile(lod, request, response, path, acceptsGzip(request.headers['accept-encoding']))) return;
@@ -475,24 +755,44 @@ export function createHoneymoonServer({
     if (!filename || !await serveFile(request, response, filename)) throw new RequestError(404, 'not_found');
   }
 
-  const server = createServer({ requestTimeout: 15000 }, (request, response) => {
-    dispatch(request, response).catch(error => {
-      if (response.destroyed) return;
-      if (response.headersSent) return response.destroy();
-      if (error instanceof RequestError) return json(response, error.status, { error: error.code, ...error.details });
-      console.error(error);
-      return json(response, 500, { error: 'internal_error' });
+  function listener(privatePort) {
+    const http=createServer({requestTimeout:15000},(request,response)=>{
+      const owner=(privatePort || ownerOnPrimary&&!secure) && ownerRequest(request,http.address());
+      if (privatePort&&!owner) return json(response,403,{error:'owner_only'});
+      dispatch(request,response,owner,!privatePort&&secure,privatePort?undefined:allowedOrigin).catch(error=>{
+        if (response.destroyed) return;
+        if (response.headersSent) return response.destroy();
+        if (error instanceof RequestError) return json(response,error.status,{error:error.code,...error.details});
+        console.error(error);
+        return json(response,500,{error:'internal_error'});
+      });
     });
-  });
+    return http;
+  }
+  const server=listener(false);
+  const ownerServer=listener(true);
   const heartbeat = setInterval(() => {
     for (const { player, response } of streams) {
       game.touch(player);
-      if (!response.write(': heartbeat\n\n') && response.writableLength > 256 * 1024) response.destroy();
+      writeStream(response,': heartbeat\n\n');
     }
   }, 15000);
   heartbeat.unref();
   const presenceTicks = setInterval(() => presence.flush(), 100);
   presenceTicks.unref();
+  const npcTicks=setInterval(()=>{
+    try {
+      const online=new Map();
+      for (const {player} of streams) {
+        const position=presence.onlinePosition(player);
+        if (position && !online.has(player)) online.set(player,{id:player,position,spectator:game.npcPlayerView(player).spectator});
+      }
+      if (survival.enabled) survival.tick(online.keys(),survivalChanged);
+      npcs.tick([...online.values()]);
+      for (const stream of streams) sendNpcs(stream);
+    } catch(error) { console.error(error); }
+  },200);
+  npcTicks.unref();
   let itemRefresh = 0;
   const blockTicks = setInterval(() => {
     try {
@@ -513,21 +813,25 @@ export function createHoneymoonServer({
 
   return {
     server,
+    ownerServer,
     game,
+    npcs,
     async close() {
       clearInterval(heartbeat);
       clearInterval(presenceTicks);
+      clearInterval(npcTicks);
       clearInterval(blockTicks);
       for (const { response } of streams) response.end();
-      await new Promise((success, fail) => {
-        server.close(error => {
-          if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') fail(error);
+      await Promise.all([server,ownerServer].map(listener=>new Promise((success,fail)=>{
+        listener.close(error=>{
+          if (error&&error.code!=='ERR_SERVER_NOT_RUNNING') fail(error);
           else success();
         });
-        server.closeAllConnections();
-      });
+        listener.closeAllConnections();
+      })));
       game.flushMinecarts();
       game.clearDroppedItems();
+      await chat.close();
       store.close();
     },
   };
@@ -535,17 +839,25 @@ export function createHoneymoonServer({
 
 async function main() {
   const geometry = await import('../world/geometry.mjs');
+  const host = process.env.HOST ?? '127.0.0.1';
+  const secure=process.env.HONEYMOON_SECURE_COOKIE==='1';
+  const remote=secure||!isLoopback(host);
   const app = createHoneymoonServer({
     geometry,
     generated: process.env.HONEYMOON_GENERATED && resolve(process.env.HONEYMOON_GENERATED),
     state: process.env.HONEYMOON_STATE && resolve(process.env.HONEYMOON_STATE),
-    secure: process.env.HONEYMOON_SECURE_COOKIE === '1',
+    secure,
     allowedOrigin: process.env.HONEYMOON_ORIGIN,
+    publicOrigin:process.env.HONEYMOON_ORIGIN,
+    npcAdminKey:process.env.HONEYMOON_NPC_ADMIN_KEY,
+    inviteRequired:remote||process.env.HONEYMOON_INVITE_REQUIRED==='1',
+    ownerOnPrimary:!remote,
+    initialMode:'game',
   });
   if (app.game.conflicts.length) console.log(JSON.stringify({ rebaseConflicts: app.game.conflicts }, null, 2));
-  const host = process.env.HOST ?? '127.0.0.1';
   const port = Number(process.env.PORT ?? 4173);
   app.server.listen(port, host, () => console.log(`Honeymoon http://${host}:${app.server.address().port}`));
+  if (remote) app.ownerServer.listen(0,'127.0.0.1',()=>console.log(`Owner http://127.0.0.1:${app.ownerServer.address().port}/`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => { await app.close(); });
 }
 

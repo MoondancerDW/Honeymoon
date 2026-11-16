@@ -1,6 +1,8 @@
 import {signalSides} from './block-interactions.mjs';
 import {creativeIcon,shapeFor,tiles} from './geometry.mjs';
 import {intersectSelection} from './selection.mjs';
+import {blockItemAppearance} from './item-appearance.mjs';
+import {microblockPartFromDamage} from './creative-items.mjs';
 
 const LEGACY_SIDES = [3,4,2,5];
 const YAW = [0,0,Math.PI,0,-Math.PI/2,Math.PI/2];
@@ -65,6 +67,19 @@ function displayItem(item, turns) {
   const depth = 6 / 128;
   const spin = (turns & 3) * Math.PI / 2;
   const sine = Math.sin(spin), cosine = Math.cos(spin);
+  if (item.quads?.length) {
+    const points = item.quads.flatMap(surface=>surface.points);
+    const bounds = [0,1,2].map(axis=>{
+      const values = points.map(point=>point[axis]);
+      return [Math.min(...values),Math.max(...values)];
+    });
+    const scale = 5/16 / Math.max(...bounds.map(([lo,hi])=>hi-lo),.5);
+    const [cx,cy,z0] = bounds.map(([lo,hi],axis)=>axis === 2 ? lo : (lo+hi)*.5);
+    return item.quads.map(({points,uv,tint,shade})=>({uv:uv.flat(),tint,shade,
+      positions:points.flatMap(([x,y,z])=>[
+        ((x-cx)*cosine-(y-cy)*sine)*scale, ((x-cx)*sine+(y-cy)*cosine)*scale, depth+(z-z0)*scale,
+      ])}));
+  }
   if (item.faces) {
     const size = 5 / 32;
     const halfDepth = item.cover ? size / 8 : size;
@@ -102,18 +117,23 @@ export function itemFrameMount(entity) {
   return {center,normal,side,rotationY,rotationX,support:fromTile ? [TileX,TileY,TileZ] : null,Item,ItemRotation};
 }
 
-export function itemFrameModel(entity, items, atlasRows = 64) {
+export function itemFrameModel(entity, items, atlasRows = 64, models) {
   const mount = itemFrameMount(entity);
   if (!mount) return null;
   const {Item:stack,ItemRotation} = mount;
   const atlasItem = stack && items?.[stack.id + ':' + (stack.Damage ?? 0)];
-  const terrainItem = stack && !atlasItem && (stack.Block || stack.id < 256);
-  const item = terrainItem ? blockItem(stack,atlasRows) : atlasItem;
+  const part = stack?.id === 750 ? microblockPartFromDamage(stack.Damage ?? 0) : null;
+  const block = stack && (part || stack.Block || atlasItem?.block || stack.id < 256);
+  const model = block && models ? blockItemAppearance({part,key:stack.id === 768
+    ? `creative:768:${stack.Damage ?? 0}` : `legacy:${stack.id}:${(stack.Damage ?? 0)&15}`},models,atlasRows) : undefined;
+  const terrainItem = model ? model.family === 'terrain' : block && !atlasItem;
+  const item = model?.quads.length ? model : terrainItem ? blockItem(stack,atlasRows) : atlasItem;
   const scale = 64 / atlasRows;
   const surfaces = entity.data?.Invisible ? [] : scale === 1 ? frame : frame.map(quad => ({
     ...quad,uv:quad.uv.map((coordinate,index) => index & 1 ? coordinate * scale : coordinate),
   }));
-  return {...mount,frame:surfaces,item:displayItem(item,ItemRotation),terrainItem};
+  return {...mount,frame:surfaces,item:displayItem(item,ItemRotation),terrainItem,
+    itemFamily:model?.family ?? (terrainItem ? 'terrain' : 'biblio')};
 }
 
 export function itemFrameHit(entity, origin, direction, range = 6) {

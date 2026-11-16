@@ -83,6 +83,8 @@ function setPose(player, pose) {
   player.swing = pose.swing ?? 0;
   player.held = pose.held;
   player.equipment = pose.equipment;
+  player.emote = pose.emote;
+  player.death = pose.death;
   setNameplate(player);
 }
 
@@ -134,6 +136,21 @@ export class RemotePlayers {
     }
   }
 
+  pick(origin,direction,limit) {
+    let selected;
+    for (const [id,player] of this.entries) {
+      if (player.spectator||player.death) continue;
+      const {height,halfWidth}=playerBody(player.size,player.stance);
+      const dx=player.target.x-origin[0],dy=player.target.y+height*.56-origin[1],dz=player.target.z-origin[2];
+      const range=dx*direction[0]+dy*direction[1]+dz*direction[2];
+      if (range<=0||range>=Math.min(limit,selected?.length??Infinity)) continue;
+      const radial=((dx-range*direction[0])/Math.max(.35,halfWidth))**2+((dy-range*direction[1])/(height*.55))**2+
+        ((dz-range*direction[2])/Math.max(.35,halfWidth))**2;
+      if (radial<=1) selected={id,name:player.nickname,length:range};
+    }
+    return selected;
+  }
+
   frame(now, dt) {
     const mix = 1 - Math.exp(-dt * 18);
     for (const player of this.entries.values()) {
@@ -164,11 +181,12 @@ export class RemotePlayers {
           [(object.position.x-x)/dt,(object.position.z-z)/dt],0,now);
       }
       player.avatar.animate({time: now / 1000, dt, speed, pitch: player.drawnPitch,
-        yawOffset:facing.yawOffset, strideDirection:facing.strideDirection, strafe:facing.strafe,
+        yawOffset:facing.yawOffset, forward:facing.forward, strafe:facing.strafe,
         motion:player.motion, stance:player.stance, boost:player.boost, groundSeat:player.groundSeat,
         position:object.position,
-        swing:player.swing, held:player.held, equipment:player.equipment, itemAssets:this.itemAssets?.()});
-      player.label.visible = player.stance === 'stand' && distance < maxNameplateDistance ** 2;
+        swing:player.swing, held:player.held, equipment:player.equipment, itemAssets:this.itemAssets?.(), emote:player.emote});
+      player.avatar.ragdoll(player.death,dt);
+      player.label.visible = !player.death && player.stance === 'stand' && distance < maxNameplateDistance ** 2;
       player.label.position.y = player.avatar.labelHeight - .12;
       object.updateMatrixWorld(true);
     }

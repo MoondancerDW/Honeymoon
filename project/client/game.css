@@ -74,7 +74,23 @@ button:disabled { cursor: wait; opacity: .45; }
 }
 #clock-form, #teleport-form { top: 5rem; right: 1rem; gap: .65rem; }
 #clock-form:not([hidden]), #teleport-form:not([hidden]) { display: grid; }
-#clock-input, #chat-input, .teleport-coordinates input { padding: .45rem .55rem; background: #14252e; border: 1px solid var(--line); border-radius: .4rem; }
+#clock-input, #chat-input, #warp-title, .teleport-coordinates input { padding: .45rem .55rem; background: #14252e; border: 1px solid var(--line); border-radius: .4rem; }
+#warps-menu:not([hidden]) {
+  display: grid; gap: .6rem; top: 22%; left: max(1rem, env(safe-area-inset-left));
+  width: min(25rem, calc(100vw - 2rem)); max-height: 73vh; overflow-y: auto;
+}
+#game:has(#warps-menu:not([hidden])) #entry { visibility: hidden; }
+#warps-menu header, #warp-actions:not([hidden]) { display: flex; align-items: center; justify-content: space-between; gap: .4rem; flex-wrap: wrap; }
+#warp-heading { font-size: 1.05rem; margin: 0; }
+#warp-status { margin: 0; font-size: .84rem; color: var(--gold); }
+#warp-status:empty, #warp-list:empty { display: none; }
+#warp-list { display: grid; gap: .35rem; list-style: none; margin: 0; padding: 0; max-height: 35vh; overflow-y: auto; }
+#warp-list button { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: start; gap: .6rem; }
+#warp-list button span { overflow-wrap: anywhere; }
+#warp-list button small { flex: none; opacity: .8; font-variant-numeric: tabular-nums; }
+#warp-list button[aria-pressed="true"] { border-color: var(--gold); }
+#warp-form:not([hidden]) { display: grid; gap: .4rem; }
+#warp-title { min-width: 0; }
 .teleport-coordinates { display: flex; gap: .45rem; }
 .teleport-coordinates label { display: grid; gap: .2rem; }
 .teleport-coordinates input { width: 5.5rem; }
@@ -148,13 +164,46 @@ button:disabled { cursor: wait; opacity: .45; }
 #touch { display: none; }
 .touch.playing #touch { display: block; }
 .touch #keys { display: none; }
-#stick, .touch-actions { position: absolute; bottom: max(4.25rem, calc(env(safe-area-inset-bottom) + 3rem)); touch-action: none; }
-#stick { left: max(1.25rem, env(safe-area-inset-left)); width: 6.1rem; height: 6.1rem; border: 1px solid #fff8; border-radius: 50%; background: #16283173; }
+.touch.playing #chat:not(.expanded) { bottom: calc(13.35rem + env(safe-area-inset-bottom)); }
+#stick, .touch-actions { position: absolute; bottom: calc(4.45rem + env(safe-area-inset-bottom)); touch-action: none; }
+#stick { z-index: 2; left: max(1.2rem, calc(env(safe-area-inset-left) + .45rem)); width: 6.5rem; height: 6.5rem; border: 1px solid #fff8; border-radius: 50%; background: #16283173; }
 #stick i { pointer-events: none; position: absolute; left: calc(50% - 17px); top: calc(50% - 17px); width: 34px; height: 34px; border-radius: 50%; background: #f0d297b8; }
-.touch-actions { right: max(1rem, env(safe-area-inset-right)); display: grid; grid-template-columns: repeat(2, auto); gap: .35rem; }
-.touch-actions button { min-width: 2.65rem; min-height: 2.65rem; background: var(--glass); }
-.touch-actions button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold); }
-#jump { grid-column: 1 / -1; }
+.touch-actions { z-index: 2; right: max(.65rem, calc(env(safe-area-inset-right) + .35rem)); display: grid; grid-template-columns: repeat(2, minmax(4.5rem, 1fr)); gap: .35rem; }
+#touch button { min-height: 44px; padding: .38rem .46rem; font-size: .83rem; background: var(--glass); touch-action: manipulation; }
+#touch button[aria-pressed="true"], #touch button.holding { border-color: var(--gold); color: var(--gold); background: #334646; }
+#touch-use { color: var(--gold); }
+.touch-quick { position: absolute; z-index: 3; top: max(.5rem, env(safe-area-inset-top)); right: max(.55rem, env(safe-area-inset-right)); display: flex; gap: .32rem; }
+#touch-more-panel:not([hidden]) { position: absolute; z-index: 4; right: max(.55rem,env(safe-area-inset-right)); top: calc(max(.5rem, env(safe-area-inset-top)) + 3.05rem);
+  display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: .35rem; width: min(95vw,24rem);
+  max-height: calc(100dvh - 8.2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow: auto;
+  padding: .5rem; border: 1px solid var(--line); border-radius: .55rem; background: #14232e; }
+.touch.playing .target-tag { top: calc(max(.5rem,env(safe-area-inset-top)) + 3.15rem); }
+.touch:has(.social-panel:not([hidden])) #touch, .touch:has(dialog[open]) #touch { display: none; }
+.touch.dead #touch { display: none; }
+#health:not([hidden]) { position: absolute; z-index: 2; top: calc(max(.5rem,env(safe-area-inset-top)) + 3.05rem);
+  left: max(.55rem,env(safe-area-inset-left)); display: flex; gap: 3px; padding: 5px; border: 1px solid var(--line);
+  border-radius: .38rem; background: var(--glass); pointer-events: none; }
+#health span { width: clamp(9px,1.18vw,15px); height: clamp(11px,1.4vw,17px); border: 1px solid #4c6b76;
+  background: #152832; box-shadow: inset 0 0 0 1px #10202a; }
+#health span.filled { background: #b13d41; border-color: #dc7564; box-shadow: inset 0 2px #db6160, inset 0 -2px #8a2932; }
+#game.paused #health { display: none; }
+#death-screen:not([hidden]) { position: absolute; z-index: 5; inset: 0; display: grid; align-content: center;
+  justify-items: center; gap: 1rem; pointer-events: none; background: radial-gradient(transparent 32%,#43090970 100%); }
+#death-title { margin: 0; font-size: clamp(2.3rem,6vw,4.5rem); text-shadow: 0 2px 9px #1d0303; }
+#revive { min-width: 7rem; min-height: 44px; pointer-events: auto; }
+#mode-players, #craft-list { display: grid; gap: .45rem; max-height: 55dvh; overflow-y: auto; }
+#mode-players label, .mode-row { display: flex; justify-content: space-between; align-items: center; gap: .7rem; }
+.mode-row { padding-bottom: .55rem; border-bottom: 1px solid var(--line); margin-bottom: .55rem; }
+#craft-list button { display: grid; gap: .17rem; text-align: start; min-height: 44px; }
+#craft-list small { opacity: .8; }
+.touch .tools { max-height: 34dvh; overflow-y: auto; }
+@media (orientation: portrait) {
+  .touch .touch-quick { top: calc(max(.5rem,env(safe-area-inset-top)) + 2.75rem); }
+  .touch #touch-more-panel:not([hidden]), .touch.playing .target-tag { top: calc(max(.5rem,env(safe-area-inset-top)) + 5.75rem); }
+  #game.touch.paused .panel { max-width: min(92vw,30rem); }
+  .touch #health:not([hidden]) { top: calc(max(.5rem,env(safe-area-inset-top)) + 5.75rem); }
+  .touch.playing .target-tag { margin-top: 2.15rem; }
+}
 @media (max-width: 640px) {
   .top, .bottom { left: max(.5rem, env(safe-area-inset-left)); right: max(.5rem, env(safe-area-inset-right)); }
   .tools, .brand { padding: .3rem .5rem; }
@@ -164,8 +213,8 @@ button:disabled { cursor: wait; opacity: .45; }
   #keys { display: none; }
 }
 
-#creative-toggle, #inventory-toggle { pointer-events: auto; background: var(--glass); padding: .42rem .65rem; font-size: inherit; }
-#creative-toggle:hover, #inventory-toggle:hover { background: #38535c; }
+#creative-toggle, #inventory-toggle, #warp-toggle { pointer-events: auto; background: var(--glass); padding: .42rem .65rem; font-size: inherit; }
+#creative-toggle:hover, #inventory-toggle:hover, #warp-toggle:hover { background: #38535c; }
 #sign-editor {
   width: min(26rem, 90vw);
   padding: 1.25rem;
@@ -303,6 +352,13 @@ button:disabled { cursor: wait; opacity: .45; }
 #inventory-equipment button { left: calc(var(--equipment-x) * var(--gui-px)); top: calc(var(--equipment-y) * var(--gui-px)); }
 #creative-inventory button { pointer-events: auto; }
 #inventory-trash { top: calc(112 * var(--gui-px)); left: calc(173 * var(--gui-px)); }
+#inventory-edit {
+  display:none; position:absolute; top:calc(13 * var(--gui-px)); left:calc(149 * var(--gui-px));
+  width:var(--slot-size); height:var(--slot-size); padding:0; border:1px solid #49667c;
+  background:#a7c9db; color:#203847; font-size:calc(10 * var(--gui-px));
+}
+.inventory-only #inventory-edit { display:block; }
+#inventory-edit.drop-target { background:#e6f2fa; }
 #inventory-preview {
   top: calc(5 * var(--gui-px)); left: calc(27 * var(--gui-px));
   width: calc(32 * var(--gui-px)); height: calc(44 * var(--gui-px)); background: #000;
@@ -317,6 +373,41 @@ button:disabled { cursor: wait; opacity: .45; }
   position: fixed; left: 50%; bottom: max(0px, env(safe-area-inset-bottom)); transform: translateX(-50%);
   display: flex; justify-content: center;
 }
+.inventory-document {
+  width:min(580px,calc(100vw - 30px)); max-height:calc(100dvh - 30px);
+  overflow:auto; padding:18px; color:#182c3b; background:#cbddeb;
+  border:4px ridge #819daf; border-radius:4px;
+}
+.inventory-document::backdrop { background:#0c141bb0; }
+.inventory-document h2,.inventory-document h3 { margin:0 0 12px; }
+.inventory-document h3 { margin-top:15px; font-size:.95rem; }
+.inventory-document label { display:grid; gap:4px; margin-bottom:10px; }
+.inventory-document input,.inventory-document textarea {
+  width:100%; padding:7px 9px; border:1px solid #839caa; color:#152735; background:#edf5fa;
+  font:inherit; resize:vertical;
+}
+.inventory-document textarea { white-space:pre-wrap; overflow-wrap:anywhere; }
+#item-format { display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }
+#item-format button,.inventory-document .document-actions button,.book-pagination button {
+  min-height:25px; border:1px solid #6d899c; color:#223848; background:#e6f1f8; padding:4px 9px;
+}
+#item-format .text-color { padding:0; width:25px; }
+#item-text-preview { min-height:2em; margin:8px 0; padding:7px; color:#21333f; background:#e4eff5; white-space:pre-wrap; overflow-wrap:anywhere; }
+.book-pagination,.document-actions { display:flex; justify-content:flex-end; gap:8px; align-items:center; margin:8px 0; }
+.book-pagination { justify-content:space-between; }
+#book-page { background:#f2e7cd; color:#24190e; line-height:1.5; }
+#book-author { margin-bottom:6px; }
+#item-document-error,#container-status { color:#84251c; min-height:1.25em; margin:5px 0; }
+.container-grid { display:grid; grid-template-columns:repeat(9,minmax(0,1fr)); gap:2px; max-width:440px; }
+.container-grid .inventory-slot {
+  aspect-ratio:1; width:100%; min-height:0; position:relative;
+  border:2px inset #a6bac8; padding:3px; background:#8dafc4;
+}
+.container-grid .inventory-slot:hover,.container-grid .container-source { background:#d5e7f2; }
+.container-grid .inventory-slot canvas,#container-carried canvas {
+  width:100%; height:100%; image-rendering:pixelated; pointer-events:none;
+}
+#container-carried { position:fixed; transform:translate(-50%,-50%); width:36px; height:36px; pointer-events:none; z-index:3; }
 #hotbar {
   --gui-px: clamp(1.4px, calc(100vw / 184), 2.5px);
   --slot-size: calc(16 * var(--gui-px));

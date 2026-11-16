@@ -7,6 +7,7 @@ import {isRideableMinecart, minecartQuads, minecartRotation, minecartTilt} from 
 import {boatHeading,isRideableBoat} from '../world/boats.mjs';
 import {boatModel} from '../world/boat-model.mjs';
 import {RemotePlayers} from './remote-players.mjs';
+import {NpcView} from './npc-models.mjs';
 import {createPonyAvatar, createPonyFacing} from './pony-avatar.mjs';
 import {cameraClearance} from './movement.mjs';
 import {clockTick} from '../world/world-time.mjs';
@@ -21,12 +22,15 @@ import {DroppedItemView} from './dropped-items.mjs';
 import {HeldLights} from './held-light.mjs';
 import {groundSurface} from './audio.mjs';
 import {Rain} from './rain.mjs';
+import {SnowAccumulation} from './snow-accumulation.mjs';
 import {Climate} from './climate.mjs';
 import {detailCoverage} from '../world/full-detail.mjs';
 import {isWeather} from '../world/weather.mjs';
 import {fluidAt} from '../world/block-movement.mjs';
 import {FallingLeaves} from './falling-leaves.mjs';
 import {attachFoliageWind,windAt} from './wind.mjs';
+import {rainStrength,stormAt} from './storm.mjs';
+import {canopyCardPixels,canopyCardSize} from './canopy-card.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -89,14 +93,24 @@ function quadGeometry(quads, light, shade) {
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(quads.flatMap(quad =>
     quad.uv.map((value, index) => index & 1 ? 1 - value : value)), 2));
   geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(new Uint16Array(vertices).fill(light), 1));
-  geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(3 * vertices).fill(shade), 3, true));
+  const colors = new Uint8Array(3 * vertices);
+  for (const [index,quad] of quads.entries()) {
+    const tint = quad.tint ?? 0xffffff, brightness = shade * (quad.shade ?? 1) / 255;
+    for (let channel=0;channel<3;channel++) {
+      const value = Math.round((tint >> (16-8*channel) & 255) * brightness);
+      for (let point=0;point<4;point++) colors[index*12+point*3+channel] = value;
+    }
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
   geometry.setIndex(quads.flatMap((_, i) => [0, 1, 2, 0, 2, 3].map(vertex => 4 * i + vertex)));
   return geometry;
 }
 
 export class Display {
-  constructor(container, world, dayTick = 6000) {
+  constructor(container, world, dayTick = 6000, {mobile=false,lowDevice=false}={}) {
     this.world = world;
+    this.mobile = mobile;
+    this.lowDevice=lowDevice;
     this.sectionVisibility = new SectionVisibility();
     this.container = container;
     this.scene = new THREE.Scene();
@@ -106,6 +120,7 @@ export class Display {
     this.fluidFog = {water:new THREE.Fog('#285473',.7,28),lava:new THREE.Fog('#b04608',.1,2.4)};
     this.fluidCellAt = (x,y,z) => this.world.cellAt(x,y,z);
     this.sky = createSky();
+    this.sky.material.uniforms.lowDetail.value=Number(this.lowDevice);
     this.scene.add(this.sky);
     this.worldTime = {tick:dayTick, frozen:false, received:performance.now()};
     this.cycleTime = null;
@@ -118,13 +133,19 @@ export class Display {
     this.nightHorizon = new THREE.Color('#0c1326');
     this.nightZenith = new THREE.Color('#040716');
     this.cloudyHorizon = new THREE.Color('#69727d');
-    this.cloudyNight = new THREE.Color('#020406');
+    this.cloudyNight = new THREE.Color('#010203');
     this.weather = 'clear';
     this.foliageEnabled = new URLSearchParams(location.search).get('foliage') !== '0';
     this.foliageDirection = {value:new THREE.Vector2()};
     this.foliagePhase = {value:0};
+    this.foliageMeshes=new Set();
     this.climate = new Climate();
-    this.climate.load().catch(error=>console.warn('Weather biomes could not be loaded',error));
+    this.climate.load().then(loaded=>{
+      if (!loaded) return;
+      for (const chunk of this.world.chunks.values()) {
+        for (const y of chunk.sections.keys()) this.schedule(chunk.x,y,chunk.z);
+      }
+    }).catch(error=>console.warn('Weather biomes could not be loaded',error));
     this.nightVision = false;
     this.updateSky(dayTick);
     this.visualEntities = new THREE.Group();
@@ -150,8 +171,14 @@ export class Display {
     this.ponyAirAt = ponyAirAt;
     this.players = new RemotePlayers(this.scene,this.camera,() => this.heldItemAssets(),ponyAirAt,
       (feet,body,motion,fall,now) => this.groundDust(feet,body,motion,fall,now));
+    this.npcs = new NpcView(this.scene,this.camera,()=>this.heldItemAssets(),{mobile,
+      chunkVisible:(x,z)=>this.isPreciseVisible(x,z),
+      light:(x,y,z)=>{
+        const offset=4*this.world.lightAt(Math.floor(x),Math.floor(y),Math.floor(z));
+        return this.lightBytes[offset]<<16 | this.lightBytes[offset+1]<<8 | this.lightBytes[offset+2];
+      }});
     this.ponyShadows = new PonyShadows(this.scene, this.world);
-    this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
+    this.renderer = new THREE.WebGLRenderer({antialias: !mobile, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.uploadScene = new THREE.Scene();
@@ -194,13 +221,15 @@ export class Display {
     this.meshTimes = [];
     this.visibleEdits = new Map();
     this.frameTimes = [];
+    this.renderedFrames = 0;
     this.rings = new Map();
     this.ringData = new Map();
-    this.requestedDistance = 4;
+    this.requestedDistance = this.lowDevice?2:4;
+    this.preferredDistance = 4;
     this.lastFrame = performance.now();
     this.outline = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(1.006, 1.006, 1.006)),
-      new THREE.LineBasicMaterial({color: '#ffeab6', depthTest: false, transparent: true, opacity: .8})
+      new THREE.LineBasicMaterial({color:'#080808',depthTest:true,depthWrite:false,transparent:true,opacity:.48})
     );
     this.outline.visible = false;
     this.outline.renderOrder = 3;
@@ -248,10 +277,22 @@ export class Display {
     const textures = terrainFilter(map,this.atlasRows);
     this.useLightmap(this.materials.opaque,textures);
     this.useLightmap(this.materials.cutout,textures);
-    if (this.foliageEnabled) attachFoliageWind(this.materials.cutout,this.foliageDirection,this.foliagePhase);
+    if (this.foliageEnabled) {
+      attachFoliageWind(this.materials.cutout,this.foliageDirection,this.foliagePhase);
+      this.materials.foliage=new THREE.MeshBasicMaterial({map,vertexColors:true,side:THREE.DoubleSide,alphaTest:.28});
+      this.useLightmap(this.materials.foliage,textures);
+      const canopyMap=new THREE.DataTexture(canopyCardPixels(),canopyCardSize,canopyCardSize);
+      canopyMap.colorSpace=THREE.SRGBColorSpace;
+      canopyMap.minFilter=THREE.LinearMipmapLinearFilter;
+      canopyMap.magFilter=THREE.NearestFilter;
+      canopyMap.generateMipmaps=true;
+      canopyMap.needsUpdate=true;
+      attachFoliageWind(this.materials.foliage,this.foliageDirection,this.foliagePhase,canopyMap);
+    }
     this.useLightmap(this.materials.blend,textures);
     const multisample = Boolean(this.renderer.getContext().getContextAttributes()?.antialias);
     this.materials.cutout.alphaToCoverage = multisample;
+    if (this.materials.foliage) this.materials.foliage.alphaToCoverage=multisample;
     this.materials.water = this.materials.blend.clone();
     this.useLightmap(this.materials.water,textures,true);
     if (supportsFarTerrain(this.world.manifest)) this.farTerrain = new FarTerrain(this,textures);
@@ -395,18 +436,18 @@ export class Display {
     };
   }
 
-  updateSky(tick) {
+  updateSky(tick,flash=0) {
     const sun = sunlightAt(tick);
     const angle = Math.PI * 2 * celestialAngle(tick);
     const sky = Math.max(0, Math.min(1, 2 * Math.cos(angle) + .5));
     const overcast = this.weather !== 'clear';
-    const skyStrength = overcast ? Math.min(sun,.025 + .975 * sky) : sun;
+    const skyStrength = overcast ? Math.min(1,Math.min(sun,.025+.975*sky)+.56*flash) : sun;
     if (this.lastSun !== skyStrength) {
       writeLightmap(this.lightBytes,skyStrength,{skyLoss:overcast ? 3 : 0,darkFloor:true,nightVision:this.nightVision});
       this.lightmap.needsUpdate = true;
       this.lastSun = skyStrength;
     }
-    const {zenith, horizon, sunDirection, cloudOffset, night, cloudy} = this.sky.material.uniforms;
+    const {zenith, horizon, sunDirection, cloudOffset, night, cloudy,stormFlash} = this.sky.material.uniforms;
     zenith.value.copy(this.nightZenith).lerp(this.dayZenith, sky);
     horizon.value.copy(overcast ? this.cloudyNight : this.nightHorizon)
       .lerp(overcast ? this.cloudyHorizon : this.dayHorizon,sky);
@@ -414,6 +455,7 @@ export class Display {
     cloudOffset.value.set(Math.sin(angle) * 1.3, (1 - Math.cos(angle)) * .6);
     night.value = 1 - sky;
     cloudy.value = Number(overcast);
+    stormFlash.value=flash;
     this.scene.fog.color.copy(horizon.value);
   }
 
@@ -425,6 +467,7 @@ export class Display {
     if (mode !== 'rain') {
       this.rain?.visible(false);
       this.precipitationKind = null;
+      this.weatherAudio=null;
     }
     this.visibleRain = 0;
   }
@@ -516,7 +559,8 @@ export class Display {
   heldItemAssets() {
     if (!this.materials) return undefined;
     return this.ponyItemAssets ??= {
-      terrain:this.materials.opaque.map, rows:this.atlasRows,
+      terrain:this.materials.opaque.map, rows:this.atlasRows, models:this.world.models,
+      modelTexture:family => this.materials[`${family}:cutout`]?.map,
       itemSprite:key => {
         const items = this.world.models?.biblio?.items;
         const entry = items?.[key] ?? items?.[`${key.split(':', 1)[0]}:0`];
@@ -526,7 +570,7 @@ export class Display {
     };
   }
 
-  updateLocalAvatar(now, dt, position, pose, speed, seat, spectator) {
+  updateLocalAvatar(now, dt, position, pose, speed, seat, spectator, death) {
     this.localPonyFacing ??= createPonyFacing();
     const facing = this.localPonyFacing(position, pose.yaw, dt, seat?.yaw, pose.motion);
     if (!this.localAvatar) {
@@ -544,9 +588,10 @@ export class Display {
     object.position.set(position.x, position.y, position.z);
     object.rotation.y = facing.bodyYaw;
     this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion, stance:pose.stance, boost:pose.boost,
-      yawOffset:facing.yawOffset, strideDirection:facing.strideDirection, strafe:facing.strafe,
+      yawOffset:facing.yawOffset, forward:facing.forward, strafe:facing.strafe,
       position, groundSeat:pose.groundSeat || seat?.kind === 'ground', swing:pose.swing, held:pose.held,
-      equipment:pose.equipment, itemAssets:this.heldItemAssets()});
+      equipment:pose.equipment, itemAssets:this.heldItemAssets(), emote:pose.emote});
+    this.localAvatar.ragdoll(death,dt);
     object.updateMatrixWorld(true);
   }
 
@@ -562,6 +607,8 @@ export class Display {
     if (!width || !height) return;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
+    const pixels=this.lowDevice?960*540:this.mobile?1280*720:Infinity;
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio,this.mobile||this.lowDevice?Infinity:1.65,Math.sqrt(pixels/(width*height))));
     this.renderer.setSize(width, height, false);
   }
 
@@ -684,15 +731,19 @@ export class Display {
     this.streamArea = {x, z, radius};
     if (this.farTerrain?.active) {
       this.farTerrain.move(x,z);
+    }
+    if (this.farTerrain?.active || this.lowDevice) {
       for (const chunk of this.world.chunks.values()) this.updateChunkVisibility(chunk.x,chunk.z);
     }
   }
 
   get detailedDistance() {
-    return this.requestedDistance === 24 || this.requestedDistance === 32 ? 4 : Math.min(this.requestedDistance,8);
+    return this.requestedDistance === 24 || this.requestedDistance === 32 ? (this.mobile ? 3 : 4) : Math.min(this.requestedDistance,8);
   }
 
   isPreciseVisible(x,z) {
+    if (this.lowDevice && this.streamArea) return Math.max(Math.abs(x-this.streamArea.x),Math.abs(z-this.streamArea.z))<=2 &&
+      this.world.chunks.get(chunkKey(x,z))?.visualOnly===false;
     if (!this.farTerrain?.active || !this.streamArea) return !this.world.chunks.get(chunkKey(x,z))?.visualOnly || this.requestedDistance > 4;
     if (!this.farTerrain.hasChunk(x,z)) return true;
     return this.exactChunks.has(chunkKey(x,z));
@@ -742,6 +793,7 @@ export class Display {
 
   remesh(x, y, z, revision) {
     this.rain?.invalidate(x,z);
+    this.snowAccumulation?.invalidate(x,z);
     this.heldLights.invalidate(x,z);
     const cx = Math.floor(x / 16), cy = Math.floor(y / 16), cz = Math.floor(z / 16);
     this.schedule(cx, cy, cz, true);
@@ -771,13 +823,36 @@ export class Display {
 
   async setDetailedLodDistance(distance) {
     if (!this.farTerrain) throw new RangeError('Detailed LOD settings require distant terrain');
-    this.farTerrain.setDetailedLodDistance(distance);
-    if (this.requestedDistance !== 32) await this.setDistance(32);
+    const horizon=this.mobile ? 24 : 32;
+    this.farTerrain.setDetailedLodDistance(Math.min(distance,horizon));
+    if (this.preferredDistance !== horizon) await this.setDistance(horizon);
     return this.detailedLodDistance;
   }
 
-  async setDistance(distance) {
-    if ((distance === 24 || distance === 32) && !(this.farTerrain?.lod.maxDistance >= distance)) return;
+  async setLowDevice(enabled) {
+    if (this.lowDevice===enabled) return;
+    this.lowDevice=enabled;
+    this.sky.material.uniforms.lowDetail.value=Number(enabled);
+    this.resize();
+    if (enabled) {
+      for (const mesh of this.foliageMeshes) mesh.visible=false;
+      if (this.fallingLeaves) this.fallingLeaves.mesh.visible=false;
+      this.visibleLeaves=0;
+      this.foliageDirection.value.set(0,0);
+      this.ponyShadows.update([],this.camera.position);
+    } else if (this.foliageEnabled) {
+      for (const chunk of this.world.chunks.values()) {
+        if (!chunk.visualOnly) for (const y of chunk.sections.keys()) this.schedule(chunk.x,y,chunk.z);
+      }
+    }
+    if (this.snowAccumulation) this.snowAccumulation.mesh.visible=!enabled;
+    await this.setDistance(this.preferredDistance);
+  }
+
+  async setDistance(preferred) {
+    if ((preferred === 24 || preferred === 32) && !(this.farTerrain?.lod.maxDistance >= preferred)) return;
+    this.preferredDistance=preferred;
+    const distance=this.lowDevice?2:preferred;
     this.requestedDistance = distance;
     this.farTerrain?.setDistance(distance);
     this.exactChunks.clear();
@@ -794,8 +869,8 @@ export class Display {
       const layered = distance >= 24 && this.farTerrain?.lod.maxDistance === 32;
       const vista = distance === 32 && this.farTerrain?.vista;
       this.scene.fog.near = vista ? 500 : distance === 32 ? 448 : distance === 4 ? 56 : layered ? 128 : distance * 14;
-      this.scene.fog.far = vista ? VISTA_FOG_END : distance * 16;
-      this.camera.far = vista ? VISTA_FOG_END + 280 : 850;
+      this.scene.fog.far = vista ? VISTA_FOG_END : this.lowDevice?44:distance * 16;
+      this.camera.far = vista ? VISTA_FOG_END + 280 : this.lowDevice?150:850;
       this.camera.updateProjectionMatrix();
     } else {
       this.scene.fog.near = distance === 4 ? 60 : distance * 8;
@@ -961,14 +1036,14 @@ export class Display {
   }
 
   makeItemFrame(entity) {
-    const model = itemFrameModel(entity,this.world.models.biblio?.items,this.atlasRows);
+    const model = itemFrameModel(entity,this.world.models.biblio?.items,this.atlasRows,this.world.models);
     if (!model) return;
     const group = new THREE.Group();
     group.position.set(...model.center);
     group.rotation.set(model.rotationX,model.rotationY,0,'YXZ');
     const position = entity.position.map(Math.floor);
     const light = this.world.lightAt(...position);
-    const material = model.terrainItem ? this.materials.cutout : this.materials['biblio:cutout'];
+    const material = this.materials[model.terrainItem ? 'cutout' : `${model.itemFamily}:cutout`];
     for (const [quads, surface, shade] of [[model.frame,this.materials.opaque,216],[model.item,material,255]]) {
       if (!quads?.length || !surface) continue;
       const mesh = new THREE.Mesh(quadGeometry(quads,light,shade),surface);
@@ -1018,8 +1093,8 @@ export class Display {
   dispense({position,direction,stack}) {
     if (!this.world.hasChunk(position[0],position[2]) || this.dispenserItems.length >= 48) return;
     const model = itemFrameModel({data:{TileX:0,TileY:0,TileZ:0,MountSide:3,Item:stack}},
-      this.world.models.biblio?.items,this.atlasRows);
-    const material = model?.terrainItem ? this.materials.cutout : this.materials['biblio:cutout'];
+      this.world.models.biblio?.items,this.atlasRows,this.world.models);
+    const material = this.materials[model?.terrainItem ? 'cutout' : `${model?.itemFamily}:cutout`];
     if (!model?.item.length || !material) return;
     const mesh = new THREE.Mesh(quadGeometry(model.item,this.world.lightAt(...position),255),material);
     const start = position.map((value,index) => value + .5 + .55 * direction[index]);
@@ -1097,10 +1172,17 @@ export class Display {
       geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3, true));
       geometry.setAttribute('legacyLightLevel', new THREE.BufferAttribute(data.lightLevels, 1));
       if (data.wind) geometry.setAttribute('foliageWind',new THREE.BufferAttribute(data.wind,1));
+      if (data.leaf) geometry.setAttribute('foliageLeaf',new THREE.BufferAttribute(data.leaf,1));
       geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
       const {center, radius} = data.bounds;
       geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(...center), radius);
-      group.add(new THREE.Mesh(geometry, this.materials[mode]));
+      const mesh=new THREE.Mesh(geometry,this.materials[mode]);
+      if (mode==='foliage') {
+        mesh.userData.foliage=true;
+        mesh.visible=!this.lowDevice;
+        this.foliageMeshes.add(mesh);
+      }
+      group.add(mesh);
     }
     for (const sign of result.signs) {
       const mesh = this.signMesh(sign);
@@ -1116,6 +1198,7 @@ export class Display {
     group.removeFromParent();
     group.traverse(mesh => {
       if (!mesh.isMesh) return;
+      if (mesh.userData.foliage) this.foliageMeshes.delete(mesh);
       mesh.geometry.dispose();
       if (mesh.userData.sign || mesh.userData.painting) {
         mesh.material.map.dispose();
@@ -1287,7 +1370,8 @@ export class Display {
         }
         worker.postMessage({id: job.id, type: job.type, version: job.version, paletteAppend,
           collectVisibility:this.sectionVisibility.enabled,
-          foliage:this.foliageEnabled && !job.visualOnly ? [job.cx*16,job.cy*16,job.cz*16] : null,
+          foliage:this.foliageEnabled && !this.lowDevice && !job.visualOnly ? [job.cx*16,job.cy*16,job.cz*16] : null,
+          biomeTints:this.climate.columnTints(job.cx,job.cz),
           atlasRows: this.atlasRows, connectedTextures: this.connectedTextures,
           chiselConnectedTextures: this.chiselConnectedTextures, carpentryModel: this.carpentryModel, ...halo},
           [halo.indices.buffer, halo.light.buffer]);
@@ -1311,12 +1395,17 @@ export class Display {
     }
   }
 
-  render(now, selection, playing = false, placement = null, foreground = true) {
+  render(now, selection, playing = false, placement = null, foreground = true, listener = this.camera.position) {
     this.updateFrames();
     this.updateDispensers(now);
     this.blockDebris?.update(now,this.camera);
-    if (now >= (this.nextSkyUpdate ?? 0)) {
-      this.updateSky(this.dayTick(now));
+    const epoch=Date.now();
+    const snow=this.weather==='rain' && this.climate.snowAt(listener.x,listener.y,listener.z);
+    const strike=this.weather==='rain' && !snow ? stormAt(epoch) : null;
+    const flash=strike?.flash ?? 0;
+    if (now >= (this.nextSkyUpdate ?? 0) || flash!==(this.lastStormFlash ?? 0)) {
+      this.lastStormFlash=flash;
+      this.updateSky(this.dayTick(now),flash);
       this.nextSkyUpdate = now + 200;
     }
     const interval = now - this.lastFrame;
@@ -1327,7 +1416,7 @@ export class Display {
     const turning = playing && this.lastViewDirection.dot(this.viewDirection) < .82;
     if (turning) this.nextBackgroundUpload = now + 80;
     this.lastViewDirection.copy(this.viewDirection);
-    if (playing && interval > 36) this.nextBackgroundUpload = Math.max(this.nextBackgroundUpload, now + 44);
+    if (playing && interval > (this.mobile?52:36)) this.nextBackgroundUpload = Math.max(this.nextBackgroundUpload, now + 44);
     const edit = this.visibleEdits.size > 0;
     const stream = !playing || edit || now >= this.nextBackgroundUpload || !turning && now - this.lastBackgroundUpload >= 140;
     this.farTerrain?.step(now,stream);
@@ -1369,14 +1458,21 @@ export class Display {
       this.previewBlocked = placement.blocked;
     }
     // Inactive tabs keep receiving player and world updates while limiting GPU work.
-    if (foreground || now >= (this.nextIdleRender ?? 0)) {
+    const eligible = foreground || now >= (this.nextIdleRender ?? 0);
+    if (eligible) {
       if (this.fireTexture) this.fireTexture.offset.y = (Math.floor(now / FIRE_STEP_MS) % FIRE_FRAMES) / FIRE_FRAMES;
-      if (this.foliageEnabled && this.materials?.cutout) {
-        const wind = windAt(now,this.weather);
+      const wind=windAt(now,this.weather);
+      if (!this.lowDevice && this.foliageEnabled && this.materials?.cutout) {
         this.foliageDirection.value.set(wind.x,wind.z);
         this.foliagePhase.value = wind.phase;
-        this.fallingLeaves ??= new FallingLeaves(this.scene,this.world,this.materials.cutout,this.atlasRows);
+        this.fallingLeaves ??= new FallingLeaves(this.scene,this.world,this.materials.cutout,this.atlasRows,this.climate);
         this.visibleLeaves = this.fallingLeaves.update(now,this.camera,wind);
+        const camera=this.camera.position;
+        for (const mesh of this.foliageMeshes) {
+          const {center,radius}=mesh.geometry.boundingSphere, origin=mesh.parent.position;
+          mesh.visible=(camera.x-origin.x-center.x)**2+(camera.y-origin.y-center.y)**2+
+            (camera.z-origin.z-center.z)**2<(59+radius)**2;
+        }
       }
       this.sky.position.copy(this.camera.position);
       this.sky.updateMatrixWorld();
@@ -1387,14 +1483,26 @@ export class Display {
       if (this.weather === 'rain') {
         this.rain ??= new Rain(this.scene,this.world,this.climate);
         const {x,y,z}=this.camera.position;
-        this.precipitationKind = this.climate.snowAt(x,y,z) ? 'snow' : 'rain';
+        this.precipitationKind=snow ? 'snow' : 'rain';
         const bx=Math.floor(x), by=Math.floor(y), bz=Math.floor(z);
         const packed=this.world.lightAt(bx,by,bz);
         const nearby=this.heldLights.levelAt(bx,by,bz);
         const offset=4*((packed&240)|Math.max(packed&15,nearby));
-        const brightness=Math.max(.07,.2+this.lastSun*.58,this.lightBytes[offset]/255);
-        this.visibleRain=this.rain.step(now,this.camera.position,brightness);
+        const brightness=Math.max(.23,.25+this.lastSun*.62,this.lightBytes[offset]/255);
+        const strength=rainStrength(wind);
+        this.visibleRain=this.rain.step(now,this.camera.position,this.viewDirection,brightness,wind,strength,listener,strike,
+          this.lowDevice?180:undefined);
+        this.weatherAudio={strength,cover:this.rain.listenerCover,strike,epoch};
       }
+      if(!this.lowDevice && snow && !this.snowAccumulation) {
+        this.snowAccumulation=new SnowAccumulation(this.scene,this.world,this.climate,{mobile:this.mobile,
+          chunkVisible:(x,z)=>this.isPreciseVisible(x,z), light:(x,y,z)=>{
+            const packed=this.world.lightAt(Math.floor(x),Math.floor(y),Math.floor(z));
+            const offset=4*packed;
+            return this.lightBytes[offset]<<16 | this.lightBytes[offset+1]<<8 | this.lightBytes[offset+2];
+          }});
+      }
+      if (!this.lowDevice) this.snowAccumulation?.update(now,listener,snow);
       for (const {object,avatar} of ponies) {
         if (!object.visible && avatar !== this.localAvatar) continue;
         const {x,y,z} = object.position;
@@ -1403,12 +1511,13 @@ export class Display {
         const offset = 4 * ((packed & 240) | Math.max(packed & 15,this.heldLights.levelAt(xx,yy,zz)));
         avatar.setLight(this.lightBytes[offset] << 16 | this.lightBytes[offset + 1] << 8 | this.lightBytes[offset + 2]);
       }
-      this.ponyShadows.update(ponies.map(pony => pony.object), this.camera.position);
+      if (!this.lowDevice) this.ponyShadows.update(ponies.map(pony => pony.object), this.camera.position);
       this.droppedItemView ??= new DroppedItemView(this.scene,this.world);
       this.droppedItemView.update(now,this.camera.position,this.heldItemAssets(),(x,y,z) => {
         const offset = 4 * this.world.lightAt(Math.floor(x),Math.floor(y),Math.floor(z));
         return this.lightBytes[offset] << 16 | this.lightBytes[offset + 1] << 8 | this.lightBytes[offset + 2];
       },(x,z) => this.isPreciseVisible(x,z));
+      this.npcs.update(now,Math.min(.1,interval*.001)||0);
       this.updateOcclusion(now);
       const eye=this.camera.position;
       const medium=fluidAt(this.fluidCellAt,eye.x,eye.y,eye.z,this.world.models);
@@ -1425,6 +1534,7 @@ export class Display {
           this.sky.visible=true;
         }
       } else this.renderer.render(this.scene,this.camera);
+      this.renderedFrames++;
       this.nextIdleRender = now + 100;
     }
   }
@@ -1434,9 +1544,10 @@ export class Display {
     let preciseBytes = 0, coarseBytes = 0, preciseTriangles = 0, coarseTriangles = 0, foliageQuads = 0;
     for (const [id, group] of this.groups) {
       if (!group.visible) continue;
-      foliageQuads += group.userData.foliageQuads ?? 0;
       const coarse = id.startsWith('lod:');
       for (const mesh of group.children) {
+        if (!mesh.visible) continue;
+        if (mesh.userData.foliage) foliageQuads+=group.userData.foliageQuads ?? 0;
         const data = mesh.geometry;
         const bytes = Object.values(data.attributes).reduce((size, attr) => size + attr.array.byteLength, data.index?.array.byteLength || 0);
         const triangles = (data.index?.count || data.attributes.position.count) / 3;
@@ -1445,6 +1556,8 @@ export class Display {
       }
     }
     return {calls: render.calls, triangles: render.triangles, geometries: memory.geometries, textures: memory.textures,
+      renderedFrames:this.renderedFrames,framebuffer:[this.renderer.domElement.width,this.renderer.domElement.height],
+      lowDevice:this.lowDevice,detailedDistance:this.detailedDistance,
       occlusion:this.sectionVisibility.statistics(), heldLights:this.heldLights.statistics(),
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles, farTerrain:this.farTerrain?.stats(),
       foliageQuads, fallingLeaves:this.visibleLeaves ?? 0,
@@ -1464,6 +1577,8 @@ function createSky() {
       cloudOffset: {value: new THREE.Vector2()},
       night: {value: 0},
       cloudy: {value: 0},
+      stormFlash:{value:0},
+      lowDetail:{value:0},
       windTime: {value: 0},
       sunColor: {value: new THREE.Color('#fff7cf')},
       moonColor: {value: new THREE.Color('#dce8f9')},
@@ -1485,6 +1600,8 @@ function createSky() {
       uniform vec3 moonColor;
       uniform float night;
       uniform float cloudy;
+      uniform float stormFlash;
+      uniform float lowDetail;
       uniform float windTime;
       varying vec3 skyDirection;
       float hash(vec2 cell) {
@@ -1507,7 +1624,7 @@ function createSky() {
         vec3 ray = normalize(skyDirection);
         float mixAmount = 1.0 - exp(-max(ray.y, 0.0) * 8.0);
         vec3 skyColor = mix(horizon, zenith, mixAmount);
-        if (cloudy > .5) {
+        if (cloudy > .5 && lowDetail < .5) {
           vec2 p = ray.xz / (max(ray.y,0.0) + .24);
           float upper = clouds(p*1.9 + vec2(windTime*.023,windTime*.008));
           float lower = clouds(p*3.1 + vec2(8.7+windTime*.052,3.7+windTime*.019));
@@ -1516,13 +1633,14 @@ function createSky() {
           vec3 darkCloud = vec3(.12,.145,.175);
           vec3 highCloud = mix(vec3(.20,.235,.27),vec3(.33,.365,.39),shoulders);
           vec3 deck = mix(highCloud,darkCloud + vec3(.08)*smoothstep(.48,.72,lower),distinct);
-          float light = mix(.009,1.0,pow(1.0-night,1.26));
+          float light = mix(.0026,1.0,pow(1.0-night,1.35));
           skyColor = mix(horizon,deck*light,smoothstep(-.01,.17,ray.y));
+          skyColor = mix(skyColor,vec3(.53,.61,.76),stormFlash*.56);
           gl_FragColor = vec4(skyColor,1.0);
           #include <colorspace_fragment>
           return;
         }
-        if (night > .01 && ray.y > 0.0) {
+        if (lowDetail < .5 && night > .01 && ray.y > 0.0) {
           vec2 uv = vec2(atan(ray.z, ray.x) * (128.0 / 6.2831853), asin(ray.y) * 24.0);
           vec2 cell = floor(uv);
           cell.x = mod(cell.x, 128.0);
@@ -1538,7 +1656,7 @@ function createSky() {
         float moon = length(ray + sunDirection);
         skyColor = mix(skyColor, sunColor, horizonMask * (.18 * exp(-34.0 * sun) + .8 * disk(sun, .032)));
         skyColor = mix(skyColor, moonColor, horizonMask * (.11 * exp(-38.0 * moon) + .87 * disk(moon, .026)));
-        if (sunDirection.y > 0.0 && ray.y > .06) {
+        if (lowDetail < .5 && sunDirection.y > 0.0 && ray.y > .06) {
           vec2 p = ray.xz / (ray.y + .27) * 3.2 + cloudOffset + vec2(7.8, 5.1);
           float field = clouds(p * vec2(.8, 1.15));
           float alpha = smoothstep(.53, .67, field) * smoothstep(.06, .24, ray.y) * smoothstep(0.0, .2, sunDirection.y);

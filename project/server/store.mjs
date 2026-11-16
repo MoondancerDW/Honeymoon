@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { publicMicroPart } from '../world/microblocks.mjs';
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 const chatHistoryLimit = 100;
 
 export function transaction(db, run) {
@@ -86,6 +86,36 @@ function migrate(db) {
     if (version < 4) db.exec('ALTER TABLE edits ADD COLUMN micro_parts TEXT;');
     if (version < 5) db.exec('ALTER TABLE edits ADD COLUMN voxels TEXT;');
     if (version < 8) db.exec("ALTER TABLE edits ADD COLUMN fluid TEXT CHECK (fluid IN ('water','lava','dry'));");
+    if (version < 9) {
+      const columns=new Set(db.prepare('PRAGMA table_info(players)').all().map(column=>column.name));
+      if (!columns.has('profile_name')) db.exec('ALTER TABLE players ADD COLUMN profile_name TEXT;');
+      if (!columns.has('access_role'))
+        db.exec("ALTER TABLE players ADD COLUMN access_role TEXT NOT NULL DEFAULT 'player' CHECK (access_role IN ('player','admin'));");
+      db.exec(`
+      CREATE TABLE IF NOT EXISTS access_devices (
+        id TEXT PRIMARY KEY,
+        player TEXT NOT NULL REFERENCES players(id),
+        token_hash TEXT NOT NULL UNIQUE,
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        revoked_at INTEGER
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS access_devices_by_player ON access_devices(player,created_at);
+      CREATE TABLE IF NOT EXISTS access_invites (
+        id TEXT PRIMARY KEY,
+        code_hash TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL CHECK (kind IN ('player','admin','device')),
+        player TEXT REFERENCES players(id),
+        issuer TEXT NOT NULL REFERENCES players(id),
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        used_at INTEGER,
+        revoked_at INTEGER
+      ) STRICT;
+      `);
+    }
     db.exec(`
       CREATE TABLE IF NOT EXISTS player_profiles (
         player TEXT PRIMARY KEY REFERENCES players(id),

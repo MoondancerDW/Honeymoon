@@ -66,6 +66,17 @@ test('framed solid block and RedPower covers use distinct depth', () => {
   assert.equal(extent(750), 5 / 128);
 });
 
+test('frames preserve native mod geometry and the atlas used to texture it', () => {
+  const surface = {positions:[.2,.1,.3,.8,.1,.3,.8,.5,.6,.2,.5,.6],uv:[0,1,1,1,1,0,0,0]};
+  const models = {jammy:{models:{'legacy:201:13':{surfaces:[surface]}}}};
+  const data = {TileX:2,TileY:4,TileZ:6,MountSide:3,Item:{id:201,Damage:13,Block:true}};
+  const model = itemFrameModel({data},{},90,models);
+  assert.equal(model.itemFamily,'jammy');
+  assert.equal(model.item.length,1);
+  assert.deepEqual(model.item[0].uv,surface.uv);
+  assert.ok(model.item[0].positions[8] > model.item[0].positions[2]);
+});
+
 test('filled map pixels use native colors, shades and transparent checker', () => {
   const width = 128;
   const colors = Buffer.alloc(width * width);

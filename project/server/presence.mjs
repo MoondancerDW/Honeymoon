@@ -1,6 +1,7 @@
 import { RequestError } from './errors.mjs';
 import { publicProfile } from './presence-profile.mjs';
 import { isPlayerStance } from '../world/player-body.mjs';
+import { isMicroPart, publicMicroPart } from '../world/microblocks.mjs';
 
 const poses = new Set(['idle', 'walk', 'run', 'air', 'fly', 'swim', 'sit']);
 const reconnectGrace = 2000;
@@ -24,8 +25,12 @@ export function readPose(body) {
       body.boost !== undefined && typeof body.boost !== 'boolean' ||
       body.seq !== undefined && (!Number.isSafeInteger(body.seq) || body.seq < 0) ||
       body.typing !== undefined && typeof body.typing !== 'boolean' ||
+      body.emote != null && (!['wave','dance'].includes(body.emote.id) ||
+        !Number.isSafeInteger(body.emote.started) || body.emote.started < 0) ||
       body.swing !== undefined && (!Number.isInteger(body.swing) || body.swing < 0 || body.swing > 2147483647) ||
-      body.held != null && (!['block', 'item'].includes(body.held.kind) || typeof body.held.key !== 'string' || !heldKey.test(body.held.key))) {
+      body.held != null && (!['block', 'item'].includes(body.held.kind) || typeof body.held.key !== 'string' || !heldKey.test(body.held.key) ||
+        body.held.part !== undefined && (!isMicroPart(body.held.part) || body.held.kind !== 'block' ||
+          body.held.key !== `cover-material:${body.held.part.material}`))) {
     throw new RequestError(400, 'invalid_pose');
   }
   const yaw = (body.yaw + Math.PI) % (2 * Math.PI);
@@ -36,7 +41,9 @@ export function readPose(body) {
     ...(body.eye !== undefined && {eye:readEye(body.eye)}),
     ...(body.typing !== undefined && {typing:body.typing}),
     ...(body.swing !== undefined && {swing:body.swing}),
-    ...(body.held !== undefined && {held:body.held === null ? null : {kind:body.held.kind, key:body.held.key}}) };
+    ...(body.emote !== undefined && {emote:body.emote === null ? null : {id:body.emote.id,started:body.emote.started}}),
+    ...(body.held !== undefined && {held:body.held === null ? null : {kind:body.held.kind, key:body.held.key,
+      ...(body.held.part && {part:publicMicroPart(body.held.part)})}}) };
 }
 
 function roundPosition({x, y, z}) {
@@ -59,11 +66,12 @@ export function createPresence({store, profileFor = player => publicProfile(play
     return players.get(player);
   }
 
-  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, spectator, stance, boost,equipment,groundSeat}) => ({
+  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, spectator, stance, boost,equipment,groundSeat,emote,death}) => ({
     id:profile.id, position, yaw, pitch, motion, lookYaw,
     ...(typing !== undefined && {typing}), ...(swing !== undefined && {swing}), ...(held !== undefined && {held}),
     ...(spectator !== undefined && {spectator}), ...(stance !== undefined && {stance}), ...(boost !== undefined && {boost}),
-    ...(equipment !== undefined && {equipment}), ...(groundSeat !== undefined && {groundSeat})});
+    ...(equipment !== undefined && {equipment}), ...(groundSeat !== undefined && {groundSeat}),
+    ...(emote !== undefined && {emote}),...(death !== undefined && {death})});
   const snapshot = except => [...players].flatMap(([player, entry]) => player !== except && entry.visible
     ? [{ ...entry.profile, ...motionOf(entry) }] : []);
   const roster = stream => ({players:snapshot(stream.player),
@@ -84,7 +92,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
     const previous = entry.position;
     let dirty = previous.x !== next.x || previous.y !== next.y || previous.z !== next.z;
     if (dirty) entry.position = next;
-    for (const key of ['spectator','stance']) {
+    for (const key of ['spectator','stance','death']) {
       if (pose?.[key] !== undefined && entry[key] !== pose[key]) {
         entry[key] = pose[key];
         dirty = true;
@@ -111,8 +119,14 @@ export function createPresence({store, profileFor = player => publicProfile(play
         dirty = true;
         entry[key] = pose[key];
       }
-      if (pose.held !== undefined && (entry.held === undefined || entry.held?.key !== pose.held?.key || entry.held?.kind !== pose.held?.kind)) {
+      if (pose.held !== undefined && (entry.held === undefined || entry.held?.key !== pose.held?.key || entry.held?.kind !== pose.held?.kind ||
+          JSON.stringify(entry.held?.part) !== JSON.stringify(pose.held?.part))) {
         entry.held = pose.held;
+        dirty = true;
+      }
+      if (pose.emote !== undefined && (entry.emote === undefined ||
+          entry.emote?.id !== pose.emote?.id || entry.emote?.started !== pose.emote?.started)) {
+        entry.emote = pose.emote;
         dirty = true;
       }
       if (pose.seq !== undefined) entry.seq = pose.seq;
@@ -158,6 +172,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
         entry.pitch = 0;
         entry.motion = 'idle';
         entry.typing = entry.swing = entry.held = entry.spectator = entry.stance = entry.boost = entry.equipment = entry.groundSeat = undefined;
+        entry.emote = undefined;
       }
       if (entry.connections) visibility(player, entry, true);
       update(player, position, pose);

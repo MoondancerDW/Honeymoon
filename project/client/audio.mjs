@@ -38,6 +38,47 @@ function noise(context, seconds, impulse = false) {
   return result;
 }
 
+function rainLoop(context,kind) {
+  const channels=2, length=Math.floor(context.sampleRate*3.2);
+  const buffer=context.createBuffer(channels,length,context.sampleRate);
+  const tone={open:1820,wood:720,stone:440,glass:2410,foliage:1060,water:1340,snow:610}[kind];
+  const tapCount=kind==='snow' ? 0 : kind==='open' ? 155 : kind==='foliage' ? 130 : 83;
+  for (let channel=0;channel<channels;channel++) {
+    const data=buffer.getChannelData(channel);
+    const smoothing=1-Math.exp(-2*Math.PI*tone/context.sampleRate);
+    let filtered=0;
+    for (let i=0;i<length;i++) {
+      filtered+=smoothing*(Math.random()*2-1-filtered);
+      data[i]=filtered*(kind==='open' ? .49 : .17);
+    }
+    for (let j=0;j<tapCount;j++) {
+      const start=Math.floor(Math.random()*length);
+      const duration=(kind==='foliage' ? .034 : .024)+Math.random()*.035;
+      const amplitude=.10+Math.random()*.19, pitch=tone*(.78+.44*Math.random());
+      for (let k=0;k<duration*context.sampleRate;k++) {
+        const progress=k/(duration*context.sampleRate);
+        const timbre=kind==='wood' || kind==='stone' || kind==='glass'
+          ? .75*Math.sin(2*Math.PI*pitch*k/context.sampleRate)+.25*(Math.random()*2-1) : Math.random()*2-1;
+        data[(start+k)%length]+=amplitude*timbre*Math.min(1,k/16)*(1-progress)**4;
+      }
+    }
+    // Close the loop without a click from the continuous rain bed.
+    for (let k=0;k<256;k++) data[length-256+k]=data[length-256+k]*(1-k/255)+data[0]*k/255;
+  }
+  return buffer;
+}
+
+export function rainAudioMix(kind,strength,volume,cover) {
+  const exposure=cover?.exposure ?? 1;
+  const power=volume*(.38+.62*clamp(strength,0,1));
+  const blocked=cover?.sheltered;
+  if (kind==='snow') return {open:0,snow:power*(blocked ? .013+.13*exposure : .44),roof:undefined,impact:0};
+  if (kind!=='rain') return {open:0,snow:0,roof:undefined,impact:0};
+  return {open:power*(blocked ? .026+.32*exposure : .82+.18*exposure),snow:0,
+    roof:blocked ? cover.roof ?? 'stone' : undefined,
+    impact:blocked ? power*(.02+.83*Math.exp(-Math.max(0,cover.roofHeight-1)/10))*(1-.65*exposure) : 0};
+}
+
 function obstructed(world, listener, destination) {
   const start = [listener.x,listener.y,listener.z];
   const delta = destination.map((value,i)=>value+.5-start[i]);
@@ -125,6 +166,9 @@ export class WorldAudio {
   #air;
   #airFilter;
   #airGain;
+  #weatherLoops = new Map();
+  #weatherGains;
+  #lastThunder;
   #indoor = false;
   #skySampleAt = 0;
   #windSampleAt = 0;
@@ -135,6 +179,8 @@ export class WorldAudio {
   #music;
   #nextMusic = 0;
   #records = new Map();
+  #bard;
+  #bardRetryAt = 0;
   #requested = 0;
   #played = 0;
 
@@ -171,6 +217,7 @@ export class WorldAudio {
     this.#moved = 0;
     this.#airborne = 0;
     if (!active) this.#music?.pause();
+    if (!active) this.#bard?.player.pause();
     if (active && this.#music && this.#musicVolume) this.#music.play().catch(() => {});
     for (const {player} of this.#records.values()) {
       if (active) player.play().catch(() => {});
@@ -183,6 +230,45 @@ export class WorldAudio {
     this.#muted = Boolean(muted);
     this.#updateGain();
     if (this.#music) this.#music.muted = this.#muted;
+    if (this.#bard) this.#bard.player.muted = this.#muted;
+  }
+
+  npcMusic(npcs,position,now) {
+    if (!this.#playing || this.#muted || !globalThis.Audio || !this.#environment.otherVolume) {
+      this.#bard?.player.pause();
+      return;
+    }
+    let speaker, nearest=Infinity;
+    for (const npc of npcs) {
+      if (npc.health<=0 || !/^\/generated\/npcs\/sound\/[^/?#]+\.ogg$/i.test(npc.bard?.sound??'')) continue;
+      const {x,y,z}=npc.position;
+      const distance=Math.hypot(x-position.x,y-position.y,z-position.z);
+      if (distance<npc.bard.maxRange && distance<nearest) {
+        speaker=npc;
+        nearest=distance;
+      }
+    }
+    if (!speaker) {
+      this.#bard?.player.pause();
+      this.#bard=undefined;
+      return;
+    }
+    const {sound,minRange,maxRange}=speaker.bard;
+    if (this.#bard?.sound!==sound) {
+      this.#bard?.player.pause();
+      const player=new Audio(sound);
+      player.loop=true;
+      player.preload='none';
+      this.#bard={sound,player};
+      this.#bardRetryAt=0;
+    }
+    const {player}=this.#bard;
+    player.muted=false;
+    player.volume=.68*this.#volume*this.#environment.otherVolume*clamp((maxRange-nearest)/Math.max(1,maxRange-minRange),0,1);
+    if (player.paused && now>=this.#bardRetryAt) {
+      this.#bardRetryAt=now+2000;
+      player.play().catch(()=>{});
+    }
   }
 
   setVolume(volume) {
@@ -314,13 +400,13 @@ export class WorldAudio {
   }
 
   frame(world, position, {grounded = false, swimming = false, climbing = false, yaw = 0, body = PLAYER,
-    precipitation = null, sheltered = false, biome, night = false, windStrength = .3} = {}) {
+    precipitation = null, sheltered = false, weatherAudio, biome, night = false, windStrength = .3} = {}) {
     if (!this.#playing || !this.#catalog) return;
     this.#listener = {x: position.x, y: position.y + 1.62, z: position.z};
     this.#right = [Math.cos(yaw), -Math.sin(yaw)];
     if (this.#context?.state === 'running') {
       this.#playMusic();
-      this.#atmosphere(world,precipitation,sheltered,biome,night,windStrength);
+      this.#atmosphere(world,precipitation,sheltered,biome,night,windStrength,weatherAudio);
       this.#ambience(world, position);
       this.#caveMood(world);
     }
@@ -358,7 +444,33 @@ export class WorldAudio {
     }
   }
 
-  #atmosphere(world, precipitation, sheltered, biome, night, windStrength) {
+  #updateRain(precipitation,weather,volume,now) {
+    const mix=rainAudioMix(precipitation,weather?.strength ?? .8,volume,weather?.cover);
+    for (const [kind,gain] of [['open',mix.open],['snow',mix.snow],[mix.roof,mix.impact]]) {
+      if (!kind || gain<=.001 || this.#weatherLoops.has(kind)) continue;
+      const source=this.#context.createBufferSource(), level=this.#context.createGain();
+      level.gain.value=0;
+      source.buffer=rainLoop(this.#context,kind);
+      source.loop=true;
+      source.connect(level).connect(this.#master);
+      source.start();
+      this.#weatherLoops.set(kind,level);
+    }
+    for (const [kind,level] of this.#weatherLoops) {
+      level.gain.setTargetAtTime(mix[kind] ?? (kind===mix.roof ? mix.impact : 0),now,.19);
+    }
+    this.#weatherGains=mix;
+    const strike=weather?.strike;
+    if (precipitation==='rain' && strike && strike.id!==this.#lastThunder &&
+      weather.epoch>=strike.soundAt && weather.epoch<strike.soundAt+650) {
+      this.#lastThunder=strike.id;
+      const underRoof=weather.cover?.sheltered;
+      void this.play('ambient.weather.thunder',undefined,{volume:volume*(underRoof ? .68 : 1.45),
+        pitch:.87,occluded:underRoof});
+    }
+  }
+
+  #atmosphere(world, precipitation, sheltered, biome, night, windStrength, weatherAudio) {
     const settings=this.#environment, now=this.#context.currentTime;
     if (now >= this.#skySampleAt) {
       this.#skySampleAt=now+.35;
@@ -377,15 +489,16 @@ export class WorldAudio {
       this.#air.connect(this.#airFilter).connect(this.#airGain).connect(this.#master);
       this.#air.start();
     }
-    if (this.#air && now>=this.#windSampleAt) {
+    if (now>=this.#windSampleAt) {
       this.#windSampleAt=now+.075;
-      const roof = sheltered || this.#indoor;
-      const rain = precipitation === 'rain', snow = precipitation === 'snow';
+      const roof = weatherAudio?.cover?.sheltered ?? (sheltered || this.#indoor);
+      const snow = precipitation === 'snow';
       const breeze = taiga.has(biome) ? 1 : forest.has(biome) ? .82 : .61;
       const gust = .42+.58*clamp(windStrength,0,1)**(2.6-2*settings.natureFrequency);
-      const volume = settings.natureVolume*(rain ? .42 : snow ? .22 : .10*breeze)*gust*(roof ? .21 : 1);
-      this.#airGain.gain.setTargetAtTime(volume,now,.12);
-      this.#airFilter.frequency.setTargetAtTime(roof ? 270 : rain ? 1800 : snow ? 520 : 410,now,.3);
+      const volume = settings.natureVolume*(snow ? .22 : .13*breeze)*gust*(roof ? .22 : 1);
+      this.#airGain?.gain.setTargetAtTime(volume,now,.12);
+      this.#airFilter?.frequency.setTargetAtTime(roof ? 270 : snow ? 520 : 410,now,.3);
+      this.#updateRain(precipitation,weatherAudio,settings.natureVolume,now);
     }
     if (!settings.animalsFrequency || !settings.animalsVolume || this.#indoor && settings.profile === 'minimal' || now<this.#nextAnimal) return;
     if (!this.#nextAnimal) {
@@ -488,7 +601,7 @@ export class WorldAudio {
 
   stats() {
     return {loaded: Boolean(this.#catalog), state: this.#context?.state ?? 'disabled', muted: this.#muted,
-      requested: this.#requested, played: this.#played,
+      requested: this.#requested, played: this.#played, rain:this.#weatherGains,
       musicPlaying: Boolean(this.#music && !this.#music.paused && !this.#music.ended)};
   }
 }

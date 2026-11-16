@@ -1,6 +1,7 @@
 import {arrangeCreativeCatalog} from './creative-layout.mjs';
 import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
 import {itemStackLimit} from '../world/item-stack.mjs';
+import {bookType,itemLore,itemName,plainMinecraftText,stackType} from '../world/item-text.mjs';
 
 const columns = 9;
 const visibleRows = 5;
@@ -15,7 +16,7 @@ function cardData({entry,icon,code}) {
     search:normalized([name,entry.english,entry.mod,entry.key,icon.name,icon.key,code,entry.variant].filter(Boolean).join(' '))};
 }
 
-export function createCreativeMenu({load,choose,select,move,trash,drop,pause,resume,notice,icon,preview}) {
+export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pause,resume,notice,icon,preview,editItem,readBook,canCopy=()=>true}) {
   const byId = id => document.getElementById(id);
   const dialog = byId('creative-menu');
   const toggle = byId('creative-toggle');
@@ -24,6 +25,7 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
   const status = byId('creative-count'), retry = byId('creative-retry');
   const previousPage = byId('creative-prev-page'), nextPage = byId('creative-next-page');
   const trashTarget = byId('inventory-trash'), carried = byId('inventory-carried');
+  const editingTarget=byId('inventory-edit');
   const hotbar = byId('hotbar'), equipmentPanel = byId('inventory-equipment');
   const slotsPanel = byId('inventory-slots'), previewCanvas = byId('inventory-preview');
   const cache = new Map();
@@ -67,10 +69,11 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
   function entryFor(stack) {
     if (!stack) return null;
     const entry = catalog?.byKey.get(stack.key);
-    if (entry && !stack.copied) return entry;
+    const custom=plainMinecraftText(itemName(stack)||stack.nbt?.title);
+    if (entry && !stack.copied) return custom ? {...entry,name:custom} : entry;
     const id = Number(/^legacy:(\d+):/.exec(stack.cell ?? stack.key)?.[1]);
     if (stack.part) return {key:stack.key,kind:'microblock',part:stack.part,name:stack.name || 'Микроблок'};
-    return entry ?? {key:stack.cell ?? stack.key,id,name:stack.name || (id ? `Блок ${id}` : stack.key),data:stack.object?.data};
+    return entry ?? {key:stack.cell ?? stack.key,id,name:custom || stack.name || (id ? `Блок ${id}` : stack.key),data:stack.object?.data};
   }
 
   function iconFor(entry) { return catalog?.icons.get(entry?.key) ?? entry; }
@@ -116,14 +119,23 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
   }
 
   async function transferTo(source,destination,single = false) {
-    if (!source || source.slot === destination || !mayMove(source,destination)) return;
+    if (!source || source.slot===destination&&!source.clone || !mayMove(source,destination)) return;
     const available = countAt(source);
     const amount = single ? 1 : available;
     if (!available) return;
     const target = stackAt(destination);
+    if (source.clone) {
+      const origin=stackAt(source.slot);
+      if (!origin || target && stackType(origin)!==stackType(target)) return;
+      const accepted=Math.min(amount,itemStackLimit(origin.key)-(target?.count??0));
+      if (accepted>0 && await request(clone,source.slot,destination,accepted)!==false && picked===source) {
+        setPicked(available>accepted?{...source,count:available-accepted}:null);
+      }
+      return;
+    }
     if (source.entry) {
       const {entry} = source;
-      const same = target?.key === entry.key && !target.copied;
+      const same = target?.key === entry.key && !target.copied && !target.nbt && !target.legacyNbt;
       const count = Math.min(amount + (same ? target.count : 0),maxStack(entry));
       const added = count - (same ? target.count : 0);
       if (added <= 0) return;
@@ -194,7 +206,7 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
     }
     const start = slot < columns ? columns : 0;
     const end = slot < columns ? inventorySize : columns;
-    const match = state.slots.findIndex((other,index)=>index >= start && index < end && other?.key === stack.key &&
+    const match = state.slots.findIndex((other,index)=>index >= start && index < end && other && stackType(other)===stackType(stack) &&
       other.count < maxStack(entryFor(other)));
     const available = state.slots.findIndex((other,index)=>index >= start && index < end && !other);
     if (match >= 0) void request(move,slot,match);
@@ -204,7 +216,7 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
   function clickSlot(slot,event,secondary) {
     if (event.shiftKey && !picked) { quickMove(slot); return; }
     if (picked) {
-      if (picked.slot === slot) setPicked(null);
+      if (picked.slot === slot && !picked.clone) setPicked(null);
       else void transferTo(picked,slot,secondary);
       return;
     }
@@ -222,6 +234,17 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
       button.addEventListener('pointerenter',()=>{ underCursor = {slot}; });
       button.addEventListener('pointerleave',()=>{ if (underCursor?.slot === slot) underCursor = null; });
       button.addEventListener('contextmenu',event=>{ event.preventDefault(); clickSlot(slot,event,true); });
+      button.addEventListener('auxclick',event=>{
+        if (event.button!==1||!canCopy()) return;
+        event.preventDefault();
+        const stack=stackAt(slot);
+        if (stack) setPicked({slot,clone:true,count:itemStackLimit(stack.key)});
+      });
+      button.addEventListener('dblclick',()=>{
+        if (!bookType(stackAt(slot))) return;
+        setPicked(null);
+        readBook?.(slot);
+      });
       button.addEventListener('dragstart',event=>beginDrag(event,{slot}));
       button.addEventListener('dragend',endDrag);
       acceptDrop(button,source=>void transferTo(source,slot),source=>mayMove(source,slot));
@@ -246,7 +269,7 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
     for (let slot=0;slot<menuSlots.length;slot++) {
       const stack = stackAt(slot);
       const entry = entryFor(stack);
-      const visible = slot === picked?.slot ? Math.max(0,(stack?.count ?? 0)-countAt(picked)) : stack?.count ?? 0;
+      const visible = slot===picked?.slot&&!picked.clone ? Math.max(0,(stack?.count??0)-countAt(picked)) : stack?.count??0;
       const renditions = slot < columns ? [menuSlots[slot],worldSlots[slot]] : [menuSlots[slot]];
       for (const button of renditions) {
         const world = button === worldSlots[slot];
@@ -258,7 +281,7 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
         button.draggable = Boolean(stack) && !world;
         const title = slot < inventorySize ? `Ячейка ${slot+1}` : equipmentLabels[slot-inventorySize];
         const label = `${title} · ${entry?.name ?? 'Пусто'}${count > 1 ? ' ×'+count : ''}`;
-        button.title = label;
+        button.title = [label,...itemLore(stack).map(plainMinecraftText)].join('\n');
         button.setAttribute('aria-label',label);
         const signature = count && entry ? `${entry.key}:${count}:${entry.part?.material ?? ''}:${entry.part?.shape ?? ''}` : '';
         if (button.dataset.image === signature) continue;
@@ -286,9 +309,16 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
     return true;
   }
 
-  const discard = source => { if (source?.slot !== undefined && stackAt(source.slot)) void request(trash,source.slot); };
+  const discard = source => { if (source?.slot!==undefined && !source.clone && stackAt(source.slot)) void request(trash,source.slot); };
   acceptDrop(trashTarget,discard);
   trashTarget.addEventListener('click',() => { discard(picked); setPicked(null); });
+  function editSource(source) {
+    if (!storageMode() || source?.slot===undefined || !stackAt(source.slot)) return;
+    setPicked(null);
+    editItem?.(source.slot);
+  }
+  acceptDrop(editingTarget,editSource,source=>storageMode()&&source.slot!==undefined);
+  editingTarget.addEventListener('click',()=>editSource(picked??{slot:state.selected}));
 
   function blockButton({entry,icon,name,code}) {
     const card = document.createElement('button');
@@ -460,7 +490,8 @@ export function createCreativeMenu({load,choose,select,move,trash,drop,pause,res
   function dropSource(source,all) {
     if (source?.entry) void request(drop,{key:source.entry.key,count:all ? countAt(source) : 1});
     else if (source?.slot !== undefined && stackAt(source.slot)) {
-      void request(drop,{slot:source.slot,...(all && source.count ? {count:source.count} : {all})});
+      void request(drop,{slot:source.slot,...(source.clone&&{clone:true}),
+        ...(source.count||source.clone ? {count:all ? countAt(source):1} : {all})});
     }
   }
 

@@ -626,6 +626,14 @@ function orientedRedPowerMachine(source, rotation) {
   return [box(CUBE, faces, {redPowerUv:machineUvFlags[side]})];
 }
 
+function rotatedRedPowerAppliance(source, rotation, base=tiles.redPowerMachine) {
+  const order = [
+    [4,5,0,1,2,3], [3,2,0,1,4,5], [5,4,0,1,3,2], [2,3,0,1,5,4],
+  ][rotation & 3];
+  const turn = [0,5,3,6][rotation & 3];
+  return [box(CUBE, order.map(face=>base+source[face]), {redPowerUv:[0,0,turn,turn,0,0]})];
+}
+
 const APPROX_FURNITURE = 'Simplified Jammy Furniture model';
 const APPROX_BIBLIO = 'Simplified BiblioCraft model';
 const armchairPieces = [
@@ -825,6 +833,15 @@ function specialShape(id, meta, cell, neighbors) {
   if (id === 751 && meta === 2) {
     return orientedRedPowerMachine([87,89,88,88,88,88],data?.rot);
   }
+  if (id === 751 && meta === 3) {
+    return rotatedRedPowerAppliance([3,0,2,1,1,1],data?.rot,3206);
+  }
+  if (id === 751 && meta === 5) {
+    const storage=Math.min(4,Math.max(0,Math.trunc((data?.stor ?? 0)*4/3000)));
+    const active=data?.ps & 1, powered=data?.ps & 2;
+    const panel=(active ? 192 : powered ? 186 : 181)+storage;
+    return rotatedRedPowerAppliance([180,active ? 177 : 176,panel,panel,active ? 179 : 178,active ? 179 : 178],data?.rot);
+  }
   if (id === 751 && (meta === 0 || meta === 1 || meta === 4)) {
     const active = Number(data?.ps > 0);
     const front = [4, 1, 5, 0][data?.rot & 3];
@@ -857,6 +874,21 @@ function specialShape(id, meta, cell, neighbors) {
   if (id === 763 && meta === 12) {
     // RenderMachine sets an alternate igniter face when TileMachine.Active is set.
     return orientedRedPowerMachine([48,164 + (data?.ps & 1),167,167,166,166],data?.rot);
+  }
+  if (id === 763 && meta >= 13) {
+    const active=data?.ps & 1;
+    if (meta === 13) return orientedRedPowerMachine([172+active,168+active,171,171,170,170],data?.rot);
+    const panel=(meta === 14 ? 91 : 93)+active;
+    return orientedRedPowerMachine([58,89,panel,panel,90,90],data?.rot);
+  }
+  if (id === 766 && meta < 2) {
+    const active=data?.ps & 1, charged=data?.ps & 8, poweredOrDelayed=data?.ps & 6;
+    if (meta === 0) {
+      const side=199+Number(Boolean(charged)), panel=201+Number(Boolean(charged))+2*active;
+      return orientedRedPowerMachine([198,197,side,side,panel,panel],data?.rot);
+    }
+    const panel=210+4*Number(Boolean(charged))+2*Number(Boolean(poweredOrDelayed))+active;
+    return orientedRedPowerMachine([209,208,panel,panel,panel,panel],data?.rot);
   }
   if ([760, 761, 762, 763, 764, 767].includes(id)) {
     const controller = id <= 762;
@@ -1183,7 +1215,8 @@ function registryShape(id, meta) {
   const [faces, render, bounds, flags, emission, tint, hint] = source;
   const [opaque, normal, materialBlocks, liquid, tileEntity, blended] = [1, 2, 4, 8, 16, 32].map(bit => Boolean(flags & bit));
   const color = tint === 0xffffff ? undefined : tint;
-  const material = {mode:blended ? 'blend' : opaque ? 'opaque' : 'cutout', tint:color, emissive:emission > 0,
+  const twilightLeaves=id === 2164 || id === 2177;
+  const material = {mode:blended ? 'blend' : opaque && !twilightLeaves ? 'opaque' : 'cutout', tint:color, emissive:emission > 0,
     solid:!liquid && (materialBlocks || normal || opaque)};
   if (render === 1 || render === 6 || render === 19 || hint === 'sprite') {
     return [box([.05, 0, .05, .95, 1, .95], faces[4], {...material, solid:false, mode:'cutout', kind:'cross', uv:'box'})];
@@ -1205,7 +1238,7 @@ const simpleCache = new Map();
 const neighborDependent = new Set([2, 8, 9, 10, 11, 54, 64, 71, 85, 101, 102, 107, 113, 132, 139, 750, 1527, 2802, 2803, 4095,
   ...Array.from({length:24}, (_, i) => 2808 + i),
   ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
-const dynamic = new Set([...neighborDependent, 751, 763, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
+const dynamic = new Set([...neighborDependent, 751, 763, 765, 766, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
 const chiselMaterialShapes = new Map();
 const jammyCubeTiles = 3880;
 const chiselWater = box(CUBE, tiles.water, {mode:'blend', solid:false, fluid:'water'});
@@ -1305,6 +1338,14 @@ export function shapeFor(cell, neighbors) {
     ?? uniform(tiles.unknown, { approximation: 'Unknown legacy block definition' });
   if (cacheable) simpleCache.set(key, result);
   return result;
+}
+
+export function itemShapeFor(cell) {
+  const [id,meta]=unpack(cell);
+  if (id === 751 && meta === 3) return rotatedRedPowerAppliance([3,0,1,2,1,1],0,3206);
+  const shapes = shapeFor(cell);
+  // The source inventory renderer can draw a decal without any world neighbors.
+  return shapes[0]?.decal ? (registryShape(id,meta) ?? shapes) : shapes;
 }
 
 const mixedCarvingBoxes = new WeakMap();

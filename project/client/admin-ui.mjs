@@ -1,0 +1,240 @@
+import {button,field,node} from './npc-controls.mjs';
+
+const titles={player:'Игрок',admin:'Администратор',device:'Устройство'};
+const inviteStatus={active:'Действует',available:'Действует',pending:'Действует',used:'Использовано',
+  expired:'Истекло',revoked:'Отозвано'};
+const textErrors={
+  admin_required:'Нужен профиль администратора.',
+  access_denied:'Доступ к этому действию закрыт.',
+  owner_required:'Это действие доступно владельцу.',
+  invalid_invite_kind:'Выберите тип приглашения.',
+  invite_profile_missing:'Профиль больше недоступен.',
+  profile_not_found:'Профиль больше недоступен.',
+  invite_not_found:'Приглашение больше недоступно.',
+  device_not_found:'Устройство больше недоступно.',
+};
+const date=new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short'});
+const stamp=value=>Number.isFinite(value)?date.format(value):'';
+const nameOf=profile=>profile.profileName||profile.nickname||profile.uid;
+
+export function createAdminUi({element,load,post,pause,worldSettings}) {
+  const toggle=element('admin-toggle'),dialog=element('admin-menu'),body=element('admin-body'),status=element('admin-status');
+  const tabs=[...dialog.querySelectorAll('[data-admin-tab]')];
+  const identity=element('game');
+  let data,access,busy=false,tab='profiles',freshLink,searchText='';
+  const activeTab=()=>tabs.forEach(control=>control.setAttribute('aria-pressed',String(control.dataset.adminTab===tab)));
+
+  function tell(message='',error=false) {
+    status.textContent=message;
+    status.hidden=!message;
+    status.classList.toggle('admin-error',error);
+  }
+
+  function setAccess(value) {
+    access=value;
+    identity.classList.toggle('with-access',Boolean(access?.inviteRequired));
+    toggle.hidden=access?.role!=='admin';
+    if (toggle.hidden && dialog.open) dialog.close();
+  }
+
+  async function fetchList() {
+    const response=await load();
+    if (!response.ok) throw new Error(textErrors[response.body?.error]??'Список профилей и приглашений недоступен.');
+    data=response.body;
+  }
+
+  function section(title,...content) {
+    const result=node('section','admin-section');
+    result.append(node('h3',null,title),...content);
+    return result;
+  }
+
+  function linkBox() {
+    const box=node('div','admin-link');
+    const label=field(freshLink.name,{value:freshLink.url});
+    label.input.readOnly=true;
+    label.input.spellcheck=false;
+    const copy=button('Копировать ссылку',async()=>{
+      try {
+        if (!navigator.clipboard) throw new Error('clipboard unavailable');
+        await navigator.clipboard.writeText(label.input.value);
+        tell('Ссылка скопирована.');
+      } catch {
+        label.input.focus();
+        label.input.select();
+        tell('Ссылка выделена. Скопируйте её.');
+      }
+    },'admin-primary');
+    box.append(label.wrapper,copy);
+    return box;
+  }
+
+  function createdLink(reply,person) {
+    const {invite,code}=reply;
+    const generated=new URL(reply.url??'/',location.origin);
+    if (!reply.url) generated.hash=new URLSearchParams({invite:code}).toString();
+    freshLink={id:invite?.id,url:generated.href,
+      name:person?'Ссылка для профиля '+nameOf(person):'Ссылка-приглашение'};
+    tell('Приглашение создано.');
+  }
+
+  async function submit(path,payload,done,refresh=true) {
+    if (busy) return;
+    busy=true;
+    dialog.setAttribute('aria-busy','true');
+    tell();
+    const controls=[...body.querySelectorAll('button,input,select')].filter(control=>!control.disabled);
+    for (const control of controls) control.disabled=true;
+    try {
+      const response=await post(path,payload);
+      if (!response.ok) {
+        tell(textErrors[response.body.error]??'Действие сейчас недоступно.',true);
+        return;
+      }
+      done?.(response.body);
+      if (refresh) await fetchList();
+      if (dialog.open) render();
+    } catch(error) {tell(error.message||'Связь с сервером прервана.',true);}
+    finally {
+      busy=false;
+      dialog.setAttribute('aria-busy','false');
+      for (const control of controls) control.disabled=false;
+    }
+  }
+
+  function deviceLine(device,manageable) {
+    const summary=node('div','admin-details');
+    summary.append(node('strong',null,device.label||'Браузер'),
+      node('small',null,[device.current?'Этот браузер':'',device.revokedAt?'Отозвано '+stamp(device.revokedAt):
+        device.lastSeen?'Последний вход '+stamp(device.lastSeen):''].filter(Boolean).join(' · ')));
+    const row=node('div','admin-device');
+    row.dataset.deviceId=device.id;
+    row.append(summary);
+    if (manageable && !device.revokedAt) row.append(button('Отозвать доступ',()=>{
+      if (!window.confirm(device.current?'Отозвать доступ этого браузера?':'Отозвать доступ этого устройства?')) return;
+      void submit('admin/devices/revoke',{id:device.id},()=>{
+        tell('Доступ устройства отозван.');
+        if (device.current) location.reload();
+      },!device.current);
+    }));
+    return row;
+  }
+
+  function profileCard(person) {
+    const row=node('article','admin-record');
+    row.dataset.profileUid=person.uid;
+    const header=node('div','admin-summary');
+    const information=node('div','admin-details');
+    const short=person.uid.slice(0,8);
+    const manageable=access.owner || person.uid===access.uid || person.role==='player';
+    const identification=[person.owner?'Владелец':titles[person.role],person.online?'В сети':'Не в сети',short].filter(Boolean);
+    information.append(node('strong',null,nameOf(person)),node('small',null,identification.join(' · ')));
+    if (person.nickname && person.nickname!==nameOf(person)) information.append(node('small',null,'Ник в игре · '+person.nickname));
+    const linkDevice=button('Привязать устройство',()=>void submit('admin/invites',
+      {kind:'device',profileUid:person.uid},reply=>createdLink(reply,person)));
+    header.append(information);
+    if (manageable) header.append(linkDevice);
+    row.append(header);
+    const devices=person.devices??[];
+    if (devices.length) {
+      const details=node('details');
+      details.append(node('summary',null,'Устройства · '+devices.filter(device=>!device.revokedAt).length));
+      details.append(...devices.map(device=>deviceLine(device,manageable)));
+      row.append(details);
+    }
+    return row;
+  }
+
+  function profiles() {
+    const active=section('Профили игроков');
+    const search=field('Найти профиль',{type:'search',value:searchText,placeholder:'Имя, ник или UID'});
+    const list=node('div','admin-cards');
+    function filter() {
+      searchText=search.input.value;
+      const value=searchText.trim().toLocaleLowerCase('ru');
+      const people=(data?.profiles??[]).filter(person=>!value ||
+        [person.profileName,person.nickname,person.uid].join(' ').toLocaleLowerCase('ru').includes(value));
+      list.replaceChildren(...people.map(profileCard));
+      if (!people.length) list.append(node('p','admin-subtle','Профили не найдены.'));
+    }
+    search.input.addEventListener('input',filter);
+    filter();
+    active.append(search.wrapper,list);
+    return active;
+  }
+
+  function inviteCard(invitation) {
+    const target=data.profiles.find(profile=>profile.uid===invitation.profileUid);
+    const header=node('div','admin-details');
+    const title=invitation.label||(target?'Устройство профиля '+nameOf(target):titles[invitation.kind]);
+    const meta=[inviteStatus[invitation.status]??invitation.status,
+      invitation.expiresAt?'до '+stamp(invitation.expiresAt):''].filter(Boolean);
+    header.append(node('strong',null,title),node('small',null,meta.join(' · ')));
+    const row=node('article','admin-record');
+    row.dataset.inviteId=invitation.id;
+    const actions=node('div','admin-summary');
+    actions.append(header);
+    if ((access.owner || invitation.role!=='admin') && ['active','available','pending'].includes(invitation.status)) actions.append(button('Отозвать приглашение',
+      ()=>void submit('admin/invites/revoke',{id:invitation.id},()=>{
+        tell('Приглашение отозвано.');
+        if (freshLink?.id===invitation.id) freshLink=undefined;
+      })));
+    row.append(actions);
+    return row;
+  }
+
+  function invitations() {
+    const panel=section('Приглашения');
+    const buttons=node('div','admin-actions');
+    buttons.append(button('Пригласить игрока',()=>void submit('admin/invites',{kind:'player'},createdLink),'admin-primary'));
+    if (access.owner) buttons.append(button('Пригласить администратора',()=>void submit('admin/invites',{kind:'admin'},createdLink)));
+    panel.append(buttons);
+    const records=data?.invites??[];
+    if (records.length) panel.append(...records.map(inviteCard));
+    else panel.append(node('p','admin-subtle','Приглашений пока нет.'));
+    return panel;
+  }
+
+  function world() {
+    const values=worldSettings();
+    const shortcuts=node('div','admin-actions');
+    for (const [label,key] of [['Игровые режимы','modes'],['Время','clock'],['Редактор NPC','npcs']]) {
+      const shortcut=button(label,()=>{
+        dialog.close();
+        values.open(key);
+      });
+      shortcuts.append(shortcut);
+    }
+    const weather=field('Погода',{choices:[['clear','Ясно'],['cloudy','Облачно'],['rain','Дождь / снег']],
+      value:values.weather,changed:mode=>void submit('weather',{mode},reply=>{
+        values.weatherChanged(reply.mode??mode);
+        tell('Погода обновлена.');
+      },false)});
+    return section('Мир',shortcuts,weather.wrapper);
+  }
+
+  function render() {
+    activeTab();
+    if (!data&&tab!=='world') return;
+    const page=tab==='profiles'?profiles():tab==='invites'?invitations():world();
+    body.replaceChildren(...(freshLink&&tab!=='world'?[linkBox(),page]:[page]));
+  }
+
+  toggle.addEventListener('click',async()=>{
+    if (access?.role!=='admin'||dialog.open) return;
+    dialog.showModal();
+    pause();
+    tell();
+    body.replaceChildren(node('p','admin-subtle','Загружаем профили…'));
+    try {await fetchList(); if (dialog.open) render();}
+    catch(error) {body.replaceChildren(); tell(error.message,true);}
+  });
+  element('admin-close').addEventListener('click',()=>dialog.close());
+  dialog.addEventListener('close',()=>{freshLink=undefined;});
+  for (const control of tabs) control.addEventListener('click',()=>{
+    tab=control.dataset.adminTab;
+    tell();
+    render();
+  });
+  return {setAccess,isOpen:()=>dialog.open};
+}

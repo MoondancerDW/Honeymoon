@@ -6,6 +6,12 @@ import {windAt} from './wind.mjs';
 import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
 import {createSocialHud} from './social-hud.mjs';
 import {createCreativeMenu} from './creative-menu.mjs';
+import {createItemDocuments} from './item-documents.mjs';
+import {createContainerMenu} from './container-menu.mjs';
+import {createAccessUi} from './access-ui.mjs';
+import {createAdminUi} from './admin-ui.mjs';
+import {createNpcUi} from './npc-ui.mjs';
+import {createWorldEdit,isWoodAxe} from './world-edit.mjs';
 import {renderCreativeIcon} from './creative-icons.mjs';
 import {renderInventoryPreview} from './inventory-preview.mjs';
 import {blockState, jammyUseSound} from '../world/block-interactions.mjs';
@@ -13,18 +19,22 @@ import {seatFor, SEATED_EYE, SEATED_HEIGHT} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
 import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,POSITION_TRAIL_LIMIT,playerBody} from '../world/player-body.mjs';
-import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
+import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox, publicMicroPart} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
 import {canLogLiquid, liquidKind} from '../world/logged-fluid.mjs';
 import {FAKE_WATER,bucketCell,bucketKeys,fluidState} from '../world/fluid-state.mjs';
 import {detailCoverage} from '../world/full-detail.mjs';
+import {bookType,plainMinecraftText,stackRevision} from '../world/item-text.mjs';
+import {containerSpec} from '../world/containers.mjs';
 import {chiselMaterialShape, coverBoxes, signFor} from '../world/geometry.mjs';
 import {creativeMicroblock} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselPlacementAtHit, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 import {positionBatch} from './position-packet.mjs';
 import {supportsFarTerrain} from './far-terrain.mjs';
+import {bindTouchControls} from './touch-controls.mjs';
+import {createPlayerModeUi} from './player-mode-ui.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -50,11 +60,13 @@ const audioSettings = element('audio-settings');
 const teleportLoading = element('teleport-loading');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
+const detailPreference=touchMode?'honeymoon-touch-detail-distance':'honeymoon-detail-distance';
+const lowDevicePreference='honeymoon-low-device';
 const heading = {yaw: 0, pitch: -.045};
 let orbitHeading = null, orbitReturn = 0;
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
-let heldPart = null, partRotation = 0, placement = null, placementKey = '';
+let heldPart = null, heldPonyPart, partRotation = 0, placement = null, placementKey = '';
 let heldSofa = null, sofaTurns = 0;
 let chiseling = false, chiselMaterial = null, chiselSize = 1;
 let heldVersion = 0;
@@ -65,11 +77,18 @@ const creativeNames = new Map();
 const creativeEntries = new Map();
 let catalogRequest, inventoryRequest = Promise.resolve();
 let inventory = {slots:Array(36).fill(null),selected:0};
+let emote=null;
 let heldSignature = '';
 let selectionInputs, selectionRevision = 0;
 let seatTarget = null;
 let frameTarget = null, rayFrameTarget;
+let npcTarget, npcEditorAvailable = false;
+const npcBards=new Map();
+let nextBardCheck=0;
+let npcActionQueue=Promise.resolve();
 const positionInterval = 130;
+const mobileFrameMs = 1000/32;
+let nextMobileFrame;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 const positionTrail = [];
 let playing = false, jump = false, lastFrame = 0, nextPositionSync = 0, timer;
@@ -90,15 +109,19 @@ let crouchUntil = 0;
 let hoofSwing = 0;
 let repeatPlacement = false, nextPlacement = 0, resumeOnEscape = false, resuming = false;
 let pointerReleasedAt = -Infinity;
+let touchControls;
+let hitPlayer, deathOrbit;
 let nextClockUpdate = 0;
 const audio = new WorldAudio();
 const profile = new PlayerProfile({nickname:element('nickname'), skin:element('pony-skin'), status:element('skin-status'),
   clear:element('clear-skin'), label:element('player-name')}, notice);
+const accessUi=createAccessUi({element,post});
 const pause = () => {
   repeatPlacement = false;
   keys.clear();
   jump = false;
   stick.x = stick.z = 0;
+  touchControls?.clear();
   if (document.pointerLockElement) document.exitPointerLock();
 };
 function resume() {
@@ -106,6 +129,7 @@ function resume() {
   const canvas = view.renderer.domElement;
   if (document.pointerLockElement === canvas || resuming) return;
   resuming = true;
+  audio.enable();
   const rejected = () => {
     resuming = false;
     setPlaying(false);
@@ -116,16 +140,116 @@ function resume() {
   try { Promise.resolve(canvas.requestPointerLock()).catch(rejected); }
   catch { rejected(); }
 }
-const social = createSocialHud({post, notice, pause, resume, teleport});
+const social = createSocialHud({post, notice, pause, resume, teleport, placeWarp,
+  worldEditCommand:command=>worldEdit.command(command),
+  loadWarps:()=>json('/api/warps',{signal:AbortSignal.timeout(5000)})});
+const inventoryStackAt=slot=>slot<36 ? inventory.slots[slot] : inventory.equipment?.[slot-36];
+const itemDocuments=createItemDocuments({stackAt:inventoryStackAt,act:inventoryAction,pause,resume});
+const storage=createContainerMenu({action:containerAction,entryFor:entryForInventoryStack,
+  draw:drawCreativeIcon,inventory:()=>inventory,pause,resume});
+const npcUi=createNpcUi({command:npcCommand,onTeleport:receiveNpcTeleport,
+  loadEditor:()=>getNpc('/api/npcs/editor'),edit:payload=>post('npcs/editor',payload,AbortSignal.timeout(10000)),
+  unlock:key=>post('npcs/admin',{key},AbortSignal.timeout(5000)),
+  loadModels:()=>import('../world/npc-model-catalog.mjs').then(module=>module.loadNpcModelManifest()),
+  loadCatalog:loadCreative,entryFor:npcItemEntry,drawItem:drawCreativeIcon,inventory:()=>inventory,
+  position:()=>position,preview:(canvas,appearance)=>view.npcs?.preview(canvas,appearance,performance.now()),
+  clearPreview:canvas=>view.npcs?.clearPreview(canvas),pause,resume,notice});
+const modeUi=createPlayerModeUi({element,notice,pause,changed:updateGameMode,revive:revivePlayer,
+  fetchModes:()=>json('/api/modes',{signal:AbortSignal.timeout(5000)}),
+  changeMode:fields=>post('modes',fields,AbortSignal.timeout(5000)),
+  async craft(recipe) {
+    const result=await post('craft',{recipe},AbortSignal.timeout(5000));
+    if (result.ok) applyInventory(result.body.inventory);
+    return result;
+  }});
+const adminUi=createAdminUi({element,load:()=>getNpc('/api/admin/access'),
+  post:(path,fields)=>post(path,fields,AbortSignal.timeout(10000)),pause,
+  worldSettings:()=>({
+    weather:view.weather,weatherChanged:updateWeather,
+    open(section) {element({npcs:'npc-editor-toggle',modes:'mode-toggle',clock:'clock-toggle'}[section]).click();},
+  }),
+});
+const worldEditEnabled=()=>modeUi.active && modeUi.creative && modeUi.admin && !spectator;
+const worldEdit=createWorldEdit({
+  scene:()=>view.scene,enabled:worldEditEnabled,getState:()=>getNpc('/api/worldedit'),
+  send:async payload=>{
+    if (!await flushPosition()) return {ok:false,body:{error:'movement_blocked'}};
+    return post('worldedit',{...payload,eye:view.eyeOffset()},AbortSignal.timeout(12000));
+  },
+  apply:body=>{changes(body.changes,body.worldRevision,body.frames); effects(body);},
+  notice,
+});
+const wieldWorldEdit=()=>worldEditEnabled() && isWoodAxe(inventoryStackAt(inventory.selected));
 const creative = createCreativeMenu({load:loadCreative,
   choose:(entry,slot,count)=>inventoryAction('inventory_give',{key:entry.key,slot,count}),
   select:slot=>inventoryAction('inventory_select',{slot}),
   move:(from,to,count)=>inventoryAction('inventory_move',{from,to,count}),
+  clone:(from,to,count)=>inventoryAction('inventory_clone',{from,to,count}),
   trash:slot=>inventoryAction('inventory_trash',{slot}),
   drop:fields=>inventoryAction('drop_item',{...fields,yaw:heading.yaw,eye:view.eyeOffset()}),
   preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin),
+  editItem:itemDocuments.openItem,readBook:itemDocuments.openBook,
+  canCopy:()=>modeUi.creative,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
-const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open || audioSettings?.open;
+const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open || audioSettings?.open ||
+  itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen() || modeUi.isOpen() || adminUi.isOpen();
+
+function updateGameMode(next) {
+  creativeToggle.disabled=spectator||!creativeAvailable||!modeUi.creative;
+  creativeToggle.hidden=modeUi.active&&!modeUi.creative;
+  element('touch-catalog').hidden=modeUi.active&&!modeUi.creative;
+  element('touch-copy').hidden=modeUi.active&&!modeUi.creative;
+  element('weather').disabled=modeUi.active&&!next.admin;
+  social.setAdmin(!modeUi.active||next.admin);
+  game.classList.toggle('dead',Boolean(next.death));
+  if (!view) return;
+  if (next.death&&!deathOrbit) {
+    deathOrbit={perspective:view.perspective,heading:orbitHeading};
+    orbitHeading={...heading,pitch:-.22};
+    view.perspective=1;
+    keys.clear();
+    jump=repeatPlacement=false;
+    touchControls?.clear();
+    setFlight(false);
+    Object.assign(position,next.death.position);
+    if (document.pointerLockElement) document.exitPointerLock();
+    setPlaying(true);
+    updateCameraHint();
+  } else if (!next.death&&deathOrbit) {
+    view.perspective=deathOrbit.perspective;
+    orbitHeading=deathOrbit.heading;
+    deathOrbit=null;
+    updateCameraHint();
+  }
+}
+
+async function revivePlayer() {
+  if (resetting) return;
+  resetting=true;
+  if (!touchMode) resume();
+  try {
+    await sync;
+    const {ok,body}=await post('respawn',{},AbortSignal.timeout(5000));
+    if (!ok) throw new Error(body.error);
+    await arriveAt(body.position,body.stance);
+    modeUi.update(body.gameMode);
+  } finally {resetting=false;}
+}
+
+function npcItemEntry(stack) {
+  const key=stack.key??(Number.isInteger(stack.id)?'creative:'+stack.id+':'+(stack.damage??stack.meta??0):null);
+  return key?entryForInventoryStack({...stack,key}):null;
+}
+
+function entryForInventoryStack(stack) {
+  if (!stack) return null;
+  const known=creativeEntries.get(stack.key);
+  const [,id,meta]=stack.key.split(':');
+  const identity=Number(id);
+  return known ?? {key:stack.key,id:identity,damage:Number(meta),name:stack.name??(stack.cell?
+    labelFor(stack.cell):Number.isFinite(identity)?`Предмет ${identity}`:stack.key),part:stack.part,
+    ...(stack.part&&{kind:'microblock'}),...(stack.cell&&{blockKey:stack.cell})};
+}
 
 async function loadCreative() {
   catalogRequest ??= json('/generated/creative/catalog.json').then(catalog=>{
@@ -143,6 +267,7 @@ function inventoryAction(type,fields = {}) {
     if (['drop_item','pickup_item'].includes(type) && !await flushPosition()) return false;
     const result = await postAction({requestId:requestId(),type,...fields});
     if (!result.ok) {
+      applyInventory(result.body.inventory);
       if (result.body.error !== 'no_dropped_item') notice(messages[result.body.error] || result.body.error);
       return false;
     }
@@ -153,15 +278,33 @@ function inventoryAction(type,fields = {}) {
   return run;
 }
 
+async function containerAction(type,target,fields={}) {
+  if (type==='container_open'&&!await flushPosition()) return {ok:false,body:{error:'movement_blocked'}};
+  const {x,y,z,hit}=target;
+  const result=await postAction({type,requestId:requestId(),x,y,z,hit,eye:view.eyeOffset(),
+    expectedRevision:world.revisionAt(x,y,z),...fields});
+  const body=result.body;
+  if (result.ok) {
+    changes(body.changes,body.worldRevision,body.frames);
+    applyInventory(body.inventory);
+    effects(body);
+  } else {
+    body.message=messages[body.error]??body.error;
+    if (type==='container_open') notice(body.message);
+  }
+  return result;
+}
+
 function applyInventory(value) {
   if (!value || !Array.isArray(value.slots)) return;
   inventory = value;
   creative.setInventory(value);
   const stack = value.slots[value.selected];
-  const signature = stack ? JSON.stringify([stack.key,stack.cell,stack.part,stack.pattern,stack.object,stack.copied]) : '';
+  const signature = `${stackRevision(stack)}:${Boolean(stack?.copied)}`;
   if (signature === heldSignature) return;
   heldSignature = signature;
-  const entry = stack && creativeEntries.get(stack.key);
+  const entry = stack && (creativeEntries.get(stack.key) ??
+    (stack.key.startsWith('creative:')?{...entryForInventoryStack(stack),kind:'flat-item'}:null));
   heldVersion++;
   fromCreative = Boolean(stack && !stack.copied);
   heldCreativeItem = entry?.kind && !stack.copied ? entry : null;
@@ -176,7 +319,7 @@ function applyInventory(value) {
 }
 
 async function drawCreativeIcon(entry, canvas) {
-  return renderCreativeIcon(entry,canvas,world?.models?.biblio?.items);
+  return renderCreativeIcon(entry,canvas,world?.models);
 }
 
 if (touchMode) {
@@ -193,6 +336,9 @@ function notice(message) {
 }
 
 const messages = {
+  admin_required:'Это действие доступно администратору', creative_only:'Предметы из каталога доступны в креативе',
+  tool_required:'Нужен подходящий инструмент', held_item_required:'Выбери нужный предмет в панели',
+  bucket_required:'Для удаления жидкости нужно ведро', player_dead:'Сначала нажми «Ожить»',
   occupied: 'Здесь уже есть блок или игрок', stale_cell: 'Ячейка изменилась. Повторите действие.',
   out_of_reach: 'Цель вне досягаемости', not_visible: 'Блок закрыт', outside_bounds: 'Граница района',
   reserved: 'Это часть контрольной механики', nothing_to_copy: 'Сначала скопируйте блок',
@@ -209,6 +355,12 @@ const messages = {
   voxel_material_limit: 'В кубе уже слишком много разных материалов',
   outside_playable_area: 'Граница района', protected_cell: 'Это часть контрольной механики',
   no_interaction: 'С этим объектом нельзя взаимодействовать',
+  stale_container: 'Хранилище изменилось. Повторите действие',
+  not_a_container: 'Хранилище больше недоступно',
+  wrong_container_item: 'Этот предмет не подходит для ячейки',
+  stale_inventory_item: 'Предмет изменился. Откройте его снова',
+  invalid_item_text: 'Проверьте текст предмета',
+  book_already_signed: 'Книга уже подписана',
   not_a_seat: 'На этот блок нельзя сесть', seat_taken: 'Место уже занято',
   seat_blocked: 'Над сиденьем недостаточно места',
   seat_requires_ground: 'Сесть можно на твёрдую поверхность',
@@ -251,6 +403,49 @@ async function post(path, payload, signal) {
   return {ok: response.ok, body};
 }
 
+async function getNpc(path) {
+  const response=await fetch(path,{signal:AbortSignal.timeout(8000)});
+  return {ok:response.ok,body:await response.json()};
+}
+
+function applyNpcs(payload) {
+  if (!payload || !Array.isArray(payload.npcs)) return;
+  npcBards.clear();
+  for (const npc of payload.npcs) if (npc.bard?.sound) npcBards.set(npc.id,npc);
+  view.npcs?.replace(payload.npcs);
+  npcEditorAvailable=payload.editorAvailable!==false;
+  npcUi.setAvailable(entered && npcEditorAvailable);
+  npcUi.setAccess(payload.editor);
+}
+
+function moveNpcs({updates}) {
+  if (!Array.isArray(updates)) return;
+  for (const update of updates) {
+    const bard=npcBards.get(update.id);
+    if (bard) npcBards.set(update.id,{...bard,...update});
+  }
+  view.npcs?.motion(updates);
+}
+
+async function refreshNpcs() {
+  try {
+    const {ok,body}=await getNpc('/api/npcs');
+    if (ok) applyNpcs(body);
+  } catch (error) {console.warn('Не удалось обновить список NPC',error);}
+}
+
+function npcCommand(npcId,action,parameters={}) {
+  const request=npcActionQueue.then(async()=>{
+    if (resetting || seatPending) return {ok:false,body:{error:'action_pending'}};
+    if (!await flushPosition()) return {ok:false,body:{error:'movement_blocked'}};
+    const result=await post('npcs/action',{npcId,action,eye:view.eyeOffset(),...parameters},AbortSignal.timeout(8000));
+    if (result.ok) applyInventory(result.body.inventory);
+    return result;
+  });
+  npcActionQueue=request.catch(()=>{});
+  return request;
+}
+
 function requestId() {
   return [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join('');
 }
@@ -276,6 +471,7 @@ function changes(list = [], revision = 0, frames) {
   }
   if (frames) world.setFrames(frames,revision);
   if (changed.length || frames) selectionRevision++;
+  if (changed.length) storage.changed(changed);
   if (seat?.kind === 'ground' && changed.length) presenceDirty = true;
   view.remeshLighting(world.updateLighting());
   for (const change of changed) {
@@ -296,14 +492,16 @@ async function refresh() {
 }
 
 function stream() {
-  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1');
-  feed.addEventListener('open', () => { presenceDirty = true; });
+  feed = new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1&npcs=1');
+  feed.addEventListener('open', () => { presenceDirty = true; social.refreshWarps(); });
   feed.addEventListener('presence', event => {
     const {players, selfOnline} = JSON.parse(event.data);
     view.players.replace(players);
     social.roster(players, selfOnline && profile.confirmed);
   });
   feed.addEventListener('presence-motion', event => view.players.update(JSON.parse(event.data).players));
+  feed.addEventListener('npcs',event=>applyNpcs(JSON.parse(event.data)));
+  feed.addEventListener('npc-motion',event=>moveNpcs(JSON.parse(event.data)));
   feed.addEventListener('dropped-items',event=>world.setDroppedItems(JSON.parse(event.data).entities,performance.now()));
   feed.addEventListener('minecarts', event => {
     const {entities,boats,seat:reportedSeat,position:feet} = JSON.parse(event.data);
@@ -321,6 +519,9 @@ function stream() {
     social.clockState(time);
   });
   feed.addEventListener('weather',event=>updateWeather(JSON.parse(event.data).mode));
+  feed.addEventListener('game-mode',event=>modeUi.update(JSON.parse(event.data)));
+  feed.addEventListener('access-revoked',()=>location.reload());
+  feed.addEventListener('warps',event=>social.warpsChanged(JSON.parse(event.data)));
   feed.addEventListener('commit', event => {
     const data = JSON.parse(event.data);
     changes(data.changes, data.worldRevision, data.frames);
@@ -341,7 +542,8 @@ function heldPonyItem() {
   }
   const partKey = heldPart ? `cover-material:${heldPart.material}` : null;
   const key = chiseling ? chiselMaterial : partKey ?? clipboard;
-  return key && /^(?:legacy|cover-material):[\d:]+$/.test(key) ? {kind:'block', key} : null;
+  return key && /^(?:legacy|cover-material):[\d:]+$/.test(key)
+    ? {kind:'block',key,...(!chiseling && heldPonyPart && {part:heldPonyPart})} : null;
 }
 
 function playerPose() {
@@ -351,7 +553,7 @@ function playerPose() {
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
     stance:seat?.bed ? 'crawl' : movement.stance, boost:!seat && flying && playing && sprinting(), eye:view.eyeOffset(),
     typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(), groundSeat:seat?.kind === 'ground',
-    equipment:inventory.equipment,
+    equipment:inventory.equipment,emote,
     seq:Math.round(performance.timeOrigin + performance.now())};
 }
 
@@ -365,7 +567,9 @@ function sendPresence(now) {
   }
   const changed = !lastSentPose || pose.motion !== lastSentPose.motion || pose.stance !== lastSentPose.stance || pose.boost !== lastSentPose.boost ||
     pose.typing !== lastSentPose.typing || pose.swing !== lastSentPose.swing ||
+    pose.emote?.id!==lastSentPose.emote?.id || pose.emote?.started!==lastSentPose.emote?.started ||
     pose.held?.key !== lastSentPose.held?.key || pose.held?.kind !== lastSentPose.held?.kind ||
+    pose.held?.part !== lastSentPose.held?.part ||
     pose.cartDrive !== lastSentPose.cartDrive || Boolean(pose.cartDrive) ||
     pose.boatDrive?.[0] !== lastSentPose.boatDrive?.[0] || pose.boatDrive?.[1] !== lastSentPose.boatDrive?.[1] ||
     pose.boatDrive?.some(Boolean) ||
@@ -388,7 +592,8 @@ function sendPresence(now) {
 function updateCamera() {
   const stance = seat?.bed ? 'crawl' : movement.stance;
   const lowCeiling = !spectator && stance !== 'stand' ? playerBody(movement.size,stance).height : undefined;
-  view.updateCamera(position,orbitHeading ?? heading,seat ? SEATED_EYE : EYE,lowCeiling);
+  const focus=modeUi.death ? {...position,y:position.y-(view.localAvatar?.ragdollDrop??0)} : position;
+  view.updateCamera(focus,orbitHeading ?? heading,modeUi.death?.position ? .55 : seat ? SEATED_EYE : EYE,lowCeiling);
 }
 
 function cameraMode() {
@@ -446,9 +651,10 @@ function look(dx, dy, sensitivity = .0023) {
 function enterWorld() {
   entered = true;
   presenceDirty = true;
-  creativeToggle.disabled = spectator || !creativeAvailable;
+  creativeToggle.disabled = spectator || !creativeAvailable || !modeUi.creative;
   inventoryToggle.disabled = spectator;
-  element('weather').disabled = false;
+  npcUi.setAvailable(npcEditorAvailable);
+  element('weather').disabled = modeUi.active&&!modeUi.admin;
 }
 
 function setPlaying(active) {
@@ -496,7 +702,7 @@ function setSpectator(active) {
   keys.clear();
   game.classList.toggle('spectating', active);
   element('spectator-status').hidden = !active;
-  creativeToggle.disabled = active || !creativeAvailable;
+  creativeToggle.disabled = active || !creativeAvailable||!modeUi.creative;
   inventoryToggle.disabled = active;
   updateCameraHint();
 }
@@ -567,25 +773,38 @@ async function teleport(coordinates) {
   try {
     await sync;
     const result = await post('teleport', coordinates, AbortSignal.timeout(5000));
-    if (result.ok) {
-      const arriving = arriveAt(result.body.position,result.body.stance);
-      changes(result.body.changes, result.body.worldRevision);
-      effects(result.body);
-      presenceDirty = true;
-      selectionInputs = null;
-      placementKey = '';
-      await arriving;
-    }
+    if (result.ok) await acceptTeleport(result.body);
     return result;
   } finally {
     resetting = false;
   }
 }
 
+async function acceptTeleport(body) {
+  const arriving=arriveAt(body.position,body.stance);
+  changes(body.changes,body.worldRevision,body.frames);
+  effects(body);
+  presenceDirty=true;
+  selectionInputs=null;
+  placementKey='';
+  await arriving;
+}
+
+async function receiveNpcTeleport(body) {
+  resetting=true;
+  try {await acceptTeleport(body);}
+  finally {resetting=false;}
+}
+
+async function placeWarp(title) {
+  if (resetting || acting || seatPending) return {ok:false,body:{error:'action_pending'}};
+  if (!await flushPosition()) return {ok:false,body:{error:'movement_blocked'}};
+  return post('warps',{title},AbortSignal.timeout(5000));
+}
+
 async function arriveAt(feet, stance) {
   const cx = Math.floor(feet.x / 16), cz = Math.floor(feet.z / 16);
-  const visible = world.manifest.chunks.filter(([x,z]) =>
-    Math.max(Math.abs(x - cx), Math.abs(z - cz)) <= view.detailedDistance);
+  const visible = world.playableAround(cx,cz,view.detailedDistance);
   const covered = !view.chunksReady(visible);
   if (covered) teleportLoading.hidden = false;
   setSeat(null, feet,stance);
@@ -624,9 +843,15 @@ async function toggleSeat(ground) {
 
 function interact(sneaking = false) {
   if (!playing || acting || resetting || spectator || menuOpen()) return;
+  if (npcTarget && !seat) {npcUi.interact(npcTarget); return;}
   if (seat || seatTarget) return toggleSeat();
   if (frameTarget) return action('interact');
   const cell = selection?.cell;
+  if (!sneaking && containerSpec(cell)) {
+    acting=true;
+    void storage.open(selection).catch(()=>notice('Не удалось открыть хранилище')).finally(()=>{acting=false;});
+    return;
+  }
   if (seatFor(cell, world.models) && !(sneaking && jammyUseSound(...blockState(cell)))) return toggleSeat();
   const sign = signFor(cell);
   if (!sign) return action('interact', sneaking);
@@ -831,6 +1056,7 @@ function updatePlacementHints() {
 
 function setHeldPart(part) {
   heldPart = part;
+  heldPonyPart = part ? publicMicroPart(part) : undefined;
   partRotation = 0;
   placementKey = '';
   updatePlacementHints();
@@ -886,10 +1112,12 @@ function toggleChiselSize() {
 }
 
 function updateSelection() {
-  if (!playing || spectator || orbitHeading) {
+  if (!playing || spectator || orbitHeading || modeUi.death) {
     selection = null;
     seatTarget = null;
     frameTarget = null;
+    npcTarget = null;
+    hitPlayer = null;
     selectionInputs = null;
     return;
   }
@@ -897,26 +1125,69 @@ function updateSelection() {
   const {yaw,pitch} = heading;
   const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,chiselSize,seat,movement.stance];
   const changed = !selectionInputs || stamp.some((value, index) => value !== selectionInputs[index]);
-  if (!changed && !world.minecarts.size && !world.boats.size && !seatTarget) return;
+  const vehicleChanged=changed || world.minecarts.size || world.boats.size || seatTarget;
+  if (!vehicleChanged && !view.npcs&&!modeUi.active) return;
   selectionInputs = stamp;
   const cp = Math.cos(pitch);
   const origin = view.sightOrigin(position,seat ? SEATED_EYE : EYE);
   const direction = [-Math.sin(yaw) * cp,Math.sin(pitch),-Math.cos(yaw) * cp];
   if (changed) selection = pick(world, origin, direction, chiseling);
-  seatTarget = pickVehicle(world,origin,direction,selection);
+  if (vehicleChanged) seatTarget = pickVehicle(world,origin,direction,selection);
   if (changed) rayFrameTarget = pickItemFrame(world,origin,direction,selection);
   frameTarget = rayFrameTarget;
   if (frameTarget && (seatTarget?.length ?? Infinity) < frameTarget.length) frameTarget = null;
   else if (frameTarget) seatTarget = null;
+  npcTarget = !seat && view.npcs?.pick(origin,direction,
+    Math.min(6,selection?.length??6,seatTarget?.length??6,frameTarget?.length??6));
+  hitPlayer=modeUi.active&&!seat&&view.players.pick(origin,direction,Math.min(4.2,selection?.length??Infinity,
+    seatTarget?.length??Infinity,frameTarget?.length??Infinity,npcTarget?.distance??Infinity));
   if (changed && chiseling && chiselSize === 2 && selection?.voxel !== undefined) {
     selection.chiselSize = chiselSize;
     selection.boxes = [voxelRemovalBrush(selection.cell.voxels, selection.voxel, chiselSize).box];
   }
 }
 
-async function action(type, sneaking = false) {
+async function action(type, sneaking = false, tapTool = false) {
+  if (modeUi.death) return;
+  if (type==='copy'&&!modeUi.creative) {notice('Копирование доступно в креативе'); return;}
   if (acting || resetting || spectator || !playing) return;
+  if (wieldWorldEdit() && (type==='remove' || type==='place' || type==='copy' && tapTool)) {
+    repeatPlacement=false;
+    await worldEdit.tool(type,selection);
+    return;
+  }
+  if (type==='remove'&&hitPlayer&&!chiseling&&!menuOpen()) {
+    acting=true;
+    try {
+      const result=await post('combat',{target:hitPlayer.id},AbortSignal.timeout(5000));
+      if (result.ok&&result.body.hit) {
+        hoofSwing=(hoofSwing+1)&0x7fffffff;
+        presenceDirty=true;
+      }
+    } catch {notice('Связь с сервером прервана');}
+    finally {acting=false;}
+    return;
+  }
+  if (npcTarget) {
+    if (type==='remove' && !chiseling) {
+      acting=true;
+      try {
+        const result=await npcCommand(npcTarget.id,'attack');
+        if (!result.ok) notice(messages[result.body.error]??'Не удалось атаковать NPC');
+        else {
+          hoofSwing=(hoofSwing+1)&0x7fffffff;
+          presenceDirty=true;
+        }
+      } catch {notice('Связь с сервером прервалась');}
+      finally {acting=false;}
+    }
+    return;
+  }
   const frame = frameTarget && !chiseling && ['place','remove','interact'].includes(type) ? frameTarget : null;
+  if (type==='place' && !frame && !chiseling && bookType(inventoryStackAt(inventory.selected))) {
+    itemDocuments.openBook(inventory.selected,{world:true});
+    return;
+  }
   const placingFrame = !frame && type === 'place' && heldCreativeItem?.kind === 'item-frame';
   const placingCart = !frame && type === 'place' && heldCreativeItem?.kind === 'minecart';
   const placingBoat = !frame && type === 'place' && heldCreativeItem?.kind === 'boat';
@@ -1088,8 +1359,22 @@ async function action(type, sneaking = false) {
 }
 
 function tick(now) {
+  if (touchMode || view.lowDevice) {
+    const deadline=nextMobileFrame??now;
+    if (now+1<deadline) {
+      requestAnimationFrame(tick);
+      return;
+    }
+    // Recover cadence after a late frame without scheduling another immediately.
+    nextMobileFrame=Math.max(deadline+mobileFrameMs,now+mobileFrameMs/2);
+  }
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
   let seatedSpeed = 0;
+  if (emote && (flying || seat || jump || forwardInput() || turnInput() || movement.stance!=='stand' ||
+      emote.id==='wave'&&Date.now()-emote.started>2200)) {
+    emote=null;
+    presenceDirty=true;
+  }
   lastFrame = now;
   world.stepMinecarts(now);
   const vehicle = seat?.entity && (seat.kind === 'boat' ? world.boats : world.minecarts).get(seat.entity)?.entity;
@@ -1152,9 +1437,13 @@ function tick(now) {
   } else horizontalSpeed = seatedSpeed;
   if (playing && !menuOpen()) {
     const hour = view.dayTick(now);
+    if (now>=nextBardCheck) {
+      audio.npcMusic(npcBards.values(),position,now);
+      nextBardCheck=now+200;
+    }
     audio.frame(world,position,{grounded:movement.grounded && !seat && !flying,
       yaw:heading.yaw,body:movement.body,climbing:movement.medium === 'ladder',swimming:movement.medium === 'water',
-      precipitation:view.precipitationKind,sheltered:view.rain?.listenerSheltered,
+      precipitation:view.precipitationKind,sheltered:view.rain?.listenerSheltered,weatherAudio:view.weatherAudio,
       biome:view.climate?.biomeAt(position.x,position.z),night:hour > 13000 && hour < 23000,
       windStrength:windAt(now,view.weather).strength});
   }
@@ -1166,26 +1455,27 @@ function tick(now) {
     view.viewBob.step(0, dt, true, 0);
   }
   view.updateVehicles();
-  view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat, spectator);
+  view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat, spectator,modeUi.death);
   updateCamera();
   view.players.frame(now, dt);
   updateSelection();
-  updatePlacement(selection);
+  worldEdit.frame();
+  updatePlacement(npcTarget||hitPlayer?null:selection);
   if (repeatPlacement && now >= nextPlacement && !acting && !resetting && !menuOpen() && playing &&
-      !spectator && !orbitHeading && document.pointerLockElement === view.renderer.domElement) {
+      !spectator && !orbitHeading && (touchMode || document.pointerLockElement === view.renderer.domElement)) {
     nextPlacement = now + 150;
-    if ((clipboard || heldPart || chiseling) && !frameTarget && !seatTarget) void action('place');
+    if ((clipboard || heldPart || chiseling) && !frameTarget && !seatTarget && !npcTarget) void action('place');
   }
-  const selected = frameTarget ? 'Рамка · ПКМ — вложить предмет · E — повернуть' :
+  const selected = hitPlayer ? hitPlayer.name : npcTarget ? plainMinecraftText(npcTarget.entity?.name??'NPC') : frameTarget ? 'Рамка · ПКМ — вложить предмет · E — повернуть' :
     seatTarget ? (seatTarget.kind === 'boat' ? 'Лодка · E — сесть' : 'Вагонетка · E — сесть') :
     selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
-  const targetSeat = !seat && !seatTarget && !frameTarget && seatFor(selection?.cell,world.models);
-  const interaction = targetSeat ? targetSeat.bed ? 'E — лечь' : 'E — сесть' :
+  const targetSeat = !npcTarget && !seat && !seatTarget && !frameTarget && seatFor(selection?.cell,world.models);
+  const interaction = npcTarget ? (touchMode?'Действие — разговор':'E — разговор') : targetSeat ? targetSeat.bed ? 'E — лечь' : 'E — сесть' :
     !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) ? 'E — редактировать' : '';
-  const fluidHint = selection?.cell?.fluid === 'water' ? 'ЛКМ — убрать воду' :
+  const fluidHint = npcTarget?'':selection?.cell?.fluid === 'water' ? 'ЛКМ — убрать воду' :
     selection?.cell?.fluid === 'lava' ? 'ЛКМ — убрать лаву' : '';
-  const status = [selected,interaction,fluidHint].filter(Boolean).join('  /  ');
+  const status = wieldWorldEdit() ? worldEdit.hint(touchMode) : [selected,interaction,fluidHint].filter(Boolean).join('  /  ');
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
   const coordinates = `X ${position.x.toFixed(2)}  Y ${position.y.toFixed(2)}  Z ${position.z.toFixed(2)}`;
   if (coordinateStatus.textContent !== coordinates) coordinateStatus.textContent = coordinates;
@@ -1194,7 +1484,10 @@ function tick(now) {
     nextClockUpdate = now + 200;
   }
   nearbyStream?.update();
-  view.render(now, selection, playing && !menuOpen(), placement, document.hasFocus());
+  const eye=view.sightOrigin(position,movement.body.eye);
+  touchControls?.update({flying,spectator,stance:movement.stance,crawlRequested,seated:seat?.kind==='ground',
+    orbit:Boolean(orbitHeading),chisel:chiseling});
+  view.render(now, npcTarget||hitPlayer?null:selection, playing && !menuOpen(), placement, document.hasFocus(),{x:eye[0],y:eye[1],z:eye[2]});
   requestAnimationFrame(tick);
 }
 
@@ -1244,7 +1537,7 @@ function bindControls() {
   document.addEventListener('pointerlockchange', () => {
     resuming = false;
     if (!document.pointerLockElement) pointerReleasedAt = performance.now();
-    if (!touchMode && !menuOpen()) setPlaying(document.pointerLockElement === canvas);
+    if (!touchMode && !menuOpen() && !modeUi.death) setPlaying(document.pointerLockElement === canvas);
   });
   document.addEventListener('pointerlockerror', () => {
     resuming = false;
@@ -1259,8 +1552,9 @@ function bindControls() {
     }
   });
   document.addEventListener('keydown', event => {
-    if (!teleportLoading.hidden && event.target !== element('teleport-reload')) return;
-    if (signEditor.open || audioSettings?.open) return;
+    if ((!teleportLoading.hidden && event.target !== element('teleport-reload'))||modeUi.death) return;
+    if (signEditor.open || audioSettings?.open || itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen()||
+        modeUi.isOpen() || adminUi.isOpen()) return;
     if ((event.code === 'F5' || event.code === 'KeyY' || event.code === 'KeyU') && playing && !menuOpen()) {
       event.preventDefault();
       if (!spectator && !event.repeat) {
@@ -1321,10 +1615,15 @@ function bindControls() {
         recordPosition(position);
       }
     }
-    if (event.code === 'KeyZ' && !resetting && !acting) toggleChisel();
-    if (event.code === 'KeyB') {
-      if (chiseling) toggleChiselSize();
-      else creative.openInventory();
+    if (event.code === 'KeyK' && !resetting && !acting) {
+      if (event.shiftKey && chiseling) toggleChiselSize();
+      else toggleChisel();
+    }
+    if (event.code === 'KeyJ') creative.openInventory();
+    if (['KeyB','KeyZ'].includes(event.code)&&!flying&&!seat&&movement.grounded&&movement.stance==='stand') {
+      const id=event.code==='KeyB'?'wave':'dance';
+      emote=emote?.id===id ? null : {id,started:Date.now()};
+      presenceDirty=true;
     }
     if (event.code === 'KeyQ') {
       event.preventDefault();
@@ -1357,10 +1656,11 @@ function bindControls() {
   window.addEventListener('blur', () => {
     repeatPlacement = resumeOnEscape = resuming = false;
     keys.clear();
+    touchControls?.clear();
     social.blur();
   });
   canvas.addEventListener('mousedown', event => {
-    if (touchMode || menuOpen()) return;
+    if (touchMode || menuOpen()||modeUi.death) return;
     if (!playing) {
       if (entered && event.button === 0) button.click();
       return;
@@ -1373,7 +1673,7 @@ function bindControls() {
       action('place');
     }
     if (event.button === 0) action('remove');
-    if (event.button === 1) action('copy');
+    if (event.button === 1) action('copy',false,true);
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
   canvas.addEventListener('wheel',event=>{
@@ -1388,51 +1688,55 @@ function bindControls() {
 
   let finger, fingerX, fingerY;
   canvas.addEventListener('pointerdown', event => {
-    if (!touchMode || finger !== undefined) return;
+    if ((!touchMode&&!modeUi.death) || !playing || menuOpen() || finger !== undefined) return;
     finger = event.pointerId;
     fingerX = event.clientX;
     fingerY = event.clientY;
     canvas.setPointerCapture(finger);
   });
   canvas.addEventListener('pointermove', event => {
-    if (event.pointerId !== finger) return;
+    if (event.pointerId !== finger || menuOpen()) return;
     look(event.clientX - fingerX, event.clientY - fingerY, .006);
     fingerX = event.clientX;
     fingerY = event.clientY;
   });
   canvas.addEventListener('lostpointercapture', () => { finger = undefined; });
-  const pad = element('stick');
-  const nub = pad.querySelector('i');
-  function slide(event) {
-    const bounds = pad.getBoundingClientRect();
-    const x = (event.clientX - bounds.left - bounds.width / 2) / 34;
-    const z = (event.clientY - bounds.top - bounds.height / 2) / 34;
-    const magnitude = Math.max(1, Math.hypot(x, z));
-    stick.x = x / magnitude;
-    stick.z = z / magnitude;
-    nub.style.transform = 'translate(' + (stick.x * 33) + 'px,' + (stick.z * 33) + 'px)';
-  }
-  pad.addEventListener('pointerdown', event => { pad.setPointerCapture(event.pointerId); slide(event); });
-  pad.addEventListener('pointermove', event => { if (pad.hasPointerCapture(event.pointerId)) slide(event); });
-  pad.addEventListener('lostpointercapture', () => {
-    stick.x = stick.z = 0;
-    nub.style.transform = '';
+  if (touchMode) touchControls=bindTouchControls({element,stick,
+    enabled:()=>playing&&!menuOpen()&&teleportLoading.hidden&&!modeUi.death,
+    sendKey:(code,pressed,modifiers)=>document.dispatchEvent(new KeyboardEvent(pressed?'keydown':'keyup',
+      {code,cancelable:true,...modifiers})),
+    use:interact,
+    block(type) { if (type==='rotate') cyclePlacement(); else void action(type,false,true); },
+    repeat(held) {
+      repeatPlacement=held&&!spectator;
+      if (held) nextPlacement=performance.now()+350;
+    },
+    pause() { pause(); setPlaying(false); },
   });
-  element('touch-place').addEventListener('click', () => action('place'));
-  element('touch-use').addEventListener('click', () => interact());
-  for (const [id, command] of [['touch-copy','copy'], ['touch-remove','remove']]) {
-    element(id).addEventListener('click', () => action(command));
-  }
-  touchRotate.addEventListener('click', cyclePlacement);
-  touchChisel.addEventListener('click', () => { if (!resetting && !acting) toggleChisel(); });
-  element('jump').addEventListener('pointerdown', () => { jump = true; });
   element('detail-distance').addEventListener('change', event => {
     const distance = Number(event.target.value);
     view.setDetailedLodDistance(distance).then(() => {
-      localStorage.setItem('honeymoon-detail-distance', String(distance));
+      localStorage.setItem(detailPreference,String(distance));
     }).catch(error => notice(error.message));
   });
   const night = element('night-vision');
+  const lowDevice = element('low-device');
+  const detail = element('detail-distance');
+  const paintLowDevice = ()=>{
+    lowDevice.textContent=view.lowDevice?'Слабое устройство: вкл.':'Слабое устройство: выкл.';
+    lowDevice.setAttribute('aria-pressed',String(view.lowDevice));
+    detail.disabled=view.farTerrain?.lod.maxDistance!==32 || view.lowDevice;
+  };
+  paintLowDevice();
+  lowDevice.addEventListener('click',async()=>{
+    lowDevice.disabled=true;
+    try {
+      await view.setLowDevice(!view.lowDevice);
+      localStorage.setItem(lowDevicePreference,view.lowDevice?'1':'0');
+      nearbyStream?.update();
+    } catch (error) {notice(error.message);}
+    finally {paintLowDevice(); lowDevice.disabled=false;}
+  });
   const showVision = enabled=>{
     view.setNightVision(enabled);
     night.textContent = enabled ? 'Ночное зрение вкл.' : 'Ночное зрение выкл.';
@@ -1456,7 +1760,7 @@ function bindControls() {
       notice('Не удалось изменить погоду');
     } finally {
       weather.value = view.weather;
-      weather.disabled = false;
+      weather.disabled = modeUi.active&&!modeUi.admin;
     }
   });
   const sound = element('audio-toggle');
@@ -1575,8 +1879,7 @@ async function streamChunks(chunks, scenery) {
   }
 }
 
-function streamNearby(chunks, scenery) {
-  const playable = new Set(chunks.map(([x, z]) => chunkKey(x, z)));
+function streamNearby(scenery) {
   const visual = new Set(scenery.map(([x, z]) => chunkKey(x, z)));
   const inFullWorld=detailCoverage(world.manifest.fullChunks);
   const inFlight = new Map();
@@ -1604,7 +1907,7 @@ function streamNearby(chunks, scenery) {
     for (let dz = -radius; dz <= radius; dz++) for (let dx = -radius; dx <= radius; dx++) {
       const coordinate = [x + dx, z + dz];
       const key = chunkKey(...coordinate);
-      const visualOnly = !playable.has(key);
+      const visualOnly = !world.isPlayableChunk(...coordinate);
       if (visualOnly && !visual.has(key) && !inFullWorld(...coordinate) || world.chunks.has(key)) continue;
       planned.push({coordinate, key, visualOnly, distance:Math.max(Math.abs(dx), Math.abs(dz)), order:dx * dx + dz * dz});
     }
@@ -1648,8 +1951,12 @@ function streamNearby(chunks, scenery) {
 }
 
 async function start() {
-  const [manifest, session] = await Promise.all([json('/generated/world/world.json'), post('session', {})]);
-  if (!session.ok) throw new Error('Сеанс не создан');
+  const sessionBody = await accessUi.acquire();
+  if (!sessionBody) return;
+  const session = {body:sessionBody};
+  adminUi.setAccess(sessionBody.access);
+  if (sessionBody.access?.role==='admin') npcUi.setAccess(true);
+  const manifest = await json('/generated/world/world.json');
   creativeAvailable = session.body.creative;
   profile.initialize(session.body.profile);
   if (session.body.sounds) {
@@ -1670,7 +1977,9 @@ async function start() {
   movement.size = profile.confirmed.size ?? 'normal';
   movement.stance = confirmedStance = session.body.stance ?? 'stand';
   crawlRequested = movement.stance === 'crawl';
-  view = new Display(surface, world, session.body.dayTick);
+  view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
+    lowDevice:localStorage.getItem(lowDevicePreference)==='1'});
+  modeUi.update(session.body.gameMode);
   view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
   if (session.body.seat) setSeat(session.body.seat, p,session.body.stance);
@@ -1681,10 +1990,13 @@ async function start() {
   updateCamera();
   const farSupported = supportsFarTerrain(manifest) && manifest.lod.maxDistance === 32;
   const distance = element('detail-distance');
-  const savedDetail = Number(localStorage.getItem('honeymoon-detail-distance'));
+  if (touchMode) for (const option of [...distance.options]) if (Number(option.value)>24) option.remove();
+  const savedDetail = Number(localStorage.getItem(detailPreference));
   if ([...distance.options].some(option => Number(option.value) === savedDetail)) distance.value = String(savedDetail);
-  distance.disabled = !farSupported;
+  else if (touchMode) distance.value='12';
+  distance.disabled = !farSupported || view.lowDevice;
   await Promise.all([view.loadTextures(),creativeAvailable ? loadCreative().catch(console.error) : null]);
+  void refreshNpcs();
   await refresh();
   await view.prepareGraphics();
   bindControls();
@@ -1701,6 +2013,8 @@ async function start() {
     localAvatar: () => view.inspectLocalAvatar(),
     setOcclusion: enabled => view.setOcclusion(enabled),
     target: () => selection && {...selection},
+    targetNpc: () => npcTarget,
+    health: () => ({mode:modeUi.creative?'creative':'game',death:modeUi.death,health:Number(element('health').getAttribute('aria-valuenow'))}),
     placement: () => placement && {...placement},
     setDistance: distance => view.setDistance(distance),
     setDetailedDistance: distance => view.setDetailedLodDistance(distance),
@@ -1710,8 +2024,9 @@ async function start() {
     time: () => ({tick:view.dayTick(performance.now()), frozen:view.worldTime.frozen,
       sun:view.sky.material.uniforms.sunDirection.value.toArray()}),
   });
-  const near = manifest.chunks.filter(chunk => distanceToChunk(chunk) <= 1);
-  const buffered = manifest.chunks.filter(chunk => distanceToChunk(chunk) <= 2);
+  const spawnChunk=[Math.floor(position.x/16),Math.floor(position.z/16)];
+  const near = world.playableAround(...spawnChunk,1);
+  const buffered = world.playableAround(...spawnChunk,2);
   const startup = [...buffered].sort((a, b) => distanceToChunk(a) - distanceToChunk(b));
   await Promise.all(Array.from({length: 4}, async () => {
     while (startup.length) await addChunk(startup.shift());
@@ -1723,9 +2038,14 @@ async function start() {
   button.disabled = false;
   const horizon = farSupported ? view.setDetailedLodDistance(Number(distance.value)) : view.setDistance(4);
   horizon.catch(console.error);
-  if (manifest.chunkPalettes) nearbyStream = streamNearby(manifest.chunks, manifest.visualChunks ?? []);
+  if (manifest.chunkPalettes) nearbyStream = streamNearby(manifest.visualChunks ?? []);
   const pending = nearbyStream?.done ?? streamChunks(manifest.chunks.filter(chunk => !buffered.includes(chunk)), manifest.visualChunks ?? []);
   pending.catch(console.error);
+  if (sessionBody.access?.authenticated && sessionBody.access?.inviteRequired) {
+    document.addEventListener('pointerdown',()=>audio.enable(),{once:true,capture:true});
+    setPlaying(true);
+    if (!touchMode) notice('Нажмите на игру, чтобы управлять обзором мышью');
+  }
 }
 
 start().catch(error => {
