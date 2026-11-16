@@ -873,6 +873,7 @@ export class Display {
       group.userData.frameRevision = frame.revision;
       this.editedFrames.set(key,group);
       this.scene.add(group);
+      group.updateMatrixWorld(true);
     }
   }
 
@@ -889,6 +890,7 @@ export class Display {
     mesh.position.set(...start);
     mesh.rotation.y = Math.atan2(direction[0],direction[2]);
     this.scene.add(mesh);
+    mesh.updateMatrixWorld();
     this.dispenserItems.push({mesh,start,velocity,time:performance.now()});
   }
 
@@ -903,6 +905,7 @@ export class Display {
       mesh.position.set(start[0] + velocity[0] * elapsed,
         start[1] + velocity[1] * elapsed - 2 * elapsed ** 2,start[2] + velocity[2] * elapsed);
       mesh.rotation.y += .1;
+      mesh.updateMatrixWorld();
       return true;
     });
   }
