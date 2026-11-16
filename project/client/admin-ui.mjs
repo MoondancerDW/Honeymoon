@@ -12,16 +12,28 @@ const textErrors={
   profile_not_found:'Профиль больше недоступен.',
   invite_not_found:'Приглашение больше недоступно.',
   device_not_found:'Устройство больше недоступно.',
+  profile_missing:'Профиль больше недоступен.',
+  profile_banned:'Доступ профиля заблокирован.',
+  player_missing:'Игрок больше недоступен.',
+  target_offline:'Игрок вышел из игры.',
+  not_online:'Для телепорта оба игрока должны быть в игре.',
+  teleport_blocked:'Рядом с игроком нет места для телепорта.',
+  outside_playable_area:'Игрок за пределами доступной области.',
+  player_dead:'Персонаж должен возродиться перед телепортом.',
+  movement_blocked:'Сервер скорректировал позицию. Повторите действие.',
+  invalid_ban_reason:'Проверьте текст причины блокировки.',
+  owner_protected:'Профиль владельца защищён от блокировки.',
+  admin_target_self:'Выберите профиль другого игрока.',
 };
 const date=new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short'});
 const stamp=value=>Number.isFinite(value)?date.format(value):'';
 const nameOf=profile=>profile.profileName||profile.nickname||profile.uid;
 
-export function createAdminUi({element,load,post,pause,worldSettings}) {
+export function createAdminUi({element,load,post,pause,worldSettings,teleport}) {
   const toggle=element('admin-toggle'),dialog=element('admin-menu'),body=element('admin-body'),status=element('admin-status');
   const tabs=[...dialog.querySelectorAll('[data-admin-tab]')];
   const identity=element('game');
-  let data,access,busy=false,tab='profiles',freshLink,searchText='';
+  let data,access,busy=false,tab='profiles',freshLink,searchText='',banTarget;
   const activeTab=()=>tabs.forEach(control=>control.setAttribute('aria-pressed',String(control.dataset.adminTab===tab)));
 
   function tell(message='',error=false) {
@@ -91,7 +103,7 @@ export function createAdminUi({element,load,post,pause,worldSettings}) {
         tell(textErrors[response.body.error]??'Действие сейчас недоступно.',true);
         return;
       }
-      done?.(response.body);
+      await done?.(response.body);
       if (refresh) await fetchList();
       if (dialog.open) render();
     } catch(error) {tell(error.message||'Связь с сервером прервана.',true);}
@@ -120,6 +132,57 @@ export function createAdminUi({element,load,post,pause,worldSettings}) {
     return row;
   }
 
+  function profileActions(person,manageable) {
+    const actions=node('div','admin-actions');
+    const other=person.uid!==access.uid;
+    if (other && person.online && !person.ban) {
+      actions.append(button('Телепортироваться к игроку',()=>teleportProfile(person,'to')));
+      if (manageable) actions.append(button('Телепортировать игрока к себе',()=>teleportProfile(person,'bring')));
+    }
+    if (other && manageable && !person.owner) {
+      const label=person.ban?'Снять бан':'Забанить';
+      actions.append(button(label,()=>{
+        if (person.ban) {
+          void submit('admin/profiles/unban',{uid:person.uid},()=>tell('Блокировка снята.'));
+        } else {
+          banTarget=person.uid;
+          render();
+          body.querySelector('input[name="ban-reason"]')?.focus();
+        }
+      },person.ban?'':'admin-danger'));
+    }
+    return actions;
+  }
+
+  function teleportProfile(person,direction) {
+    void submit('admin/teleport',{target:person.uid,direction},async reply=>{
+      if (direction==='to') {
+        dialog.close();
+        await teleport(reply.teleport);
+      } else tell('Игрок перенесён к вам.');
+    },false);
+  }
+
+  function banForm(person) {
+    const form=node('form','admin-ban-form');
+    const reason=field('Причина блокировки (необязательно)',{maxLength:240});
+    reason.input.name='ban-reason';
+    const actions=node('div','admin-actions');
+    const confirm=button('Подтвердить бан',undefined,'admin-danger');
+    confirm.type='submit';
+    actions.append(confirm,button('Отмена',()=>{banTarget=undefined;render();}));
+    form.append(reason.wrapper,actions);
+    form.addEventListener('submit',event=>{
+      event.preventDefault();
+      const message=reason.input.value.trim();
+      void submit('admin/profiles/ban',{uid:person.uid,...(message&&{reason:message})},()=>{
+        banTarget=undefined;
+        tell('Профиль заблокирован.');
+      });
+    });
+    return form;
+  }
+
   function profileCard(person) {
     const row=node('article','admin-record');
     row.dataset.profileUid=person.uid;
@@ -127,14 +190,19 @@ export function createAdminUi({element,load,post,pause,worldSettings}) {
     const information=node('div','admin-details');
     const short=person.uid.slice(0,8);
     const manageable=access.owner || person.uid===access.uid || person.role==='player';
-    const identification=[person.owner?'Владелец':titles[person.role],person.online?'В сети':'Не в сети',short].filter(Boolean);
+    const identification=[person.owner?'Владелец':titles[person.role],
+      person.ban?'Заблокирован':person.online?'В сети':'Не в сети',short].filter(Boolean);
     information.append(node('strong',null,nameOf(person)),node('small',null,identification.join(' · ')));
     if (person.nickname && person.nickname!==nameOf(person)) information.append(node('small',null,'Ник в игре · '+person.nickname));
     const linkDevice=button('Привязать устройство',()=>void submit('admin/invites',
       {kind:'device',profileUid:person.uid},reply=>createdLink(reply,person)));
     header.append(information);
-    if (manageable) header.append(linkDevice);
+    if (manageable && !person.ban) header.append(linkDevice);
     row.append(header);
+    if (person.ban?.reason) row.append(node('small','admin-error','Причина блокировки · '+person.ban.reason));
+    const actions=profileActions(person,manageable);
+    if (actions.childElementCount) row.append(actions);
+    if (banTarget===person.uid) row.append(banForm(person));
     const devices=person.devices??[];
     if (devices.length) {
       const details=node('details');
@@ -230,7 +298,7 @@ export function createAdminUi({element,load,post,pause,worldSettings}) {
     catch(error) {body.replaceChildren(); tell(error.message,true);}
   });
   element('admin-close').addEventListener('click',()=>dialog.close());
-  dialog.addEventListener('close',()=>{freshLink=undefined;});
+  dialog.addEventListener('close',()=>{freshLink=undefined;banTarget=undefined;});
   for (const control of tabs) control.addEventListener('click',()=>{
     tab=control.dataset.adminTab;
     tell();

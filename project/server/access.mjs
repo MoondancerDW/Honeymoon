@@ -44,7 +44,8 @@ function inviteStatus(row,now) {
   return 'active';
 }
 
-export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,now=Date.now,revokeStream=()=>{}}={}) {
+export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,now=Date.now,revokeStream=()=>{},
+  disconnectProfile=()=>{}}={}) {
   const prepare=sql=>store.db.prepare(sql);
   const findDevice=prepare(`SELECT devices.id AS deviceId,devices.player AS uid,devices.last_seen AS lastSeen,
     players.profile_name AS profileName,players.access_role AS role
@@ -75,8 +76,15 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
   const disableInvite=prepare('UPDATE access_invites SET revoked_at=? WHERE id=? AND used_at IS NULL AND revoked_at IS NULL');
   const expected=typeof ownerKey==='string' && ownerKey.length ? Buffer.from(hash(ownerKey),'hex') : undefined;
   const failedOwner=new Map();
+  const bans=new Map(prepare("SELECT owner,value FROM module_state WHERE module='access' AND key='ban' AND value<>'null'")
+    .all().map(({owner,value})=>[owner,JSON.parse(value)]));
   const owner=()=>store.getState('access','','owner')?.value ?? null;
-  const isAdmin=uid=>typeof uid==='string' && account.get(uid)?.role==='admin';
+  const isAdmin=uid=>typeof uid==='string' && !bans.has(uid) && account.get(uid)?.role==='admin';
+
+  function requireUnbanned(uid) {
+    const ban=bans.get(uid);
+    if (ban) throw new RequestError(403,'profile_banned',{reason:ban.reason});
+  }
 
   function authorize(uid) {
     if (!isAdmin(uid)) throw new RequestError(403,'admin_required');
@@ -88,6 +96,28 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
     }
   }
 
+  function adminTarget(actor,target,control) {
+    authorize(actor);
+    if (typeof target!=='string'||!uidPattern.test(target)||!account.get(target)) throw new RequestError(404,'player_missing');
+    if (target===actor) throw new RequestError(400,'admin_target_self');
+    if (control) manageProfile(actor,target);
+    return target;
+  }
+
+  function setBan(actor,uid,reason,banned) {
+    authorize(actor);
+    if (uid===owner()) throw new RequestError(403,'owner_protected');
+    adminTarget(actor,uid,true);
+    const previous=bans.get(uid)??null;
+    const ban=banned ? {reason:label(reason,240,'invalid_ban_reason',''),at:previous?.at??Math.trunc(now())} : null;
+    store.putState('access',uid,'ban',1,ban);
+    if (ban) {
+      bans.set(uid,ban);
+      disconnectProfile(uid,ban);
+    } else bans.delete(uid);
+    return {uid,ban};
+  }
+
   function initialNick(uid,name) {
     const candidate=Array.from(name.replace(/[^\p{L}\p{M}\p{N} _-]/gu,'')).slice(0,24).join('').trim();
     if (candidate.length>=2 && candidate.length<=24 && /[\p{L}\p{N}]/u.test(candidate)) updateInitialNick.run(uid,candidate);
@@ -96,7 +126,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
   function authenticate(token) {
     if (typeof token!=='string' || !devicePattern.test(token)) return undefined;
     const credential=findDevice.get(hash(token));
-    if (credential && now()-credential.lastSeen>=60_000) touchDevice.run(Math.trunc(now()),credential.deviceId);
+    if (credential && !bans.has(credential.uid) && now()-credential.lastSeen>=60_000) touchDevice.run(Math.trunc(now()),credential.deviceId);
     return credential;
   }
 
@@ -121,6 +151,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
       if (row.kind==='device') {
         const profile=account.get(uid);
         if (!profile) throw new RequestError(404,'profile_missing');
+        requireUnbanned(uid);
         if (!profile.profileName) {
           const name=accountName(body.profileName??body.nickname,store.getProfile(uid)?.nickname);
           updateAccount.run(name,profile.role,uid);
@@ -138,6 +169,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
   }
 
   function signIn(body,{credential,legacy,ownerBootstrap}={}) {
+    requireUnbanned(credential?.uid);
     if (credential && body.invite===undefined) return {credential};
     if (credential) throw new RequestError(409,'already_authenticated');
     if (body.invite!==undefined) return invited(body.invite,body);
@@ -145,6 +177,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
     const deviceName=label(body.deviceName,80,'invalid_device_name','Локальный браузер');
     return store.atomic(()=>{
       const uid=legacy ? store.playerFromToken(legacy) : null;
+      requireUnbanned(uid);
       return mint(uid??store.createPlayer().id,deviceName);
     });
   }
@@ -175,6 +208,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
         return mint(savedOwner,deviceName);
       }
       const previous=credential?.uid??(legacy?store.playerFromToken(legacy):null);
+      requireUnbanned(previous);
       const previousAccount=previous?account.get(previous):undefined;
       const name=accountName(body.profileName??body.nickname,
         previousAccount?.profileName ?? (previous ? store.getProfile(previous)?.nickname : null) ??
@@ -203,7 +237,8 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
     authorize(credential.uid);
     const currentOwner=owner(),time=Math.trunc(now());
     return {
-      profiles:profileList.all().map(profile=>({...profile,owner:profile.uid===currentOwner,online:Boolean(online(profile.uid)),
+      profiles:profileList.all().map(profile=>({...profile,owner:profile.uid===currentOwner,
+        ban:bans.get(profile.uid)??null,online:!bans.has(profile.uid)&&Boolean(online(profile.uid)),
         devices:deviceList.all(profile.uid).map(device=>({...device,current:device.id===credential.deviceId}))})),
       invites:inviteList.all().map(row=>publicInvite(row,time)),
     };
@@ -219,6 +254,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
     if (kind==='device') {
       if (typeof profileUid!=='string' || !uidPattern.test(profileUid) || !account.get(profileUid)) throw new RequestError(404,'profile_missing');
       manageProfile(uid,profileUid);
+      requireUnbanned(profileUid);
       target=profileUid;
     }
     const title=label(body.label,80,'invalid_invite_label','');
@@ -256,7 +292,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
     return {ok:true};
   }
 
-  return {authenticate,signIn,bootstrap,view,isAdmin,listAdmin,issue,revokeInvite,revokeDevice,profiles:()=>profileList.all(),account:uid=>
+  return {authenticate,signIn,bootstrap,view,isAdmin,requireUnbanned,adminTarget,setBan,listAdmin,issue,revokeInvite,revokeDevice,profiles:()=>profileList.all(),account:uid=>
     typeof uid==='string'&&uidPattern.test(uid)?account.get(uid):undefined,
   npcEditor:{available:Boolean(expected),isAdmin,require(uid) {
     if (!isAdmin(uid)) throw new RequestError(403,'npc_editor_required');

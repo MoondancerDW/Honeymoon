@@ -195,3 +195,109 @@ test('invitations can expire and revoke without consuming a profile',async t=>{
   const profiles=code(await request(urls.owner,'/api/admin/access',{cookie:owner.cookie})).profiles;
   assert.equal(profiles.length,1);
 });
+
+async function eventReader(t,url,cookie,query='presence=1') {
+  const response=await fetch(url+'/api/events?'+query,{headers:{Cookie:cookie},signal:AbortSignal.timeout(8000)});
+  assert.equal(response.status,200);
+  const reader=response.body.getReader();
+  t.after(()=>reader.cancel().catch(()=>{}));
+  const decoder=new TextDecoder();
+  let buffer='';
+  return async event=>{
+    for (;;) {
+      const end=buffer.indexOf('\n\n');
+      if (end!==-1) {
+        const packet=buffer.slice(0,end).split('\n');
+        buffer=buffer.slice(end+2);
+        if (packet.includes('event: '+event)) return JSON.parse(packet.find(line=>line.startsWith('data: ')).slice(6));
+      } else {
+        const part=await reader.read();
+        assert.ok(!part.done,`stream closed before ${event}`);
+        buffer+=decoder.decode(part.value,{stream:true});
+      }
+    }
+  };
+}
+
+test('administrators teleport online players privately and bans persist without replacing profiles',async t=>{
+  const {state,start,close}=fixture(t);
+  let urls=await start();
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const hostUid=code(owner).access.uid;
+  const host=(path,body)=>request(urls.owner,path,{body,cookie:owner.cookie});
+  const redeem=(invite,profileName)=>request(urls.public,'/api/session',{origin:external,body:{invite,profileName}});
+  const guest=await redeem(code(await host('/api/admin/invites',{kind:'player'})).code,'Guest Save');
+  const guestUid=code(guest).access.uid;
+  const visitor=(path,body)=>request(urls.public,path,{body,cookie:guest.cookie,origin:external});
+  const admin=await redeem(code(await host('/api/admin/invites',{kind:'admin'})).code,'Moderator');
+  const adminUid=code(admin).access.uid;
+  const moderator=(path,body)=>request(urls.public,path,{body,cookie:admin.cookie,origin:external});
+  const second=await redeem(code(await host('/api/admin/invites',{kind:'device',profileUid:guestUid})).code);
+  code(second);
+  const reservation=code(await host('/api/admin/invites',{kind:'device',profileUid:guestUid}));
+
+  const teleport='/api/admin/teleport',ban='/api/admin/profiles/ban',unban='/api/admin/profiles/unban';
+  assert.equal(code(await host(teleport,{target:guestUid,direction:'bring'}),409).error,'not_online');
+  assert.equal(code(await visitor(teleport,{target:hostUid,direction:'to'}),403).error,'admin_required');
+  assert.equal(code(await visitor(ban,{uid:hostUid}),403).error,'admin_required');
+  assert.equal(code(await moderator(teleport,{target:hostUid,direction:'bring'}),403).error,'owner_required');
+  assert.equal(code(await moderator(ban,{uid:hostUid}),403).error,'owner_protected');
+  assert.equal(code(await moderator(ban,{uid:adminUid}),400).error,'admin_target_self');
+
+  const hostEvent=await eventReader(t,urls.owner,owner.cookie);
+  const visitorEvent=await eventReader(t,urls.public,guest.cookie);
+  const secondEvent=await eventReader(t,urls.public,second.cookie,'social=1');
+  for (const actor of [host,visitor]) code(await actor('/api/presence',{yaw:0,pitch:0,motion:'idle'}));
+  const initial=code(await visitor('/api/session',{})).position;
+  const movedHost=code(await host(teleport,{target:guestUid,direction:'to'}));
+  assert.equal(movedHost.uid,hostUid);
+  assert.deepEqual(await hostEvent('admin-teleport'),movedHost.teleport);
+  assert.deepEqual(code(await host('/api/session',{})).position,movedHost.teleport.position);
+  const place=movedHost.teleport.position;
+  assert.ok(Math.abs(place.x-initial.x)>0.6 && Math.hypot(place.x-initial.x,place.z-initial.z)<3.5);
+  assert.equal(place.y,initial.y);
+  const movedVisitor=code(await host(teleport,{target:guestUid,direction:'bring'}));
+  assert.equal(movedVisitor.uid,guestUid);
+  assert.deepEqual(await visitorEvent('admin-teleport'),movedVisitor.teleport);
+  assert.notEqual(movedVisitor.teleport.teleportId,movedHost.teleport.teleportId);
+  assert.deepEqual(code(await visitor('/api/session',{})).position,movedVisitor.teleport.position);
+  assert.notDeepEqual(movedVisitor.teleport.position,place);
+  const stale=[initial.x,initial.y,initial.z,'stand'];
+  const oldTrail=code(await visitor('/api/position',{...initial,requestId:'before-admin-teleport',from:stale,trail:[stale]}),409);
+  assert.equal(oldTrail.error,'movement_blocked');
+  assert.deepEqual(oldTrail.position,movedVisitor.teleport.position);
+
+  code(await host('/api/modes',{mode:'game',target:hostUid}));
+  code(await visitor('/api/teleport',{x:7.5,y:8,z:7.5}));
+  const flight=code(await host(teleport,{target:guestUid,direction:'to'}));
+  assert.equal(flight.teleport.position.y,8);
+  assert.equal(flight.teleport.flight,true);
+  assert.deepEqual(await hostEvent('admin-teleport'),flight.teleport);
+
+  const reason='Rule violation';
+  const blocked=code(await moderator(ban,{uid:guestUid,reason}));
+  assert.deepEqual(await visitorEvent('access-revoked'),{banned:true,reason});
+  assert.deepEqual(await secondEvent('access-revoked'),{banned:true,reason});
+  assert.deepEqual(code(await visitor('/api/session',{}),403),{error:'profile_banned',reason});
+  assert.equal(code(await visitor('/generated/world/world.json'),403).error,'profile_banned');
+  assert.equal(code(await visitor('/api/presence',{yaw:0,pitch:0}),403).error,'profile_banned');
+  assert.equal(code(await redeem(reservation.code),403).error,'profile_banned');
+  assert.equal(code(await host(teleport,{target:guestUid,direction:'bring'}),409).error,'not_online');
+  const listed=()=>host('/api/admin/access').then(code).then(({profiles})=>profiles.find(profile=>profile.uid===guestUid));
+  assert.deepEqual((await listed()).ban,blocked.ban);
+  assert.equal((await listed()).online,false);
+
+  await close();
+  const save=openStore(state);
+  save.putState('inventory',guestUid,'slots',2,{slots:[{key:'legacy:1:0',cell:'legacy:1:0',count:19}],selected:0,equipment:[]});
+  save.close();
+  urls=await start();
+  assert.deepEqual((await listed()).ban,blocked.ban);
+  assert.equal(code(await visitor('/api/world'),403).error,'profile_banned');
+  assert.equal(code(await host(unban,{uid:guestUid})).ban,null);
+  const restored=code(await visitor('/api/session',{}));
+  assert.equal(restored.access.uid,guestUid);
+  assert.equal(restored.inventory.slots[0].count,19);
+  assert.equal(code(await redeem(reservation.code)).access.uid,guestUid);
+  assert.equal((await listed()).ban,null);
+});

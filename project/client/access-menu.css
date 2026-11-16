@@ -13,6 +13,7 @@
   border-radius: .35rem; color: #fbf7ed; background: #112934;
 }
 #access-form small, #admin-status { color: var(--gold); }
+#access-form small { overflow-wrap: anywhere; }
 #access-form small:empty { display: none; }
 #access-submit, #admin-menu .admin-primary { color: #18272e; background: #f0d297; font-weight: 650; }
 #access-profile { margin: 0 0 .25rem; color: var(--gold); font-size: .84rem; overflow-wrap: anywhere; }
@@ -45,6 +46,8 @@
 #admin-menu .admin-device { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .4rem; align-items: center; }
 #admin-menu .admin-subtle, #admin-menu small { color: #cbdcde; font-size: .82rem; overflow-wrap: anywhere; }
 #admin-menu .admin-error { color: #ffbaaa; }
+#admin-menu .admin-danger { color: #ffe3dc; background: #653d3d; border-color: #b5746e; }
+#admin-menu .admin-ban-form { display: grid; gap: .55rem; padding: .65rem; background: #392f34; border-radius: .35rem; }
 #admin-menu .admin-link input { font-family: ui-monospace, Consolas, monospace; }
 #admin-menu :is(.admin-record, .admin-device) strong { overflow-wrap: anywhere; }
 @media (pointer:coarse) {

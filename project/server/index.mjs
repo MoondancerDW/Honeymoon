@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createReadStream, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -269,6 +270,12 @@ export function createHoneymoonServer({
         writeEvent(stream.response,'access-revoked',{});
         stream.response.end();
       }
+    },disconnectProfile:(player,ban)=>{
+      for (const stream of streams) if (stream.player===player&&!stream.response.writableEnded) {
+        writeEvent(stream.response,'access-revoked',{banned:true,reason:ban.reason});
+        stream.response.end();
+      }
+      presence.leave(player);
     }});
   const bulkWrites=new WeakMap();
   const worldTime = createWorldTime(store);
@@ -335,6 +342,7 @@ export function createHoneymoonServer({
   }
 
   function writeEvent(response, name, event, revision) {
+    if (response.writableEnded || response.destroyed) return;
     const id = revision === undefined ? '' : `id: ${revision}\n`;
     const packet=`${id}event: ${name}\ndata: ${JSON.stringify(event)}\n\n`;
     const bytes=name==='commit'?Buffer.byteLength(packet):0;
@@ -353,7 +361,7 @@ export function createHoneymoonServer({
   }
 
   function writeStream(response,packet) {
-    if (!response.destroyed && !response.write(packet) &&
+    if (!response.writableEnded && !response.destroyed && !response.write(packet) &&
         response.writableLength>MAX_STREAM_BACKLOG+(bulkWrites.get(response)??0)) response.destroy();
   }
 
@@ -361,11 +369,14 @@ export function createHoneymoonServer({
     for (const stream of streams) if (stream.social && receives(stream.player)) writeEvent(stream.response, name, data);
   }
 
-  function teleportPlayer(player,target) {
-    const result=game.teleport(player,target);
+  function publishTeleport(player,result) {
     presence.update(player,result.position,game.poseFor(player,{yaw:0,pitch:0,motion:'idle'}));
     if (result.changes.length || result.effects.length) broadcast(player,result);
     return result;
+  }
+
+  function teleportPlayer(player,target) {
+    return publishTeleport(player,game.teleport(player,target));
   }
 
   function sendNpcs(stream) {
@@ -435,9 +446,16 @@ export function createHoneymoonServer({
     if (isApi) {
       if (method === 'POST' || method === 'DELETE') requireSameOrigin(request,requestSecure,requestOrigin);
       const player=credential?.uid;
+      const ownerBootstrap=method==='POST'&&owner&&(path==='/api/access/owner'||path==='/api/npcs/admin');
+      if (!ownerBootstrap) access.requireUnbanned(player);
+      async function readInput(limit) {
+        const result=await readBody(request,limit);
+        if (!ownerBootstrap) access.requireUnbanned(player);
+        return result;
+      }
       if (path==='/api/access' && method==='GET') return json(response,200,accessView(credential,owner));
       if (path === '/api/session' && method === 'POST') {
-        const input=await readBody(request);
+        const input=await readInput();
         const {credential:joined,token}=access.signIn(input,{credential,ownerBootstrap:accessView(undefined,owner).ownerBootstrap,
           legacy:!inviteRequired?readAccessCookie(request,legacyCookieName):undefined});
         return json(response,200,session(joined,owner),token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
@@ -445,7 +463,7 @@ export function createHoneymoonServer({
       if ((path==='/api/access/owner' || path==='/api/npcs/admin') && method==='POST') {
         if (!owner) throw new RequestError(403,'owner_only');
         const legacyRoute=path==='/api/npcs/admin';
-        const {credential:joined,token}=access.bootstrap(await readBody(request),{credential,legacyRoute,
+        const {credential:joined,token}=access.bootstrap(await readInput(),{credential,legacyRoute,
           legacy:readAccessCookie(request,legacyCookieName),source:request.socket.remoteAddress});
         if (survival.enabled) sendSocial('game-mode',playerMode(joined.uid),id=>id===joined.uid);
         const body=session(joined,owner);
@@ -453,31 +471,52 @@ export function createHoneymoonServer({
       }
       if (!player) throw new RequestError(401, 'session_required');
       if (path==='/api/access/logout' && method==='POST') {
-        await readBody(request);
+        await readInput();
         const result=access.revokeDevice(credential);
         return json(response,200,result,{'Set-Cookie':[accessCookie('',requestSecure,0),legacyClearCookie(requestSecure)]});
       }
       if (path==='/api/admin/access' && method==='GET')
         return json(response,200,access.listAdmin(credential,presence.onlineProfile));
       if (path==='/api/admin/invites' && method==='POST')
-        return json(response,200,access.issue(player,await readBody(request)));
+        return json(response,200,access.issue(player,await readInput()));
       if (path==='/api/admin/invites/revoke' && method==='POST') {
-        const {id}=await readBody(request);
+        const {id}=await readInput();
         return json(response,200,access.revokeInvite(player,id));
       }
       if (path==='/api/admin/devices/revoke' && method==='POST') {
-        const {id}=await readBody(request);
+        const {id}=await readInput();
         const result=access.revokeDevice(credential,id,false);
         return json(response,200,result,id===credential.deviceId?{'Set-Cookie':[accessCookie('',requestSecure,0),legacyClearCookie(requestSecure)]}:{});
+      }
+      if (method==='POST'&&(path==='/api/admin/profiles/ban'||path==='/api/admin/profiles/unban')) {
+        const {uid,reason}=await readInput();
+        return json(response,200,access.setBan(player,uid,reason,path.endsWith('/ban')));
       }
       const presenceStream=path==='/api/events' && url.searchParams.get('presence')==='1';
       if ((presenceStream || (method==='POST'||method==='DELETE')&&!parallelDeviceRoutes.has(path)) && activeElsewhere(credential)) {
         throw new RequestError(409,'profile_active_elsewhere');
       }
+      if (path==='/api/admin/teleport'&&method==='POST') {
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        const {target,direction}=await readInput();
+        if (direction!=='to'&&direction!=='bring') throw new RequestError(400,'invalid_admin_teleport');
+        const bring=direction==='bring';
+        const member=access.adminTarget(player,target,bring);
+        const online=uid=>presence.onlineProfile(uid) && [...streams].some(stream=>stream.player===uid &&
+          stream.presence && !stream.response.destroyed && !stream.response.writableEnded);
+        if (!online(player)||!online(member)) throw new RequestError(409,'not_online');
+        const uid=bring?member:player;
+        const anchor=bring?player:member;
+        const teleport={...publishTeleport(uid,game.teleportNear(uid,anchor)),teleportId:randomUUID()};
+        for (const stream of streams) if (stream.player===uid&&stream.presence) {
+          writeEvent(stream.response,'admin-teleport',teleport);
+        }
+        return json(response,200,{uid,teleport});
+      }
       if (path==='/api/worldedit' && method==='GET') return json(response,200,worldEdit.read(player));
       if (path==='/api/worldedit' && method==='POST') {
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
-        const result=worldEdit.action(player,await readBody(request));
+        const result=worldEdit.action(player,await readInput());
         if (result.changes?.length) {
           const {worldRevision,changes,effects,frames}=result;
           broadcast(player,{worldRevision,changes,effects,frames});
@@ -488,19 +527,19 @@ export function createHoneymoonServer({
       if (path==='/api/npcs/editor' && method==='GET') return json(response,200,npcs.editor(player));
       if (path==='/api/npcs/editor' && method==='POST') {
         if (!npcs.isAdmin(player)) throw new RequestError(403,'npc_editor_required');
-        const next=npcs.edit(player,await readBody(request,MAX_NPC_EDITOR_BODY));
+        const next=npcs.edit(player,await readInput(MAX_NPC_EDITOR_BODY));
         for (const stream of streams) sendNpcs(stream);
         return json(response,200,next);
       }
       if (path==='/api/npcs/action' && method==='POST') {
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
         if (survival.dead(player)) throw new RequestError(409,'player_dead');
-        return json(response,200,npcs.action(player,await readBody(request)));
+        return json(response,200,npcs.action(player,await readInput()));
       }
       if (path==='/api/modes' && survival.enabled) {
         if (!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
         if (method==='POST') {
-          const {mode,target}=await readBody(request);
+          const {mode,target}=await readInput();
           const member=target===undefined ? undefined : access.account(target)?.uid??[...streams].map(stream=>stream.player)
             .find(id=>presence.onlineProfile(id)?.id===target);
           if (target!==undefined&&!member) throw new RequestError(404,'player_missing');
@@ -515,24 +554,24 @@ export function createHoneymoonServer({
         return json(response,200,modeAdministration());
       }
       if (path==='/api/combat' && method==='POST' && survival.enabled) {
-        const {target}=await readBody(request);
+        const {target}=await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
         const defender=[...streams].map(stream=>stream.player).find(id=>presence.onlineProfile(id)?.id===target);
         if (!defender) throw new RequestError(404,'player_missing');
         return json(response,200,{hit:Boolean(game.hitPlayer(player,defender))});
       }
       if (path==='/api/craft' && method==='POST' && survival.enabled) {
-        const {recipe}=await readBody(request);
+        const {recipe}=await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
         return json(response,200,{inventory:game.craft(player,recipe)});
       }
       if (path === '/api/chat' && method === 'POST') {
-        const body = await readBody(request);
+        const body = await readInput();
         return json(response, 200, chat.message(presence.onlineProfile(player), body, player, presence.onlinePosition(player)));
       }
       if (path === '/api/time' && method === 'POST') {
         if ((inviteRequired||survival.enabled)&&!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
-        const body = await readBody(request);
+        const body = await readInput();
         if (!inviteRequired&&!survival.enabled&&!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const time = worldTime.set(body);
         sendSocial('world-time', time);
@@ -540,14 +579,15 @@ export function createHoneymoonServer({
       }
       if (path === '/api/weather' && method === 'POST') {
         if ((inviteRequired||survival.enabled)&&!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
-        const {mode} = await readBody(request);
+        const {mode} = await readInput();
         if (!inviteRequired&&!survival.enabled&&!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
         const value = {mode:worldTime.setWeather(mode)};
         sendSocial('weather',value);
         return json(response,200,value);
       }
       if (path === '/api/profile' && method === 'POST') {
-        const updates = await profileChanges(await readBody(request, MAX_PROFILE_BODY));
+        const updates = await profileChanges(await readInput(MAX_PROFILE_BODY));
+        access.requireUnbanned(player);
         const saved = store.getProfile(player);
         if (updates.nickname === saved?.nickname) delete updates.nickname;
         if (updates.skin !== undefined && (updates.skin?.hash ?? null) === (saved?.skinHash ?? null)) delete updates.skin;
@@ -568,7 +608,7 @@ export function createHoneymoonServer({
       }
       if (path === '/api/presence') {
         if (method === 'POST') {
-          const body = await readBody(request);
+          const body = await readInput();
           const pose = readPose(body);
           if (body.cartDrive !== undefined && ![-1,0,1].includes(body.cartDrive)) throw new RequestError(400,'invalid_pose');
           if (body.boatDrive !== undefined && (!Array.isArray(body.boatDrive) || body.boatDrive.length !== 2 ||
@@ -586,7 +626,7 @@ export function createHoneymoonServer({
       }
       if (path === '/api/seat' && method === 'POST') {
         if (survival.dead(player)) throw new RequestError(409,'player_dead');
-        const body = await readBody(request);
+        const body = await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         if (body.ground !== undefined && (typeof body.ground !== 'boolean' || body.target !== undefined)) {
           throw new RequestError(400,'invalid_coordinates');
@@ -600,7 +640,7 @@ export function createHoneymoonServer({
       }
       if (path === '/api/world' && method === 'GET') return json(response, 200, game.snapshot(player));
       if (path === '/api/position' && method === 'POST') {
-        const body = await readBody(request);
+        const body = await readInput();
         const pose = body.pose === undefined ? undefined : readPose(body.pose);
         const result = game.position(player, body);
         presence.update(player, result.position, game.poseFor(player, pose));
@@ -608,7 +648,7 @@ export function createHoneymoonServer({
         return json(response, 200, result);
       }
       if (path === '/api/respawn' && method === 'POST') {
-        await readBody(request);
+        await readInput();
         const death=survival.avatarDeath(player);
         const result=death?game.revive(player,death):game.respawn(player);
         if (death) survival.reset(player);
@@ -617,7 +657,7 @@ export function createHoneymoonServer({
         return json(response, 200, {...result,...(survival.enabled&&{gameMode:playerMode(player)})});
       }
       if (path === '/api/spectator' && method === 'POST') {
-        const body = await readBody(request);
+        const body = await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const pose = readPose(body.pose);
         const result = game.setSpectator(player, body);
@@ -626,20 +666,20 @@ export function createHoneymoonServer({
       }
       if (path === '/api/warps' && method === 'GET') return json(response,200,warps.list());
       if ((path === '/api/warps' || path === '/api/warps/remove') && method === 'POST') {
-        const body = await readBody(request);
+        const body = await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
         const next = path === '/api/warps' ? warps.add(body.title,game.session(player).position) : warps.remove(body.id);
         sendSocial('warps',next);
         return json(response,200,next);
       }
       if (path === '/api/teleport' && method === 'POST') {
-        const body = await readBody(request);
+        const body = await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const target = body.warpId === undefined ? body : warps.get(body.warpId).position;
         return json(response,200,teleportPlayer(player,target));
       }
       if (path === '/api/action' && method === 'POST') {
-        const result = game.action(player, await readBody(request,MAX_ACTION_BODY));
+        const result = game.action(player, await readInput(MAX_ACTION_BODY));
         if (!result.replay && result.status === 200) {
           afterCommit?.(request, response, result.output);
           broadcast(player, result.output);
@@ -694,6 +734,7 @@ export function createHoneymoonServer({
     if (inviteRequired&&gameAsset) {
       response.setHeader('Vary','Cookie');
       if (!credential) throw new RequestError(401,'session_required');
+      access.requireUnbanned(credential.uid);
     }
     if (path.startsWith('/generated/npcs/sound/')) {
       let name;

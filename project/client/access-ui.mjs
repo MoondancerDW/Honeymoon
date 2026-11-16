@@ -11,6 +11,7 @@ const errors={
   owner_rate_limit:'Слишком много попыток. Попробуйте через минуту.',
   owner_unavailable:'Вход владельца сейчас недоступен.',
   profile_missing:'Профиль для этого приглашения недоступен.',
+  profile_banned:'Доступ этого профиля к серверу заблокирован.',
   profile_active_elsewhere:'Этот профиль уже в игре в другом браузере. Закройте прежний сеанс и повторите вход.',
 };
 
@@ -40,11 +41,12 @@ export function createAccessUi({element,post}) {
   const profile=element('access-profile');
   let invitation;
 
-  function hint(code) {
+  function hint(code,reason) {
     status.textContent=errors[code]??'Не удалось войти. Проверьте ссылку или попробуйте снова.';
+    if (code==='profile_banned' && typeof reason==='string' && reason) status.append(' Причина блокировки — '+reason);
   }
 
-  function display({owner=false,needsName=false,code}={}) {
+  function display({owner=false,needsName=false,code,reason}={}) {
     gate.hidden=false;
     nameRow.hidden=!needsName;
     keyRow.hidden=!owner;
@@ -53,7 +55,7 @@ export function createAccessUi({element,post}) {
     submit.hidden=!owner&&!needsName;
     submit.textContent='Войти';
     status.textContent='';
-    if (code) hint(code);
+    if (code) hint(code,reason);
     if (owner) key.focus();
     else if (needsName) name.focus();
   }
@@ -78,7 +80,7 @@ export function createAccessUi({element,post}) {
             form.reset();
             resolve(response);
           } else {
-            hint(response.body.error);
+            hint(response.body.error,response.body.reason);
             if (response.body.error==='profile_name_required') {name.required=true; name.focus();}
             else if (owner) {key.value=''; key.focus();}
           }
@@ -109,7 +111,7 @@ export function createAccessUi({element,post}) {
           if (response.ok && !response.body.access?.activeElsewhere) {
             form.onsubmit=null;
             resolve(response);
-          } else hint(response.body.error??'profile_active_elsewhere');
+          } else hint(response.body.error??'profile_active_elsewhere',response.body.reason);
         } catch {status.textContent='Не удалось связаться с сервером. Повторите вход.';}
         finally {submit.disabled=false;}
       };
@@ -129,7 +131,7 @@ export function createAccessUi({element,post}) {
       else if (code==='profile_active_elsewhere') ready=await waitForProfileSlot();
       else if (!invitation && attempt.body?.ownerBootstrap) ready=await waitForForm({owner:true});
       else {
-        display({code:code??'invite_required'});
+        display({code:code??'invite_required',reason:attempt.body?.reason});
         return null;
       }
     }

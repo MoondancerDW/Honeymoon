@@ -99,6 +99,7 @@ let seat = null, seatPending = false, seatEpoch = 0;
 let seatedMoveSince;
 let signTarget;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
+let arrivalVersion = 0;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed;
 let nearbyStream;
@@ -163,7 +164,12 @@ const modeUi=createPlayerModeUi({element,notice,pause,changed:updateGameMode,rev
     return result;
   }});
 const adminUi=createAdminUi({element,load:()=>getNpc('/api/admin/access'),
-  post:(path,fields)=>post(path,fields,AbortSignal.timeout(10000)),pause,
+  async post(path,fields) {
+    if (path==='admin/teleport' && fields.direction==='bring' && !await flushPosition()) {
+      return {ok:false,body:{error:'movement_blocked'}};
+    }
+    return post(path,fields,AbortSignal.timeout(10000));
+  },pause,teleport:receiveAdminTeleport,
   worldSettings:()=>({
     weather:view.weather,weatherChanged:updateWeather,
     open(section) {element({npcs:'npc-editor-toggle',modes:'mode-toggle',clock:'clock-toggle'}[section]).click();},
@@ -521,6 +527,9 @@ function stream() {
   feed.addEventListener('weather',event=>updateWeather(JSON.parse(event.data).mode));
   feed.addEventListener('game-mode',event=>modeUi.update(JSON.parse(event.data)));
   feed.addEventListener('access-revoked',()=>location.reload());
+  feed.addEventListener('admin-teleport',event=>{
+    receiveAdminTeleport(JSON.parse(event.data)).catch(error=>notice(error.message));
+  });
   feed.addEventListener('warps',event=>social.warpsChanged(JSON.parse(event.data)));
   feed.addEventListener('commit', event => {
     const data = JSON.parse(event.data);
@@ -782,6 +791,7 @@ async function teleport(coordinates) {
 
 async function acceptTeleport(body) {
   const arriving=arriveAt(body.position,body.stance);
+  if (body.flight===true) setFlight(true);
   changes(body.changes,body.worldRevision,body.frames);
   effects(body);
   presenceDirty=true;
@@ -792,8 +802,18 @@ async function acceptTeleport(body) {
 
 async function receiveNpcTeleport(body) {
   resetting=true;
-  try {await acceptTeleport(body);}
-  finally {resetting=false;}
+  const arrival=acceptTeleport(body),version=arrivalVersion;
+  try {await arrival;}
+  finally {if (version===arrivalVersion) resetting=false;}
+}
+
+const handledAdminTeleports=new Set();
+async function receiveAdminTeleport(body) {
+  const id=body?.teleportId;
+  if (!id || handledAdminTeleports.has(id)) return;
+  handledAdminTeleports.add(id);
+  if (handledAdminTeleports.size>32) handledAdminTeleports.delete(handledAdminTeleports.values().next().value);
+  await receiveNpcTeleport(body);
 }
 
 async function placeWarp(title) {
@@ -803,18 +823,24 @@ async function placeWarp(title) {
 }
 
 async function arriveAt(feet, stance) {
+  const version=++arrivalVersion;
   const cx = Math.floor(feet.x / 16), cz = Math.floor(feet.z / 16);
   const visible = world.playableAround(cx,cz,view.detailedDistance);
   const covered = !view.chunksReady(visible);
-  if (covered) teleportLoading.hidden = false;
+  teleportLoading.hidden = !covered;
+  if (covered) {
+    element('teleport-loading-text').textContent = 'Загрузка, подождите...';
+    element('teleport-reload').hidden = true;
+  }
   setSeat(null, feet,stance);
   nearbyStream?.update();
   if (!covered) return;
   try {
     await view.whenReady(visible);
     await new Promise(resolve => requestAnimationFrame(resolve));
-    teleportLoading.hidden = true;
+    if (version===arrivalVersion) teleportLoading.hidden = true;
   } catch (error) {
+    if (version!==arrivalVersion) return;
     element('teleport-loading-text').textContent = 'Не удалось загрузить локацию';
     element('teleport-reload').hidden = false;
     throw error;
@@ -912,6 +938,8 @@ function syncPosition(lastStep) {
   nextPositionSync = performance.now() + positionInterval;
   positionMetrics.requests++;
   sync = post('position', payload, AbortSignal.timeout(3000)).then(({ok, body}) => {
+    // An external teleport can arrive while the preceding position request is still in flight.
+    if (pendingPosition !== payload) return;
     if (ok) {
       confirmedPosition = positionTuple(body.position);
       confirmedStance = body.stance ?? payload.trail.at(-1)[3];
@@ -928,6 +956,7 @@ function syncPosition(lastStep) {
     retryCount = 0;
     effects(body);
   }).catch(() => {
+    if (pendingPosition !== payload) return;
     positionMetrics.errors++;
     retryCount++;
     nextPositionSync = performance.now() + Math.min(2000, positionInterval * retryCount);
@@ -1402,7 +1431,7 @@ function tick(now) {
       }
     }
   } else seatedMoveSince = undefined;
-  if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending) {
+  if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending && teleportLoading.hidden) {
     const startX = position.x, startZ = position.z;
     const fallSpeed = movement.fall;
     const forward = forwardInput();
@@ -1447,7 +1476,7 @@ function tick(now) {
       biome:view.climate?.biomeAt(position.x,position.z),night:hour > 13000 && hour < 23000,
       windStrength:windAt(now,view.weather).strength});
   }
-  if (!resetting && now >= nextPositionSync && !acting) syncPosition();
+  if (!resetting && teleportLoading.hidden && now >= nextPositionSync && !acting) syncPosition();
   if (!sync || presenceDirty) sendPresence(now);
   if (playing && !menuOpen() && !seat && !flying && movement.stance === 'stand') {
     view.viewBob.step(horizontalSpeed * dt, dt, movement.grounded && !movement.medium, movement.fall);

@@ -1429,6 +1429,35 @@ export function createGame(base, store, geometry, {
     return {...entry, seat:null, stance:'stand'};
   }
 
+  function teleportNear(player, anchorPlayer) {
+    const origin=playerAt(anchorPlayer);
+    const body=bodyFor(player,'stand');
+    const others=activePositions(player).slice(1);
+    const clear=position=>bodyWithinMap(position,body) && !physical.collides(position,body) &&
+      !others.some(other=>Math.abs(position.x-other.x)<body.halfWidth+other.body.halfWidth &&
+        Math.abs(position.z-other.z)<body.halfWidth+other.body.halfWidth &&
+        position.y<other.y+other.body.height && position.y+body.height>other.y) &&
+      ![.06,body.height-.03].some(height=>{
+        const cell=cellAt(Math.floor(position.x),Math.floor(position.y+height),Math.floor(position.z));
+        return blockState(cell)[0]===51 || fluidAt(cellAt,position.x,position.y+height,position.z,models);
+      });
+    const directions=[[1,0],[0,1],[-1,0],[0,-1],[1,1],[-1,1],[-1,-1],[1,-1]];
+    const flight=[];
+    for (const distance of [1.4,2.4]) {
+      for (const [dx,dz] of directions) {
+        const x=origin.x+dx*distance,z=origin.z+dz*distance;
+        for (const [low,high] of [[-.12,.55],[.55,1.3],[-1.5,-.12]]) {
+          const position=physical.standAbove({x,y:origin.y+low,z},origin.y+high,body);
+          if (position && clear(position)) return teleport(player,position);
+        }
+        flight.push({x,y:origin.y,z});
+      }
+    }
+    const air=flight.find(clear);
+    if (air) return {...teleport(player,air),flight:true};
+    throw new RequestError(409,'teleport_blocked');
+  }
+
   function passivePosition(position) {
     return {position, effects:[], changes:[], worldRevision:store.worldRevision()};
   }
@@ -1682,6 +1711,7 @@ export function createGame(base, store, geometry, {
     },
     position,
     teleport,
+    teleportNear,
     setSpectator,
     advance,
     advanceMinecarts,
