@@ -4,11 +4,9 @@ import {blockState} from '../world/block-interactions.mjs';
 import {collisionFor,coverBoxes} from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {fluidState,fluidSurface} from '../world/fluid-state.mjs';
+import {sampleSnowLane,snowColumnBand,snowCoverage} from './snow-coverage.mjs';
 
-const textureSide=256, textureBlocks=16, duration=60, radius=16, span=radius*2+1;
-const offsets=Array.from({length:span**2},(_,i)=>[i%span-radius,Math.floor(i/span)-radius])
-  .filter(([x,z])=>x*x+z*z<=radius*radius)
-  .sort(([x,z],[a,b])=>x*x+z*z-a*a-b*b);
+const textureSide=256, textureBlocks=16, duration=60;
 const snowBlocks=new Set([78,80]);
 const faces=[[0,1,0],[1,0,Math.PI/2],[0,-1,Math.PI],[-1,0,-Math.PI/2]];
 const wallOffset=.004;
@@ -68,19 +66,23 @@ export class SnowAccumulation {
     this.climate=climate;
     this.light=light;
     this.chunkVisible=chunkVisible;
-    this.accentLimit=mobile?280:570;
+    this.coverage=snowCoverage(mobile);
+    this.grainLimit=this.coverage.grainLimit;
     this.sideLimit=mobile?48:130;
     this.sideBudget=mobile?10:18;
-    this.limit=this.accentLimit+this.sideLimit;
-    this.baseLimit=mobile?250:490;
-    this.batch=mobile?14:24;
+    this.limit=this.coverage.bands.reduce((sum,band)=>sum+band.capacity,0)+this.grainLimit+this.sideLimit;
     this.cover=new RainCover(world);
     this.patches=new Map();
     this.masks=new Map();
     this.wallBoxes=new Map();
-    this.cursor=0;
+    this.cursors=[0,0,0];
     this.nextSurvey=0;
     this.clock={value:0};
+    this.snowStarted={value:0};
+    this.eye={value:new THREE.Vector3()};
+    const glRange=([from,to])=>`vec2(${from.toFixed(1)},${to.toFixed(1)})`;
+    const [near,middle,far]=this.coverage.bands.map(({range})=>glRange(range));
+    const detail=glRange(this.coverage.detail),vertical=glRange(this.coverage.vertical);
     this.probe=new THREE.Object3D();
     this.probe.rotation.order='YXZ';
     this.tint=new THREE.Color();
@@ -92,8 +94,12 @@ export class SnowAccumulation {
       polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1});
     material.onBeforeCompile=shader=>{
       shader.uniforms.snowNow=this.clock;
+      shader.uniforms.snowStarted=this.snowStarted;
+      shader.uniforms.snowEye=this.eye;
       shader.vertexShader=shader.vertexShader.replace('#include <common>',`#include <common>
         uniform float snowNow;
+        uniform float snowStarted;
+        uniform vec3 snowEye;
         attribute vec4 snowFade;
         varying float snowOpacity;
         varying float snowLayer;
@@ -102,25 +108,32 @@ export class SnowAccumulation {
         snowWorld=(modelMatrix*instanceMatrix*vec4(transformed,1.0)).xz;
         snowLocal=uv;
         snowLayer=snowFade.w;
-        if (snowLayer>1.5) {
+        if (snowLayer==2.0) {
           vec3 outward=normalize(mat3(modelMatrix*instanceMatrix)*normal);
           snowWorld-=outward.xz*.010;
         }
-        float settle=smoothstep(0.0,5.0,snowNow-snowFade.y);
+        vec3 center=(modelMatrix*instanceMatrix*vec4(0.0,0.0,0.0,1.0)).xyz;
+        vec3 distanceToEye=center-snowEye;
+        vec2 limits=snowLayer==0.0 ? ${near} : snowLayer==3.0 ? ${middle} : snowLayer==4.0 ? ${far} : ${detail};
+        vec2 down=${vertical};
+        float distanceFade=1.0-smoothstep(limits.x,limits.y,length(distanceToEye.xz));
+        float heightFade=(1.0-smoothstep(8.0,20.0,distanceToEye.y))*(1.0-smoothstep(down.x,down.y,-distanceToEye.y));
+        float discovered=smoothstep(0.0,1.2,snowNow-snowFade.y);
+        float settle=snowFade.y>=snowStarted ? smoothstep(0.0,5.0,snowNow-snowStarted) : 1.0;
         float melted=smoothstep(0.0,${duration.toFixed(1)},snowNow-snowFade.z);
-        snowOpacity=snowFade.x*settle*(1.0-melted);`);
+        snowOpacity=snowFade.x*settle*discovered*(1.0-melted)*distanceFade*heightFade;`);
       shader.fragmentShader=shader.fragmentShader.replace('#include <common>',`#include <common>
         varying float snowOpacity;
         varying float snowLayer;
         varying vec2 snowWorld;
         varying vec2 snowLocal;`).replace('#include <map_fragment>',`
         diffuseColor *= texture2D(map,snowWorld/${textureBlocks.toFixed(1)});
-        if (snowLayer > 1.5) {
+        if (snowLayer == 2.0) {
           float broken=texture2D(map,(snowWorld+vec2(3.6,6.7))/${textureBlocks.toFixed(1)}).a;
           float roll=.32+.60*broken;
           diffuseColor.a *= smoothstep(1.0-roll,1.0,snowLocal.y);
           diffuseColor.rgb *= .93;
-        } else if (snowLayer > .5) {
+        } else if (snowLayer == 1.0) {
           vec4 grain=texture2D(map,(snowWorld+vec2(7.3,3.4))/${textureBlocks.toFixed(1)});
           float edge=1.0-smoothstep(.19,.49,length(snowLocal-vec2(.5)));
           diffuseColor.a = mix(.24,1.0,grain.a)*edge;
@@ -159,7 +172,7 @@ export class SnowAccumulation {
     const px=x+.5,pz=z+.5;
     const surface=this.cover.surfaceAt(px,pz);
     const y=surface.top;
-    if(!Number.isFinite(y) || y>eye.y+8 || y<eye.y-34 ||
+    if(!Number.isFinite(y) || y>eye.y+24 || y<eye.y-this.coverage.vertical[1]-8 ||
         ['water','foliage','glass'].includes(surface.kind) ||
         (!globalSnow && !this.climate.snowAt(px,y+.035,pz))) return null;
     const footing=Math.floor(y-.0001);
@@ -265,68 +278,73 @@ export class SnowAccumulation {
     this.probe.rotation.set(plane.side?Math.PI/2:0,plane.angle??0,0,'YXZ');
     this.probe.updateMatrix();
     this.mesh.setMatrixAt(index,this.probe.matrix);
-    this.tint.setHex(this.light(patch.x,patch.y+.01,patch.z));
+    this.tint.setHex(patch.tint);
     this.mesh.setColorAt(index,this.tint);
-    this.fade.setXYZW(index,weight,patch.created+(layer===1?1.4:0),patch.seen,layer);
+    this.fade.setXYZW(index,weight,patch.created,patch.seen,layer);
   }
 
   survey(now,eye,snowing,globalSnow) {
-    const x=Math.floor(eye.x), z=Math.floor(eye.z);
-    if(this.x===undefined || Math.abs(x-this.x)+Math.abs(z-this.z)>=4) {
-      this.x=x;this.z=z;this.cursor=0;
-    }
     const time=now*.001;
+    const {bands,vertical,detail}=this.coverage;
+    const refresh=(x,z)=>{
+      const key=x+','+z;
+      const previous=this.patches.get(key);
+      if(previous) return;
+      const patch=this.exposed(x,z,eye,globalSnow);
+      if(patch) this.patches.set(key,{...patch,band:snowColumnBand(x,z),created:time,seen:time});
+    };
     if(snowing) {
       this.cover.beginFrame();
-      for(let i=0;i<this.batch;i++) {
-        const [offX,offZ]=offsets[this.cursor++%offsets.length];
-        const x=this.x+offX,z=this.z+offZ,key=x+','+z;
-        const patch=this.exposed(x,z,eye,globalSnow);
-        if(!patch) continue;
-        const previous=this.patches.get(key);
-        if(previous) previous.seen=time;
-        else this.patches.set(key,{...patch,created:time,seen:time});
+      refresh(Math.floor(eye.x),Math.floor(eye.z));
+      for(let band=0;band<bands.length;band++) {
+        const lane=bands[band];
+        for(let i=0;i<lane.probes;i++) {
+          const [x,z]=sampleSnowLane(lane,this.cursors[band]++,eye.x,eye.z);
+          refresh(x,z);
+        }
       }
     }
-    const candidates=[];
+    const retention=bands.at(-1).radius+12;
+    const details=[];
+    const byBand=[0,0,0];
+    let count=0;
     for(const [key,patch] of this.patches) {
-      if(time-patch.seen>=duration) {
+      const distance=(patch.x-eye.x)**2+(patch.z-eye.z)**2;
+      const height=patch.y-eye.y;
+      if(time-patch.seen>=duration || distance>retention**2 ||
+          !this.world.chunks.has((patch.cellX>>4)+','+(patch.cellZ>>4))) {
         this.patches.delete(key);
         continue;
       }
-      const distance=(patch.x-eye.x)**2+(patch.z-eye.z)**2;
-      if(distance>radius**2*1.2 || Math.abs(patch.y-eye.y)>36 ||
-          !this.chunkVisible(Math.floor(patch.x)>>4,Math.floor(patch.z)>>4)) continue;
+      if(distance>bands[patch.band].radius**2 || height>24 || height< -vertical[1]-8 ||
+          !this.chunkVisible(patch.cellX>>4,patch.cellZ>>4)) continue;
       if(snowing && (globalSnow || this.climate.snowAt(patch.x,patch.y,patch.z))) patch.seen=time;
-      candidates.push({patch,distance});
+      patch.tint=this.light(patch.x,patch.y+.01,patch.z);
+      this.writePatch(count++,patch,1,patch.band===0?0:patch.band+2);
+      byBand[patch.band]++;
+      if(distance<detail[1]**2 && Math.abs(height)<20) details.push({patch,distance});
     }
-    candidates.sort((a,b)=>a.distance-b.distance);
-    const bases=Math.min(this.baseLimit,candidates.length);
-    const cutoff=candidates.length>this.baseLimit?candidates[this.baseLimit-1].distance:radius**2*1.2;
-    const edge=distance=>1-THREE.MathUtils.smoothstep(distance,cutoff*.66,cutoff);
-    let count=bases;
-    for(let i=0;i<bases;i++) {
-      const {patch,distance}=candidates[i];
-      this.writePatch(i,patch,edge(distance));
-      if(count<this.accentLimit) {
-        const grain=this.grain(patch);
-        if(grain) this.writePatch(count++,patch,.52*edge(distance),1,grain);
-      }
+    this.topBands=byBand;
+    details.sort((a,b)=>a.distance-b.distance);
+    const bases=count;
+    for(const {patch} of details) {
+      if(count-bases>=this.grainLimit) break;
+      const grain=this.grain(patch);
+      if(grain) this.writePatch(count++,patch,.52,1,grain);
     }
     this.grains=count-bases;
     const fringeStart=count;
     let probes=this.sideBudget;
     this.wallBoxes.clear();
-    for(let i=0;i<bases && count<fringeStart+this.sideLimit;i++) {
-      const {patch,distance}=candidates[i];
-      if(distance>Math.min(cutoff,150)) break;
+    for(const {patch} of details) {
+      if(count>=fringeStart+this.sideLimit) break;
       if(!patch.sides && probes>0) {
         patch.sides=this.fringes(patch);
         probes--;
       }
       for(const strip of patch.sides??[]) {
         if(count>=fringeStart+this.sideLimit) break;
-        this.writePatch(count++,patch,edge(distance),2,strip);
+        this.writePatch(count++,patch,1,2,strip);
       }
     }
     this.fringeCount=count-fringeStart;
@@ -338,11 +356,24 @@ export class SnowAccumulation {
 
   update(now,eye,snowing,globalSnow=false) {
     this.clock.value=now*.001;
+    if(snowing && !this.snowing) this.snowStarted.value=this.clock.value;
+    this.snowing=snowing;
+    const previous=this.eye.value;
+    if(this.hasEye && ((previous.x-eye.x)**2+(previous.z-eye.z)**2>18**2 || Math.abs(previous.y-eye.y)>30)) {
+      this.patches.clear();
+      this.cover.columns.clear();
+      this.cursors.fill(0);
+      this.mesh.count=0;
+      this.nextSurvey=0;
+    }
+    previous.set(eye.x,eye.y,eye.z);
+    this.hasEye=true;
     if(now<this.nextSurvey) return;
     this.nextSurvey=now+(snowing?145:340);
     this.survey(now,eye,snowing,globalSnow);
   }
 
   inspect() {return {coating:this.mesh.count,retained:this.patches.size,grains:this.grains,fringes:this.fringeCount,
+    topBands:this.topBands??[0,0,0],ranges:this.coverage.bands.map(band=>band.range),vertical:this.coverage.vertical,
     maskCoverage:this.mesh.material.map.userData.coverage};}
 }

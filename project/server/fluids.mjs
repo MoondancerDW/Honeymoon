@@ -15,7 +15,7 @@ const decrement = kind => kind === 'water' ? 1 : 2;
 const boxEnds = [['x0','x1'],['y0','y1'],['z0','z1']];
 const asCell = cell => cell?.cell && {...cell,key:cell.cell};
 
-export function createFluidSimulation({read,canWrite,clock,model,shape,collision,topSupports}) {
+export function createFluidSimulation({read,canWrite,clock,model,shape,collision,topSupports,spreading=false}) {
   const scheduled = new Map();
   function schedule(at, delay) {
     if (!canWrite(...at)) return;
@@ -40,7 +40,9 @@ export function createFluidSimulation({read,canWrite,clock,model,shape,collision
       for (const point of [at,...neighbors.map(side=>add(at,side))]) {
         if (!canWrite(...point)) continue;
         const cell = read(...point), fluid = fluidState(cell);
-        if (fluid && !fluid.fake) schedule(point,ticks[fluid.kind]);
+        if (fluid && !fluid.fake && (spreading || fluid.kind === 'lava' && !fluid.logged)) {
+          schedule(point,ticks[fluid.kind]);
+        }
         if (isPlant(cell,point)) schedule(point,100);
       }
     }
@@ -124,8 +126,7 @@ export function createFluidSimulation({read,canWrite,clock,model,shape,collision
         cell = atCell(...at);
       }
       let fluid = fluidState(cell);
-      if (!fluid || fluid.fake) return;
-      const below = add(at,down), support = atCell(...below);
+      if (!fluid || fluid.fake || !spreading && (fluid.kind !== 'lava' || fluid.logged)) return;
       const sides = lateral.map(side=>{
         const point = add(at,side);
         const adjacent = atCell(...point);
@@ -136,6 +137,8 @@ export function createFluidSimulation({read,canWrite,clock,model,shape,collision
         set(at,source(fluid) ? 'legacy:49:0' : 'legacy:4:0');
         return;
       }
+      if (!spreading) return;
+      const below = add(at,down), support = atCell(...below);
       const horizontalFluid = sides.filter(({point,side,cell:next,fluid:other}) => other?.kind === fluid.kind &&
         !other.fake && facesConnect(at,point,cell,next,side));
       if (!source(fluid)) {

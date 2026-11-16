@@ -331,7 +331,6 @@ export function createGame(base, store, geometry, {
     canWrite:(x,y,z)=>base.inBounds(x,y,z) && (!base.hasPlayableChunk || base.hasPlayableChunk(x>>4,z>>4)) &&
       !reserved(x,y,z) && !spawnProtected(x,y,z) && !seatsAt(x,y,z) &&
       (allowRemoval || base.getCell(x,y,z).key === 'air')});
-  fluids.changed(store.edits().filter(cell=>fluidState(cell)));
   const frames = createItemFrames({base,store,physical,getCurrent,faceSupports,
     protectedCell:(x,y,z) => reserved(x,y,z) || spawnProtected(x,y,z)});
   const carts = createMinecarts({
