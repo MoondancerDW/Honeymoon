@@ -64,7 +64,10 @@ export function redstone(getCell, geometry, compositions) {
     const links = wireSides(point);
     const direction = (side ^ 1) - 2;
     const perpendicular = (direction & 2) ^ 2;
-    return links.every(link => !link) || (links[direction] && !links[perpendicular] && !links[perpendicular + 1]);
+    // A single connection still draws a straight wire across the block. Its open end
+    // powers receivers on that axis, but a corner has links on both axes.
+    return links.every(link => !link) || ((links[direction] || links[direction ^ 1]) &&
+      !links[perpendicular] && !links[perpendicular + 1]);
   }
   function powered(point, dust = true, sides = allSides) {
     return signalSides.some((delta, side) => {

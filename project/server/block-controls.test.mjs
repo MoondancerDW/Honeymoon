@@ -90,6 +90,35 @@ test('a neighboring lever powers and brakes a player-placed powered rail', t => 
   assert.equal(railFor(store.getEdit(6, 1, 4)).powered, false);
 });
 
+test('redstone dust powers a lamp at its open end without leaking sideways around a corner', t => {
+  const lever = [4,1,7];
+  const east = [6,1,7], south = [5,1,8], north = [5,1,5];
+  for (const corner of [false,true]) {
+    const base = fixture([
+      [...lever,69,5],[5,1,7,55,0],[...east,123,0],[...south,123,0],
+      ...(corner ? [[5,1,6,55,0],[...north,123,0]] : []),
+    ],[3.5,1,6.5]);
+    const store = openStore(':memory:');
+    t.after(() => store.close());
+    let now = 0;
+    const game = gameFor(base,store,() => now);
+    const player = store.createPlayer().id;
+    game.session(player);
+    const on = game.action(player,command('terminal-dust-on',lever));
+    assert.equal(on.status,200,JSON.stringify(on));
+    assert.equal(store.getEdit(5,1,7).cell,'legacy:55:15');
+    assert.equal(store.getEdit(...south),undefined);
+    const expected = corner ? north : east;
+    assert.equal(store.getEdit(...expected).cell,'legacy:124:0');
+    if (corner) assert.equal(store.getEdit(...east),undefined);
+    const off = game.action(player,command('terminal-dust-off',lever,on.output.worldRevision));
+    assert.equal(off.status,200,JSON.stringify(off));
+    now += 200;
+    game.advance();
+    assert.equal(store.getEdit(...expected).cell,'legacy:123:0');
+  }
+});
+
 test('a newly mounted lever energizes a normal RedPower lamp and extinguishes its inverted partner', t => {
   const base = fixture([[6,1,5,757,3],[7,1,4,758,9]]);
   base.catalog.add('legacy:69:0');
