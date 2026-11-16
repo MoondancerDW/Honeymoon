@@ -18,6 +18,7 @@ const base = external ? null : loadBase(join(generated,'world'));
 const app = external ? null : createHoneymoonServer({generated, base, state:':memory:', geometry});
 const points = [
   {id:'city', feet:[-163,151,164], yaw:-174.4, pitch:22.5},
+  {id:'boundary', feet:[-377.63,97,-164.46], yaw:145, pitch:12},
   {id:'castle-approach', feet:[-1620.5,119,87.5], yaw:153, pitch:26},
   {id:'castle-from-far', feet:[-1875,145,145], yaw:-92, pitch:14},
   {id:'east-garrison', feet:[479,139,-95], yaw:-124.2, pitch:26.5},
@@ -70,8 +71,8 @@ try {
   });
   await page.goto(url);
   await page.waitForFunction(() => globalThis.honeymoon?.stats().playable, undefined, {timeout:90000});
-  const initialDistance = await page.locator('#distance').inputValue();
-  assert.equal(initialDistance,'24');
+  const initialDistance = Number(await page.locator('#distance').inputValue());
+  assert.ok(initialDistance === 24 || initialDistance === 32);
   await page.addStyleTag({content:'#game > :not(#scene) {display:none !important;}'});
   for (const {id,feet,yaw,pitch,surfaceY} of points) {
     if (selected && id !== selected) continue;
@@ -79,15 +80,16 @@ try {
     const perspective = await page.evaluate(pose => honeymoon.qaCamera(pose),camera);
     assert.equal(perspective.mode,'first');
     assert.ok(Math.abs(perspective.position[1] - feet[1] - 1.62) < .11);
-    const modes = id === 'fire-eye' ? [[4,false]] : compareWater ? [[8,false],[24,false]]
-      : id === 'mine-room' ? [[4,false],[24,false],[24,true]] : [[4,false],[24,false]];
+    const modes = id === 'fire-eye' ? [[4,false]] : id === 'boundary' && initialDistance === 32 ? [[24,false],[32,false]]
+      : compareWater ? [[8,false],[initialDistance,false]]
+      : id === 'mine-room' ? [[4,false],[initialDistance,false],[initialDistance,true]] : [[4,false],[initialDistance,false]];
     for (const [distance,occlusion] of modes) {
       await page.evaluate(value => honeymoon.setDistance(value), distance);
       if (occlusion) await page.evaluate(() => honeymoon.setOcclusion(true));
       await page.waitForFunction(({feet,distance,occlusion}) => {
         const {streaming,farTerrain,occlusion:visibility} = honeymoon.stats();
         return streaming?.ready && streaming.x === Math.floor(feet[0]/16) && streaming.z === Math.floor(feet[2]/16) &&
-          (distance === 24 ? farTerrain?.ready && farTerrain.packs > 0 : !farTerrain?.active) &&
+          (distance >= 24 ? farTerrain?.ready && farTerrain.radius === distance && farTerrain.packs > 0 : !farTerrain?.active) &&
           (!occlusion || visibility?.enabled && visibility.classifiedSections > 0);
       }, {feet,distance,occlusion},{timeout:120000,polling:220});
       const facts = await page.evaluate(() => {

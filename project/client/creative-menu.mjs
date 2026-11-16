@@ -3,7 +3,7 @@ const collator = new Intl.Collator('ru', {numeric:true, sensitivity:'base'});
 const defaultTabs = [
   ['build','Строительство'], ['decor','Декор'], ['nature','Природа'], ['redstone','Механизмы'],
   ['jammy','Мебель Jammy'], ['chisel','Chisel'], ['redpower','RedPower'], ['mods','Другие моды'],
-  ['technical','Технические'],
+  ['technical','Технические'], ['items','Предметы'],
 ];
 
 function normalized(text) {
@@ -12,7 +12,7 @@ function normalized(text) {
 
 function cardData(entry) {
   const name = entry.name || entry.english || entry.key;
-  const address = Number.isInteger(entry.id) ? `${entry.id}:${entry.meta ?? 0}` : entry.key;
+  const address = Number.isInteger(entry.id) ? entry.id + ':' + (entry.damage ?? entry.meta ?? 0) : entry.key;
   return {entry, name, address, category:entry.category ?? 'mods',
     search:normalized([name, entry.english, entry.mod, entry.key, address, entry.variant].filter(Boolean).join(' '))};
 }

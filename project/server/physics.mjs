@@ -55,6 +55,20 @@ export function physics(base, geometry, getCell) {
     return false;
   }
 
+  function standAbove({x, y, z}, highest) {
+    const bx = Math.floor(x), bz = Math.floor(z);
+    for (let by = Math.floor(y) - 1; by <= highest; by++) {
+      const surfaces = boxesAt('collisionFor', bx, by, bz).filter(box =>
+        x > bx + box.x0 && x < bx + box.x1 && z > bz + box.z0 && z < bz + box.z1)
+        .map(box => by + box.y1).sort((a, b) => a - b);
+      for (const level of surfaces) {
+        if (level < y || level > highest) continue;
+        const target = {x, y:level, z};
+        if (!collides(target)) return target;
+      }
+    }
+  }
+
   function movePathClear(start, end) {
     const steps = Math.ceil(Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z) * 8);
     for (let step = 1; step <= steps; step++) {
@@ -203,6 +217,7 @@ export function physics(base, geometry, getCell) {
 
   return {
     collides,
+    standAbove,
     movementAllowed,
     movementTrailAllowed,
     visible,

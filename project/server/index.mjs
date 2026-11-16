@@ -161,7 +161,6 @@ export function createHoneymoonServer({
   allowRemoval,
 } = {}) {
   const models = {};
-  const creative = readCreativeCatalog(generated, project);
   const lod = base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
   const publicWorld = base.publicManifest ?? base.manifest;
   const manifest = lod ? {...publicWorld, lod:lod.descriptor} : publicWorld;
@@ -175,6 +174,7 @@ export function createHoneymoonServer({
       if (error.code !== 'ENOENT') throw error;
     }
   }
+  const creative = readCreativeCatalog(generated, project, models.biblio?.flatItems);
   if (state !== ':memory:') mkdirSync(dirname(state), { recursive: true });
   const store = openStore(state);
   let game;
@@ -224,7 +224,7 @@ export function createHoneymoonServer({
     for (const stream of streams) {
       const effects = player === stream.player ? [] : output.effects.filter(effect => effect.sound)
         .map(({message: _, ...effect}) => effect);
-      if (output.changes.length || effects.length) {
+      if (output.changes.length || effects.length || output.frames) {
         writeEvent(stream.response, 'commit', {
           ...output,
           effects,
@@ -302,7 +302,7 @@ export function createHoneymoonServer({
         const pose = readPose(body);
         const result = game.sit(player, body.target, pose);
         presence.update(player, result.position, game.poseFor(player, {
-          yaw:result.seat?.yaw ?? pose.yaw, pitch:result.seat ? 0 : pose.pitch, motion:'idle',
+          ...pose, yaw:result.seat?.yaw ?? pose.yaw, pitch:result.seat ? 0 : pose.pitch, motion:'idle',
         }));
         return json(response, 200, result);
       }
@@ -318,14 +318,22 @@ export function createHoneymoonServer({
       if (path === '/api/respawn' && method === 'POST') {
         await readBody(request);
         const result = game.respawn(player);
-        presence.update(player, result.position, {yaw:0, pitch:0, motion:'idle'});
+        presence.update(player, result.position, game.poseFor(player, {yaw:0, pitch:0, motion:'idle'}));
+        return json(response, 200, result);
+      }
+      if (path === '/api/spectator' && method === 'POST') {
+        const body = await readBody(request);
+        if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
+        const pose = readPose(body.pose);
+        const result = game.setSpectator(player, body);
+        presence.update(player, result.position, {...pose, spectator:result.spectator});
         return json(response, 200, result);
       }
       if (path === '/api/teleport' && method === 'POST') {
         const body = await readBody(request);
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const result = game.teleport(player, body);
-        presence.update(player, result.position, {yaw:0, pitch:0, motion:'idle'});
+        presence.update(player, result.position, game.poseFor(player, {yaw:0, pitch:0, motion:'idle'}));
         if (result.changes.length || result.effects.length) broadcast(player, result);
         return json(response, 200, result);
       }

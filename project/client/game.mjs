@@ -1,5 +1,5 @@
 import {Display} from './display.mjs';
-import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickMinecart} from './movement.mjs';
+import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickItemFrame, pickMinecart} from './movement.mjs';
 import {World, chunkKey, json} from './world-data.mjs';
 import {WorldAudio} from './audio.mjs';
 import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
@@ -38,9 +38,11 @@ const signEditor = element('sign-editor');
 const signFields = [...element('sign-form').querySelectorAll('input')];
 const signStatus = element('sign-status');
 const signSave = element('sign-save');
+const teleportLoading = element('teleport-loading');
 const keys = new Set();
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const heading = {yaw: 0, pitch: -.045};
+let orbitHeading = null, orbitReturn = 0;
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
 let heldPart = null, partRotation = 0, placement = null, placementKey = '';
@@ -51,14 +53,16 @@ let fromCreative = false;
 let heldCreativeItem = null;
 let creativeAvailable = false;
 const creativeNames = new Map();
-let iconImage;
+let iconImage, itemIconImage;
 let selectionInputs, selectionRevision = 0;
 let seatTarget = null;
+let frameTarget = null, rayFrameTarget;
 const positionInterval = 130;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 const positionTrail = [];
 let playing = false, jump = false, lastFrame = 0, nextPositionSync = 0, timer;
 let flying = false;
+let spectator = false, spectatorReturn = null;
 let seat = null, seatPending = false, seatEpoch = 0;
 let signTarget;
 let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
@@ -67,6 +71,7 @@ let feed;
 let nearbyStream;
 let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
+let hoofSwing = 0;
 let nextClockUpdate = 0;
 const audio = new WorldAudio();
 const profile = new PlayerProfile({nickname:element('nickname'), skin:element('pony-skin'), status:element('skin-status'),
@@ -77,12 +82,13 @@ const pause = () => {
   stick.x = stick.z = 0;
   if (document.pointerLockElement) document.exitPointerLock();
 };
-function resume() {
+function resume(keepPlaying = false) {
   if (touchMode || !view || !entered) return;
   const canvas = view.renderer.domElement;
   if (document.pointerLockElement === canvas) return;
-  try { Promise.resolve(canvas.requestPointerLock()).catch(() => setPlaying(false)); }
-  catch { setPlaying(false); }
+  const rejected = () => { if (!keepPlaying) setPlaying(false); };
+  try { Promise.resolve(canvas.requestPointerLock()).catch(rejected); }
+  catch { rejected(); }
 }
 const social = createSocialHud({post, notice, pause, resume, teleport});
 const creative = createCreativeMenu({load:loadCreative, choose:chooseCreative,
@@ -100,7 +106,7 @@ function chooseCreative(entry) {
   heldVersion++;
   fromCreative = true;
   heldCreativeItem = entry.kind ? entry : null;
-  clipboard = entry.kind === 'microblock' || entry.kind === 'minecart' ? null : entry.blockKey ?? entry.key;
+  clipboard = ['microblock','minecart','item-frame','flat-item'].includes(entry.kind) ? null : entry.blockKey ?? entry.key;
   heldSofa = isJammyConnectableSeat(world.models?.jammy, clipboard) ? {} : null;
   sofaTurns = 0;
   chiselMaterial = isChiselMaterial(clipboard) ? chiselMaterialKey(clipboard) : null;
@@ -111,6 +117,22 @@ function chooseCreative(entry) {
 }
 
 async function drawCreativeIcon(entry, canvas) {
+  const sprite = world.models.biblio?.items?.[entry.id + ':' + (entry.damage ?? 0)];
+  if (sprite?.uv && ['flat-item','item-frame','minecart'].includes(entry.kind)) {
+    if (!itemIconImage) {
+      const image = new Image();
+      image.src = '/generated/models/biblio.png';
+      itemIconImage = image.decode().then(() => image).catch(error => { itemIconImage = undefined; throw error; });
+    }
+    const image = await itemIconImage;
+    const [u0,v0,u1,v1] = sprite.uv;
+    const context = canvas.getContext('2d');
+    context.imageSmoothingEnabled = false;
+    context.clearRect(0,0,canvas.width,canvas.height);
+    context.drawImage(image,u0*image.width,v0*image.height,(u1-u0)*image.width,(v1-v0)*image.height,
+      0,0,canvas.width,canvas.height);
+    return true;
+  }
   if (entry.kind === 'minecart') {
     const context = canvas.getContext('2d');
     context.fillStyle = '#333a44';
@@ -193,6 +215,11 @@ const messages = {
   invalid_sign_face: 'Табличку можно поставить сверху или сбоку блока',
   invalid_sign_text: 'Каждая строка должна содержать до 80 символов без переноса',
   not_a_sign: 'Здесь больше нет таблички',
+  not_a_frame: 'Здесь больше нет рамки',
+  stale_frame: 'Рамка изменилась. Повторите действие.',
+  invalid_frame_face: 'Для рамки нужна широкая сторона прочного блока',
+  frame_limit: 'Достигнут предел рамок',
+  invalid_control_face: 'Этот механизм нельзя закрепить на выбранной грани',
   rail_needs_support: 'Рельсам нужна опора снизу',
   minecart_requires_rail: 'Поставьте вагонетку на рельсы',
   not_a_minecart: 'Здесь больше нет вагонетки',
@@ -220,19 +247,21 @@ async function postAction(request) {
   catch { return post('action', request); }
 }
 
-function effects(data) {
+function effects(data, showMessages = true) {
   audio.effects(data.effects ?? [], world);
   for (const effect of data.effects || []) {
-    if (effect.message) notice(effect.message);
+    if (effect.type === 'dispense') view.dispense(effect);
+    if (showMessages && effect.message) notice(effect.message);
   }
 }
 
-function changes(list = [], revision = 0) {
+function changes(list = [], revision = 0, frames) {
   const changed = [];
   for (const change of list) {
     if (world.setOverride(change)) changed.push(change);
   }
-  if (changed.length) selectionRevision++;
+  if (frames) world.setFrames(frames,revision);
+  if (changed.length || frames) selectionRevision++;
   view.remeshLighting(world.updateLighting());
   for (const change of changed) {
     if (world.hasChunk(change.x, change.z)) view.remesh(change.x, change.y, change.z, change.revision);
@@ -246,7 +275,7 @@ async function refresh() {
     location.reload();
     return;
   }
-  changes(snapshot.overrides, snapshot.worldRevision);
+  changes(snapshot.overrides, snapshot.worldRevision, snapshot.frames);
 }
 
 function stream() {
@@ -275,8 +304,8 @@ function stream() {
   });
   feed.addEventListener('commit', event => {
     const data = JSON.parse(event.data);
-    changes(data.changes, data.worldRevision);
-    audio.effects(data.effects ?? [], world);
+    changes(data.changes, data.worldRevision, data.frames);
+    effects(data,false);
   });
   feed.addEventListener('reset', () => refresh().catch(error => notice(error.message)));
   feed.addEventListener('ready', event => {
@@ -285,10 +314,21 @@ function stream() {
   });
 }
 
+function heldPonyItem() {
+  const item = heldCreativeItem;
+  if (item && (item.kind === 'flat-item' || item.kind === 'item-frame' || item.kind === 'minecart')) {
+    return {kind:'item', key:`${item.id}:${item.damage ?? 0}`};
+  }
+  const partKey = heldPart ? `cover-material:${heldPart.material}` : null;
+  const key = chiseling ? chiselMaterial : partKey ?? clipboard;
+  return key && /^(?:legacy|cover-material):[\d:]+$/.test(key) ? {kind:'block', key} : null;
+}
+
 function playerPose() {
   const motion = seat ? 'sit' : !playing ? 'idle' : flying ? 'fly' : movement.medium === 'water' ? 'swim' :
     !movement.grounded && !movement.medium ? 'air' : horizontalSpeed > .15 ? (sprinting() ? 'run' : 'walk') : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
+    typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(),
     seq:Math.round(performance.timeOrigin + performance.now())};
 }
 
@@ -299,6 +339,8 @@ function sendPresence(now) {
     pose.cartDrive = playing && !menuOpen() ? Math.sign(forwardInput()) : 0;
   }
   const changed = !lastSentPose || pose.motion !== lastSentPose.motion ||
+    pose.typing !== lastSentPose.typing || pose.swing !== lastSentPose.swing ||
+    pose.held?.key !== lastSentPose.held?.key || pose.held?.kind !== lastSentPose.held?.kind ||
     pose.cartDrive !== lastSentPose.cartDrive || Boolean(pose.cartDrive) ||
     Math.abs(pose.yaw - lastSentPose.yaw) > .03 || Math.abs(pose.pitch - lastSentPose.pitch) > .03;
   if (!presenceDirty && !changed) return;
@@ -315,7 +357,32 @@ function sendPresence(now) {
 }
 
 function updateCamera() {
-  view.updateCamera(position, heading, seat ? SEATED_EYE : EYE);
+  view.updateCamera(position, orbitHeading ?? heading, seat ? SEATED_EYE : EYE);
+}
+
+function cameraMode() {
+  const camera = view.perspectiveView();
+  return orbitHeading ? {...camera, mode:'orbit'} : camera;
+}
+
+function updateCameraHint() {
+  element('aim').style.display = spectator || orbitHeading || view.perspective === 2 ? 'none' : '';
+  element('orbit-status').hidden = !orbitHeading;
+}
+
+function toggleOrbit() {
+  if (orbitHeading) {
+    orbitHeading = null;
+    view.perspective = orbitReturn;
+  } else {
+    orbitHeading = {...heading};
+    orbitReturn = view.perspective;
+    view.perspective = 1;
+    view.viewBob.reset();
+    keys.clear();
+    jump = false;
+  }
+  updateCameraHint();
 }
 
 function sprinting() {
@@ -327,6 +394,11 @@ function forwardInput() {
 }
 
 function look(dx, dy, sensitivity = .0023) {
+  if (orbitHeading) {
+    orbitHeading.yaw -= dx * sensitivity;
+    orbitHeading.pitch = Math.min(1.52, Math.max(-1.52, orbitHeading.pitch - dy * sensitivity));
+    return;
+  }
   heading.yaw -= dx * sensitivity;
   if (seat) {
     const difference = heading.yaw - seat.yaw;
@@ -341,7 +413,7 @@ function setPlaying(active) {
   if (active && !entered && !button.disabled) {
     entered = true;
     presenceDirty = true;
-    creativeToggle.disabled = !creativeAvailable;
+    creativeToggle.disabled = spectator || !creativeAvailable;
   }
   audio.setPlaying(active);
   game.classList.toggle('playing', active);
@@ -360,7 +432,46 @@ function setFlight(active) {
   movement.fall = 0;
   movement.grounded = false;
   jump = false;
-  element('flight-status').hidden = !active;
+  element('flight-status').hidden = !active || spectator;
+}
+
+function setSpectator(active) {
+  if (active === spectator) return;
+  if (active) {
+    if (orbitHeading) toggleOrbit();
+    spectatorReturn = {perspective:view.perspective, flying};
+    view.perspective = 0;
+  } else {
+    view.perspective = spectatorReturn.perspective;
+  }
+  spectator = active;
+  setFlight(active || spectatorReturn.flying);
+  keys.clear();
+  game.classList.toggle('spectating', active);
+  element('spectator-status').hidden = !active;
+  creativeToggle.disabled = active || !creativeAvailable;
+  updateCameraHint();
+}
+
+async function toggleSpectator() {
+  if (resetting || acting || seatPending) return;
+  resetting = true;
+  try {
+    await flushPosition();
+    const {ok, body} = await post('spectator', {enabled:!spectator, pose:playerPose()}, AbortSignal.timeout(5000));
+    if (!ok) {
+      notice(messages[body.error] ?? body.error);
+      return;
+    }
+    seatEpoch++;
+    setSpectator(body.spectator);
+    if (body.relocated) await arriveAt(body.position);
+    else setSeat(null, body.position);
+  } catch {
+    notice('Связь с сервером прервалась');
+  } finally {
+    resetting = false;
+  }
 }
 
 const positionTuple = ({x, y, z}) => [x, y, z];
@@ -405,17 +516,37 @@ async function teleport(coordinates) {
     await sync;
     const result = await post('teleport', coordinates, AbortSignal.timeout(5000));
     if (result.ok) {
-      setSeat(null, result.body.position);
+      const arriving = arriveAt(result.body.position);
       changes(result.body.changes, result.body.worldRevision);
       effects(result.body);
       presenceDirty = true;
       selectionInputs = null;
       placementKey = '';
-      nearbyStream?.update();
+      await arriving;
     }
     return result;
   } finally {
     resetting = false;
+  }
+}
+
+async function arriveAt(feet) {
+  const cx = Math.floor(feet.x / 16), cz = Math.floor(feet.z / 16);
+  const visible = world.manifest.chunks.filter(([x,z]) =>
+    Math.max(Math.abs(x - cx), Math.abs(z - cz)) <= view.detailedDistance);
+  const covered = !view.chunksReady(visible);
+  if (covered) teleportLoading.hidden = false;
+  setSeat(null, feet);
+  nearbyStream?.update();
+  if (!covered) return;
+  try {
+    await view.whenReady(visible);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    teleportLoading.hidden = true;
+  } catch (error) {
+    element('teleport-loading-text').textContent = 'Не удалось загрузить локацию';
+    element('teleport-reload').hidden = false;
+    throw error;
   }
 }
 
@@ -440,8 +571,9 @@ async function toggleSeat() {
 }
 
 function interact(sneaking = false) {
-  if (!playing || acting || resetting || menuOpen()) return;
+  if (!playing || acting || resetting || spectator || menuOpen()) return;
   if (seat || seatTarget) return toggleSeat();
+  if (frameTarget) return action('interact');
   const cell = selection?.cell;
   if (seatFor(cell, world.models) && !(sneaking && jammyUseSound(...blockState(cell)))) return toggleSeat();
   const sign = signFor(cell);
@@ -687,9 +819,10 @@ function toggleChiselSize() {
 }
 
 function updateSelection() {
-  if (!playing) {
+  if (!playing || spectator || orbitHeading) {
     selection = null;
     seatTarget = null;
+    frameTarget = null;
     selectionInputs = null;
     return;
   }
@@ -704,6 +837,10 @@ function updateSelection() {
   const direction = [-Math.sin(yaw) * cp,Math.sin(pitch),-Math.cos(yaw) * cp];
   if (changed) selection = pick(world, origin, direction, chiseling);
   seatTarget = pickMinecart(world, origin, direction, selection);
+  if (changed) rayFrameTarget = pickItemFrame(world,origin,direction,selection);
+  frameTarget = rayFrameTarget;
+  if (frameTarget && (seatTarget?.length ?? Infinity) < frameTarget.length) frameTarget = null;
+  else if (frameTarget) seatTarget = null;
   if (changed && chiseling && chiselSize === 2 && selection?.voxel !== undefined) {
     selection.chiselSize = chiselSize;
     selection.boxes = [voxelRemovalBrush(selection.cell.voxels, selection.voxel, chiselSize).box];
@@ -711,15 +848,21 @@ function updateSelection() {
 }
 
 async function action(type, sneaking = false) {
-  if (acting || resetting || !playing) return;
-  const placingCart = type === 'place' && heldCreativeItem?.kind === 'minecart';
+  if (acting || resetting || spectator || !playing) return;
+  const frame = frameTarget && !chiseling && ['place','remove','interact'].includes(type) ? frameTarget : null;
+  const placingFrame = !frame && type === 'place' && heldCreativeItem?.kind === 'item-frame';
+  const placingCart = !frame && type === 'place' && heldCreativeItem?.kind === 'minecart';
   const removingCart = type === 'remove' && !chiseling && seatTarget;
-  const target = removingCart || selection;
+  const target = frame || removingCart || selection;
   if (!target) return;
   const selectedVersion = heldVersion;
   const cell = getKey(target.cell);
   let pendingPlacement;
-  if (placingCart) {
+  if (frame) {
+    type = {place:'frame_item',remove:'frame_remove',interact:'frame_use'}[type];
+  } else if (placingFrame) {
+    type = 'place_frame';
+  } else if (placingCart) {
     type = 'place_minecart';
   } else if (removingCart) {
     type = 'remove_minecart';
@@ -740,7 +883,13 @@ async function action(type, sneaking = false) {
     if (heldPart && type === 'place') type = 'place_part';
   }
   const request = {requestId: requestId(), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
-  if (placingCart) Object.assign(request, {creativeItem:heldCreativeItem.key, yaw:heading.yaw});
+  if (placingCart || placingFrame) Object.assign(request,{creativeItem:heldCreativeItem.key,yaw:heading.yaw});
+  if (frame) request.entity = frame.entity;
+  if (type === 'frame_item') {
+    if (heldCreativeItem) request.creativeItem = heldCreativeItem.key;
+    else if (clipboard) request.cell = clipboard;
+    else { notice(messages.nothing_to_copy); return; }
+  }
   if (removingCart) request.entity = target.entity;
   if (type === 'copy_part' || type === 'remove_part') request.partSlot = target.partSlot;
   if (type === 'copy_voxel' || type === 'remove_voxel') {
@@ -751,8 +900,13 @@ async function action(type, sneaking = false) {
   if (type === 'interact') {
     request.yaw = heading.yaw;
     if (sneaking) request.sneaking = true;
+    if (blockState(target.cell)[0] === 23) {
+      if (heldCreativeItem) request.heldItem = heldCreativeItem.key;
+      else if (clipboard?.startsWith('legacy:')) request.heldCell = clipboard;
+    }
   }
   if (type === 'place') {
+    if (heldCreativeItem?.kind === 'flat-item') { notice('Наведите прицел на рамку'); return; }
     if (!clipboard) { notice(messages.nothing_to_copy); return; }
     request.against = {x: target.x, y: target.y, z: target.z};
     request.x += target.offset[0];
@@ -760,6 +914,7 @@ async function action(type, sneaking = false) {
     request.z += target.offset[2];
     request.cell = clipboard;
     request.yaw = heading.yaw;
+    request.pitch = heading.pitch;
     if (fromCreative) request.creative = true;
     if (heldCreativeItem) request.creativeItem = heldCreativeItem.key;
     if (heldSofa) {
@@ -784,7 +939,7 @@ async function action(type, sneaking = false) {
     Object.assign(request, {x,y,z,voxel,against,material:chiselMaterial});
     if (placement.solid) pendingPlacement = {x,y,z,boxes};
   }
-  request.expectedRevision = world.revisionAt(request.x, request.y, request.z);
+  request.expectedRevision = frame?.revision ?? world.revisionAt(request.x, request.y, request.z);
   const started = performance.now();
   acting = true;
   try {
@@ -793,9 +948,15 @@ async function action(type, sneaking = false) {
     if (pendingPlacement && overlapsPlacement(position, pendingPlacement)) { notice(messages.occupied); return; }
     const result = await postAction(request);
     if (!result.ok) {
-      if (result.body.current) changes([result.body.current], result.body.worldRevision);
+      if (result.body.current || result.body.frames) {
+        changes(result.body.current ? [result.body.current] : [],result.body.worldRevision,result.body.frames);
+      }
       notice(messages[result.body.error] || result.body.error || 'Действие отклонено');
       return;
+    }
+    if (/^(?:place|remove)(?:_|$)/.test(type)) {
+      hoofSwing = (hoofSwing + 1) & 0x7fffffff;
+      presenceDirty = true;
     }
     if (type === 'copy' && selectedVersion === heldVersion) {
       fromCreative = false;
@@ -819,7 +980,7 @@ async function action(type, sneaking = false) {
       placementKey = '';
       notice('Материал резца · ' + labelFor(chiselMaterial));
     }
-    changes(result.body.changes, result.body.worldRevision);
+    changes(result.body.changes, result.body.worldRevision, result.body.frames);
     effects(result.body);
     metrics.lastEdit = performance.now() - started;
   } catch (error) {
@@ -843,7 +1004,7 @@ function tick(now) {
     Object.assign(position, {x:anchor.x, y:anchor.y, z:anchor.z});
     Object.assign(seat, anchor);
   }
-  if (playing && !menuOpen() && !seat && !seatPending) {
+  if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending) {
     const startX = position.x, startZ = position.z;
     const forward = forwardInput();
     const strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + stick.x;
@@ -854,7 +1015,7 @@ function tick(now) {
     if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
       const dx = (-sin * forward + cos * strafe) * speed;
       const dz = (-cos * forward - sin * strafe) * speed;
-      if (flying) movement.fly(position, dx, vertical * speed, dz, dt, recordPosition);
+      if (flying) movement.fly(position, dx, vertical * speed, dz, dt, recordPosition, spectator);
       else movement.update(position, dx, dz, jump, dt,
         {rise: jump || keys.has('Space'), descend: descending, recordStep: recordPosition});
     }
@@ -873,12 +1034,13 @@ function tick(now) {
   updateCamera();
   view.updateMinecarts();
   view.players.frame(now, dt);
-  view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat);
+  view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat, spectator);
   updateSelection();
   updatePlacement(selection);
-  const selected = seatTarget ? 'Вагонетка · E — сесть' : selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
+  const selected = frameTarget ? 'Рамка · ПКМ — вложить предмет · E — повернуть' :
+    seatTarget ? 'Вагонетка · E — сесть' : selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
-  const interaction = !seat && !seatTarget && (seatFor(selection?.cell, world.models) ? 'E — сесть' :
+  const interaction = !seat && !seatTarget && !frameTarget && (seatFor(selection?.cell, world.models) ? 'E — сесть' :
     selection && signFor(selection.cell) && world.revisionAt(selection.x, selection.y, selection.z) ? 'E — редактировать' : '');
   const held = chiseling ? labelFor(chiselMaterial) : heldCreativeItem?.name ?? (heldPart ? partLabel(heldPart) : labelFor(clipboard));
   const status = [selected, interaction, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
@@ -919,7 +1081,7 @@ function bindControls() {
         if (playing) {
           entered = true;
           presenceDirty = true;
-          creativeToggle.disabled = !creativeAvailable;
+          creativeToggle.disabled = spectator || !creativeAvailable;
         }
       }).catch(error => {
         if (touchMode) setPlaying(false);
@@ -941,23 +1103,50 @@ function bindControls() {
   document.addEventListener('pointerlockchange', () => {
     if (!touchMode && !menuOpen()) setPlaying(document.pointerLockElement === canvas);
   });
-  document.addEventListener('pointerlockerror', () => notice('Браузер заблокировал захват курсора'));
+  document.addEventListener('pointerlockerror', () => {
+    if (!playing) notice('Браузер заблокировал захват курсора');
+  });
   document.addEventListener('mousemove', event => {
-    if (!touchMode && playing && !menuOpen()) look(event.movementX, event.movementY);
+    if (!touchMode && playing && !menuOpen() && (document.pointerLockElement === canvas || event.target === canvas)) {
+      look(event.movementX, event.movementY);
+    }
   });
   document.addEventListener('keydown', event => {
+    if (!teleportLoading.hidden && event.target !== element('teleport-reload')) return;
     if (signEditor.open) return;
-    if (event.code === 'F5' && playing && !menuOpen()) {
+    if ((event.code === 'F5' || event.code === 'KeyY' || event.code === 'KeyU') && playing && !menuOpen()) {
       event.preventDefault();
-      if (!event.repeat) {
-        const mode = view.cyclePerspective();
-        element('aim').style.display = mode === 'front' ? 'none' : '';
+      if (!spectator && !event.repeat) {
+        if (event.code === 'KeyU') toggleOrbit();
+        else {
+          if (orbitHeading) toggleOrbit();
+          view.cyclePerspective();
+          updateCameraHint();
+        }
       }
       return;
     }
     if (creative.keydown(event) || creative.isOpen()) return;
     if (social.keydown(event, playing)) return;
-    if (!playing) return;
+    if (event.code === 'KeyP' && playing && !menuOpen()) {
+      event.preventDefault();
+      if (!event.repeat) toggleSpectator();
+      return;
+    }
+    if (event.code === 'Escape' && entered) {
+      event.preventDefault();
+      if (!event.repeat) {
+        if (playing) {
+          pause();
+          setPlaying(false);
+        } else {
+          setPlaying(true);
+          resume(true);
+        }
+      }
+      return;
+    }
+    if (!playing || orbitHeading) return;
     if (event.code === 'KeyI' && !event.repeat && !creativeToggle.disabled) {
       event.preventDefault();
       creative.open();
@@ -967,6 +1156,7 @@ function bindControls() {
     keys.add(event.code);
     if (event.repeat) return;
     if (event.code === 'Space') jump = true;
+    if (spectator) return;
     if (event.code === 'KeyF' && !resetting && !seat) setFlight(!flying);
     if (event.code === 'KeyV' && !resetting && !acting) toggleChisel();
     if (event.code === 'KeyB') toggleChiselSize();
@@ -982,11 +1172,14 @@ function bindControls() {
   window.addEventListener('blur', () => { keys.clear(); social.blur(); });
   canvas.addEventListener('mousedown', event => {
     if (!playing || touchMode || menuOpen()) return;
+    if (document.pointerLockElement !== canvas) { resume(true); return; }
+    if (orbitHeading) return;
     if (event.button === 2) action('place');
     if (event.button === 0) action('remove');
     if (event.button === 1) action('copy');
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
+  element('teleport-reload').addEventListener('click', () => location.reload());
   element('sign-form').addEventListener('submit', saveSign);
   element('sign-cancel').addEventListener('click', closeSign);
   signEditor.addEventListener('cancel', event => { event.preventDefault(); closeSign(); });
@@ -1065,8 +1258,8 @@ function bindControls() {
       await sync;
       const {ok, body} = await post('respawn', {});
       if (ok) {
-        setSeat(null, body.position);
-        setFlight(false);
+        await arriveAt(body.position);
+        setFlight(spectator);
         presenceDirty = true;
       }
       else notice(messages[body.error] || body.error);
@@ -1205,12 +1398,16 @@ async function start() {
   view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
   if (session.body.seat) setSeat(session.body.seat, p);
+  if (session.body.spectator) setSpectator(true);
   if (session.body.time) view.setWorldTime(session.body.time);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
   updateCamera();
   const available = new Set([4, ...(manifest.terrain || []).map(ring => ring.radius)]);
   if (manifest.chunkPalettes) available.add(8);
-  if (supportsFarTerrain(manifest)) available.add(24);
+  if (supportsFarTerrain(manifest)) {
+    available.add(24);
+    if (manifest.lod.maxDistance === 32) available.add(32);
+  }
   const distance = element('distance');
   for (const option of distance.options) option.disabled = !available.has(Number(option.value));
   if (available.has(24)) distance.value = '24';
@@ -1224,11 +1421,11 @@ async function start() {
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
       revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
-      flying, chiseling, chiselMaterial, chiselSize, perspective:view.perspectiveView(),
+      flying, spectator, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
       movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
-    perspective: () => view.perspectiveView(),
+    perspective: cameraMode,
     localAvatar: () => view.inspectLocalAvatar(),
     setOcclusion: enabled => view.setOcclusion(enabled),
     target: () => selection && {...selection},

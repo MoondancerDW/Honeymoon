@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {readCreativeCatalog} from './creative-catalog.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import * as geometry from '../world/geometry.mjs';
-import {CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
+import {CREATIVE_FRAME_KEY, CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
 import {guidedMicroblock} from '../world/microblocks.mjs';
 
 const fixture = fileURLToPath(new URL('../work/', import.meta.url));
@@ -19,6 +19,7 @@ test('creative catalog supplies the transport items when the generated catalog i
   assert.ok(rails.every(entry => entry.placeable && placeable.has(entry.key)));
   assert.equal(items.get(CREATIVE_MINECART_KEY)?.kind, 'minecart');
   assert.equal(items.get(CREATIVE_MINECART_KEY)?.blockKey, undefined);
+  assert.equal(items.get(CREATIVE_FRAME_KEY)?.kind,'item-frame');
   assert.ok(placeable.has('legacy:1:0'));
 });
 
@@ -26,6 +27,10 @@ test('creative places registered off-map states with normal ownership, and build
   mkdirSync(fixture, {recursive:true});
   const generated = mkdtempSync(join(fixture, 'creative-test-'));
   mkdirSync(join(generated, 'creative'));
+  mkdirSync(join(generated,'models'));
+  writeFileSync(join(generated,'models','biblio.png'),'fixture');
+  writeFileSync(join(generated,'models','biblio.json'),JSON.stringify({models:{},items:{},armor:{},
+    flatItems:[{id:264,damage:0,name:'Алмаз',english:'Diamond',mod:'Minecraft'}]}));
   const entries = ['4:0','64:0','26:0','4094:0','63:0','68:0'].map((id, index) => ({key:`legacy:${id}`, placeable:index !== 3}));
   const lamp = {key:'creative:768:53', blockKey:'legacy:768:0', kind:'shaped-lamp', damage:53};
   const cover = {key:'creative:750:0', blockKey:'legacy:750:0', kind:'microblock', damage:0, coverData:65536};
@@ -35,7 +40,7 @@ test('creative places registered off-map states with normal ownership, and build
   const base = {manifest:{spawn:[8.5,1,8.5], bounds:{minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15},
     compositions:{}, palette:['air','legacy:1:0']}, hash:'creative-a', catalog:new Set(['air','legacy:1:0']),
     getCell:(x,y,z) => x === 9 && y === 1 && z === 6 ? {key:'legacy:63:0', object:null} :
-      {key:y === 0 ? 'legacy:1:0' : 'air', object:null},
+      {key:y === 0 || x === 8 && y === 4 && z === 6 ? 'legacy:1:0' : 'air', object:null},
     inBounds:(...point) => point.every(n => n >= 0 && n < 16)};
   const state = join(generated, 'test.sqlite');
   let app;
@@ -59,9 +64,10 @@ test('creative places registered off-map states with normal ownership, and build
   const response = await fetch(url + '/generated/creative/catalog.json');
   const served = (await response.json()).entries;
   assert.deepEqual(served.slice(0, entries.length), entries);
-  const transport = served.slice(entries.length);
+  const transport = served.slice(entries.length,entries.length + 4);
   assert.deepEqual(transport.map(entry => entry.key), ['legacy:66:0', 'legacy:27:0', 'legacy:28:0', CREATIVE_MINECART_KEY]);
   assert.ok(transport.every(entry => entry.placeable && entry.category === 'redstone'));
+  assert.equal(served.find(entry => entry.key === 'creative:264:0')?.kind,'flat-item');
   let seq = 0;
   async function command(cookie, type, point, fields) {
     const [x,y,z] = point;
@@ -114,6 +120,20 @@ test('creative places registered off-map states with normal ownership, and build
     against:{x:9,y:1,z:7}, hit:{x:9.125,y:1.5,z:8}});
   assert.equal(wall.body.changes?.[0].cell,'legacy:68:3',JSON.stringify(wall));
   assert.equal(wall.body.changes?.[0].object.type,'Sign');
+  const frame = await command(a,'place_frame',[7,0,9],{creativeItem:CREATIVE_FRAME_KEY,hit:{x:7.5,y:1,z:9.5}});
+  assert.equal(frame.status,200,JSON.stringify(frame));
+  const [floor] = frame.body.frames;
+  assert.equal(floor.data.MountSide,1);
+  const insert = {entity:floor.key,hit:{x:7.5,y:1.065,z:9.5},expectedRevision:floor.revision};
+  const filled = await command(a,'frame_item',floor.position.map(Math.floor),{...insert,cell:'legacy:4:0'});
+  assert.deepEqual(filled.body.frames?.[0].data.Item,{id:4,Damage:0,Block:true},JSON.stringify(filled));
+  const replaced = await command(b,'frame_item',floor.position.map(Math.floor),{...insert,
+    expectedRevision:filled.body.worldRevision,creativeItem:'creative:264:0'});
+  assert.deepEqual(replaced.body.frames?.[0].data.Item,{id:264,Damage:0},JSON.stringify(replaced));
+  const rotated = await command(b,'frame_use',floor.position.map(Math.floor),{...insert,expectedRevision:replaced.body.worldRevision});
+  assert.equal(rotated.body.frames?.[0].data.ItemRotation,1,JSON.stringify(rotated));
+  const ceiling = await command(a,'place_frame',[8,4,6],{creativeItem:CREATIVE_FRAME_KEY,hit:{x:8.5,y:4,z:6.5}});
+  assert.equal(ceiling.body.frames?.find(entry => entry.data.TileY === 4)?.data.MountSide,0,JSON.stringify(ceiling));
   await app.close();
   base.hash = 'creative-b';
   await launch();
@@ -123,4 +143,5 @@ test('creative places registered off-map states with normal ownership, and build
   assert.equal(world.overrides.find(change => change.x === 8 && change.z === 10)?.object.data.style, 1);
   assert.equal(world.overrides.find(change => change.x === 8 && change.z === 7)?.object.data.Text1,'Тихая улица');
   assert.equal(world.overrides.find(change => change.x === 9 && change.z === 8)?.cell,'legacy:68:3');
+  assert.equal(world.frames.find(entry => entry.key === floor.key)?.data.Item.id,264);
 });

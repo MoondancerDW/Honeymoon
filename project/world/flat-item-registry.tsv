@@ -1,0 +1,1494 @@
+id	damage	nameEn	nameRu	textureFile	passes	class
+256	0	Железная лопата	Железная лопата	/gui/items.png	82:16777215	vj
+257	0	Железная кирка	Железная кирка	/gui/items.png	98:16777215	uy
+258	0	Железный топор	Железный топор	/gui/items.png	114:16777215	un
+259	0	Огниво	Огниво	/gui/items.png	5:16777215	uj
+260	0	Яблоко	Яблоко	/gui/items.png	10:16777215	uk
+261	0	Лук	Лук	/gui/items.png	21:16777215	tb
+262	0	Стрела	Стрела	/gui/items.png	37:16777215	up
+263	0	Уголь	Уголь	/gui/items.png	7:16777215	tg
+263	1	Древесный уголь	Древесный уголь	/gui/items.png	7:16777215	tg
+264	0	Алмаз	Алмаз	/gui/items.png	55:16777215	up
+265	0	Железный слиток	Железный слиток	/gui/items.png	23:16777215	up
+266	0	Золотой слиток	Золотой слиток	/gui/items.png	39:16777215	up
+267	0	Железный меч	Железный меч	/gui/items.png	66:16777215	vu
+268	0	Деревянный меч	Деревянный меч	/gui/items.png	64:16777215	vu
+269	0	Деревянная лопата	Деревянная лопата	/gui/items.png	80:16777215	vj
+270	0	Деревянная кирка	Деревянная кирка	/gui/items.png	96:16777215	uy
+271	0	Деревянный топор	Деревянный топор	/gui/items.png	112:16777215	un
+272	0	Каменный меч	Каменный меч	/gui/items.png	65:16777215	vu
+273	0	Каменная лопата	Каменная лопата	/gui/items.png	81:16777215	vj
+274	0	Каменная кирка	Каменная кирка	/gui/items.png	97:16777215	uy
+275	0	Каменный топор	Каменный топор	/gui/items.png	113:16777215	un
+276	0	Алмазный меч	Алмазный меч	/gui/items.png	67:16777215	vu
+277	0	Алмазная лопата	Алмазная лопата	/gui/items.png	83:16777215	vj
+278	0	Алмазная кирка	Алмазная кирка	/gui/items.png	99:16777215	uy
+279	0	Алмазный топор	Алмазный топор	/gui/items.png	115:16777215	un
+280	0	Палка	Палка	/gui/items.png	53:16777215	up
+281	0	Миска	Миска	/gui/items.png	71:16777215	up
+282	0	Тушеные грибы	Тушеные грибы	/gui/items.png	72:16777215	tc
+283	0	Золотой меч	Золотой меч	/gui/items.png	68:16777215	vu
+284	0	Золотая лопата	Золотая лопата	/gui/items.png	84:16777215	vj
+285	0	Золотая кирка	Золотая кирка	/gui/items.png	100:16777215	uy
+286	0	Золотой топор	Золотой топор	/gui/items.png	116:16777215	un
+287	0	Нить	Нить	/gui/items.png	8:16777215	vr
+288	0	Перо	Перо	/gui/items.png	24:16777215	up
+289	0	Порох	Порох	/gui/items.png	40:16777215	up
+290	0	Деревянная мотыга	Деревянная мотыга	/gui/items.png	128:16777215	uo
+291	0	Каменная мотыга	Каменная мотыга	/gui/items.png	129:16777215	uo
+292	0	Железная мотыга	Железная мотыга	/gui/items.png	130:16777215	uo
+293	0	Алмазная мотыга	Алмазная мотыга	/gui/items.png	131:16777215	uo
+294	0	Золотая мотыга	Золотая мотыга	/gui/items.png	132:16777215	uo
+295	0	Семена пшеницы	Семена пшеницы	/gui/items.png	9:16777215	vh
+296	0	Пшеница	Пшеница	/gui/items.png	25:16777215	up
+297	0	Хлеб	Хлеб	/gui/items.png	41:16777215	uk
+298	0	Кожаный шлем	Кожаный шлем	/gui/items.png	0:10511680,144:16777215	su
+299	0	Кожаная куртка	Кожаная куртка	/gui/items.png	16:10511680,160:16777215	su
+300	0	Кожаные штаны	Кожаные штаны	/gui/items.png	32:10511680,176:16777215	su
+301	0	Кожаные ботинки	Кожаные ботинки	/gui/items.png	48:10511680,192:16777215	su
+302	0	Койф	Койф	/gui/items.png	1:16777215	su
+303	0	Кольчуга	Кольчуга	/gui/items.png	17:16777215	su
+304	0	Кольчужные поножи	Кольчужные поножи	/gui/items.png	33:16777215	su
+305	0	Кольчужные ботинки	Кольчужные ботинки	/gui/items.png	49:16777215	su
+306	0	Железный шлем	Железный шлем	/gui/items.png	2:16777215	su
+307	0	Железный нагрудник	Железный нагрудник	/gui/items.png	18:16777215	su
+308	0	Железные поножи	Железные поножи	/gui/items.png	34:16777215	su
+309	0	Железные ботинки	Железные ботинки	/gui/items.png	50:16777215	su
+310	0	Алмазный шлем	Алмазный шлем	/gui/items.png	3:16777215	su
+311	0	Алмазный нагрудник	Алмазный нагрудник	/gui/items.png	19:16777215	su
+312	0	Алмазные поножи	Алмазные поножи	/gui/items.png	35:16777215	su
+313	0	Алмазные ботинки	Алмазные ботинки	/gui/items.png	51:16777215	su
+314	0	Золотой шлем	Золотой шлем	/gui/items.png	4:16777215	su
+315	0	Золотой нагрудник	Золотой нагрудник	/gui/items.png	20:16777215	su
+316	0	Золотые поножи	Золотые поножи	/gui/items.png	36:16777215	su
+317	0	Золотые ботинки	Золотые ботинки	/gui/items.png	52:16777215	su
+318	0	Кремень	Кремень	/gui/items.png	6:16777215	up
+319	0	Сырая свинина	Сырая свинина	/gui/items.png	87:16777215	uk
+320	0	Жареная свинина	Жареная свинина	/gui/items.png	88:16777215	uk
+321	0	Картина	Картина	/gui/items.png	26:16777215	um
+322	0	Золотое яблоко	Золотое яблоко	/gui/items.png	11:16777215	ul
+322	1	Золотое яблоко	Золотое яблоко	/gui/items.png	11:16777215	ul
+323	0	Табличка	Табличка	/gui/items.png	42:16777215	vk
+324	0	Деревянная дверь	Деревянная дверь	/gui/items.png	43:16777215	tx
+325	0	Ведро	Ведро	/gui/items.png	74:16777215	td
+326	0	Ведро воды	Ведро воды	/gui/items.png	75:16777215	td
+327	0	Ведро лавы	Ведро лавы	/gui/items.png	76:16777215	td
+328	0	Вагонетка	Вагонетка	/gui/items.png	135:16777215	uv
+329	0	Седло	Седло	/gui/items.png	104:16777215	ve
+330	0	Железная дверь	Железная дверь	/gui/items.png	44:16777215	tx
+331	0	Красная пыль	Красная пыль	/gui/items.png	56:16777215	vd
+332	0	Снежок	Снежок	/gui/items.png	14:16777215	vn
+333	0	Лодка	Лодка	/gui/items.png	136:16777215	sy
+334	0	Кожа	Кожа	/gui/items.png	103:16777215	up
+335	0	Молоко	Молоко	/gui/items.png	77:16777215	uu
+336	0	Кирпич	Кирпич	/gui/items.png	22:16777215	up
+337	0	Глина	Глина	/gui/items.png	57:16777215	up
+338	0	Сахарный тростник	Сахарный тростник	/gui/items.png	27:16777215	vr
+339	0	Бумага	Бумага	/gui/items.png	58:16777215	up
+340	0	Книга	Книга	/gui/items.png	59:16777215	sz
+341	0	Сгусток слизи	Сгусток слизи	/gui/items.png	30:16777215	up
+342	0	Грузовая вагонетка	Грузовая вагонетка	/gui/items.png	151:16777215	uv
+343	0	Самоходная вагонетка	Самоходная вагонетка	/gui/items.png	167:16777215	uv
+344	0	Яйцо	Яйцо	/gui/items.png	12:16777215	tz
+345	0	Компас	Компас	/gui/items.png	54:16777215	up
+346	0	Удочка	Удочка	/gui/items.png	69:16777215	ui
+347	0	Часы	Часы	/gui/items.png	70:16777215	up
+348	0	Светящаяся пыль	Светящаяся пыль	/gui/items.png	73:16777215	up
+349	0	Сырая рыба	Сырая рыба	/gui/items.png	89:16777215	uk
+350	0	Жареная рыба	Жареная рыба	/gui/items.png	90:16777215	uk
+351	0	Чернильный мешок	Чернильный мешок	/gui/items.png	78:16777215	ty
+351	1	Красный краситель	Красный краситель	/gui/items.png	94:16777215	ty
+351	2	Зеленый краситель	Зеленый краситель	/gui/items.png	110:16777215	ty
+351	3	Какао-бобы	Какао-бобы	/gui/items.png	126:16777215	ty
+351	4	Лазурит	Лазурит	/gui/items.png	142:16777215	ty
+351	5	Фиолетовый краситель	Фиолетовый краситель	/gui/items.png	158:16777215	ty
+351	6	Бирюзовый краситель	Бирюзовый краситель	/gui/items.png	174:16777215	ty
+351	7	Светло-серый краситель	Светло-серый краситель	/gui/items.png	190:16777215	ty
+351	8	Серый краситель	Серый краситель	/gui/items.png	79:16777215	ty
+351	9	Розовый краситель	Розовый краситель	/gui/items.png	95:16777215	ty
+351	10	Лаймовый краситель	Лаймовый краситель	/gui/items.png	111:16777215	ty
+351	11	Желтый краситель	Желтый краситель	/gui/items.png	127:16777215	ty
+351	12	Голубой краситель	Голубой краситель	/gui/items.png	143:16777215	ty
+351	13	Пурпурный краситель	Пурпурный краситель	/gui/items.png	159:16777215	ty
+351	14	Оранжевый краситель	Оранжевый краситель	/gui/items.png	175:16777215	ty
+351	15	Костная мука	Костная мука	/gui/items.png	191:16777215	ty
+352	0	Кость	Кость	/gui/items.png	28:16777215	up
+353	0	Сахар	Сахар	/gui/items.png	13:16777215	up
+354	0	Торт	Торт	/gui/items.png	29:16777215	vr
+355	0	Кровать	Кровать	/gui/items.png	45:16777215	sx
+356	0	Повторитель	Повторитель	/gui/items.png	86:16777215	vr
+357	0	Печенье	Печенье	/gui/items.png	92:16777215	uk
+358	0	Карта	Карта	/gui/items.png	60:16777215	ut
+359	0	Ножницы	Ножницы	/gui/items.png	93:16777215	vi
+360	0	Арбуз	Арбуз	/gui/items.png	109:16777215	uk
+361	0	Семена тыквы	Семена тыквы	/gui/items.png	61:16777215	vh
+362	0	Семена арбуза	Семена арбуза	/gui/items.png	62:16777215	vh
+363	0	Сырая говядина	Сырая говядина	/gui/items.png	105:16777215	uk
+364	0	Стейк	Стейк	/gui/items.png	106:16777215	uk
+365	0	Курятина	Курятина	/gui/items.png	121:16777215	uk
+366	0	Жареная курица	Жареная курица	/gui/items.png	122:16777215	uk
+367	0	Гнилая плоть	Гнилая плоть	/gui/items.png	91:16777215	uk
+368	0	Жемчуг Эндера	Жемчуг Эндера	/gui/items.png	107:16777215	ud
+369	0	Стержень ифрита	Стержень ифрита	/gui/items.png	108:16777215	up
+370	0	Слеза Гаста	Слеза Гаста	/gui/items.png	123:16777215	up
+371	0	Золотой самородок	Золотой самородок	/gui/items.png	124:16777215	up
+372	0	Адский нарост	Адский нарост	/gui/items.png	125:16777215	vh
+373	0	Зелье	Зелье	/gui/items.png	141:3694022,140:16777215	va
+373	16273	Зелье	Зелье	/gui/items.png	141:13458603,140:16777215	va
+373	16274	Зелье	Зелье	/gui/items.png	141:8171462,140:16777215	va
+373	16307	Зелье	Зелье	/gui/items.png	141:14981690,140:16777215	va
+373	16276	Зелье	Зелье	/gui/items.png	141:5149489,140:16777215	va
+373	16341	Зелье	Зелье	/gui/items.png	141:16262179,140:16777215	va
+373	16310	Зелье	Зелье	/gui/items.png	141:2039713,140:16777215	va
+373	16312	Зелье	Зелье	/gui/items.png	141:4738376,140:16777215	va
+373	16281	Зелье	Зелье	/gui/items.png	141:9643043,140:16777215	va
+373	16314	Зелье	Зелье	/gui/items.png	141:5926017,140:16777215	va
+373	16348	Зелье	Зелье	/gui/items.png	141:4393481,140:16777215	va
+373	16318	Зелье	Зелье	/gui/items.png	141:8356754,140:16777215	va
+373	16305	Зелье	Зелье	/gui/items.png	141:13458603,140:16777215	va
+373	16306	Зелье	Зелье	/gui/items.png	141:8171462,140:16777215	va
+373	16308	Зелье	Зелье	/gui/items.png	141:5149489,140:16777215	va
+373	16373	Зелье	Зелье	/gui/items.png	141:16262179,140:16777215	va
+373	16313	Зелье	Зелье	/gui/items.png	141:9643043,140:16777215	va
+373	16380	Зелье	Зелье	/gui/items.png	141:4393481,140:16777215	va
+373	16337	Зелье	Зелье	/gui/items.png	141:13458603,140:16777215	va
+373	16338	Зелье	Зелье	/gui/items.png	141:8171462,140:16777215	va
+373	16371	Зелье	Зелье	/gui/items.png	141:14981690,140:16777215	va
+373	16340	Зелье	Зелье	/gui/items.png	141:5149489,140:16777215	va
+373	16374	Зелье	Зелье	/gui/items.png	141:2039713,140:16777215	va
+373	16376	Зелье	Зелье	/gui/items.png	141:4738376,140:16777215	va
+373	16345	Зелье	Зелье	/gui/items.png	141:9643043,140:16777215	va
+373	16378	Зелье	Зелье	/gui/items.png	141:5926017,140:16777215	va
+373	16382	Зелье	Зелье	/gui/items.png	141:8356754,140:16777215	va
+373	16369	Зелье	Зелье	/gui/items.png	141:13458603,140:16777215	va
+373	16370	Зелье	Зелье	/gui/items.png	141:8171462,140:16777215	va
+373	16372	Зелье	Зелье	/gui/items.png	141:5149489,140:16777215	va
+373	16377	Зелье	Зелье	/gui/items.png	141:9643043,140:16777215	va
+373	32657	Зелье	Зелье	/gui/items.png	141:13458603,154:16777215	va
+373	32658	Зелье	Зелье	/gui/items.png	141:8171462,154:16777215	va
+373	32691	Зелье	Зелье	/gui/items.png	141:14981690,154:16777215	va
+373	32660	Зелье	Зелье	/gui/items.png	141:5149489,154:16777215	va
+373	32725	Зелье	Зелье	/gui/items.png	141:16262179,154:16777215	va
+373	32694	Зелье	Зелье	/gui/items.png	141:2039713,154:16777215	va
+373	32696	Зелье	Зелье	/gui/items.png	141:4738376,154:16777215	va
+373	32665	Зелье	Зелье	/gui/items.png	141:9643043,154:16777215	va
+373	32698	Зелье	Зелье	/gui/items.png	141:5926017,154:16777215	va
+373	32732	Зелье	Зелье	/gui/items.png	141:4393481,154:16777215	va
+373	32702	Зелье	Зелье	/gui/items.png	141:8356754,154:16777215	va
+373	32689	Зелье	Зелье	/gui/items.png	141:13458603,154:16777215	va
+373	32690	Зелье	Зелье	/gui/items.png	141:8171462,154:16777215	va
+373	32692	Зелье	Зелье	/gui/items.png	141:5149489,154:16777215	va
+373	32757	Зелье	Зелье	/gui/items.png	141:16262179,154:16777215	va
+373	32697	Зелье	Зелье	/gui/items.png	141:9643043,154:16777215	va
+373	32764	Зелье	Зелье	/gui/items.png	141:4393481,154:16777215	va
+373	32721	Зелье	Зелье	/gui/items.png	141:13458603,154:16777215	va
+373	32722	Зелье	Зелье	/gui/items.png	141:8171462,154:16777215	va
+373	32755	Зелье	Зелье	/gui/items.png	141:14981690,154:16777215	va
+373	32724	Зелье	Зелье	/gui/items.png	141:5149489,154:16777215	va
+373	32758	Зелье	Зелье	/gui/items.png	141:2039713,154:16777215	va
+373	32760	Зелье	Зелье	/gui/items.png	141:4738376,154:16777215	va
+373	32729	Зелье	Зелье	/gui/items.png	141:9643043,154:16777215	va
+373	32762	Зелье	Зелье	/gui/items.png	141:5926017,154:16777215	va
+373	32766	Зелье	Зелье	/gui/items.png	141:8356754,154:16777215	va
+373	32753	Зелье	Зелье	/gui/items.png	141:13458603,154:16777215	va
+373	32754	Зелье	Зелье	/gui/items.png	141:8171462,154:16777215	va
+373	32756	Зелье	Зелье	/gui/items.png	141:5149489,154:16777215	va
+373	32761	Зелье	Зелье	/gui/items.png	141:9643043,154:16777215	va
+374	0	Пузырёк	Пузырёк	/gui/items.png	140:16777215	ta
+375	0	Паучий глаз	Паучий глаз	/gui/items.png	139:16777215	uk
+376	0	Маринованный паучий глаз	Маринованный паучий глаз	/gui/items.png	138:16777215	up
+377	0	Огненный порошок	Огненный порошок	/gui/items.png	157:16777215	up
+378	0	Сгусток магмы	Сгусток магмы	/gui/items.png	173:16777215	up
+379	0	Варочная стойка	Варочная стойка	/gui/items.png	172:16777215	vr
+380	0	Котёл	Котёл	/gui/items.png	156:16777215	vr
+381	0	Око Эндера	Око Эндера	/gui/items.png	155:16777215	uc
+382	0	Сверкающий арбуз	Сверкающий арбуз	/gui/items.png	137:16777215	up
+383	50	Призвать существо -	Призвать существо -	/gui/items.png	153:894731,169:0	uw
+383	51	Призвать существо -	Призвать существо -	/gui/items.png	153:12698049,169:4802889	uw
+383	52	Призвать существо -	Призвать существо -	/gui/items.png	153:3419431,169:11013646	uw
+383	54	Призвать существо -	Призвать существо -	/gui/items.png	153:44975,169:7969893	uw
+383	55	Призвать существо -	Призвать существо -	/gui/items.png	153:5349438,169:8306542	uw
+383	56	Призвать существо -	Призвать существо -	/gui/items.png	153:16382457,169:12369084	uw
+383	57	Призвать существо -	Призвать существо -	/gui/items.png	153:15373203,169:5009705	uw
+383	58	Призвать существо -	Призвать существо -	/gui/items.png	153:1447446,169:0	uw
+383	59	Призвать существо -	Призвать существо -	/gui/items.png	153:803406,169:11013646	uw
+383	60	Призвать существо -	Призвать существо -	/gui/items.png	153:7237230,169:3158064	uw
+383	61	Призвать существо -	Призвать существо -	/gui/items.png	153:16167425,169:16775294	uw
+383	62	Призвать существо -	Призвать существо -	/gui/items.png	153:3407872,169:16579584	uw
+383	65	Призвать существо -	Призвать существо -	/gui/items.png	153:4996656,169:986895	uw
+383	66	Призвать существо -	Призвать существо -	/gui/items.png	153:3407872,169:5349438	uw
+383	90	Призвать существо -	Призвать существо -	/gui/items.png	153:15771042,169:14377823	uw
+383	91	Призвать существо -	Призвать существо -	/gui/items.png	153:15198183,169:16758197	uw
+383	92	Призвать существо -	Призвать существо -	/gui/items.png	153:4470310,169:10592673	uw
+383	93	Призвать существо -	Призвать существо -	/gui/items.png	153:10592673,169:16711680	uw
+383	94	Призвать существо -	Призвать существо -	/gui/items.png	153:2243405,169:7375001	uw
+383	95	Призвать существо -	Призвать существо -	/gui/items.png	153:14144467,169:13545366	uw
+383	96	Призвать существо -	Призвать существо -	/gui/items.png	153:10489616,169:12040119	uw
+383	98	Призвать существо -	Призвать существо -	/gui/items.png	153:15720061,169:5653556	uw
+383	120	Призвать существо -	Призвать существо -	/gui/items.png	153:5651507,169:12422002	uw
+383	39	Призвать существо -	Призвать существо -	/gui/items.png	153:12623485,169:9141102	uw
+383	42	Призвать существо -	Призвать существо -	/gui/items.png	153:14020607,169:13749760	uw
+383	43	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:9320590	uw
+383	44	Призвать существо -	Призвать существо -	/gui/items.png	153:14020607,169:14020607	uw
+383	45	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:0	uw
+383	46	Призвать существо -	Призвать существо -	/gui/items.png	153:14020607,169:16711680	uw
+383	47	Призвать существо -	Призвать существо -	/gui/items.png	153:12623485,169:15656192	uw
+383	67	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:9320590	uw
+383	68	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:65407	uw
+383	69	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:9141102	uw
+383	70	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:1	uw
+383	71	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:15656192	uw
+383	72	Призвать существо -	Призвать существо -	/gui/items.png	153:12623485,169:16622	uw
+383	73	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:33023	uw
+383	74	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:13749760	uw
+383	75	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:0	uw
+383	76	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:12623485	uw
+383	77	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:5253242	uw
+383	78	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:7434694	uw
+383	79	Призвать существо -	Призвать существо -	/gui/items.png	153:33023,169:9013643	uw
+383	80	Призвать существо -	Призвать существо -	/gui/items.png	153:33023,169:15631086	uw
+383	81	Призвать существо -	Призвать существо -	/gui/items.png	153:33023,169:65407	uw
+383	82	Призвать существо -	Призвать существо -	/gui/items.png	153:12623485,169:5253242	uw
+383	85	Призвать существо -	Призвать существо -	/gui/items.png	153:12623485,169:9141102	uw
+383	86	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:14772545	uw
+383	87	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:6053069	uw
+383	88	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:65407	uw
+383	89	Призвать существо -	Призвать существо -	/gui/items.png	153:33023,169:9141102	uw
+383	100	Призвать существо -	Призвать существо -	/gui/items.png	153:33023,169:14772545	uw
+383	101	Призвать существо -	Призвать существо -	/gui/items.png	153:7434694,169:6053069	uw
+383	104	Призвать существо -	Призвать существо -	/gui/items.png	153:14020607,169:9639167	uw
+383	105	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:15656192	uw
+383	106	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:1	uw
+383	107	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:14020607	uw
+383	108	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:9320590	uw
+383	109	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:16622	uw
+383	110	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:14772545	uw
+383	111	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:7434694	uw
+383	113	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:16622	uw
+383	116	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:23423	uw
+383	117	Призвать существо -	Призвать существо -	/gui/items.png	153:16711680,169:23423	uw
+383	118	Призвать существо -	Призвать существо -	/gui/items.png	153:14772545,169:65407	uw
+383	119	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:13749760	uw
+383	121	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:9141102	uw
+383	122	Призвать существо -	Призвать существо -	/gui/items.png	153:65407,169:13749760	uw
+383	123	Призвать существо -	Призвать существо -	/gui/items.png	153:16777215,169:16030038	uw
+383	124	Призвать существо -	Призвать существо -	/gui/items.png	153:10957073,169:0	uw
+383	125	Призвать существо -	Призвать существо -	/gui/items.png	153:14695817,169:9794728	uw
+383	126	Призвать существо -	Призвать существо -	/gui/items.png	153:16777215,169:4391167	uw
+383	127	Призвать существо -	Призвать существо -	/gui/items.png	153:12428288,169:16776960	uw
+383	128	Призвать существо -	Призвать существо -	/gui/items.png	153:15302565,169:15401560	uw
+383	129	Призвать существо -	Призвать существо -	/gui/items.png	153:32767,169:16711935	uw
+383	130	Призвать существо -	Призвать существо -	/gui/items.png	153:16776960,169:15302565	uw
+383	131	Призвать существо -	Призвать существо -	/gui/items.png	153:16777215,169:16711935	uw
+383	132	Призвать существо -	Призвать существо -	/gui/items.png	153:16777215,169:16711680	uw
+383	133	Призвать существо -	Призвать существо -	/gui/items.png	153:16776960,169:16711935	uw
+383	134	Призвать существо -	Призвать существо -	/gui/items.png	153:0,169:32767	uw
+383	135	Призвать существо -	Призвать существо -	/gui/items.png	153:16753920,169:9211020	uw
+383	136	Призвать существо -	Призвать существо -	/gui/items.png	153:16777215,169:16776960	uw
+383	137	Призвать существо -	Призвать существо -	/gui/items.png	153:65280,169:16711935	uw
+383	138	Призвать существо -	Призвать существо -	/gui/items.png	153:0,169:255	uw
+383	139	Призвать существо -	Призвать существо -	/gui/items.png	153:9211020,169:0	uw
+384	0	Пузырёк опыта	Пузырёк опыта	/gui/items.png	171:16777215	ue
+385	0	Огненный шар	Огненный шар	/gui/items.png	46:16777215	uf
+386	0	Книга и перо	Книга и перо	/gui/items.png	187:16777215	vv
+387	0	Написанная книга	Написанная книга	/gui/items.png	188:16777215	vw
+388	0	Изумруд	Изумруд	/gui/items.png	186:16777215	up
+389	0	Рамка	Рамка	/gui/items.png	206:16777215	um
+390	0	Цветочный горшок	Цветочный горшок	/gui/items.png	189:16777215	vr
+391	0	Морковь	Морковь	/gui/items.png	120:16777215	vg
+392	0	Картофель	Картофель	/gui/items.png	119:16777215	vg
+393	0	Печёный картофель	Печёный картофель	/gui/items.png	118:16777215	uk
+394	0	Отравленный картофель	Отравленный картофель	/gui/items.png	134:16777215	uk
+395	0	Пустая карта	Пустая карта	/gui/items.png	205:16777215	ua
+396	0	Золотая морковь	Золотая морковь	/gui/items.png	150:16777215	uk
+397	0	Череп скелета	Череп скелета	/gui/items.png	224:16777215	vm
+397	1	Череп Скелета-Иссушителя	Череп Скелета-Иссушителя	/gui/items.png	225:16777215	vm
+397	2	Голова зомби	Голова зомби	/gui/items.png	226:16777215	vm
+397	3	Голова	Голова	/gui/items.png	227:16777215	vm
+397	4	Голова крипера	Голова крипера	/gui/items.png	228:16777215	vm
+398	0	Удочка с морковью	Удочка с морковью	/gui/items.png	102:16777215	te
+399	0	Звезда Ада	Звезда Ада	/gui/items.png	185:16777215	vl
+400	0	Тыквенный пирог	Тыквенный пирог	/gui/items.png	152:16777215	uk
+401	0	item.fireworks.name		/gui/items.png	201:16777215	uh
+402	0	item.fireworksCharge.name		/gui/items.png	202:16777215,203:9079434	ug
+403	0	item.enchantedBook.name		/gui/items.png	207:16777215	ub
+2256	0	Пластинка	Пластинка	/gui/items.png	240:16777215	vc
+2257	0	Пластинка	Пластинка	/gui/items.png	241:16777215	vc
+2258	0	Пластинка	Пластинка	/gui/items.png	242:16777215	vc
+2259	0	Пластинка	Пластинка	/gui/items.png	243:16777215	vc
+2260	0	Пластинка	Пластинка	/gui/items.png	244:16777215	vc
+2261	0	Пластинка	Пластинка	/gui/items.png	245:16777215	vc
+2262	0	Пластинка	Пластинка	/gui/items.png	246:16777215	vc
+2263	0	Пластинка	Пластинка	/gui/items.png	247:16777215	vc
+2264	0	Пластинка	Пластинка	/gui/items.png	248:16777215	vc
+2265	0	Пластинка	Пластинка	/gui/items.png	249:16777215	vc
+2266	0	Пластинка	Пластинка	/gui/items.png	250:16777215	vc
+2267	0	Пластинка	Пластинка	/gui/items.png	251:16777215	vc
+4367	0	Element of Kindness	Element of Kindness	/MLB/items.png	49:16777215	teotoo.minelittlebrony.core.item.ItemElementsOfHarmony
+4368	0	Element of Honesty	Element of Honesty	/MLB/items.png	48:16777215	teotoo.minelittlebrony.core.item.ItemElementsOfHarmony
+4369	0	Element of Loyalty	Element of Loyalty	/MLB/items.png	51:16777215	teotoo.minelittlebrony.core.item.ItemElementsOfHarmony
+4370	0	Element of Generosity	Element of Generosity	/MLB/items.png	52:16777215	teotoo.minelittlebrony.core.item.ItemElementsOfHarmony
+4371	0	Element of Laughter	Element of Laughter	/MLB/items.png	50:16777215	teotoo.minelittlebrony.core.item.ItemElementsOfHarmony
+4372	0	Element of Magic	Element of Magic	/MLB/items.png	53:16777215	teotoo.minelittlebrony.core.item.ItemElementsOfHarmony
+4991	0	Gem Sack	Gem Sack	/MLB/items.png	96:16777215	teotoo.minelittlebrony.core.item.ItemGemSack
+4992	0	Stick	Stick	/MLB/items.png	225:7022715,225:7022715	teotoo.minelittlebrony.vegetation.item.ItemColoredStick
+4992	1	Stick	Stick	/MLB/items.png	225:16774535,225:16774535	teotoo.minelittlebrony.vegetation.item.ItemColoredStick
+4992	2	Stick	Stick	/MLB/items.png	225:8072505,225:8072505	teotoo.minelittlebrony.vegetation.item.ItemColoredStick
+4993	0	Gemstone	Gemstone	/MLB/items.png	224:16711935,240:16711935	teotoo.minelittlebrony.core.item.ItemGem
+4993	1	Gemstone	Gemstone	/MLB/items.png	224:255,240:255	teotoo.minelittlebrony.core.item.ItemGem
+4993	2	Gemstone	Gemstone	/MLB/items.png	224:65535,240:65535	teotoo.minelittlebrony.core.item.ItemGem
+4993	3	Gemstone	Gemstone	/MLB/items.png	224:16711808,240:16711808	teotoo.minelittlebrony.core.item.ItemGem
+4993	4	Gemstone	Gemstone	/MLB/items.png	224:16744448,240:16744448	teotoo.minelittlebrony.core.item.ItemGem
+4993	5	Gemstone	Gemstone	/MLB/items.png	224:16776960,240:16776960	teotoo.minelittlebrony.core.item.ItemGem
+4993	6	Gemstone	Gemstone	/MLB/items.png	224:65280,240:65280	teotoo.minelittlebrony.core.item.ItemGem
+4993	7	Gemstone	Gemstone	/MLB/items.png	224:16711680,240:16711680	teotoo.minelittlebrony.core.item.ItemGem
+4993	8	Gemstone	Gemstone	/MLB/items.png	224:16777215,240:16777215	teotoo.minelittlebrony.core.item.ItemGem
+4993	9	Gemstone	Gemstone	/MLB/items.png	224:5526612,240:5526612	teotoo.minelittlebrony.core.item.ItemGem
+4993	10	Gemstone	Gemstone	/MLB/items.png	224:1052688,240:1052688	teotoo.minelittlebrony.core.item.ItemGem
+4994	0	Diamond Zaxe	Diamond Zaxe	/MLB/items.png	33:16777215	un
+4996	0	Salt Rake	Salt Rake	/MLB/items.png	32:16777215	teotoo.minelittlebrony.core.item.ItemSaltSieve
+4997	0	Assault Cake	Assault Cake	/MLB/items.png	80:16777215	teotoo.minelittlebrony.core.item.MLB_ItemThrowable
+4997	1	Chocolate Milk - Empty	Chocolate Milk - Empty	/MLB/items.png	81:16777215	teotoo.minelittlebrony.core.item.MLB_ItemThrowable
+4997	2	Pepper Pot	Pepper Pot	/MLB/items.png	82:16777215	teotoo.minelittlebrony.core.item.MLB_ItemThrowable
+4998	0	Cookie Crumbs	Cookie Crumbs	/MLB/items.png	16:16777215	teotoo.minelittlebrony.core.item.ItemGeneric
+4998	1	Cookie Dough	Cookie Dough	/MLB/items.png	17:16777215	teotoo.minelittlebrony.core.item.ItemGeneric
+4998	2	Cup of Flour	Cup of Flour	/MLB/items.png	18:16777215	teotoo.minelittlebrony.core.item.ItemGeneric
+4998	3	Salt	Salt	/MLB/items.png	19:16777215	teotoo.minelittlebrony.core.item.ItemGeneric
+4998	4	Tube of Mix	Tube of Mix	/MLB/items.png	20:16777215	teotoo.minelittlebrony.core.item.ItemGeneric
+4998	5	Vanilla	Vanilla	/MLB/items.png	21:16777215	teotoo.minelittlebrony.core.item.ItemGeneric
+4998	6	Corn Seeds	Corn Seeds	/MLB/items.png	22:16777215	teotoo.minelittlebrony.core.item.ItemGeneric
+4999	0	Apple Fritter	Apple Fritter	/MLB/items.png	0:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	1	Apple Juice	Apple Juice	/MLB/items.png	1:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	2	Corn	Corn	/MLB/items.png	2:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	3	Zap Apple	Zap Apple	/MLB/items.png	3:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	4	Cherry Chonga	Cherry Chonga	/MLB/items.png	4:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	5	Cherries	Cherries	/MLB/items.png	5:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	6	Muffin	Muffin	/MLB/items.png	6:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	7	Cupcake	Cupcake	/MLB/items.png	7:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	8	Popcorn	Popcorn	/MLB/items.png	8:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	9	Dandelion Sandwich	Dandelion Sandwich	/MLB/items.png	9:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+4999	10	Chocolate Milk	Chocolate Milk	/MLB/items.png	10:16777215	teotoo.minelittlebrony.core.item.MLB_ItemFood
+5256	0	Light Bulb	Light Bulb	/jammy780/furniture/gui/jammy_items.png	9:16777215	net.minecraft.jammy780.furniture.item.jfm_Items
+5257	0	Mantle Piece (Unf)	Mantle Piece (Unf)	/jammy780/furniture/gui/jammy_items.png	35:16777215	net.minecraft.jammy780.furniture.item.jfm_Items
+5258	0	Ceramic Panel (Unf)	Ceramic Panel (Unf)	/jammy780/furniture/gui/jammy_items.png	33:16777215	net.minecraft.jammy780.furniture.item.jfm_Items
+5259	0	Ceramic Panel	Ceramic Panel	/jammy780/furniture/gui/jammy_items.png	32:16777215	net.minecraft.jammy780.furniture.item.jfm_Items
+5260	0	Washing Machine Drum	Washing Machine Drum	/jammy780/furniture/gui/jammy_items.png	34:16777215	net.minecraft.jammy780.furniture.item.jfm_Items
+5261	0	Blind Part	Blind Part	/jammy780/furniture/gui/jammy_items.png	57:16777215	net.minecraft.jammy780.furniture.item.jfm_Items
+5357	0	Медведь Тед	Медведь Тед	/assets/Lilium.Items/textures/items/toys.png	0:16777215	su.lilium.items.custom.ItemSimple
+5358	0	Толстосум Тед	Толстосум Тед	/assets/Lilium.Items/textures/items/toys.png	1:16777215	su.lilium.items.custom.ItemSimple
+5359	0	Проныра Тед	Проныра Тед	/assets/Lilium.Items/textures/items/toys.png	2:16777215	su.lilium.items.custom.ItemSimple
+5360	0	Стражник Тед	Стражник Тед	/assets/Lilium.Items/textures/items/toys.png	3:16777215	su.lilium.items.custom.ItemSimple
+5361	0	Пожарник Тед	Пожарник Тед	/assets/Lilium.Items/textures/items/toys.png	4:16777215	su.lilium.items.custom.ItemSimple
+5363	0	Доктор Тед	Доктор Тед	/assets/Lilium.Items/textures/items/toys.png	5:16777215	su.lilium.items.custom.ItemSimple
+5364	0	Вампир Тед	Вампир Тед	/assets/Lilium.Items/textures/items/toys.png	6:16777215	su.lilium.items.custom.ItemSimple
+5365	0	Ковбой Тед	Ковбой Тед	/assets/Lilium.Items/textures/items/toys.png	7:16777215	su.lilium.items.custom.ItemSimple
+5366	0	Почтальон Тед	Почтальон Тед	/assets/Lilium.Items/textures/items/toys.png	8:16777215	su.lilium.items.custom.ItemSimple
+5367	0	Строитель Тед	Строитель Тед	/assets/Lilium.Items/textures/items/toys.png	9:16777215	su.lilium.items.custom.ItemSimple
+5368	0	Рыцарь Тед	Рыцарь Тед	/assets/Lilium.Items/textures/items/toys.png	10:16777215	su.lilium.items.custom.ItemSimple
+5369	0	Король Тед	Король Тед	/assets/Lilium.Items/textures/items/toys.png	11:16777215	su.lilium.items.custom.ItemSimple
+5370	0	Миссис Бир	Миссис Бир	/assets/Lilium.Items/textures/items/toys.png	12:16777215	su.lilium.items.custom.ItemSimple
+5376	0	Кукла Стар Висл	Кукла Стар Висл	/assets/Lilium.Items/textures/items/toys.png	16:16777215	su.lilium.items.custom.ItemSimple
+5377	0	Кукла Эйджил Скрэмбл	Кукла Эйджил Скрэмбл	/assets/Lilium.Items/textures/items/toys.png	17:16777215	su.lilium.items.custom.ItemSimple
+5378	0	Кукла Грендер Камэо	Кукла Грендер Камэо	/assets/Lilium.Items/textures/items/toys.png	18:16777215	su.lilium.items.custom.ItemSimple
+5379	0	Кукла Блу Ларк	Кукла Блу Ларк	/assets/Lilium.Items/textures/items/toys.png	19:16777215	su.lilium.items.custom.ItemSimple
+5380	0	Кукла Принцессы Селестии	Кукла Принцессы Селестии	/assets/Lilium.Items/textures/items/toys.png	20:16777215	su.lilium.items.custom.ItemSimple
+5381	0	Кукла Принцессы Луны	Кукла Принцессы Луны	/assets/Lilium.Items/textures/items/toys.png	21:16777215	su.lilium.items.custom.ItemSimple
+5382	0	Кукла Принцессы Кейденс	Кукла Принцессы Кейденс	/assets/Lilium.Items/textures/items/toys.png	22:16777215	su.lilium.items.custom.ItemSimple
+5383	0	Кукла Дэрринг Ду	Кукла Дэрринг Ду	/assets/Lilium.Items/textures/items/toys.png	23:16777215	su.lilium.items.custom.ItemSimple
+5384	0	Кукла Соарина	Кукла Соарина	/assets/Lilium.Items/textures/items/toys.png	24:16777215	su.lilium.items.custom.ItemSimple
+5385	0	Кукла Спитфаер	Кукла Спитфаер	/assets/Lilium.Items/textures/items/toys.png	25:16777215	su.lilium.items.custom.ItemSimple
+5386	0	Кукла Шайнинг Армора	Кукла Шайнинг Армора	/assets/Lilium.Items/textures/items/toys.png	26:16777215	su.lilium.items.custom.ItemSimple
+5387	0	Кукла Шайнинг Армора в доспехах	Кукла Шайнинг Армора в доспехах	/assets/Lilium.Items/textures/items/toys.png	27:16777215	su.lilium.items.custom.ItemSimple
+5406	0	Игрушечный деревянный меч	Игрушечный деревянный меч	/assets/Lilium.Items/textures/items/toys.png	32:16777215	su.lilium.items.custom.ItemSimple
+5407	0	Игрушечный деревянный меч	Игрушечный деревянный меч	/assets/Lilium.Items/textures/items/toys.png	33:16777215	su.lilium.items.custom.ItemSimple
+5408	0	Игрушечный деревянный меч	Игрушечный деревянный меч	/assets/Lilium.Items/textures/items/toys.png	34:16777215	su.lilium.items.custom.ItemSimple
+5409	0	Игрушечный деревянный меч	Игрушечный деревянный меч	/assets/Lilium.Items/textures/items/toys.png	35:16777215	su.lilium.items.custom.ItemSimple
+5410	0	Игрушечный деревянный меч	Игрушечный деревянный меч	/assets/Lilium.Items/textures/items/toys.png	36:16777215	su.lilium.items.custom.ItemSimple
+5411	0	Дорогой игрушечный меч	Дорогой игрушечный меч	/assets/Lilium.Items/textures/items/toys.png	37:16777215	su.lilium.items.custom.ItemSimple
+5412	0	Игрушечный деревянный щит	Игрушечный деревянный щит	/assets/Lilium.Items/textures/items/toys.png	38:16777215	su.lilium.items.custom.ItemSimple
+5413	0	Игрушечный деревянный щит	Игрушечный деревянный щит	/assets/Lilium.Items/textures/items/toys.png	39:16777215	su.lilium.items.custom.ItemSimple
+5414	0	Игрушечный деревянный щит	Игрушечный деревянный щит	/assets/Lilium.Items/textures/items/toys.png	40:16777215	su.lilium.items.custom.ItemSimple
+5415	0	Игрушечный деревянный щит	Игрушечный деревянный щит	/assets/Lilium.Items/textures/items/toys.png	41:16777215	su.lilium.items.custom.ItemSimple
+5416	0	Игрушечный деревянный щит	Игрушечный деревянный щит	/assets/Lilium.Items/textures/items/toys.png	42:16777215	su.lilium.items.custom.ItemSimple
+5417	0	Дорогой игрушечный щит	Дорогой игрушечный щит	/assets/Lilium.Items/textures/items/toys.png	43:16777215	su.lilium.items.custom.ItemSimple
+5436	0	Плюшевый заяц	Плюшевый заяц	/assets/Lilium.Items/textures/items/toys.png	48:16777215	su.lilium.items.custom.ItemSimple
+5437	0	Плюшевый лев	Плюшевый лев	/assets/Lilium.Items/textures/items/toys.png	49:16777215	su.lilium.items.custom.ItemSimple
+5438	0	Плюшевый инопланетянин	Плюшевый инопланетянин	/assets/Lilium.Items/textures/items/toys.png	50:16777215	su.lilium.items.custom.ItemSimple
+5439	0	Плюшевый утенок	Плюшевый утенок	/assets/Lilium.Items/textures/items/toys.png	51:16777215	su.lilium.items.custom.ItemSimple
+5440	0	Плюшевый пес Джейк	Плюшевый пес Джейк	/assets/Lilium.Items/textures/items/toys.png	52:16777215	su.lilium.items.custom.ItemSimple
+5441	0	БиМО	БиМО	/assets/Lilium.Items/textures/items/toys.png	53:16777215	su.lilium.items.custom.ItemSimple
+5442	0	Плюшевая кошка Кейк	Плюшевая кошка Кейк	/assets/Lilium.Items/textures/items/toys.png	54:16777215	su.lilium.items.custom.ItemSimple
+5556	0	§6Зелье "Белая полоса"	§6Зелье "Белая полоса"	/assets/Lilium.Items/textures/items/food.png	0:16777215	su.lilium.items.custom.ItemFoods
+5557	0	§6Зелье "Усилин"	§6Зелье "Усилин"	/assets/Lilium.Items/textures/items/food.png	1:16777215	su.lilium.items.custom.ItemFoods
+5558	0	§dЗелье "Любовный яд"	§dЗелье "Любовный яд"	/assets/Lilium.Items/textures/items/food.png	2:16777215	su.lilium.items.custom.ItemFoods
+5559	0	§6Зелье "Кофенилус"	§6Зелье "Кофенилус"	/assets/Lilium.Items/textures/items/food.png	3:16777215	su.lilium.items.custom.ItemFoods
+5560	0	§dЗелье "Рыбье"	§dЗелье "Рыбье"	/assets/Lilium.Items/textures/items/food.png	4:16777215	su.lilium.items.custom.ItemFoods
+5561	0	§dЗелье "Сыворотка правды"	§dЗелье "Сыворотка правды"	/assets/Lilium.Items/textures/items/food.png	5:16777215	su.lilium.items.custom.ItemFoods
+5562	0	§cЗелье "Отупин"	§cЗелье "Отупин"	/assets/Lilium.Items/textures/items/food.png	6:16777215	su.lilium.items.custom.ItemFoods
+5563	0	§6Зелье "Вундеркинд"	§6Зелье "Вундеркинд"	/assets/Lilium.Items/textures/items/food.png	7:16777215	su.lilium.items.custom.ItemFoods
+5564	0	§cЗелье "Раздражин"	§cЗелье "Раздражин"	/assets/Lilium.Items/textures/items/food.png	8:16777215	su.lilium.items.custom.ItemFoods
+5565	0	§cЗелье "Фактор страха"	§cЗелье "Фактор страха"	/assets/Lilium.Items/textures/items/food.png	9:16777215	su.lilium.items.custom.ItemFoods
+5566	0	§6Зелье "Вспоминалка"	§6Зелье "Вспоминалка"	/assets/Lilium.Items/textures/items/food.png	10:16777215	su.lilium.items.custom.ItemFoods
+5567	0	§dЗелье "Сон Велезулла"	§dЗелье "Сон Велезулла"	/assets/Lilium.Items/textures/items/food.png	11:16777215	su.lilium.items.custom.ItemFoods
+5568	0	§cЗелье "Черная полоса"	§cЗелье "Черная полоса"	/assets/Lilium.Items/textures/items/food.png	12:16777215	su.lilium.items.custom.ItemFoods
+5569	0	§6Зелье "Вырастин"	§6Зелье "Вырастин"	/assets/Lilium.Items/textures/items/food.png	13:16777215	su.lilium.items.custom.ItemFoods
+5570	0	§6Зелье "Стандарт"	§6Зелье "Стандарт"	/assets/Lilium.Items/textures/items/food.png	14:16777215	su.lilium.items.custom.ItemFoods
+5571	0	§4Зелье "Старазм"	§4Зелье "Старазм"	/assets/Lilium.Items/textures/items/food.png	15:16777215	su.lilium.items.custom.ItemFoods
+5572	0	§eЗелье "Эликсир жизни"	§eЗелье "Эликсир жизни"	/assets/Lilium.Items/textures/items/food.png	16:16777215	su.lilium.items.custom.ItemFoods
+5573	0	§3Зелье "Гендерин"	§3Зелье "Гендерин"	/assets/Lilium.Items/textures/items/food.png	17:16777215	su.lilium.items.custom.ItemFoods
+5574	0	§cЗелье "Забывалка"	§cЗелье "Забывалка"	/assets/Lilium.Items/textures/items/food.png	18:16777215	su.lilium.items.custom.ItemFoods
+5586	0	Таблетки	Таблетки	/assets/Lilium.Items/textures/items/food.png	32:16777215	su.lilium.items.custom.ItemFoods
+5656	0	§eСтатуэтка Земнопони	§eСтатуэтка Земнопони	/assets/Lilium.Items/textures/items/random.png	0:16777215	su.lilium.items.custom.ItemSimple
+5657	0	§eСтатуэтка Единорога	§eСтатуэтка Единорога	/assets/Lilium.Items/textures/items/random.png	1:16777215	su.lilium.items.custom.ItemSimple
+5658	0	§eСтатуэтка Пегаса	§eСтатуэтка Пегаса	/assets/Lilium.Items/textures/items/random.png	2:16777215	su.lilium.items.custom.ItemSimple
+5659	0	§9Статуэтка Аликорна	§9Статуэтка Аликорна	/assets/Lilium.Items/textures/items/random.png	3:16777215	su.lilium.items.custom.ItemSimple
+5660	0	§6Статуэтка Феникса	§6Статуэтка Феникса	/assets/Lilium.Items/textures/items/random.png	4:16777215	su.lilium.items.custom.ItemSimple
+5661	0	§6Статуэтка Грифона	§6Статуэтка Грифона	/assets/Lilium.Items/textures/items/random.png	5:16777215	su.lilium.items.custom.ItemSimple
+5662	0	§6Статуэтка Буйвола	§6Статуэтка Буйвола	/assets/Lilium.Items/textures/items/random.png	6:16777215	su.lilium.items.custom.ItemSimple
+5663	0	§6Статуэтка Минотавра	§6Статуэтка Минотавра	/assets/Lilium.Items/textures/items/random.png	7:16777215	su.lilium.items.custom.ItemSimple
+5664	0	§9Статуэтка Гидры	§9Статуэтка Гидры	/assets/Lilium.Items/textures/items/random.png	8:16777215	su.lilium.items.custom.ItemSimple
+5665	0	§6Статуэтка Алмазного пса	§6Статуэтка Алмазного пса	/assets/Lilium.Items/textures/items/random.png	9:16777215	su.lilium.items.custom.ItemSimple
+5666	0	§9Статуэтка Дракона	§9Статуэтка Дракона	/assets/Lilium.Items/textures/items/random.png	10:16777215	su.lilium.items.custom.ItemSimple
+5667	0	§9Статуэтка Цербера	§9Статуэтка Цербера	/assets/Lilium.Items/textures/items/random.png	11:16777215	su.lilium.items.custom.ItemSimple
+5668	0	§9Статуэтка Чейнджлинга	§9Статуэтка Чейнджлинга	/assets/Lilium.Items/textures/items/random.png	12:16777215	su.lilium.items.custom.ItemSimple
+5669	0	§bСтатуэтка Драконикуса	§bСтатуэтка Драконикуса	/assets/Lilium.Items/textures/items/random.png	13:16777215	su.lilium.items.custom.ItemSimple
+5670	0	§bСтатуэтка Кракена	§bСтатуэтка Кракена	/assets/Lilium.Items/textures/items/random.png	14:16777215	su.lilium.items.custom.ItemSimple
+5671	0	§bСтатуэтка Ахуизотла	§bСтатуэтка Ахуизотла	/assets/Lilium.Items/textures/items/random.png	15:16777215	su.lilium.items.custom.ItemSimple
+5672	0	§9Статуэтка Мантикоры	§9Статуэтка Мантикоры	/assets/Lilium.Items/textures/items/random.png	16:16777215	su.lilium.items.custom.ItemSimple
+5673	0	§bСтатуэтка Королевы чейнджлингов	§bСтатуэтка Королевы чейнджлингов	/assets/Lilium.Items/textures/items/random.png	17:16777215	su.lilium.items.custom.ItemSimple
+5674	0	§9Статуэтка Малой медведицы	§9Статуэтка Малой медведицы	/assets/Lilium.Items/textures/items/random.png	18:16777215	su.lilium.items.custom.ItemSimple
+5675	0	§bСтатуэтка Большой медведицы	§bСтатуэтка Большой медведицы	/assets/Lilium.Items/textures/items/random.png	19:16777215	su.lilium.items.custom.ItemSimple
+5676	0	§7Статуэтка Черного	§7Статуэтка Черного	/assets/Lilium.Items/textures/items/random.png	20:16777215	su.lilium.items.custom.ItemSimple
+5688	0	Лив	Лив	/assets/Lilium.Items/textures/items/random.png	32:16777215	su.lilium.items.custom.ItemSimple
+5689	0	Морта	Морта	/assets/Lilium.Items/textures/items/random.png	33:16777215	su.lilium.items.custom.ItemSimple
+5693	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	37:16777215	su.lilium.items.custom.ItemSimple
+5694	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	38:16777215	su.lilium.items.custom.ItemSimple
+5695	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	39:16777215	su.lilium.items.custom.ItemSimple
+5696	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	40:16777215	su.lilium.items.custom.ItemSimple
+5697	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	41:16777215	su.lilium.items.custom.ItemSimple
+5698	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	42:16777215	su.lilium.items.custom.ItemSimple
+5699	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	43:16777215	su.lilium.items.custom.ItemSimple
+5700	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	44:16777215	su.lilium.items.custom.ItemSimple
+5701	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	45:16777215	su.lilium.items.custom.ItemSimple
+5702	0	Кольцо	Кольцо	/assets/Lilium.Items/textures/items/random.png	46:16777215	su.lilium.items.custom.ItemSimple
+5703	0	§5Кольцо-блокиратор	§5Кольцо-блокиратор	/assets/Lilium.Items/textures/items/random.png	47:16777215	su.lilium.items.custom.ItemSimple
+5704	0	Магическая чаша	Магическая чаша	/assets/Lilium.Items/textures/items/random.png	48:16777215	su.lilium.items.custom.ItemSimple
+5705	0	Колокольчик Грогара	Колокольчик Грогара	/assets/Lilium.Items/textures/items/random.png	49:16777215	su.lilium.items.custom.ItemSimple
+5707	0	Золотая подкова	Золотая подкова	/assets/Lilium.Items/textures/items/random.png	50:16777215	su.lilium.items.custom.ItemSimple
+5708	0	Флажок	Флажок	/assets/Lilium.Items/textures/items/random.png	51:16777215	su.lilium.items.custom.ItemSimple
+5709	0	Флажок	Флажок	/assets/Lilium.Items/textures/items/random.png	52:16777215	su.lilium.items.custom.ItemSimple
+5710	0	Флажок	Флажок	/assets/Lilium.Items/textures/items/random.png	53:16777215	su.lilium.items.custom.ItemSimple
+5711	0	Флажок	Флажок	/assets/Lilium.Items/textures/items/random.png	54:16777215	su.lilium.items.custom.ItemSimple
+5712	0	Старая фотография	Старая фотография	/assets/Lilium.Items/textures/items/random.png	55:16777215	su.lilium.items.custom.ItemSimple
+5713	0	Фотография	Фотография	/assets/Lilium.Items/textures/items/random.png	56:16777215	su.lilium.items.custom.ItemSimple
+5714	0	Часть порванной фотографии	Часть порванной фотографии	/assets/Lilium.Items/textures/items/random.png	57:16777215	su.lilium.items.custom.ItemSimple
+5715	0	Часть порванной фотографии	Часть порванной фотографии	/assets/Lilium.Items/textures/items/random.png	58:16777215	su.lilium.items.custom.ItemSimple
+5716	0	Фотография в рамке	Фотография в рамке	/assets/Lilium.Items/textures/items/random.png	59:16777215	su.lilium.items.custom.ItemSimple
+5717	0	Старая фотография в рамке	Старая фотография в рамке	/assets/Lilium.Items/textures/items/random.png	60:16777215	su.lilium.items.custom.ItemSimple
+5718	0	Золотой накопытник Селестии	Золотой накопытник Селестии	/assets/Lilium.Items/textures/items/random.png	61:16777215	su.lilium.items.custom.ItemSimple
+5719	0	Гребень принцессы Кейденс	Гребень принцессы Кейденс	/assets/Lilium.Items/textures/items/random.png	62:16777215	su.lilium.items.custom.ItemSimple
+5720	0	Философский камень	Философский камень	/assets/Lilium.Items/textures/items/random.png	63:16777215	su.lilium.items.custom.ItemSimple
+5721	0	Серебряные часы	Серебряные часы	/assets/Lilium.Items/textures/items/random.png	64:16777215	su.lilium.items.custom.ItemSimple
+5722	0	Часы перфекциониста	Часы перфекциониста	/assets/Lilium.Items/textures/items/random.png	65:16777215	su.lilium.items.custom.ItemSimple
+5723	0	Золотое перо Алтеи	Золотое перо Алтеи	/assets/Lilium.Items/textures/items/random.png	66:16777215	su.lilium.items.custom.ItemSimple
+5724	0	Зеркало Нарцисса	Зеркало Нарцисса	/assets/Lilium.Items/textures/items/random.png	67:16777215	su.lilium.items.custom.ItemSimple
+5725	0	Нуарная бритва Брайана	Нуарная бритва Брайана	/assets/Lilium.Items/textures/items/random.png	68:16777215	su.lilium.items.custom.ItemSimple
+5726	0	Волшебная палочка	Волшебная палочка	/assets/Lilium.Items/textures/items/random.png	69:16777215	su.lilium.items.custom.ItemSimple
+5727	0	Ошейник вожака алмазных псов	Ошейник вожака алмазных псов	/assets/Lilium.Items/textures/items/random.png	70:16777215	su.lilium.items.custom.ItemSimple
+5728	0	Песочные часы	Песочные часы	/assets/Lilium.Items/textures/items/random.png	71:16777215	su.lilium.items.custom.ItemSimple
+5729	0	Огромный алмаз Соури Курда	Огромный алмаз Соури Курда	/assets/Lilium.Items/textures/items/random.png	72:16777215	su.lilium.items.custom.ItemSimple
+5730	0	Шип дракона	Шип дракона	/assets/Lilium.Items/textures/items/random.png	73:16777215	su.lilium.items.custom.ItemSimple
+5731	0	Анализатор	Анализатор	/assets/Lilium.Items/textures/items/random.png	74:16777215	su.lilium.items.custom.ItemSimple
+5732	0	Брелок сурка	Брелок сурка	/assets/Lilium.Items/textures/items/random.png	75:16777215	su.lilium.items.custom.ItemSimple
+5733	0	Аномальные песочные часы	Аномальные песочные часы	/assets/Lilium.Items/textures/items/random.png	76:16777215	su.lilium.items.custom.ItemSimple
+5734	0	Игральные кости	Игральные кости	/assets/Lilium.Items/textures/items/random.png	77:16777215	su.lilium.items.custom.ItemSimple
+5735	0	Игральные карты	Игральные карты	/assets/Lilium.Items/textures/items/random.png	78:16777215	su.lilium.items.custom.ItemSimple
+5736	0	Пиратский флаг	Пиратский флаг	/assets/Lilium.Items/textures/items/random.png	79:16777215	su.lilium.items.custom.ItemSimple
+5737	0	Набор отмычек	Набор отмычек	/assets/Lilium.Items/textures/items/random.png	80:16777215	su.lilium.items.custom.ItemSimple
+5738	0	Красивый ключ	Красивый ключ	/assets/Lilium.Items/textures/items/random.png	81:16777215	su.lilium.items.custom.ItemSimple
+5739	0	Кристалльный ключ	Кристалльный ключ	/assets/Lilium.Items/textures/items/random.png	82:16777215	su.lilium.items.custom.ItemSimple
+5740	0	Старый ржавый ключ	Старый ржавый ключ	/assets/Lilium.Items/textures/items/random.png	83:16777215	su.lilium.items.custom.ItemSimple
+5741	0	Заводной ключ	Заводной ключ	/assets/Lilium.Items/textures/items/random.png	84:16777215	su.lilium.items.custom.ItemSimple
+5742	0	Ключ чернокнижника	Ключ чернокнижника	/assets/Lilium.Items/textures/items/random.png	85:16777215	su.lilium.items.custom.ItemSimple
+5743	0	Золотой ключ	Золотой ключ	/assets/Lilium.Items/textures/items/random.png	86:16777215	su.lilium.items.custom.ItemSimple
+5744	0	Пиковый ключ	Пиковый ключ	/assets/Lilium.Items/textures/items/random.png	87:16777215	su.lilium.items.custom.ItemSimple
+5745	0	Червовый ключ	Червовый ключ	/assets/Lilium.Items/textures/items/random.png	88:16777215	su.lilium.items.custom.ItemSimple
+5746	0	Бубновый ключ	Бубновый ключ	/assets/Lilium.Items/textures/items/random.png	89:16777215	su.lilium.items.custom.ItemSimple
+5747	0	Крестовый ключ	Крестовый ключ	/assets/Lilium.Items/textures/items/random.png	90:16777215	su.lilium.items.custom.ItemSimple
+5748	0	§bКлюч скелета	§bКлюч скелета	/assets/Lilium.Items/textures/items/random.png	91:16777215	su.lilium.items.custom.ItemSimple
+5749	0	Обычный ключ	Обычный ключ	/assets/Lilium.Items/textures/items/random.png	92:16777215	su.lilium.items.custom.ItemSimple
+5750	0	Волшебная лампа	Волшебная лампа	/assets/Lilium.Items/textures/items/random.png	93:16777215	su.lilium.items.custom.ItemSimple
+5751	0	Карманный кристальный разговорник	Карманный кристальный разговорник	/assets/Lilium.Items/textures/items/random.png	94:16777215	su.lilium.items.custom.ItemSimple
+5753	0	Туз пик	Туз пик	/assets/Lilium.Items/textures/items/random.png	96:16777215	su.lilium.items.custom.ItemSimple
+5754	0	Туз червей	Туз червей	/assets/Lilium.Items/textures/items/random.png	97:16777215	su.lilium.items.custom.ItemSimple
+5755	0	Туз крестей	Туз крестей	/assets/Lilium.Items/textures/items/random.png	98:16777215	su.lilium.items.custom.ItemSimple
+5756	0	Туз бубен	Туз бубен	/assets/Lilium.Items/textures/items/random.png	99:16777215	su.lilium.items.custom.ItemSimple
+5757	0	Джокер	Джокер	/assets/Lilium.Items/textures/items/random.png	100:16777215	su.lilium.items.custom.ItemSimple
+5758	0	Баночка с невидимыми чернилами	Баночка с невидимыми чернилами	/assets/Lilium.Items/textures/items/random.png	101:16777215	su.lilium.items.custom.ItemSimple
+5759	0	Призовой кубок	Призовой кубок	/assets/Lilium.Items/textures/items/random.png	102:16777215	su.lilium.items.custom.ItemSimple
+5760	0	Золотой билет	Золотой билет	/assets/Lilium.Items/textures/items/random.png	103:16777215	su.lilium.items.custom.ItemSimple
+5761	0	Билет	Билет	/assets/Lilium.Items/textures/items/random.png	104:16777215	su.lilium.items.custom.ItemSimple
+5762	0	Громкоговоритель	Громкоговоритель	/assets/Lilium.Items/textures/items/random.png	105:16777215	su.lilium.items.custom.ItemSimple
+5763	0	Микрофон	Микрофон	/assets/Lilium.Items/textures/items/random.png	106:16777215	su.lilium.items.custom.ItemSimple
+5764	0	Бинокль	Бинокль	/assets/Lilium.Items/textures/items/random.png	107:16777215	su.lilium.items.custom.ItemSimple
+5765	0	Карманное зеркало	Карманное зеркало	/assets/Lilium.Items/textures/items/random.png	108:16777215	su.lilium.items.custom.ItemSimple
+5766	0	Мелок	Мелок	/assets/Lilium.Items/textures/items/random.png	109:16777215	su.lilium.items.custom.ItemSimple
+5767	0	Лампа	Лампа	/assets/Lilium.Items/textures/items/random.png	110:16777215	su.lilium.items.custom.ItemSimple
+5768	0	Подзорная труба	Подзорная труба	/assets/Lilium.Items/textures/items/random.png	111:16777215	su.lilium.items.custom.ItemSimple
+5769	0	Баночка с лекарствами	Баночка с лекарствами	/assets/Lilium.Items/textures/items/random.png	112:16777215	su.lilium.items.custom.ItemSimple
+5770	0	Баночка с лекарствами	Баночка с лекарствами	/assets/Lilium.Items/textures/items/random.png	113:16777215	su.lilium.items.custom.ItemSimple
+5771	0	Баночка с лекарствами	Баночка с лекарствами	/assets/Lilium.Items/textures/items/random.png	114:16777215	su.lilium.items.custom.ItemSimple
+5772	0	Шприц	Шприц	/assets/Lilium.Items/textures/items/random.png	115:16777215	su.lilium.items.custom.ItemSimple
+5773	0	Волосы с бороды Старсвирла	Волосы с бороды Старсвирла	/assets/Lilium.Items/textures/items/random.png	116:16777215	su.lilium.items.custom.ItemSimple
+5774	0	Фотоаппарат	Фотоаппарат	/assets/Lilium.Items/textures/items/random.png	117:16777215	su.lilium.items.custom.ItemSimple
+5775	0	Аномальный фотоаппарат	Аномальный фотоаппарат	/assets/Lilium.Items/textures/items/random.png	118:16777215	su.lilium.items.custom.ItemSimple
+5856	0	Корона короля дураков	Корона короля дураков	/assets/Lilium.Items/textures/items/clothes.png	0:16777215	su.lilium.items.custom.ItemSimple
+5857	0	Корона принцессы Платинум	Корона принцессы Платинум	/assets/Lilium.Items/textures/items/clothes.png	1:16777215	su.lilium.items.custom.ItemSimple
+5858	0	Диадема Свити	Диадема Свити	/assets/Lilium.Items/textures/items/clothes.png	2:16777215	su.lilium.items.custom.ItemSimple
+5859	0	Ведро великого конспиратора	Ведро великого конспиратора	/assets/Lilium.Items/textures/items/clothes.png	3:16777215	su.lilium.items.custom.ItemSimple
+5860	0	Медицинская маска	Медицинская маска	/assets/Lilium.Items/textures/items/clothes.png	5:16777215	su.lilium.items.custom.ItemClothing
+5861	0	Монокль	Монокль	/assets/Lilium.Items/textures/items/clothes.png	6:16777215	su.lilium.items.custom.ItemSimple
+5862	0	Монокль элитного сноба	Монокль элитного сноба	/assets/Lilium.Items/textures/items/clothes.png	7:16777215	su.lilium.items.custom.ItemSimple
+5863	0	Очки Алекса Лиама	Очки Алекса Лиама	/assets/Lilium.Items/textures/items/clothes.png	8:16777215	su.lilium.items.custom.ItemSimple
+5864	0	Розовые очки	Розовые очки	/assets/Lilium.Items/textures/items/clothes.png	9:16777215	su.lilium.items.custom.ItemSimple
+5865	0	Шлем Шахта	Шлем Шахта	/assets/Lilium.Items/textures/items/clothes.png	10:16777215	su.lilium.items.custom.ItemSimple
+5866	0	Очки Полосатого	Очки Полосатого	/assets/Lilium.Items/textures/items/clothes.png	11:16777215	su.lilium.items.custom.ItemClothing
+5867	0	Золотая медаль	Золотая медаль	/assets/Lilium.Items/textures/items/clothes.png	16:16777215	su.lilium.items.custom.ItemSimple
+5868	0	Серебряная медаль	Серебряная медаль	/assets/Lilium.Items/textures/items/clothes.png	17:16777215	su.lilium.items.custom.ItemSimple
+5869	0	Бронзовая медаль	Бронзовая медаль	/assets/Lilium.Items/textures/items/clothes.png	18:16777215	su.lilium.items.custom.ItemSimple
+5870	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	32:16777215	su.lilium.items.custom.ItemClothing
+5871	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	33:16777215	su.lilium.items.custom.ItemClothing
+5872	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	34:16777215	su.lilium.items.custom.ItemClothing
+5873	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	35:16777215	su.lilium.items.custom.ItemClothing
+5874	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	36:16777215	su.lilium.items.custom.ItemClothing
+5875	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	37:16777215	su.lilium.items.custom.ItemClothing
+5876	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	38:16777215	su.lilium.items.custom.ItemClothing
+5877	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	39:16777215	su.lilium.items.custom.ItemClothing
+5878	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	40:16777215	su.lilium.items.custom.ItemClothing
+5879	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	41:16777215	su.lilium.items.custom.ItemClothing
+5880	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	42:16777215	su.lilium.items.custom.ItemClothing
+5881	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	43:16777215	su.lilium.items.custom.ItemClothing
+5882	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	44:16777215	su.lilium.items.custom.ItemClothing
+5883	0	Подвеска	Подвеска	/assets/Lilium.Items/textures/items/clothes.png	45:16777215	su.lilium.items.custom.ItemClothing
+5884	0	Лив	Лив	/assets/Lilium.Items/textures/items/clothes.png	46:16777215	su.lilium.items.custom.ItemClothing
+5885	0	Морта	Морта	/assets/Lilium.Items/textures/items/clothes.png	47:16777215	su.lilium.items.custom.ItemClothing
+5930	0	Шапка бродяги	Шапка бродяги	/assets/Lilium.Items/textures/items/Laj.png	12:16777215	su.lilium.items.custom.ItemClothing
+5956	0	Шлем Аустера Вордена	Шлем Аустера Вордена	/assets/Lilium.Items/textures/items/clothes.png	4:16777215	su.lilium.items.custom.ItemSimple
+6142	0	ЛотСулейск	ЛотСулейск	/assets/Lilium.Items/textures/items/Items_Poff.png	11:16777215	su.lilium.items.custom.ItemSimple
+6156	0	Записи Тенегрива I	Записи Тенегрива I	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6157	0	Записи Тенегрива II	Записи Тенегрива II	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6158	0	Записи Тенегрива III	Записи Тенегрива III	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6159	0	Записи Тенегрива IV	Записи Тенегрива IV	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6160	0	Записи Тенегрива V	Записи Тенегрива V	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6161	0	Записи Тенегрива VI	Записи Тенегрива VI	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6162	0	Записи Тенегрива VII	Записи Тенегрива VII	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6163	0	Записи Тенегрива VIII	Записи Тенегрива VIII	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6164	0	Записи Тенегрива IX	Записи Тенегрива IX	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6165	0	Записи Тенегрива X	Записи Тенегрива X	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6166	0	Записи Тенегрива XI	Записи Тенегрива XI	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6167	0	Записи Тенегрива XII	Записи Тенегрива XII	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6168	0	Записи Тенегрива XIII	Записи Тенегрива XIII	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6169	0	Записи Тенегрива XIV	Записи Тенегрива XIV	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6170	0	Записи Тенегрива XV	Записи Тенегрива XV	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6171	0	Записи Тенегрива XVI	Записи Тенегрива XVI	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6172	0	Записи Тенегрива XVII	Записи Тенегрива XVII	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6173	0	Записи Тенегрива XVIII	Записи Тенегрива XVIII	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6174	0	Записи Тенегрива XIX	Записи Тенегрива XIX	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6175	0	Записи Тенегрива XX	Записи Тенегрива XX	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6176	0	Записи Тенегрива XXI	Записи Тенегрива XXI	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6177	0	Записи Тенегрива XXII	Записи Тенегрива XXII	/assets/Lilium.Items/textures/items/books.png	14:16777215	su.lilium.items.custom.ItemBook
+6178	0	Темное таинтсво	Темное таинтсво	/assets/Lilium.Items/textures/items/books.png	12:16777215	su.lilium.items.custom.ItemBook
+6179	0	Книга Тенегрива	Книга Тенегрива	/assets/Lilium.Items/textures/items/books.png	10:16777215	su.lilium.items.custom.ItemBook
+6213	0	Вилка	Вилка	/assets/Lilium.Items/textures/items/Laj.png	1:16777215	su.lilium.items.custom.ItemSimple
+6214	0	Старая вилка	Старая вилка	/assets/Lilium.Items/textures/items/Laj.png	0:16777215	su.lilium.items.custom.ItemSimple
+6215	0	Обертка от жевательной резинки	Обертка от жевательной резинки	/assets/Lilium.Items/textures/items/Laj.png	2:16777215	su.lilium.items.custom.ItemSimple
+6216	0	Карандаш	Карандаш	/assets/Lilium.Items/textures/items/Laj.png	3:16777215	su.lilium.items.custom.ItemSimple
+6217	0	Огрызок карандаша	Огрызок карандаша	/assets/Lilium.Items/textures/items/Laj.png	4:16777215	su.lilium.items.custom.ItemSimple
+6218	0	Старая ложка	Старая ложка	/assets/Lilium.Items/textures/items/Laj.png	5:16777215	su.lilium.items.custom.ItemSimple
+6219	0	Ложка	Ложка	/assets/Lilium.Items/textures/items/Laj.png	6:16777215	su.lilium.items.custom.ItemSimple
+6220	0	Мыло	Мыло	/assets/Lilium.Items/textures/items/Items_Poff.png	0:16777215	su.lilium.items.custom.ItemSimple
+6221	0	Огрызок яблока	Огрызок яблока	/assets/Lilium.Items/textures/items/Items_Poff.png	6:16777215	su.lilium.items.custom.ItemSimple
+6222	0	Расческа	Расческа	/assets/Lilium.Items/textures/items/Items_Poff.png	1:16777215	su.lilium.items.custom.ItemSimple
+6223	0	Сломанная расческа	Сломанная расческа	/assets/Lilium.Items/textures/items/Items_Poff.png	2:16777215	su.lilium.items.custom.ItemSimple
+6224	0	Зубная щетка	Зубная щетка	/assets/Lilium.Items/textures/items/Items_Poff.png	5:16777215	su.lilium.items.custom.ItemSimple
+6225	0	Нож	Нож	/assets/Lilium.Items/textures/items/Laj.png	7:16777215	su.lilium.items.custom.ItemSimple
+6226	0	Зазубренный нож	Зазубренный нож	/assets/Lilium.Items/textures/items/Laj.png	8:16777215	su.lilium.items.custom.ItemSimple
+6227	0	Косметичка	Косметичка	/assets/Lilium.Items/textures/items/Laj.png	9:16777215	su.lilium.items.custom.ItemSimple
+6228	0	Пустая косметичка	Пустая косметичка	/assets/Lilium.Items/textures/items/Laj.png	10:16777215	su.lilium.items.custom.ItemSimple
+6229	0	Ктено	Ктено	/assets/Lilium.Items/textures/items/Laj.png	11:16777215	su.lilium.items.custom.ItemFoods
+6231	0	Tермометр	Tермометр	/assets/Lilium.Items/textures/items/Laj.png	13:16777215	su.lilium.items.custom.ItemSimple
+6232	0	Зонт	Зонт	/assets/Lilium.Items/textures/items/Laj.png	14:16777215	su.lilium.items.custom.ItemSimple
+6233	0	Черный зонт	Черный зонт	/assets/Lilium.Items/textures/items/Laj.png	15:16777215	su.lilium.items.custom.ItemSimple
+6234	0	Порванный зонт	Порванный зонт	/assets/Lilium.Items/textures/items/Laj.png	16:16777215	su.lilium.items.custom.ItemSimple
+6236	0	Голубой мелок	Голубой мелок	/assets/Lilium.Items/textures/items/Items_Poff.png	8:16777215	su.lilium.items.custom.ItemSimple
+6237	0	Красный мелок	Красный мелок	/assets/Lilium.Items/textures/items/Items_Poff.png	9:16777215	su.lilium.items.custom.ItemSimple
+6238	0	Зеленый мелок	Зеленый мелок	/assets/Lilium.Items/textures/items/Items_Poff.png	10:16777215	su.lilium.items.custom.ItemSimple
+6239	0	Раздавленная розовая жвачка	Раздавленная розовая жвачка	/assets/Lilium.Items/textures/items/Items_Poff.png	12:16777215	su.lilium.items.custom.ItemSimple
+6240	0	Игрушка пингвина	Игрушка пингвина	/assets/Lilium.Items/textures/items/Items_Poff.png	13:16777215	su.lilium.items.custom.ItemSimple
+6241	0	Баскетбольный мяч	Баскетбольный мяч	/assets/Lilium.Items/textures/items/Laj.png	17:16777215	su.lilium.items.custom.ItemSimple
+6242	0	Мяч	Мяч	/assets/Lilium.Items/textures/items/Laj.png	18:16777215	su.lilium.items.custom.ItemSimple
+6243	0	"Обасная" бритва	"Обасная" бритва	/assets/Lilium.Items/textures/items/Laj.png	19:16777215	su.lilium.items.custom.ItemSimple
+6244	0	Зазубренная "Обасная" бритва	Зазубренная "Обасная" бритва	/assets/Lilium.Items/textures/items/Laj.png	20:16777215	su.lilium.items.custom.ItemSimple
+6245	0	Разбитое зеркальце	Разбитое зеркальце	/assets/Lilium.Items/textures/items/Laj.png	21:16777215	su.lilium.items.custom.ItemSimple
+6246	0	Cтетоскоп	Cтетоскоп	/assets/Lilium.Items/textures/items/Laj.png	22:16777215	su.lilium.items.custom.ItemSimple
+6247	0	Крутые очки	Крутые очки	/assets/Lilium.Items/textures/items/Laj.png	23:16777215	su.lilium.items.custom.ItemClothing
+6248	0	Кружка	Кружка	/assets/Lilium.Items/textures/items/Laj.png	24:16777215	su.lilium.items.custom.ItemSimple
+6249	0	Кружка	Кружка	/assets/Lilium.Items/textures/items/Laj.png	25:16777215	su.lilium.items.custom.ItemSimple
+6250	0	Кружка	Кружка	/assets/Lilium.Items/textures/items/Laj.png	26:16777215	su.lilium.items.custom.ItemSimple
+6251	0	Кружка чая	Кружка чая	/assets/Lilium.Items/textures/items/Laj.png	27:16777215	su.lilium.items.custom.ItemFoods
+6252	0	Кружка чая	Кружка чая	/assets/Lilium.Items/textures/items/Laj.png	28:16777215	su.lilium.items.custom.ItemFoods
+6253	0	Кружка чая	Кружка чая	/assets/Lilium.Items/textures/items/Laj.png	29:16777215	su.lilium.items.custom.ItemFoods
+6254	0	Кружка кофе	Кружка кофе	/assets/Lilium.Items/textures/items/Laj.png	27:16777215	su.lilium.items.custom.ItemFoods
+6255	0	Кружка кофе	Кружка кофе	/assets/Lilium.Items/textures/items/Laj.png	28:16777215	su.lilium.items.custom.ItemFoods
+6256	0	Кружка кофе	Кружка кофе	/assets/Lilium.Items/textures/items/Laj.png	29:16777215	su.lilium.items.custom.ItemFoods
+6257	0	Чайник	Чайник	/assets/Lilium.Items/textures/items/Laj.png	30:16777215	su.lilium.items.custom.ItemSimple
+6258	0	Дырявый чаник	Дырявый чаник	/assets/Lilium.Items/textures/items/Laj.png	31:16777215	su.lilium.items.custom.ItemSimple
+6259	0	Карта	Карта	/assets/Lilium.Items/textures/items/Laj.png	32:16777215	su.lilium.items.custom.ItemSimple
+6260	0	Кисточка	Кисточка	/assets/Lilium.Items/textures/items/Laj.png	33:16777215	su.lilium.items.custom.ItemSimple
+6261	0	Палитра	Палитра	/assets/Lilium.Items/textures/items/Laj.png	34:16777215	su.lilium.items.custom.ItemSimple
+6262	0	Бинт	Бинт	/assets/Lilium.Items/textures/items/Laj.png	35:16777215	su.lilium.items.custom.ItemSimple
+6263	0	Шампунь "Грива Ясногрива"	Шампунь "Грива Ясногрива"	/assets/Lilium.Items/textures/items/Laj.png	36:16777215	su.lilium.items.custom.ItemSimple
+6264	0	Пластырь	Пластырь	/assets/Lilium.Items/textures/items/Laj.png	37:16777215	su.lilium.items.custom.ItemSimple
+6265	0	Скалка	Скалка	/assets/Lilium.Items/textures/items/Laj.png	38:16777215	su.lilium.items.custom.ItemSimple
+6266	0	Тряпочка	Тряпочка	/assets/Lilium.Items/textures/items/Laj.png	39:16777215	su.lilium.items.custom.ItemSimple
+6267	0	Глобус	Глобус	/assets/Lilium.Items/textures/items/Laj.png	40:16777215	su.lilium.items.custom.ItemSimple
+6268	0	Метла	Метла	/assets/Lilium.Items/textures/items/Laj.png	41:16777215	su.lilium.items.custom.ItemSimple
+6269	0	Желтый опавший лист	Желтый опавший лист	/assets/Lilium.Items/textures/items/Laj.png	42:16777215	su.lilium.items.custom.ItemSimple
+6270	0	Желтый опавший лист	Желтый опавший лист	/assets/Lilium.Items/textures/items/Laj.png	43:16777215	su.lilium.items.custom.ItemSimple
+6271	0	Желтый опавший лист	Желтый опавший лист	/assets/Lilium.Items/textures/items/Laj.png	44:16777215	su.lilium.items.custom.ItemSimple
+6272	0	Красный опавший лист	Красный опавший лист	/assets/Lilium.Items/textures/items/Laj.png	45:16777215	su.lilium.items.custom.ItemSimple
+6273	0	Красный опавший лист	Красный опавший лист	/assets/Lilium.Items/textures/items/Laj.png	46:16777215	su.lilium.items.custom.ItemSimple
+6274	0	Красный опавший лист	Красный опавший лист	/assets/Lilium.Items/textures/items/Laj.png	47:16777215	su.lilium.items.custom.ItemSimple
+6275	0	§bМармелад "КРАКЕН"	§bМармелад "КРАКЕН"	/assets/Lilium.Items/textures/items/Laj.png	48:16777215	su.lilium.items.custom.ItemFoods
+6276	0	§dСок "Вишневый сад"	§dСок "Вишневый сад"	/assets/Lilium.Items/textures/items/Laj.png	49:16777215	su.lilium.items.custom.ItemFoods
+6277	0	§9Батончик "Млечный Путь"	§9Батончик "Млечный Путь"	/assets/Lilium.Items/textures/items/Laj.png	50:16777215	su.lilium.items.custom.ItemFoods
+6278	0	§cНэко-Кола	§cНэко-Кола	/assets/Lilium.Items/textures/items/Laj.png	51:16777215	su.lilium.items.custom.ItemFoods
+6279	0	§cНэко-Кола ВИНОГРАД	§cНэко-Кола ВИНОГРАД	/assets/Lilium.Items/textures/items/Laj.png	52:16777215	su.lilium.items.custom.ItemFoods
+6280	0	§cНэко-Кола ОРАНЖ	§cНэко-Кола ОРАНЖ	/assets/Lilium.Items/textures/items/Laj.png	53:16777215	su.lilium.items.custom.ItemFoods
+6281	0	§4Доктор Ктоппер	§4Доктор Ктоппер	/assets/Lilium.Items/textures/items/Laj.png	54:16777215	su.lilium.items.custom.ItemFoods
+6282	0	§fКлубничное молоко "Белогривый лентяй"	§fКлубничное молоко "Белогривый лентяй"	/assets/Lilium.Items/textures/items/Laj.png	55:16777215	su.lilium.items.custom.ItemFoods
+6283	0	§2Роса-с-кручи	§2Роса-с-кручи	/assets/Lilium.Items/textures/items/Laj.png	56:16777215	su.lilium.items.custom.ItemFoods
+6284	0	§eМинотавр Рэд	§eМинотавр Рэд	/assets/Lilium.Items/textures/items/Laj.png	57:16777215	su.lilium.items.custom.ItemFoods
+6285	0	§6Яблочный сок	§6Яблочный сок	/assets/Lilium.Items/textures/items/Laj.png	58:16777215	su.lilium.items.custom.ItemFoods
+6286	0	Бейсболка минотавра Рэда	Бейсболка минотавра Рэда	/assets/Lilium.Items/textures/items/Laj.png	59:16777215	su.lilium.items.custom.ItemClothing
+6287	0	Кепка скаута	Кепка скаута	/assets/Lilium.Items/textures/items/Laj.png	60:16777215	su.lilium.items.custom.ItemClothing
+6288	0	Кепка скаута	Кепка скаута	/assets/Lilium.Items/textures/items/Laj.png	60:16777215	su.lilium.items.custom.ItemClothing
+6289	0	Кепка скаута	Кепка скаута	/assets/Lilium.Items/textures/items/Laj.png	60:16777215	su.lilium.items.custom.ItemClothing
+6290	0	Лохмотья	Лохмотья	/assets/Lilium.Items/textures/items/Laj.png	61:16777215	su.lilium.items.custom.ItemClothing
+6291	0	Солнцезащитные очки	Солнцезащитные очки	/assets/Lilium.Items/textures/items/Laj.png	62:16777215	su.lilium.items.custom.ItemClothing
+6292	0	Старомодные очки	Старомодные очки	/assets/Lilium.Items/textures/items/Laj.png	63:16777215	su.lilium.items.custom.ItemClothing
+6293	0	Очки для чтения	Очки для чтения	/assets/Lilium.Items/textures/items/Laj.png	64:16777215	su.lilium.items.custom.ItemClothing
+6294	0	Очки для чтения	Очки для чтения	/assets/Lilium.Items/textures/items/Laj.png	65:16777215	su.lilium.items.custom.ItemClothing
+6295	0	Милые очки для чтения	Милые очки для чтения	/assets/Lilium.Items/textures/items/Laj.png	66:16777215	su.lilium.items.custom.ItemClothing
+6296	0	Карнавальная маска	Карнавальная маска	/assets/Lilium.Items/textures/items/Laj.png	67:16777215	su.lilium.items.custom.ItemClothing
+6297	0	Карнавальная маска	Карнавальная маска	/assets/Lilium.Items/textures/items/Laj.png	68:16777215	su.lilium.items.custom.ItemClothing
+6298	0	Широкий галстук	Широкий галстук	/assets/Lilium.Items/textures/items/Laj.png	69:16777215	su.lilium.items.custom.ItemClothing
+6299	0	Широкий галстук	Широкий галстук	/assets/Lilium.Items/textures/items/Laj.png	70:16777215	su.lilium.items.custom.ItemClothing
+6300	0	Широкий галстук	Широкий галстук	/assets/Lilium.Items/textures/items/Laj.png	71:16777215	su.lilium.items.custom.ItemClothing
+6301	0	Галстук минотавра Рэда	Галстук минотавра Рэда	/assets/Lilium.Items/textures/items/Laj.png	72:16777215	su.lilium.items.custom.ItemClothing
+6302	0	Галстук-бабочка	Галстук-бабочка	/assets/Lilium.Items/textures/items/Laj.png	73:16777215	su.lilium.items.custom.ItemClothing
+6303	0	Галстук-бабочка	Галстук-бабочка	/assets/Lilium.Items/textures/items/Laj.png	74:16777215	su.lilium.items.custom.ItemClothing
+6304	0	Галстук-бабочка	Галстук-бабочка	/assets/Lilium.Items/textures/items/Laj.png	75:16777215	su.lilium.items.custom.ItemClothing
+6305	0	Узкий галстук	Узкий галстук	/assets/Lilium.Items/textures/items/Laj.png	76:16777215	su.lilium.items.custom.ItemClothing
+6306	0	Узкий галстук	Узкий галстук	/assets/Lilium.Items/textures/items/Laj.png	77:16777215	su.lilium.items.custom.ItemClothing
+6307	0	Узкий галстук	Узкий галстук	/assets/Lilium.Items/textures/items/Laj.png	78:16777215	su.lilium.items.custom.ItemClothing
+6308	0	Бейсболка Кракена	Бейсболка Кракена	/assets/Lilium.Items/textures/items/Laj.png	79:16777215	su.lilium.items.custom.ItemClothing
+6309	0	Бейсболка Многоглаза	Бейсболка Многоглаза	/assets/Lilium.Items/textures/items/Laj.png	80:16777215	su.lilium.items.custom.ItemClothing
+6310	0	Бейсболка Дракона	Бейсболка Дракона	/assets/Lilium.Items/textures/items/Laj.png	81:16777215	su.lilium.items.custom.ItemClothing
+6311	0	Модные очки	Модные очки	/assets/Lilium.Items/textures/items/Laj.png	82:16777215	su.lilium.items.custom.ItemClothing
+8067	0	Chisel	Chisel	atlas_72_items	0:16777215	info.jbcs.minecraft.chisel.ItemChisel
+8068	0	Ice shard	Ice shard	/gui/items.png	0:16777215	up
+8069	0	Cloud in a bottle	Cloud in a bottle	atlas_72_items	1:16777215	info.jbcs.minecraft.chisel.ItemCloudInABottle
+8070	0	Ball O' Moss	Ball O' Moss	atlas_72_items	2:16777215	info.jbcs.minecraft.chisel.ItemBallOMoss
+8256	0	Медная монета 	Медная монета 	/su/lilium/textures/Items.png	0:16777215	su.lilium.discord.ItemCoin
+8257	0	Серебрянная монета	Серебрянная монета	/su/lilium/textures/Items.png	1:16777215	su.lilium.discord.ItemCoin
+8258	0	Золотая монета	Золотая монета	/su/lilium/textures/Items.png	2:16777215	su.lilium.discord.ItemCoin
+9028	0	Zebra Record	Zebra Record	/mods/mocreatures/textures/misc/items.png	89:16777215	drzhark.mocreatures.item.MoCItemRecord
+9029	0	Crafted Saddle	Crafted Saddle	/mods/mocreatures/textures/misc/items.png	0:16777215	drzhark.mocreatures.item.MoCItemHorseSaddle
+9030	0	Iron Mount Armor	Iron Mount Armor	/mods/mocreatures/textures/misc/items.png	73:16777215	drzhark.mocreatures.item.MoCItem
+9031	0	Shark Teeth	Shark Teeth	/mods/mocreatures/textures/misc/items.png	3:16777215	drzhark.mocreatures.item.MoCItem
+9032	0	Hay Stack	Hay Stack	/mods/mocreatures/textures/misc/items.png	1:16777215	drzhark.mocreatures.item.MoCItemHayStack
+9033	0	Sugar Lump	Sugar Lump	/mods/mocreatures/textures/misc/items.png	2:16777215	drzhark.mocreatures.item.MoCItemSugarLump
+9034	0	item.fishyegg.0.name		/mods/mocreatures/textures/misc/items.png	16:16777215	drzhark.mocreatures.item.MoCItemEgg
+9035	0	BigCat Claw	BigCat Claw	/mods/mocreatures/textures/misc/items.png	4:16777215	drzhark.mocreatures.item.MoCItem
+9036	0	Whip	Whip	/mods/mocreatures/textures/misc/items.png	5:16777215	drzhark.mocreatures.item.MoCItemWhip
+9037	0	Gold Mount Armor	Gold Mount Armor	/mods/mocreatures/textures/misc/items.png	74:16777215	drzhark.mocreatures.item.MoCItem
+9038	0	Diamond Mount Armor	Diamond Mount Armor	/mods/mocreatures/textures/misc/items.png	75:16777215	drzhark.mocreatures.item.MoCItem
+9039	0	Builder Hammer	Builder Hammer	/mods/mocreatures/textures/misc/items.png	142:16777215	drzhark.mocreatures.item.ItemStaffTeleport
+9040	0	Medallion	Medallion	/mods/mocreatures/textures/misc/items.png	6:16777215	drzhark.mocreatures.item.MoCItem
+9041	0	Black Kitty Bed	Black Kitty Bed	/mods/mocreatures/textures/misc/items.png	17:16777215	drzhark.mocreatures.item.MoCItemKittyBed
+9042	0	Litter Box	Litter Box	/mods/mocreatures/textures/misc/items.png	7:16777215	drzhark.mocreatures.item.MoCItemLitterBox
+9043	0	Wool Ball	Wool Ball	/mods/mocreatures/textures/misc/items.png	8:16777215	drzhark.mocreatures.item.MoCItem
+9044	0	Rope	Rope	/mods/mocreatures/textures/misc/items.png	9:16777215	drzhark.mocreatures.item.MoCItem
+9045	0	Pet Food	Pet Food	/mods/mocreatures/textures/misc/items.png	10:16777215	drzhark.mocreatures.item.MoCItem
+9046	0	Builder Hammer	Builder Hammer	/mods/mocreatures/textures/misc/items.png	141:16777215	drzhark.mocreatures.item.ItemBuilderHammer
+9047	0	Reptile Hide	Reptile Hide	/mods/mocreatures/textures/misc/items.png	11:16777215	drzhark.mocreatures.item.MoCItem
+9048	0	Reptile Plate	Reptile Plate	/mocreatures/items.png	12:16777215	drzhark.mocreatures.item.MoCItemArmor
+9049	0	Reptile Helmet	Reptile Helmet	/mocreatures/items.png	13:16777215	drzhark.mocreatures.item.MoCItemArmor
+9050	0	Reptile Legs	Reptile Legs	/mocreatures/items.png	14:16777215	drzhark.mocreatures.item.MoCItemArmor
+9051	0	Reptile Boots	Reptile Boots	/mocreatures/items.png	15:16777215	drzhark.mocreatures.item.MoCItemArmor
+9052	0	Empty FishBowl	Empty FishBowl	/mods/mocreatures/textures/misc/items.png	32:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9053	0	Full FishBowl	Full FishBowl	/mods/mocreatures/textures/misc/items.png	33:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9054	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	34:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9055	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	35:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9056	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	36:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9057	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	37:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9058	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	38:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9059	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	39:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9060	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	40:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9061	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	41:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9062	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	42:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9063	0	FishBowl	FishBowl	/mods/mocreatures/textures/misc/items.png	43:16777215	drzhark.mocreatures.item.MoCItemFishBowl
+9064	0	Fur	Fur	/mods/mocreatures/textures/misc/items.png	18:16777215	drzhark.mocreatures.item.MoCItem
+9065	0	Omelet	Omelet	/mods/mocreatures/textures/misc/items.png	19:16777215	drzhark.mocreatures.item.MoCItemFood
+9066	0	Turtle Meat	Turtle Meat	/mods/mocreatures/textures/misc/items.png	20:16777215	drzhark.mocreatures.item.MoCItemFood
+9067	0	Turtle Soup	Turtle Soup	/mods/mocreatures/textures/misc/items.png	21:16777215	drzhark.mocreatures.item.MoCItemTurtleSoup
+9068	0	Nunchaku	Nunchaku	/mods/mocreatures/textures/misc/items.png	64:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9069	0	Sai	Sai	/mods/mocreatures/textures/misc/items.png	65:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9070	0	Bo	Bo	/mods/mocreatures/textures/misc/items.png	66:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9071	0	Katana	Katana	/mods/mocreatures/textures/misc/items.png	67:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9072	0	Shark Sword	Shark Sword	/mods/mocreatures/textures/misc/items.png	68:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9073	0	Key	Key	/mods/mocreatures/textures/misc/items.png	22:16777215	drzhark.mocreatures.item.MoCItem
+9074	0	Essence of Darkness	Essence of Darkness	/mods/mocreatures/textures/misc/items.png	23:16777215	drzhark.mocreatures.item.MoCItem
+9075	0	Essence of Fire	Essence of Fire	/mods/mocreatures/textures/misc/items.png	24:16777215	drzhark.mocreatures.item.MoCItem
+9076	0	Bone Amulet	Bone Amulet	/mods/mocreatures/textures/misc/items.png	25:16777215	drzhark.mocreatures.item.MoCItemAmulet
+9077	0	Bone Amulet	Bone Amulet	/mods/mocreatures/textures/misc/items.png	26:16777215	drzhark.mocreatures.item.MoCItemAmulet
+9078	0	Ghost Amulet	Ghost Amulet	/mods/mocreatures/textures/misc/items.png	27:16777215	drzhark.mocreatures.item.MoCItemAmulet
+9079	0	Ghost Amulet	Ghost Amulet	/mods/mocreatures/textures/misc/items.png	28:16777215	drzhark.mocreatures.item.MoCItemAmulet
+9080	0	Fairy Amulet	Fairy Amulet	/mods/mocreatures/textures/misc/items.png	85:16777215	drzhark.mocreatures.item.MoCItemAmulet
+9081	0	Fairy Amulet	Fairy Amulet	/mods/mocreatures/textures/misc/items.png	86:16777215	drzhark.mocreatures.item.MoCItemAmulet
+9082	0	Sky Amulet	Sky Amulet	/mods/mocreatures/textures/misc/items.png	87:16777215	drzhark.mocreatures.item.MoCItemAmulet
+9083	0	Sky Amulet	Sky Amulet	/mods/mocreatures/textures/misc/items.png	88:16777215	drzhark.mocreatures.item.MoCItemAmulet
+9084	0	Essence of Undead	Essence of Undead	/mods/mocreatures/textures/misc/items.png	44:16777215	drzhark.mocreatures.item.MoCItem
+9085	0	Essence of Light	Essence of Light	/mods/mocreatures/textures/misc/items.png	31:16777215	drzhark.mocreatures.item.MoCItem
+9086	0	Fur Plate	Fur Plate	/mocreatures/items.png	60:16777215	drzhark.mocreatures.item.MoCItemArmor
+9087	0	Fur Helmet	Fur Helmet	/mocreatures/items.png	61:16777215	drzhark.mocreatures.item.MoCItemArmor
+9088	0	Fur Legs	Fur Legs	/mocreatures/items.png	62:16777215	drzhark.mocreatures.item.MoCItemArmor
+9089	0	Fur Boots	Fur Boots	/mocreatures/items.png	63:16777215	drzhark.mocreatures.item.MoCItemArmor
+9090	0	Heart of Darkness	Heart of Darkness	/mods/mocreatures/textures/misc/items.png	80:16777215	drzhark.mocreatures.item.MoCItem
+9091	0	Heart of Fire	Heart of Fire	/mods/mocreatures/textures/misc/items.png	82:16777215	drzhark.mocreatures.item.MoCItem
+9092	0	Heart of Undead	Heart of Undead	/mods/mocreatures/textures/misc/items.png	81:16777215	drzhark.mocreatures.item.MoCItem
+9093	0	Ostrich meat	Ostrich meat	/mods/mocreatures/textures/misc/items.png	83:16777215	drzhark.mocreatures.item.MoCItemFood
+9094	0	Ostrich cooked	Ostrich cooked	/mods/mocreatures/textures/misc/items.png	84:16777215	drzhark.mocreatures.item.MoCItemFood
+9095	0	Unicorn Horn	Unicorn Horn	/mods/mocreatures/textures/misc/items.png	47:16777215	drzhark.mocreatures.item.MoCItem
+9098	0	Crystal Mount Armor	Crystal Mount Armor	/mods/mocreatures/textures/misc/items.png	76:16777215	drzhark.mocreatures.item.MoCItem
+9100	0	Raw Turkey	Raw Turkey	/mods/mocreatures/textures/misc/items.png	91:16777215	drzhark.mocreatures.item.MoCItemFood
+9101	0	Cooked Turkey	Cooked Turkey	/mods/mocreatures/textures/misc/items.png	92:16777215	drzhark.mocreatures.item.MoCItemFood
+9102	0	Hide	Hide	/mods/mocreatures/textures/misc/items.png	93:16777215	drzhark.mocreatures.item.MoCItem
+9103	0	Hide Plate	Hide Plate	/mocreatures/items.png	94:16777215	drzhark.mocreatures.item.MoCItemArmor
+9104	0	Hide Helmet	Hide Helmet	/mocreatures/items.png	95:16777215	drzhark.mocreatures.item.MoCItemArmor
+9105	0	Hide Legs	Hide Legs	/mocreatures/items.png	96:16777215	drzhark.mocreatures.item.MoCItemArmor
+9106	0	Hide Boots	Hide Boots	/mocreatures/items.png	97:16777215	drzhark.mocreatures.item.MoCItemArmor
+9107	0	Raw Rat	Raw Rat	/mods/mocreatures/textures/misc/items.png	77:16777215	drzhark.mocreatures.item.MoCItemFood
+9108	0	Cooked Rat	Cooked Rat	/mods/mocreatures/textures/misc/items.png	78:16777215	drzhark.mocreatures.item.MoCItemFood
+9109	0	Rat Burger	Rat Burger	/mods/mocreatures/textures/misc/items.png	79:16777215	drzhark.mocreatures.item.MoCItemFood
+9110	0	Black Chitin	Black Chitin	/mods/mocreatures/textures/misc/items.png	98:16777215	drzhark.mocreatures.item.MoCItem
+9111	0	Frost Chitin	Frost Chitin	/mods/mocreatures/textures/misc/items.png	99:16777215	drzhark.mocreatures.item.MoCItem
+9112	0	Nether Chitin	Nether Chitin	/mods/mocreatures/textures/misc/items.png	100:16777215	drzhark.mocreatures.item.MoCItem
+9113	0	Chitin	Chitin	/mods/mocreatures/textures/misc/items.png	101:16777215	drzhark.mocreatures.item.MoCItem
+9114	0	Cave Scorpion Sword	Cave Scorpion Sword	/mods/mocreatures/textures/misc/items.png	102:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9115	0	Frost Scorpion Sword	Frost Scorpion Sword	/mods/mocreatures/textures/misc/items.png	103:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9116	0	Nether Scorpion Sword	Nether Scorpion Sword	/mods/mocreatures/textures/misc/items.png	104:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9117	0	Scorpion Sword	Scorpion Sword	/mods/mocreatures/textures/misc/items.png	105:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9118	0	Scorpion Plate	Scorpion Plate	/mocreatures/items.png	106:16777215	drzhark.mocreatures.item.MoCItemArmor
+9119	0	Scorpion Helmet	Scorpion Helmet	/mocreatures/items.png	107:16777215	drzhark.mocreatures.item.MoCItemArmor
+9120	0	Scorpion Legs	Scorpion Legs	/mocreatures/items.png	108:16777215	drzhark.mocreatures.item.MoCItemArmor
+9121	0	Scorpion Boots	Scorpion Boots	/mocreatures/items.png	109:16777215	drzhark.mocreatures.item.MoCItemArmor
+9122	0	Frost Scorpion Plate	Frost Scorpion Plate	/mocreatures/items.png	110:16777215	drzhark.mocreatures.item.MoCItemArmor
+9123	0	Frost Scorpion Helmet	Frost Scorpion Helmet	/mocreatures/items.png	111:16777215	drzhark.mocreatures.item.MoCItemArmor
+9124	0	Frost Scorpion Legs	Frost Scorpion Legs	/mocreatures/items.png	112:16777215	drzhark.mocreatures.item.MoCItemArmor
+9125	0	Frost Scorpion Boots	Frost Scorpion Boots	/mocreatures/items.png	113:16777215	drzhark.mocreatures.item.MoCItemArmor
+9126	0	Cave Scorpion Plate	Cave Scorpion Plate	/mocreatures/items.png	114:16777215	drzhark.mocreatures.item.MoCItemArmor
+9127	0	Cave Scorpion Helmet	Cave Scorpion Helmet	/mocreatures/items.png	115:16777215	drzhark.mocreatures.item.MoCItemArmor
+9128	0	Cave Scorpion Legs	Cave Scorpion Legs	/mocreatures/items.png	116:16777215	drzhark.mocreatures.item.MoCItemArmor
+9129	0	Cave Scorpion Boots	Cave Scorpion Boots	/mocreatures/items.png	117:16777215	drzhark.mocreatures.item.MoCItemArmor
+9130	0	Nether Scorpion Plate	Nether Scorpion Plate	/mocreatures/items.png	118:16777215	drzhark.mocreatures.item.MoCItemArmor
+9131	0	Nether Scorpion Helmet	Nether Scorpion Helmet	/mocreatures/items.png	119:16777215	drzhark.mocreatures.item.MoCItemArmor
+9132	0	Nether Scorpion Legs	Nether Scorpion Legs	/mocreatures/items.png	120:16777215	drzhark.mocreatures.item.MoCItemArmor
+9133	0	Nether Scorpion Boots	Nether Scorpion Boots	/mocreatures/items.png	121:16777215	drzhark.mocreatures.item.MoCItemArmor
+9134	0	Cave Scorpion Sting	Cave Scorpion Sting	/mods/mocreatures/textures/misc/items.png	122:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9135	0	Frost Scorpion Sting	Frost Scorpion Sting	/mods/mocreatures/textures/misc/items.png	123:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9136	0	Nether Scorpion Sting	Nether Scorpion Sting	/mods/mocreatures/textures/misc/items.png	124:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9137	0	Scorpion Sting	Scorpion Sting	/mods/mocreatures/textures/misc/items.png	125:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9138	0	Scroll of Freedom	Scroll of Freedom	/mods/mocreatures/textures/misc/items.png	137:16777215	drzhark.mocreatures.item.MoCItem
+9139	0	Scroll of Sale	Scroll of Sale	/mods/mocreatures/textures/misc/items.png	136:16777215	drzhark.mocreatures.item.MoCItem
+9140	0	Wood Tusks	Wood Tusks	/mods/mocreatures/textures/misc/items.png	128:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9141	0	Iron Tusks	Iron Tusks	/mods/mocreatures/textures/misc/items.png	129:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9142	0	Diamond Tusks	Diamond Tusks	/mods/mocreatures/textures/misc/items.png	130:16777215	drzhark.mocreatures.item.MoCItemWeapon
+9143	0	Elephant Harness	Elephant Harness	/mods/mocreatures/textures/misc/items.png	131:16777215	drzhark.mocreatures.item.MoCItem
+9144	0	Chest Set	Chest Set	/mods/mocreatures/textures/misc/items.png	132:16777215	drzhark.mocreatures.item.MoCItem
+9145	0	Elephant Garment	Elephant Garment	/mods/mocreatures/textures/misc/items.png	133:16777215	drzhark.mocreatures.item.MoCItem
+9146	0	Elephant Howdah	Elephant Howdah	/mods/mocreatures/textures/misc/items.png	134:16777215	drzhark.mocreatures.item.MoCItem
+9147	0	Mammoth Platform	Mammoth Platform	/mods/mocreatures/textures/misc/items.png	135:16777215	drzhark.mocreatures.item.MoCItem
+9148	0	Crab meat	Crab meat	/mods/mocreatures/textures/misc/items.png	139:16777215	drzhark.mocreatures.item.MoCItemFood
+9149	0	Crab cooked	Crab cooked	/mods/mocreatures/textures/misc/items.png	140:16777215	drzhark.mocreatures.item.MoCItemFood
+9150	0	Wyvern Portal Staff	Wyvern Portal Staff	/mods/mocreatures/textures/misc/items.png	70:16777215	drzhark.mocreatures.item.ItemStaffPortal
+9151	0	Scroll of Reset Owner	Scroll of Reset Owner	/mods/mocreatures/textures/misc/items.png	138:16777215	drzhark.mocreatures.item.MoCItem
+9257	0	White Lumar	White Lumar	/eloraam/base/items1.png	32:16777215	com.eloraam.redpower.core.ItemParts
+9257	1	Orange Lumar	Orange Lumar	/eloraam/base/items1.png	33:16777215	com.eloraam.redpower.core.ItemParts
+9257	2	Magenta Lumar	Magenta Lumar	/eloraam/base/items1.png	34:16777215	com.eloraam.redpower.core.ItemParts
+9257	3	Light Blue Lumar	Light Blue Lumar	/eloraam/base/items1.png	35:16777215	com.eloraam.redpower.core.ItemParts
+9257	4	Yellow Lumar	Yellow Lumar	/eloraam/base/items1.png	36:16777215	com.eloraam.redpower.core.ItemParts
+9257	5	Lime Lumar	Lime Lumar	/eloraam/base/items1.png	37:16777215	com.eloraam.redpower.core.ItemParts
+9257	6	Pink Lumar	Pink Lumar	/eloraam/base/items1.png	38:16777215	com.eloraam.redpower.core.ItemParts
+9257	7	Gray Lumar	Gray Lumar	/eloraam/base/items1.png	39:16777215	com.eloraam.redpower.core.ItemParts
+9257	8	Light Gray Lumar	Light Gray Lumar	/eloraam/base/items1.png	40:16777215	com.eloraam.redpower.core.ItemParts
+9257	9	Cyan Lumar	Cyan Lumar	/eloraam/base/items1.png	41:16777215	com.eloraam.redpower.core.ItemParts
+9257	10	Purple Lumar	Purple Lumar	/eloraam/base/items1.png	42:16777215	com.eloraam.redpower.core.ItemParts
+9257	11	Blue Lumar	Blue Lumar	/eloraam/base/items1.png	43:16777215	com.eloraam.redpower.core.ItemParts
+9257	12	Brown Lumar	Brown Lumar	/eloraam/base/items1.png	44:16777215	com.eloraam.redpower.core.ItemParts
+9257	13	Green Lumar	Green Lumar	/eloraam/base/items1.png	45:16777215	com.eloraam.redpower.core.ItemParts
+9257	14	Red Lumar	Red Lumar	/eloraam/base/items1.png	46:16777215	com.eloraam.redpower.core.ItemParts
+9257	15	Black Lumar	Black Lumar	/eloraam/base/items1.png	47:16777215	com.eloraam.redpower.core.ItemParts
+9258	0	Ruby	Ruby	/eloraam/base/items1.png	48:16777215	com.eloraam.redpower.core.ItemParts
+9258	1	Green Sapphire	Green Sapphire	/eloraam/base/items1.png	49:16777215	com.eloraam.redpower.core.ItemParts
+9258	2	Sapphire	Sapphire	/eloraam/base/items1.png	50:16777215	com.eloraam.redpower.core.ItemParts
+9258	3	Silver Ingot	Silver Ingot	/eloraam/base/items1.png	51:16777215	com.eloraam.redpower.core.ItemParts
+9258	4	Tin Ingot	Tin Ingot	/eloraam/base/items1.png	52:16777215	com.eloraam.redpower.core.ItemParts
+9258	5	Copper Ingot	Copper Ingot	/eloraam/base/items1.png	53:16777215	com.eloraam.redpower.core.ItemParts
+9258	6	Nikolite	Nikolite	/eloraam/base/items1.png	54:16777215	com.eloraam.redpower.core.ItemParts
+9259	0	Red Alloy Ingot	Red Alloy Ingot	/eloraam/base/items1.png	64:16777215	com.eloraam.redpower.core.ItemParts
+9259	1	Blue Alloy Ingot	Blue Alloy Ingot	/eloraam/base/items1.png	65:16777215	com.eloraam.redpower.core.ItemParts
+9259	2	Brass Ingot	Brass Ingot	/eloraam/base/items1.png	66:16777215	com.eloraam.redpower.core.ItemParts
+9259	3	Silicon Boule	Silicon Boule	/eloraam/base/items1.png	67:16777215	com.eloraam.redpower.core.ItemParts
+9259	4	Silicon Wafer	Silicon Wafer	/eloraam/base/items1.png	68:16777215	com.eloraam.redpower.core.ItemParts
+9259	5	Blue-Doped Wafer	Blue-Doped Wafer	/eloraam/base/items1.png	69:16777215	com.eloraam.redpower.core.ItemParts
+9259	6	Red-Doped Wafer	Red-Doped Wafer	/eloraam/base/items1.png	70:16777215	com.eloraam.redpower.core.ItemParts
+9259	7	Tinplate	Tinplate	/eloraam/base/items1.png	71:16777215	com.eloraam.redpower.core.ItemParts
+9259	8	Fine Copper Wire	Fine Copper Wire	/eloraam/base/items1.png	72:16777215	com.eloraam.redpower.core.ItemParts
+9259	9	Fine Iron Wire	Fine Iron Wire	/eloraam/base/items1.png	73:16777215	com.eloraam.redpower.core.ItemParts
+9259	10	Copper Coil	Copper Coil	/eloraam/base/items1.png	74:16777215	com.eloraam.redpower.core.ItemParts
+9259	11	Blulectric Motor	Blulectric Motor	/eloraam/base/items1.png	75:16777215	com.eloraam.redpower.core.ItemParts
+9259	12	Canvas	Canvas	/eloraam/base/items1.png	76:16777215	com.eloraam.redpower.core.ItemParts
+9260	0	Indigo Dye	Indigo Dye	/eloraam/base/items1.png	80:16777215	com.eloraam.redpower.base.ItemDyeIndigo
+9261	0	Iron Handsaw	Iron Handsaw	/eloraam/base/items1.png	17:16777215	com.eloraam.redpower.base.ItemHandsaw
+9262	0	Diamond Handsaw	Diamond Handsaw	/eloraam/base/items1.png	18:16777215	com.eloraam.redpower.base.ItemHandsaw
+9263	0	Screwdriver	Screwdriver	/eloraam/base/items1.png	16:16777215	com.eloraam.redpower.base.ItemScrewdriver
+9264	0	Diamond Drawplate	Diamond Drawplate	/eloraam/base/items1.png	27:16777215	com.eloraam.redpower.base.ItemDrawplate
+9265	0	Iron Nugget	Iron Nugget	/eloraam/base/items1.png	160:16777215	com.eloraam.redpower.core.ItemParts
+9265	1	Silver Nugget	Silver Nugget	/eloraam/base/items1.png	161:16777215	com.eloraam.redpower.core.ItemParts
+9265	2	Tin Nugget	Tin Nugget	/eloraam/base/items1.png	162:16777215	com.eloraam.redpower.core.ItemParts
+9265	3	Copper Nugget	Copper Nugget	/eloraam/base/items1.png	163:16777215	com.eloraam.redpower.core.ItemParts
+9266	0	Blank Plan	Blank Plan	/eloraam/base/items1.png	81:16777215	com.eloraam.redpower.core.ItemTextured
+9267	0	item.planFull.name		/eloraam/base/items1.png	82:16777215	com.eloraam.redpower.base.ItemPlan
+9268	0	Canvas Bag	Canvas Bag	/eloraam/base/items1.png	192:16777215	com.eloraam.redpower.base.ItemBag
+9269	0	Stone Wafer	Stone Wafer	/eloraam/base/items1.png	0:16777215	com.eloraam.redpower.core.ItemParts
+9269	1	Stone Wire	Stone Wire	/eloraam/base/items1.png	1:16777215	com.eloraam.redpower.core.ItemParts
+9269	2	Stone Anode	Stone Anode	/eloraam/base/items1.png	2:16777215	com.eloraam.redpower.core.ItemParts
+9269	3	Stone Cathode	Stone Cathode	/eloraam/base/items1.png	3:16777215	com.eloraam.redpower.core.ItemParts
+9269	4	Stone Pointer	Stone Pointer	/eloraam/base/items1.png	4:16777215	com.eloraam.redpower.core.ItemParts
+9269	5	Stone Redwire	Stone Redwire	/eloraam/base/items1.png	5:16777215	com.eloraam.redpower.core.ItemParts
+9269	6	Plate Assembly	Plate Assembly	/eloraam/base/items1.png	6:16777215	com.eloraam.redpower.core.ItemParts
+9269	7	Silicon Chip	Silicon Chip	/eloraam/base/items1.png	7:16777215	com.eloraam.redpower.core.ItemParts
+9269	8	Tainted Silicon Chip	Tainted Silicon Chip	/eloraam/base/items1.png	8:16777215	com.eloraam.redpower.core.ItemParts
+9269	9	Stone Bundle	Stone Bundle	/eloraam/base/items1.png	9:16777215	com.eloraam.redpower.core.ItemParts
+9270	0	Ruby Handsaw	Ruby Handsaw	/eloraam/base/items1.png	19:16777215	com.eloraam.redpower.base.ItemHandsaw
+9271	0	Green Sapphire Handsaw	Green Sapphire Handsaw	/eloraam/base/items1.png	20:16777215	com.eloraam.redpower.base.ItemHandsaw
+9272	0	Sapphire Handsaw	Sapphire Handsaw	/eloraam/base/items1.png	21:16777215	com.eloraam.redpower.base.ItemHandsaw
+9273	0	Wood Sickle	Wood Sickle	/eloraam/world/worlditems1.png	16:16777215	com.eloraam.redpower.world.ItemSickle
+9274	0	Stone Sickle	Stone Sickle	/eloraam/world/worlditems1.png	17:16777215	com.eloraam.redpower.world.ItemSickle
+9275	0	Iron Sickle	Iron Sickle	/eloraam/world/worlditems1.png	18:16777215	com.eloraam.redpower.world.ItemSickle
+9276	0	Diamond Sickle	Diamond Sickle	/eloraam/world/worlditems1.png	19:16777215	com.eloraam.redpower.world.ItemSickle
+9277	0	Gold Sickle	Gold Sickle	/eloraam/world/worlditems1.png	20:16777215	com.eloraam.redpower.world.ItemSickle
+9278	0	Ruby Sickle	Ruby Sickle	/eloraam/world/worlditems1.png	21:16777215	com.eloraam.redpower.world.ItemSickle
+9279	0	Green Sapphire Sickle	Green Sapphire Sickle	/eloraam/world/worlditems1.png	22:16777215	com.eloraam.redpower.world.ItemSickle
+9280	0	Sapphire Sickle	Sapphire Sickle	/eloraam/world/worlditems1.png	23:16777215	com.eloraam.redpower.world.ItemSickle
+9281	0	Ruby Sword	Ruby Sword	/eloraam/world/worlditems1.png	32:16777215	com.eloraam.redpower.world.ItemCustomSword
+9282	0	Green Sapphire Sword	Green Sapphire Sword	/eloraam/world/worlditems1.png	33:16777215	com.eloraam.redpower.world.ItemCustomSword
+9283	0	Sapphire Sword	Sapphire Sword	/eloraam/world/worlditems1.png	34:16777215	com.eloraam.redpower.world.ItemCustomSword
+9284	0	Ruby Shovel	Ruby Shovel	/eloraam/world/worlditems1.png	48:16777215	com.eloraam.redpower.world.ItemCustomShovel
+9285	0	Green Sapphire Shovel	Green Sapphire Shovel	/eloraam/world/worlditems1.png	49:16777215	com.eloraam.redpower.world.ItemCustomShovel
+9286	0	Sapphire Shovel	Sapphire Shovel	/eloraam/world/worlditems1.png	50:16777215	com.eloraam.redpower.world.ItemCustomShovel
+9287	0	Ruby Pickaxe	Ruby Pickaxe	/eloraam/world/worlditems1.png	64:16777215	com.eloraam.redpower.world.ItemCustomPickaxe
+9288	0	Green Sapphire Pickaxe	Green Sapphire Pickaxe	/eloraam/world/worlditems1.png	65:16777215	com.eloraam.redpower.world.ItemCustomPickaxe
+9289	0	Sapphire Pickaxe	Sapphire Pickaxe	/eloraam/world/worlditems1.png	66:16777215	com.eloraam.redpower.world.ItemCustomPickaxe
+9290	0	Ruby Axe	Ruby Axe	/eloraam/world/worlditems1.png	80:16777215	com.eloraam.redpower.world.ItemCustomAxe
+9291	0	Green Sapphire Axe	Green Sapphire Axe	/eloraam/world/worlditems1.png	81:16777215	com.eloraam.redpower.world.ItemCustomAxe
+9292	0	Sapphire Axe	Sapphire Axe	/eloraam/world/worlditems1.png	82:16777215	com.eloraam.redpower.world.ItemCustomAxe
+9293	0	Ruby Hoe	Ruby Hoe	/eloraam/world/worlditems1.png	96:16777215	com.eloraam.redpower.world.ItemCustomHoe
+9294	0	Green Sapphire Hoe	Green Sapphire Hoe	/eloraam/world/worlditems1.png	97:16777215	com.eloraam.redpower.world.ItemCustomHoe
+9295	0	Sapphire Hoe	Sapphire Hoe	/eloraam/world/worlditems1.png	98:16777215	com.eloraam.redpower.world.ItemCustomHoe
+9296	0	Flax Seeds	Flax Seeds	/eloraam/world/worlditems1.png	3:16777215	com.eloraam.redpower.world.ItemCustomSeeds
+9297	0	Athame	Athame	/eloraam/world/worlditems1.png	112:16777215	com.eloraam.redpower.world.ItemAthame
+9298	0	Wool Card	Wool Card	/eloraam/base/items1.png	28:16777215	com.eloraam.redpower.world.ItemWoolCard
+9299	0	Seed Bag	Seed Bag	/eloraam/world/worlditems1.png	128:16777215	com.eloraam.redpower.world.ItemSeedBag
+9300	0	Paint Can	Paint Can	/eloraam/base/items1.png	23:16777215	com.eloraam.redpower.core.ItemTextured
+9301	0	White Paint	White Paint	/eloraam/base/items1.png	96:16777215	com.eloraam.redpower.world.ItemPaintCan
+9302	0	Orange Paint	Orange Paint	/eloraam/base/items1.png	97:16777215	com.eloraam.redpower.world.ItemPaintCan
+9303	0	Magenta Paint	Magenta Paint	/eloraam/base/items1.png	98:16777215	com.eloraam.redpower.world.ItemPaintCan
+9304	0	Light Blue Paint	Light Blue Paint	/eloraam/base/items1.png	99:16777215	com.eloraam.redpower.world.ItemPaintCan
+9305	0	Yellow Paint	Yellow Paint	/eloraam/base/items1.png	100:16777215	com.eloraam.redpower.world.ItemPaintCan
+9306	0	Lime Paint	Lime Paint	/eloraam/base/items1.png	101:16777215	com.eloraam.redpower.world.ItemPaintCan
+9307	0	Pink Paint	Pink Paint	/eloraam/base/items1.png	102:16777215	com.eloraam.redpower.world.ItemPaintCan
+9308	0	Gray Paint	Gray Paint	/eloraam/base/items1.png	103:16777215	com.eloraam.redpower.world.ItemPaintCan
+9309	0	Light Gray Paint	Light Gray Paint	/eloraam/base/items1.png	104:16777215	com.eloraam.redpower.world.ItemPaintCan
+9310	0	Cyan Paint	Cyan Paint	/eloraam/base/items1.png	105:16777215	com.eloraam.redpower.world.ItemPaintCan
+9311	0	Purple Paint	Purple Paint	/eloraam/base/items1.png	106:16777215	com.eloraam.redpower.world.ItemPaintCan
+9312	0	Blue Paint	Blue Paint	/eloraam/base/items1.png	107:16777215	com.eloraam.redpower.world.ItemPaintCan
+9313	0	Brown Paint	Brown Paint	/eloraam/base/items1.png	108:16777215	com.eloraam.redpower.world.ItemPaintCan
+9314	0	Green Paint	Green Paint	/eloraam/base/items1.png	109:16777215	com.eloraam.redpower.world.ItemPaintCan
+9315	0	Red Paint	Red Paint	/eloraam/base/items1.png	110:16777215	com.eloraam.redpower.world.ItemPaintCan
+9316	0	Black Paint	Black Paint	/eloraam/base/items1.png	111:16777215	com.eloraam.redpower.world.ItemPaintCan
+9317	0	Paint Brush	Paint Brush	/eloraam/base/items1.png	22:16777215	com.eloraam.redpower.core.ItemTextured
+9318	0	White Paint Brush	White Paint Brush	/eloraam/base/items1.png	112:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9319	0	Orange Paint Brush	Orange Paint Brush	/eloraam/base/items1.png	113:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9320	0	Magenta Paint Brush	Magenta Paint Brush	/eloraam/base/items1.png	114:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9321	0	Light Blue Paint Brush	Light Blue Paint Brush	/eloraam/base/items1.png	115:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9322	0	Yellow Paint Brush	Yellow Paint Brush	/eloraam/base/items1.png	116:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9323	0	Lime Paint Brush	Lime Paint Brush	/eloraam/base/items1.png	117:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9324	0	Pink Paint Brush	Pink Paint Brush	/eloraam/base/items1.png	118:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9325	0	Gray Paint Brush	Gray Paint Brush	/eloraam/base/items1.png	119:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9326	0	Light Gray Paint Brush	Light Gray Paint Brush	/eloraam/base/items1.png	120:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9327	0	Cyan Paint Brush	Cyan Paint Brush	/eloraam/base/items1.png	121:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9328	0	Purple Paint Brush	Purple Paint Brush	/eloraam/base/items1.png	122:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9329	0	Blue Paint Brush	Blue Paint Brush	/eloraam/base/items1.png	123:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9330	0	Brown Paint Brush	Brown Paint Brush	/eloraam/base/items1.png	124:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9331	0	Green Paint Brush	Green Paint Brush	/eloraam/base/items1.png	125:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9332	0	Red Paint Brush	Red Paint Brush	/eloraam/base/items1.png	126:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9333	0	Black Paint Brush	Black Paint Brush	/eloraam/base/items1.png	127:16777215	com.eloraam.redpower.world.ItemPaintBrush
+9334	0	Voltmeter	Voltmeter	/eloraam/base/items1.png	24:16777215	com.eloraam.redpower.machine.ItemVoltmeter
+9335	0	BT Battery	BT Battery	/eloraam/base/items1.png	25:16777215	com.eloraam.redpower.core.ItemTextured
+9336	0	Sonic Screwdriver	Sonic Screwdriver	/eloraam/base/items1.png	129:16777215	com.eloraam.redpower.machine.ItemSonicDriver
+9337	0	BT Battery	BT Battery	/eloraam/base/items1.png	25:16777215	com.eloraam.redpower.machine.ItemBattery
+9339	0	Wooden Sail	Wooden Sail	/eloraam/base/items1.png	176:16777215	com.eloraam.redpower.core.ItemParts
+9340	0	Wooden Wind Turbine	Wooden Wind Turbine	/eloraam/base/items1.png	177:16777215	com.eloraam.redpower.machine.ItemWindmill
+9341	0	Wooden Windmill	Wooden Windmill	/eloraam/base/items1.png	178:16777215	com.eloraam.redpower.machine.ItemWindmill
+9342	0	Blank Floppy	Blank Floppy	/eloraam/control/control1.png	3:16777215	com.eloraam.redpower.control.ItemDisk
+9343	0	Brass Gear	Brass Gear	/eloraam/compat/compat1.png	1:16777215	com.eloraam.redpower.core.ItemParts
+11520	0	Wooden Spear	ÐÐµÑÐµÐ²ÑÐ½Ð½Ð¾Ðµ ÐºÐ¾Ð¿ÑÑ	/gui/weaponmod/weapons.png	0:16777215	weaponmod.item.ItemSpear
+11521	0	Stone Spear	ÐÐ°Ð¼ÐµÐ½Ð½Ð¾Ðµ ÐºÐ¾Ð¿ÑÑ	/gui/weaponmod/weapons.png	1:16777215	weaponmod.item.ItemSpear
+11522	0	Iron Spear	ÐÐµÐ»ÐµÐ·Ð½Ð¾Ðµ ÐºÐ¾Ð¿ÑÑ	/gui/weaponmod/weapons.png	2:16777215	weaponmod.item.ItemSpear
+11523	0	Diamond Spear	ÐÐ»Ð¼Ð°Ð·Ð½Ð¾Ðµ ÐºÐ¾Ð¿ÑÑ	/gui/weaponmod/weapons.png	3:16777215	weaponmod.item.ItemSpear
+11524	0	Golden Spear	ÐÐ¾Ð»Ð¾ÑÐ¾Ðµ ÐºÐ¾Ð¿ÑÐµ	/gui/weaponmod/weapons.png	4:16777215	weaponmod.item.ItemSpear
+11525	0	Wooden Halberd	ÐÐµÑÐµÐ²ÑÐ½Ð½Ð°Ñ Ð°Ð»ÐµÐ±Ð°ÑÐ´Ð°	/gui/weaponmod/weapons.png	16:16777215	weaponmod.item.ItemHalberd
+11526	0	Stone Halberd	ÐÐ°Ð¼ÐµÐ½Ð½Ð°Ñ Ð°Ð»ÐµÐ±Ð°ÑÐ´Ð°	/gui/weaponmod/weapons.png	17:16777215	weaponmod.item.ItemHalberd
+11527	0	Iron Halberd	ÐÐµÐ»ÐµÐ·Ð½Ð°Ñ Ð°Ð»ÐµÐ±Ð°ÑÐ´Ð°	/gui/weaponmod/weapons.png	18:16777215	weaponmod.item.ItemHalberd
+11528	0	Diamond Halberd	ÐÐ»Ð¼Ð°Ð·Ð½Ð°Ñ Ð°Ð»ÐµÐ±Ð°ÑÐ´Ð°	/gui/weaponmod/weapons.png	19:16777215	weaponmod.item.ItemHalberd
+11529	0	Golden Halberd	ÐÐ¾Ð»Ð¾ÑÐ°Ñ Ð°Ð»ÐµÐ±Ð°ÑÐ´Ð°	/gui/weaponmod/weapons.png	20:16777215	weaponmod.item.ItemHalberd
+11530	0	Wooden Battleaxe	ÐÐµÑÐµÐ²ÑÐ½Ð½Ð°Ñ ÑÐµÐºÐ¸ÑÐ°	/gui/weaponmod/weapons.png	32:16777215	weaponmod.item.ItemBattleAxe
+11531	0	Stone Battleaxe	ÐÐ°Ð¼ÐµÐ½Ð½Ð°Ñ ÑÐµÐºÐ¸ÑÐ°	/gui/weaponmod/weapons.png	33:16777215	weaponmod.item.ItemBattleAxe
+11532	0	Iron Battleaxe	ÐÐµÐ»ÐµÐ·Ð½Ð°Ñ ÑÐµÐºÐ¸ÑÐ°	/gui/weaponmod/weapons.png	34:16777215	weaponmod.item.ItemBattleAxe
+11533	0	Diamond Battleaxe	ÐÐ»Ð¼Ð°Ð·Ð½Ð°Ñ ÑÐµÐºÐ¸ÑÐ°	/gui/weaponmod/weapons.png	35:16777215	weaponmod.item.ItemBattleAxe
+11534	0	Golden Battleaxe	ÐÐ¾Ð»Ð¾ÑÐ°Ñ ÑÐµÐºÐ¸ÑÐ°	/gui/weaponmod/weapons.png	36:16777215	weaponmod.item.ItemBattleAxe
+11535	0	Wooden Warhammer	ÐÐµÑÐµÐ²ÑÐ½Ð½ÑÐ¹ Ð¼Ð¾Ð»Ð¾Ñ	/gui/weaponmod/weapons.png	48:16777215	weaponmod.item.ItemWarhammer
+11536	0	Stone Warhammer	ÐÐ°Ð¼ÐµÐ½Ð½ÑÐ¹ Ð¼Ð¾Ð»Ð¾Ñ	/gui/weaponmod/weapons.png	49:16777215	weaponmod.item.ItemWarhammer
+11537	0	Iron Warhammer	ÐÐµÐ»ÐµÐ·Ð½ÑÐ¹ Ð¼Ð¾Ð»Ð¾Ñ	/gui/weaponmod/weapons.png	50:16777215	weaponmod.item.ItemWarhammer
+11538	0	Diamond Warhammer	ÐÐ»Ð¼Ð°Ð·Ð½ÑÐ¹ Ð¼Ð¾Ð»Ð¾Ñ	/gui/weaponmod/weapons.png	51:16777215	weaponmod.item.ItemWarhammer
+11539	0	Golden Warhammer	ÐÐ¾Ð»Ð¾ÑÐ¾Ð¹ Ð¼Ð¾Ð»Ð¾Ñ	/gui/weaponmod/weapons.png	52:16777215	weaponmod.item.ItemWarhammer
+11540	0	Wooden Knife	ÐÐµÑÐµÐ²ÑÐ½Ð½ÑÐ¹ Ð½Ð¾Ð¶	/gui/weaponmod/weapons.png	64:16777215	weaponmod.item.ItemKnife
+11541	0	Stone Knife	ÐÐ°Ð¼ÐµÐ½Ð½ÑÐ¹ Ð½Ð¾Ð¶	/gui/weaponmod/weapons.png	65:16777215	weaponmod.item.ItemKnife
+11542	0	Iron Knife	ÐÐµÐ»ÐµÐ·Ð½ÑÐ¹ Ð½Ð¾Ð¶	/gui/weaponmod/weapons.png	66:16777215	weaponmod.item.ItemKnife
+11543	0	Diamond Knife	ÐÐ»Ð¼Ð°Ð·Ð½ÑÐ¹ Ð½Ð¾Ð¶	/gui/weaponmod/weapons.png	67:16777215	weaponmod.item.ItemKnife
+11544	0	Golden Knife	ÐÐ¾Ð»Ð¾ÑÐ¾Ð¹ Ð½Ð¾Ð¶	/gui/weaponmod/weapons.png	68:16777215	weaponmod.item.ItemKnife
+11545	0	Wooden Flail	ÐÐµÑÐµÐ²ÑÐ½Ð½ÑÐ¹ ÑÐµÐ¿	/gui/weaponmod/weapons.png	80:16777215	weaponmod.item.ItemFlail
+11546	0	Stone Flail	ÐÐ°Ð¼ÐµÐ½Ð½ÑÐ¹ ÑÐµÐ¿	/gui/weaponmod/weapons.png	81:16777215	weaponmod.item.ItemFlail
+11547	0	Iron Flail	ÐÐµÐ»ÐµÐ·Ð½ÑÐ¹ ÑÐµÐ¿	/gui/weaponmod/weapons.png	82:16777215	weaponmod.item.ItemFlail
+11548	0	Diamond Flail	ÐÐ»Ð¼Ð°Ð·Ð½ÑÐ¹ ÑÐµÐ¿	/gui/weaponmod/weapons.png	83:16777215	weaponmod.item.ItemFlail
+11549	0	Golden Flail	ÐÐ¾Ð»Ð¾ÑÐ¾Ð¹ ÑÐµÐ¿	/gui/weaponmod/weapons.png	84:16777215	weaponmod.item.ItemFlail
+11550	0	Javelin	ÐÑÐ¾ÑÐ¸Ðº	/gui/weaponmod/weapons.png	5:16777215	weaponmod.item.ItemJavelin
+11551	0	Musket	ÐÑÑÐºÐµÑ	/gui/weaponmod/weapons.png	21:16777215	weaponmod.item.ItemMusket
+11552	0	Musket with Bayonet	ÐÑÑÐºÐµÑ ÑÐ¾ ÑÑÑÐºÐ¾Ð¼	/gui/weaponmod/weapons.png	22:16777215	weaponmod.item.ItemMusket
+11553	0	Musket Barrel	ÐÐ»Ð¸Ð½Ð½ÑÐ¹ ÑÑÐ²Ð¾Ð»	/gui/weaponmod/weapons.png	23:16777215	weaponmod.item.WMItem
+11554	0	Musket Round	ÐÑÐ»Ñ	/gui/weaponmod/weapons.png	24:16777215	weaponmod.item.WMItem
+11555	0	Crossbow	ÐÑÐ±Ð°Ð»ÐµÑ	/gui/weaponmod/weapons.png	53:16777215	weaponmod.item.ItemCrossbow
+11556	0	Crossbow Bolt	ÐÐ¾Ð»Ñ	/gui/weaponmod/weapons.png	55:16777215	weaponmod.item.WMItem
+11557	0	Blowgun	Ð¡Ð°ÑÐ±Ð°ÐºÐ°Ð½	/gui/weaponmod/weapons.png	69:16777215	weaponmod.item.ItemBlowgun
+11558	0	Poisonous Dart	ÐÑÑÐ°Ð²Ð»ÐµÐ½Ð½ÑÐ¹ Ð´ÑÐ¾ÑÐ¸Ðº	/gui/weaponmod/weapons.png	70:16777215	weaponmod.item.WMItem
+11559	0	Dynamite	ÐÐ¸Ð½Ð°Ð¼Ð¸Ñ	/gui/weaponmod/weapons.png	7:16777215	weaponmod.item.ItemDynamite
+11560	0	Fire Rod	ÐÐ¾ÑÑÑÐ¸Ð¹ Ð¿ÑÑÑ	/gui/weaponmod/weapons.png	8:16777215	weaponmod.item.ItemFireRod
+11561	0	Cannon	ÐÑÑÐºÐ°	/gui/weaponmod/weapons.png	85:16777215	weaponmod.item.ItemCannon
+11562	0	Cannon Ball	Ð¯Ð´ÑÐ¾	/gui/weaponmod/weapons.png	86:16777215	weaponmod.item.WMItem
+11563	0	Blunderbuss	ÐÑÑÐºÐµÑÐ¾Ð½	/gui/weaponmod/weapons.png	37:16777215	weaponmod.item.ItemBlunderbuss
+11564	0	Blunderbuss Shot	ÐÐ°ÑÑÐµÑÑ	/gui/weaponmod/weapons.png	39:16777215	weaponmod.item.WMItem
+11565	0	Blunderbuss Barrel	Ð¡ÑÐ²Ð¾Ð» Ñ ÑÐ°ÑÑÑÑÐ±Ð¾Ð¼	/gui/weaponmod/weapons.png	38:16777215	weaponmod.item.WMItem
+11566	0	Training Dummy	Ð£ÑÐµÐ±Ð½ÑÐ¹ Ð¼Ð°Ð½ÐµÐºÐµÐ½	/gui/weaponmod/weapons.png	9:16777215	weaponmod.item.ItemDummy
+11567	0	Gun Stock	Ð ÑÐ¶ÐµÐ¹Ð½Ð¾Ðµ Ð»Ð¾Ð¶Ðµ	/gui/weaponmod/weapons.png	6:16777215	weaponmod.item.WMItem
+11568	0	Wooden Boomerang	ÐÐµÑÐµÐ²ÑÐ½Ð½ÑÐ¹ Ð±ÑÐ¼ÐµÑÐ°Ð½Ð³	/gui/weaponmod/weapons.png	112:16777215	weaponmod.item.ItemBoomerang
+11569	0	Stone Boomerang	ÐÐ°Ð¼ÐµÐ½Ð½ÑÐ¹ Ð±ÑÐ¼ÐµÑÐ°Ð½Ð³	/gui/weaponmod/weapons.png	113:16777215	weaponmod.item.ItemBoomerang
+11570	0	Iron Boomerang	ÐÐµÐ»ÐµÐ·Ð½ÑÐ¹ Ð±ÑÐ¼ÐµÑÐ°Ð½Ð³	/gui/weaponmod/weapons.png	114:16777215	weaponmod.item.ItemBoomerang
+11571	0	Diamond Boomerang	ÐÐ»Ð¼Ð°Ð·Ð½ÑÐ¹ Ð±ÑÐ¼ÐµÑÐ°Ð½Ð³	/gui/weaponmod/weapons.png	115:16777215	weaponmod.item.ItemBoomerang
+11572	0	Golden Boomerang	ÐÐ¾Ð»Ð¾ÑÐ¾Ð¹ Ð±ÑÐ¼ÐµÑÐ°Ð½Ð³	/gui/weaponmod/weapons.png	116:16777215	weaponmod.item.ItemBoomerang
+14257	0	White Flower Seed	White Flower Seed	/pam/weeeflowers/pamweeeflowers.png	0:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14258	0	Orange Flower Seed	Orange Flower Seed	/pam/weeeflowers/pamweeeflowers.png	1:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14259	0	Magenta Flower Seed	Magenta Flower Seed	/pam/weeeflowers/pamweeeflowers.png	2:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14260	0	Light Blue Flower Seed	Light Blue Flower Seed	/pam/weeeflowers/pamweeeflowers.png	3:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14261	0	Yellow Flower Seed	Yellow Flower Seed	/pam/weeeflowers/pamweeeflowers.png	4:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14262	0	Lime Flower Seed	Lime Flower Seed	/pam/weeeflowers/pamweeeflowers.png	5:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14263	0	Pink Flower Seed	Pink Flower Seed	/pam/weeeflowers/pamweeeflowers.png	6:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14264	0	Dark Grey Flower Seed	Dark Grey Flower Seed	/pam/weeeflowers/pamweeeflowers.png	8:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14265	0	Light Grey Flower Seed	Light Grey Flower Seed	/pam/weeeflowers/pamweeeflowers.png	7:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14266	0	Cyan Flower Seed	Cyan Flower Seed	/pam/weeeflowers/pamweeeflowers.png	9:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14267	0	Purple Flower Seed	Purple Flower Seed	/pam/weeeflowers/pamweeeflowers.png	10:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14268	0	Blue Flower Seed	Blue Flower Seed	/pam/weeeflowers/pamweeeflowers.png	11:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14269	0	Brown Flower Seed	Brown Flower Seed	/pam/weeeflowers/pamweeeflowers.png	12:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14270	0	Green Flower Seed	Green Flower Seed	/pam/weeeflowers/pamweeeflowers.png	13:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14271	0	Red Flower Seed	Red Flower Seed	/pam/weeeflowers/pamweeeflowers.png	14:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+14272	0	Black Flower Seed	Black Flower Seed	/pam/weeeflowers/pamweeeflowers.png	15:16777215	pamsmods.common.weeeflowers.ItemPamFlowerSeeds
+15256	0	Pot	Pot	/pam/harvestcraft/pamhcbase.png	0:16777215	pamsmods.common.harvestcraft.ItemPamTool
+15257	0	Skillet	Skillet	/pam/harvestcraft/pamhcbase.png	1:16777215	pamsmods.common.harvestcraft.ItemPamTool
+15258	0	Saucepan	Saucepan	/pam/harvestcraft/pamhcbase.png	2:16777215	pamsmods.common.harvestcraft.ItemPamTool
+15259	0	Bakeware	Bakeware	/pam/harvestcraft/pamhcbase.png	3:16777215	pamsmods.common.harvestcraft.ItemPamTool
+15260	0	Cutting Board	Cutting Board	/pam/harvestcraft/pamhcbase.png	4:16777215	pamsmods.common.harvestcraft.ItemPamTool
+15261	0	Mortar and Pestle	Mortar and Pestle	/pam/harvestcraft/pamhcbase.png	5:16777215	pamsmods.common.harvestcraft.ItemPamTool
+15262	0	Salt	Salt	/pam/harvestcraft/pamhcbase.png	16:16777215	pamsmods.common.harvestcraft.ItemPam
+15263	0	Flour	Flour	/pam/harvestcraft/pamhcbase.png	32:16777215	pamsmods.common.harvestcraft.ItemPam
+15264	0	Dough	Dough	/pam/harvestcraft/pamhcbase.png	33:16777215	pamsmods.common.harvestcraft.ItemPam
+15265	0	Toast	Toast	/pam/harvestcraft/pamhcbase.png	34:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15266	0	Pasta	Pasta	/pam/harvestcraft/pamhcbase.png	35:16777215	pamsmods.common.harvestcraft.ItemPam
+15267	0	Heavy Cream	Heavy Cream	/pam/harvestcraft/pamhcbase.png	48:16777215	pamsmods.common.harvestcraft.ItemPam
+15268	0	Butter	Butter	/pam/harvestcraft/pamhcbase.png	49:16777215	pamsmods.common.harvestcraft.ItemPam
+15269	0	Cheese	Cheese	/pam/harvestcraft/pamhcbase.png	50:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15270	0	Ice Cream	Ice Cream	/pam/harvestcraft/pamhcbase.png	51:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15271	0	Grilled Cheese	Grilled Cheese	/pam/harvestcraft/pamhcbase.png	52:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15272	0	Apple Sauce	Apple Sauce	/pam/harvestcraft/pamhcbase.png	65:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15273	0	Apple Juice	Apple Juice	/pam/harvestcraft/pamhcbase.png	64:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15274	0	Apple Pie	Apple Pie	/pam/harvestcraft/pamhcbase.png	66:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15275	0	Caramel Apple	Caramel Apple	/pam/harvestcraft/pamhcbase.png	67:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15276	0	Pumpkin Bread	Pumpkin Bread	/pam/harvestcraft/pamhcbase.png	80:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15277	0	Roasted Pumpkin Seeds	Roasted Pumpkin Seeds	/pam/harvestcraft/pamhcbase.png	81:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15278	0	Pumpkin Soup	Pumpkin Soup	/pam/harvestcraft/pamhcbase.png	82:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15279	0	Melon Juice	Melon Juice	/pam/harvestcraft/pamhcbase.png	128:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15280	0	Melon Smoothie	Melon Smoothie	/pam/harvestcraft/pamhcbase.png	129:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15281	0	Carrot Juice	Carrot Juice	/pam/harvestcraft/pamhcbase.png	112:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15282	0	Carrot Cake	Carrot Cake	/pam/harvestcraft/pamhcbase.png	113:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15283	0	Carrot Soup	Carrot Soup	/pam/harvestcraft/pamhcbase.png	114:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15284	0	Glazed Carrots	Glazed Carrots	/pam/harvestcraft/pamhcbase.png	115:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15285	0	Buttered Potato	Buttered Potato	/pam/harvestcraft/pamhcbase.png	96:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15286	0	Loaded Baked Potato	Loaded Baked Potato	/pam/harvestcraft/pamhcbase.png	97:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15287	0	Mashed Potatoes	Mashed Potatoes	/pam/harvestcraft/pamhcbase.png	98:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15288	0	Potato Salad	Potato Salad	/pam/harvestcraft/pamhcbase.png	99:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15289	0	Potato Soup	Potato Soup	/pam/harvestcraft/pamhcbase.png	100:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15290	0	Fries	Fries	/pam/harvestcraft/pamhcbase.png	101:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15291	0	Grilled Mushroom	Grilled Mushroom	/pam/harvestcraft/pamhcbase.png	148:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15292	0	Stuffed Mushroom	Stuffed Mushroom	/pam/harvestcraft/pamhcbase.png	149:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15293	0	Chicken Sandwich	Chicken Sandwich	/pam/harvestcraft/pamhcbase.png	132:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15294	0	Chicken Noodle Soup	Chicken Noodle Soup	/pam/harvestcraft/pamhcbase.png	133:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15295	0	Chicken Pot Pie	Chicken Pot Pie	/pam/harvestcraft/pamhcbase.png	134:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15296	0	Breaded Porkchop	Breaded Porkchop	/pam/harvestcraft/pamhcbase.png	160:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15297	0	Hotdog	Hotdog	/pam/harvestcraft/pamhcbase.png	161:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15298	0	Baked Ham	Baked Ham	/pam/harvestcraft/pamhcbase.png	162:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15299	0	Hamburger	Hamburger	/pam/harvestcraft/pamhcbase.png	144:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15300	0	Cheeseburger	Cheeseburger	/pam/harvestcraft/pamhcbase.png	145:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15301	0	Bacon Cheeseburger	Bacon Cheeseburger	/pam/harvestcraft/pamhcbase.png	146:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15302	0	Pot Roast	Pot Roast	/pam/harvestcraft/pamhcbase.png	147:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15303	0	Fish Sandwich	Fish Sandwich	/pam/harvestcraft/pamhcbase.png	176:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15304	0	Fish Sticks	Fish Sticks	/pam/harvestcraft/pamhcbase.png	177:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15305	0	Fish and Chips	Fish and Chips	/pam/harvestcraft/pamhcbase.png	178:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15306	0	Mayo	Mayo	/pam/harvestcraft/pamhcbase.png	164:16777215	pamsmods.common.harvestcraft.ItemPam
+15307	0	Fried Egg	Fried Egg	/pam/harvestcraft/pamhcbase.png	165:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15308	0	Scrambled Egg	Scrambled Egg	/pam/harvestcraft/pamhcbase.png	166:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15309	0	Boiled Egg	Boiled Egg	/pam/harvestcraft/pamhcbase.png	167:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15310	0	Egg Salad	Egg Salad	/pam/harvestcraft/pamhcbase.png	168:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15311	0	Caramel	Caramel	/pam/harvestcraft/pamhcbase.png	192:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15312	0	Taffy	Taffy	/pam/harvestcraft/pamhcbase.png	193:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15313	0	Spider Eye Soup	Spider Eye Soup	/pam/harvestcraft/pamhcbase.png	208:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15314	0	Zombie Jerky	Zombie Jerky	/pam/harvestcraft/pamhcbase.png	209:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15315	0	Cocoa Powder	Cocoa Powder	/pam/harvestcraft/pamhcbase.png	224:16777215	pamsmods.common.harvestcraft.ItemPam
+15316	0	Chocolate Bar	Chocolate Bar	/pam/harvestcraft/pamhcbase.png	225:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15317	0	Hot Chocolate	Hot Chocolate	/pam/harvestcraft/pamhcbase.png	226:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15318	0	Chocolate Ice Cream	Chocolate Ice Cream	/pam/harvestcraft/pamhcbase.png	227:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15319	0	Vegetable Soup	Vegetable Soup	/pam/harvestcraft/pamhcbase.png	240:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15320	0	Stock	Stock	/pam/harvestcraft/pamhcbase.png	241:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15321	0	Fruit Salad	Fruit Salad	/pam/harvestcraft/pamhcbase.png	242:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15456	0	Tomato	Tomato	/pam/harvestcraft/pamhctomato.png	16:16777215	pamsmods.common.harvestcraft.tomato.ItemPamFoodTomato
+15457	0	Tomato Seed	Tomato Seed	/pam/harvestcraft/pamhctomato.png	17:16777215	pamsmods.common.harvestcraft.tomato.ItemPamTomatoSeed
+15458	0	Tomato Seed Packet	Tomato Seed Packet	/pam/harvestcraft/pamhctomato.png	18:16777215	pamsmods.common.harvestcraft.tomato.ItemPamTomato
+15459	0	Tomato Seed Box	Tomato Seed Box	/pam/harvestcraft/pamhctomato.png	19:16777215	pamsmods.common.harvestcraft.tomato.ItemPamTomato
+15460	0	Spagetti	Spagetti	/pam/harvestcraft/pamhcbase.png	7:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15461	0	Spagetti and Meatballs	Spagetti and Meatballs	/pam/harvestcraft/pamhcbase.png	8:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15462	0	Tomato Soup	Tomato Soup	/pam/harvestcraft/pamhcbase.png	9:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15463	0	Ketchup	Ketchup	/pam/harvestcraft/pamhcbase.png	10:16777215	pamsmods.common.harvestcraft.ItemPam
+15464	0	Chicken Parmasan	Chicken Parmasan	/pam/harvestcraft/pamhcbase.png	11:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15465	0	Pizza	Pizza	/pam/harvestcraft/pamhcbase.png	12:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15482	0	Lettuce	Lettuce	/pam/harvestcraft/pamhclettuce.png	16:16777215	pamsmods.common.harvestcraft.lettuce.ItemPamFoodLettuce
+15483	0	Lettuce Seed	Lettuce Seed	/pam/harvestcraft/pamhclettuce.png	17:16777215	pamsmods.common.harvestcraft.lettuce.ItemPamLettuceSeed
+15484	0	Lettuce Seed Packet	Lettuce Seed Packet	/pam/harvestcraft/pamhclettuce.png	18:16777215	pamsmods.common.harvestcraft.lettuce.ItemPamLettuce
+15485	0	Lettuce Seed Box	Lettuce Seed Box	/pam/harvestcraft/pamhclettuce.png	19:16777215	pamsmods.common.harvestcraft.lettuce.ItemPamLettuce
+15486	0	Spring Salad	Spring Salad	/pam/harvestcraft/pamhcbase.png	23:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15487	0	Pork Lettuce Wrap	Pork Lettuce Wrap	/pam/harvestcraft/pamhcbase.png	24:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15488	0	Fish Lettuce Wrap	Fish Lettuce Wrap	/pam/harvestcraft/pamhcbase.png	25:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15489	0	BLT	BLT	/pam/harvestcraft/pamhcbase.png	26:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15490	0	Leafy Chicken Sandwich	Leafy Chicken Sandwich	/pam/harvestcraft/pamhcbase.png	27:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15491	0	Leafy Fish Sandwich	Leafy Fish Sandwich	/pam/harvestcraft/pamhcbase.png	28:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15492	0	Deluxe Cheeseburger	Deluxe Cheeseburger	/pam/harvestcraft/pamhcbase.png	29:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15493	0	Delighted Meal	Delighted Meal	/pam/harvestcraft/pamhcbase.png	30:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15507	0	Onion	Onion	/pam/harvestcraft/pamhconion.png	16:16777215	pamsmods.common.harvestcraft.onion.ItemPamSeedFoodOnion
+15508	0	Onion Seed	Onion Seed	/pam/harvestcraft/pamhconion.png	17:16777215	pamsmods.common.harvestcraft.onion.ItemPamOnionSeed
+15509	0	Onion Seed Packet	Onion Seed Packet	/pam/harvestcraft/pamhconion.png	18:16777215	pamsmods.common.harvestcraft.onion.ItemPamOnion
+15510	0	Onion Seed Box	Onion Seed Box	/pam/harvestcraft/pamhconion.png	19:16777215	pamsmods.common.harvestcraft.onion.ItemPamOnion
+15511	0	Onion Soup	Onion Soup	/pam/harvestcraft/pamhcbase.png	39:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15512	0	Potato Cakes	Potato Cakes	/pam/harvestcraft/pamhcbase.png	40:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15513	0	Hash	Hash	/pam/harvestcraft/pamhcbase.png	41:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15514	0	Braised Onions	Braised Onions	/pam/harvestcraft/pamhcbase.png	42:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15515	0	Hearty Breakfast	Hearty Breakfast	/pam/harvestcraft/pamhcbase.png	43:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15532	0	Corn	Corn	/pam/harvestcraft/pamhccorn.png	16:16777215	pamsmods.common.harvestcraft.corn.ItemPamFoodCorn
+15533	0	Corn Seed	Corn Seed	/pam/harvestcraft/pamhccorn.png	17:16777215	pamsmods.common.harvestcraft.corn.ItemPamCornSeed
+15534	0	Corn Seed Packet	Corn Seed Packet	/pam/harvestcraft/pamhccorn.png	18:16777215	pamsmods.common.harvestcraft.corn.ItemPamCorn
+15535	0	Corn Seed Box	Corn Seed Box	/pam/harvestcraft/pamhccorn.png	19:16777215	pamsmods.common.harvestcraft.corn.ItemPamCorn
+15536	0	Popcorn	Popcorn	/pam/harvestcraft/pamhccorn.png	32:16777215	pamsmods.common.harvestcraft.corn.ItemPamFoodCorn
+15537	0	Corn on the Cob	Corn on the Cob	/pam/harvestcraft/pamhcbase.png	55:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15538	0	Cornmeal	Cornmeal	/pam/harvestcraft/pamhcbase.png	56:16777215	pamsmods.common.harvestcraft.ItemPam
+15539	0	Cornbread	Cornbread	/pam/harvestcraft/pamhcbase.png	57:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15540	0	Tortilla	Tortilla	/pam/harvestcraft/pamhcbase.png	58:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15541	0	Nachoes	Nachoes	/pam/harvestcraft/pamhcbase.png	59:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15542	0	Taco	Taco	/pam/harvestcraft/pamhcbase.png	60:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15543	0	Fish Taco	Fish Taco	/pam/harvestcraft/pamhcbase.png	61:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15544	0	Creamed Corn	Creamed Corn	/pam/harvestcraft/pamhcbase.png	62:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15557	0	Strawberry	Strawberry	/pam/harvestcraft/pamhcstrawberry.png	16:16777215	pamsmods.common.harvestcraft.strawberry.ItemPamFoodStrawberry
+15558	0	Strawberry Seed	Strawberry Seed	/pam/harvestcraft/pamhcstrawberry.png	17:16777215	pamsmods.common.harvestcraft.strawberry.ItemPamStrawberrySeed
+15559	0	Strawberry Seed Packet	Strawberry Seed Packet	/pam/harvestcraft/pamhcstrawberry.png	18:16777215	pamsmods.common.harvestcraft.strawberry.ItemPamStrawberry
+15560	0	Strawberry Seed Box	Strawberry Seed Box	/pam/harvestcraft/pamhcstrawberry.png	19:16777215	pamsmods.common.harvestcraft.strawberry.ItemPamStrawberry
+15561	0	Strawberry Smoothie	Strawberry Smoothie	/pam/harvestcraft/pamhcbase.png	71:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15562	0	Strawberry Pie	Strawberry Pie	/pam/harvestcraft/pamhcbase.png	72:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15563	0	Strawberry Salad	Strawberry Salad	/pam/harvestcraft/pamhcbase.png	73:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15564	0	Strawberry Juice	Strawberry Juice	/pam/harvestcraft/pamhcbase.png	74:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15565	0	Chocolate Strawberry	Chocolate Strawberry	/pam/harvestcraft/pamhcbase.png	75:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15582	0	Cotton	Cotton	/pam/harvestcraft/pamhccotton.png	16:16777215	pamsmods.common.harvestcraft.cotton.ItemPamCotton
+15583	0	Woven Cotton	Woven Cotton	/pam/harvestcraft/pamhccotton.png	32:16777215	pamsmods.common.harvestcraft.cotton.ItemPamCotton
+15584	0	Cotton Seed	Cotton Seed	/pam/harvestcraft/pamhccotton.png	17:16777215	pamsmods.common.harvestcraft.cotton.ItemPamCottonSeed
+15585	0	Cotton Seed Packet	Cotton Seed Packet	/pam/harvestcraft/pamhccotton.png	18:16777215	pamsmods.common.harvestcraft.cotton.ItemPamCotton
+15586	0	Cotton Seed Box	Cotton Seed Box	/pam/harvestcraft/pamhccotton.png	19:16777215	pamsmods.common.harvestcraft.cotton.ItemPamCotton
+15607	0	Grape	Grape	/pam/harvestcraft/pamhcgrape.png	16:16777215	pamsmods.common.harvestcraft.grape.ItemPamFoodGrape
+15608	0	Grape Seed	Grape Seed	/pam/harvestcraft/pamhcgrape.png	17:16777215	pamsmods.common.harvestcraft.grape.ItemPamGrapeSeed
+15609	0	Grape Seed Packet	Grape Seed Packet	/pam/harvestcraft/pamhcgrape.png	18:16777215	pamsmods.common.harvestcraft.grape.ItemPamGrape
+15610	0	Grape Seed Box	Grape Seed Box	/pam/harvestcraft/pamhcgrape.png	19:16777215	pamsmods.common.harvestcraft.grape.ItemPamGrape
+15611	0	Grape Juice	Grape Juice	/pam/harvestcraft/pamhcbase.png	103:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15612	0	Vinegar	Vinegar	/pam/harvestcraft/pamhcbase.png	104:16777215	pamsmods.common.harvestcraft.ItemPam
+15613	0	Grape Jelly	Grape Jelly	/pam/harvestcraft/pamhcbase.png	105:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15614	0	Raisins	Raisins	/pam/harvestcraft/pamhcgrape.png	35:16777215	pamsmods.common.harvestcraft.grape.ItemPamFoodGrape
+15615	0	Grape Salad	Grape Salad	/pam/harvestcraft/pamhcbase.png	106:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15616	0	Raisin Cookies	Raisin Cookies	/pam/harvestcraft/pamhcbase.png	107:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15632	0	Cucumber	Cucumber	/pam/harvestcraft/pamhccucumber.png	16:16777215	pamsmods.common.harvestcraft.cucumber.ItemPamFoodCucumber
+15633	0	Cucumber Seed	Cucumber Seed	/pam/harvestcraft/pamhccucumber.png	17:16777215	pamsmods.common.harvestcraft.cucumber.ItemPamCucumberSeed
+15634	0	Cucumber Seed Packet	Cucumber Seed Packet	/pam/harvestcraft/pamhccucumber.png	18:16777215	pamsmods.common.harvestcraft.cucumber.ItemPamCucumber
+15635	0	Cucumber Seed Box	Cucumber Seed Box	/pam/harvestcraft/pamhccucumber.png	19:16777215	pamsmods.common.harvestcraft.cucumber.ItemPamCucumber
+15636	0	Pickles	Pickles	/pam/harvestcraft/pamhcbase.png	119:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15637	0	Cucumber Salad	Cucumber Salad	/pam/harvestcraft/pamhcbase.png	120:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15638	0	Cucumber Soup	Cucumber Soup	/pam/harvestcraft/pamhcbase.png	121:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15639	0	Vegetarian Lettuce Wrap	Vegetarian Lettuce Wrap	/pam/harvestcraft/pamhcbase.png	122:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15640	0	Marinated Cucumbers	Marinated Cucumbers	/pam/harvestcraft/pamhcbase.png	123:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15657	0	Peanut	Peanut	/pam/harvestcraft/pamhcpeanut.png	16:16777215	pamsmods.common.harvestcraft.peanut.ItemPamSeedFoodPeanut
+15658	0	Peanut Seed	Peanut Seed	/pam/harvestcraft/pamhcpeanut.png	17:16777215	pamsmods.common.harvestcraft.peanut.ItemPamPeanutSeed
+15659	0	Peanut Seed Packet	Peanut Seed Packet	/pam/harvestcraft/pamhcpeanut.png	18:16777215	pamsmods.common.harvestcraft.peanut.ItemPamPeanut
+15660	0	Peanut Seed Box	Peanut Seed Box	/pam/harvestcraft/pamhcpeanut.png	19:16777215	pamsmods.common.harvestcraft.peanut.ItemPamPeanut
+15661	0	Peanut Butter	Peanut Butter	/pam/harvestcraft/pamhcbase.png	87:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15662	0	Trail Mix	Trail Mix	/pam/harvestcraft/pamhcbase.png	88:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15663	0	Roasted Nuts	Roasted Nuts	/pam/harvestcraft/pamhcpeanut.png	34:16777215	pamsmods.common.harvestcraft.peanut.ItemPamFoodPeanut
+15664	0	PB&J	PB&J	/pam/harvestcraft/pamhcbase.png	89:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15665	0	Peanut Butter Cookies	Peanut Butter Cookies	/pam/harvestcraft/pamhcbase.png	90:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15682	0	Rice	Rice	/pam/harvestcraft/pamhcrice.png	16:16777215	pamsmods.common.harvestcraft.rice.ItemPamSeedFoodRice
+15683	0	Rice Seed	Rice Seed	/pam/harvestcraft/pamhcrice.png	17:16777215	pamsmods.common.harvestcraft.rice.ItemPamRiceSeed
+15684	0	Rice Seed Packet	Rice Seed Packet	/pam/harvestcraft/pamhcrice.png	18:16777215	pamsmods.common.harvestcraft.rice.ItemPamRice
+15685	0	Rice Seed Box	Rice Seed Box	/pam/harvestcraft/pamhcrice.png	19:16777215	pamsmods.common.harvestcraft.rice.ItemPamRice
+15686	0	Rice Cake	Rice Cake	/pam/harvestcraft/pamhcrice.png	32:16777215	pamsmods.common.harvestcraft.rice.ItemPamFoodRice
+15687	0	Rice Soup	Rice Soup	/pam/harvestcraft/pamhcbase.png	135:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15688	0	Fried Rice	Fried Rice	/pam/harvestcraft/pamhcbase.png	136:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15689	0	Mushroom Risotto	Mushroom Risotto	/pam/harvestcraft/pamhcbase.png	137:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15690	0	Curry Rice	Curry Rice	/pam/harvestcraft/pamhcbase.png	138:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15691	0	Rainbow Curry	Rainbow Curry	/pam/harvestcraft/pamhcbase.png	139:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15707	0	Bean	Bean	/pam/harvestcraft/pamhcbean.png	16:16777215	pamsmods.common.harvestcraft.bean.ItemPamSeedFoodBean
+15708	0	Bean Seed	Bean Seed	/pam/harvestcraft/pamhcbean.png	17:16777215	pamsmods.common.harvestcraft.bean.ItemPamBeanSeed
+15709	0	Bean Seed Packet	Bean Seed Packet	/pam/harvestcraft/pamhcbean.png	18:16777215	pamsmods.common.harvestcraft.bean.ItemPamBean
+15710	0	Bean Seed Box	Bean Seed Box	/pam/harvestcraft/pamhcbean.png	19:16777215	pamsmods.common.harvestcraft.bean.ItemPamBean
+15711	0	Refried Beans	Refried Beans	/pam/harvestcraft/pamhcbase.png	151:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15712	0	Baked Beans	Baked Beans	/pam/harvestcraft/pamhcbase.png	152:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15713	0	Beans and Rice	Beans and Rice	/pam/harvestcraft/pamhcbase.png	153:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15714	0	Chili	Chili	/pam/harvestcraft/pamhcbase.png	154:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15715	0	Bean Burrito	Bean Burrito	/pam/harvestcraft/pamhcbase.png	155:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15732	0	Bellpepper	Bellpepper	/pam/harvestcraft/pamhcbellpepper.png	16:16777215	pamsmods.common.harvestcraft.bellpepper.ItemPamFoodBellpepper
+15733	0	Bellpepper Seed	Bellpepper Seed	/pam/harvestcraft/pamhcbellpepper.png	17:16777215	pamsmods.common.harvestcraft.bellpepper.ItemPamBellpepperSeed
+15734	0	Bellpepper Seed Packet	Bellpepper Seed Packet	/pam/harvestcraft/pamhcbellpepper.png	18:16777215	pamsmods.common.harvestcraft.bellpepper.ItemPamBellpepper
+15735	0	Bellpepper Seed Box	Bellpepper Seed Box	/pam/harvestcraft/pamhcbellpepper.png	19:16777215	pamsmods.common.harvestcraft.bellpepper.ItemPamBellpepper
+15736	0	Stuffed Pepper	Stuffed Pepper	/pam/harvestcraft/pamhcbase.png	169:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15737	0	Veggie Stirfry	Veggie Stirfry	/pam/harvestcraft/pamhcbase.png	170:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15738	0	Grilled Skewer	Grilled Skewer	/pam/harvestcraft/pamhcbase.png	171:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15739	0	Supreme Pizza	Supreme Pizza	/pam/harvestcraft/pamhcbase.png	172:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15740	0	Omelet	Omelet	/pam/harvestcraft/pamhcbase.png	173:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15757	0	Chili Pepper	Chili Pepper	/pam/harvestcraft/pamhcchilipepper.png	16:16777215	pamsmods.common.harvestcraft.chilipepper.ItemPamFoodChilipepper
+15758	0	Chilipepper Seed	Chilipepper Seed	/pam/harvestcraft/pamhcchilipepper.png	17:16777215	pamsmods.common.harvestcraft.chilipepper.ItemPamChilipepperSeed
+15759	0	Chilipepper Seed Packet	Chilipepper Seed Packet	/pam/harvestcraft/pamhcchilipepper.png	18:16777215	pamsmods.common.harvestcraft.chilipepper.ItemPamChilipepper
+15760	0	Chilipepper Seed Box	Chilipepper Seed Box	/pam/harvestcraft/pamhcchilipepper.png	19:16777215	pamsmods.common.harvestcraft.chilipepper.ItemPamChilipepper
+15761	0	Hot Wings	Hot Wings	/pam/harvestcraft/pamhcbase.png	183:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15762	0	Chili Poppers	Chili Poppers	/pam/harvestcraft/pamhcbase.png	184:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15763	0	Extreme Chili	Extreme Chili	/pam/harvestcraft/pamhcbase.png	185:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15764	0	Chili Chocolate	Chili Chocolate	/pam/harvestcraft/pamhcbase.png	186:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15782	0	Lemon	Lemon	/pam/harvestcraft/pamhclemon.png	17:16777215	pamsmods.common.harvestcraft.lemon.ItemPamFoodLemon
+15783	0	Lemonaide	Lemonaide	/pam/harvestcraft/pamhcbase.png	199:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15784	0	Lemon Bar	Lemon Bar	/pam/harvestcraft/pamhcbase.png	200:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15785	0	Fish Dinner	Fish Dinner	/pam/harvestcraft/pamhcbase.png	201:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15786	0	Lemon Smoothie	Lemon Smoothie	/pam/harvestcraft/pamhcbase.png	202:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15787	0	Lemon Meringue	Lemon Meringue	/pam/harvestcraft/pamhcbase.png	203:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15788	0	Candied Lemon	Candied Lemon	/pam/harvestcraft/pamhcbase.png	204:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15789	0	Lemon Chicken	Lemon Chicken	/pam/harvestcraft/pamhcbase.png	205:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15790	0	Combustible Lemon	Combustible Lemon	/pam/harvestcraft/pamhclemon.png	39:16777215	pamsmods.common.harvestcraft.lemon.ItemPamCombustibleLemon
+15807	0	Blueberry	Blueberry	/pam/harvestcraft/pamhcblueberry.png	16:16777215	pamsmods.common.harvestcraft.blueberry.ItemPamFoodBlueberry
+15808	0	Blueberry Seed	Blueberry Seed	/pam/harvestcraft/pamhcblueberry.png	17:16777215	pamsmods.common.harvestcraft.blueberry.ItemPamBlueberrySeed
+15809	0	Blueberry Seed Packet	Blueberry Seed Packet	/pam/harvestcraft/pamhcblueberry.png	18:16777215	pamsmods.common.harvestcraft.blueberry.ItemPamBlueberry
+15810	0	Blueberry Seed Box	Blueberry Seed Box	/pam/harvestcraft/pamhcblueberry.png	19:16777215	pamsmods.common.harvestcraft.blueberry.ItemPamBlueberry
+15811	0	Blueberry Smoothie	Blueberry Smoothie	/pam/harvestcraft/pamhcbase.png	215:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15812	0	Blueberry Pie	Blueberry Pie	/pam/harvestcraft/pamhcbase.png	216:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15813	0	Blueberry Muffin	Blueberry Muffin	/pam/harvestcraft/pamhcbase.png	217:16777215	pamsmods.common.harvestcraft.ItemPamFoodBowl
+15814	0	Blueberry Juice	Blueberry Juice	/pam/harvestcraft/pamhcbase.png	218:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15815	0	Pancakes	Pancakes	/pam/harvestcraft/pamhcbase.png	219:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15816	0	Blueberry Pancakes	Blueberry Pancakes	/pam/harvestcraft/pamhcbase.png	220:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15832	0	Cherry	Cherry	/pam/harvestcraft/pamhccherry.png	17:16777215	pamsmods.common.harvestcraft.cherry.ItemPamFoodCherry
+15833	0	Cherry Juice	Cherry Juice	/pam/harvestcraft/pamhcbase.png	231:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15834	0	Cherry Pie	Cherry Pie	/pam/harvestcraft/pamhcbase.png	232:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15835	0	Chocolate Cherry	Chocolate Cherry	/pam/harvestcraft/pamhcbase.png	233:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15836	0	Cherry Smoothie	Cherry Smoothie	/pam/harvestcraft/pamhcbase.png	234:16777215	pamsmods.common.harvestcraft.ItemPamFoodBottle
+15837	0	Cheesecake	Cheesecake	/pam/harvestcraft/pamhcbase.png	235:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15838	0	Cherry Cheesecake	Cherry Cheesecake	/pam/harvestcraft/pamhcbase.png	236:16777215	pamsmods.common.harvestcraft.ItemPamFood
+15857	0	White Mushroom	White Mushroom	/pam/harvestcraft/pamhcwhitemushroom.png	16:16777215	pamsmods.common.harvestcraft.whitemushroom.ItemPamFoodWhitemushroom
+15858	0	White Mushroom Seed	White Mushroom Seed	/pam/harvestcraft/pamhcwhitemushroom.png	17:16777215	pamsmods.common.harvestcraft.whitemushroom.ItemPamWhitemushroomSeed
+15859	0	White Mushroom Seed Packet	White Mushroom Seed Packet	/pam/harvestcraft/pamhcwhitemushroom.png	18:16777215	pamsmods.common.harvestcraft.whitemushroom.ItemPamWhitemushroom
+15860	0	White Mushroom Seed Box	White Mushroom Seed Box	/pam/harvestcraft/pamhcwhitemushroom.png	19:16777215	pamsmods.common.harvestcraft.whitemushroom.ItemPamWhitemushroom
+15881	0	Candlenut	Candlenut	/pam/harvestcraft/pamhccandle.png	20:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleItem
+15882	0	Candleberry	Candleberry	/pam/harvestcraft/pamhccandle.png	16:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleItem
+15883	0	Candleberry Seed	Candleberry Seed	/pam/harvestcraft/pamhccandle.png	17:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleberrySeed
+15884	0	Candleberry Seed Packet	Candleberry Seed Packet	/pam/harvestcraft/pamhccandle.png	18:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleItem
+15885	0	Candleberry Seed Box	Candleberry Seed Box	/pam/harvestcraft/pamhccandle.png	19:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleItem
+15886	0	Candleberry Wax	Candleberry Wax	/pam/harvestcraft/pamhccandle.png	32:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleItem
+15887	0	Hardened Leather Helm	Hardened Leather Helm	/pam/harvestcraft/pamhccandle.png	36:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleArmor
+15888	0	Hardened Leather Chest	Hardened Leather Chest	/pam/harvestcraft/pamhccandle.png	35:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleArmor
+15889	0	Hardened Leather Leggings	Hardened Leather Leggings	/pam/harvestcraft/pamhccandle.png	37:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleArmor
+15890	0	Hardened Leather Boots	Hardened Leather Boots	/pam/harvestcraft/pamhccandle.png	34:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleArmor
+15891	0	Hardened Leather	Hardened Leather	/pam/harvestcraft/pamhccandle.png	33:16777215	pamsmods.common.harvestcraft.candle.ItemPamCandleItem
+15897	0	Blackberry	Blackberry	/pam/harvestcraft/pamhcblackberry.png	16:16777215	pamsmods.common.harvestcraft.blackberry.ItemPamFoodBlackberry
+15898	0	Blackberry Seed	Blackberry Seed	/pam/harvestcraft/pamhcblackberry.png	17:16777215	pamsmods.common.harvestcraft.blackberry.ItemPamBlackberrySeed
+15899	0	Blackberry Seed Packet	Blackberry Seed Packet	/pam/harvestcraft/pamhcblackberry.png	18:16777215	pamsmods.common.harvestcraft.blackberry.ItemPamBlackberry
+15900	0	Blackberry Seed Box	Blackberry Seed Box	/pam/harvestcraft/pamhcblackberry.png	19:16777215	pamsmods.common.harvestcraft.blackberry.ItemPamBlackberry
+15907	0	Raspberry	Raspberry	/pam/harvestcraft/pamhcraspberry.png	16:16777215	pamsmods.common.harvestcraft.raspberry.ItemPamFoodRaspberry
+15908	0	Raspberry Seed	Raspberry Seed	/pam/harvestcraft/pamhcraspberry.png	17:16777215	pamsmods.common.harvestcraft.raspberry.ItemPamRaspberrySeed
+15909	0	Raspberry Seed Packet	Raspberry Seed Packet	/pam/harvestcraft/pamhcraspberry.png	18:16777215	pamsmods.common.harvestcraft.raspberry.ItemPamRaspberry
+15910	0	Raspberry Seed Box	Raspberry Seed Box	/pam/harvestcraft/pamhcraspberry.png	19:16777215	pamsmods.common.harvestcraft.raspberry.ItemPamRaspberry
+15917	0	Cranberry	Cranberry	/pam/harvestcraft/pamhccranberry.png	16:16777215	pamsmods.common.harvestcraft.cranberry.ItemPamFoodCranberry
+15918	0	Cranberry Seed	Cranberry Seed	/pam/harvestcraft/pamhccranberry.png	17:16777215	pamsmods.common.harvestcraft.cranberry.ItemPamCranberrySeed
+15919	0	Cranberry Seed Packet	Cranberry Seed Packet	/pam/harvestcraft/pamhccranberry.png	18:16777215	pamsmods.common.harvestcraft.cranberry.ItemPamCranberry
+15920	0	Cranberry Seed Box	Cranberry Seed Box	/pam/harvestcraft/pamhccranberry.png	19:16777215	pamsmods.common.harvestcraft.cranberry.ItemPamCranberry
+15927	0	Kiwi	Kiwi	/pam/harvestcraft/pamhckiwi.png	16:16777215	pamsmods.common.harvestcraft.kiwi.ItemPamFoodKiwi
+15928	0	Kiwi Seed	Kiwi Seed	/pam/harvestcraft/pamhckiwi.png	17:16777215	pamsmods.common.harvestcraft.kiwi.ItemPamKiwiSeed
+15929	0	Kiwi Seed Packet	Kiwi Seed Packet	/pam/harvestcraft/pamhckiwi.png	18:16777215	pamsmods.common.harvestcraft.kiwi.ItemPamKiwi
+15930	0	Kiwi Seed Box	Kiwi Seed Box	/pam/harvestcraft/pamhckiwi.png	19:16777215	pamsmods.common.harvestcraft.kiwi.ItemPamKiwi
+15937	0	Sunflower Seeds	Sunflower Seeds	/pam/harvestcraft/pamhcsunflower.png	16:16777215	pamsmods.common.harvestcraft.sunflower.ItemPamFoodSunflower
+15938	0	Sunflower Seed	Sunflower Seed	/pam/harvestcraft/pamhcsunflower.png	17:16777215	pamsmods.common.harvestcraft.sunflower.ItemPamSunflowerSeed
+15939	0	Sunflower Seed Packet	Sunflower Seed Packet	/pam/harvestcraft/pamhcsunflower.png	18:16777215	pamsmods.common.harvestcraft.sunflower.ItemPamSunflower
+15940	0	Sunflower Seed Box	Sunflower Seed Box	/pam/harvestcraft/pamhcsunflower.png	19:16777215	pamsmods.common.harvestcraft.sunflower.ItemPamSunflower
+15947	0	Spice Leaf	Spice Leaf	/pam/harvestcraft/pamhcspiceleaf.png	16:16777215	pamsmods.common.harvestcraft.spiceleaf.ItemPamFoodSpiceleaf
+15948	0	Spice Leaf Seed	Spice Leaf Seed	/pam/harvestcraft/pamhcspiceleaf.png	17:16777215	pamsmods.common.harvestcraft.spiceleaf.ItemPamSpiceleafSeed
+15949	0	Spice Leaf Seed Packet	Spice Leaf Seed Packet	/pam/harvestcraft/pamhcspiceleaf.png	18:16777215	pamsmods.common.harvestcraft.spiceleaf.ItemPamSpiceleaf
+15950	0	Spice Leaf Seed Box	Spice Leaf Seed Box	/pam/harvestcraft/pamhcspiceleaf.png	19:16777215	pamsmods.common.harvestcraft.spiceleaf.ItemPamSpiceleaf
+15956	0	Walnut	Walnut	/pam/harvestcraft/pamhcwalnut.png	17:16777215	pamsmods.common.harvestcraft.walnut.ItemPamFoodWalnut
+15957	0	Pear	Pear	/pam/harvestcraft/pamhcpear.png	17:16777215	pamsmods.common.harvestcraft.pear.ItemPamFoodPear
+15958	0	Plum	Plum	/pam/harvestcraft/pamhcplum.png	17:16777215	pamsmods.common.harvestcraft.plum.ItemPamFoodPlum
+15959	0	Avocado	Avocado	/pam/harvestcraft/pamhcavocado.png	17:16777215	pamsmods.common.harvestcraft.avocado.ItemPamFoodAvocado
+15960	0	Nutmeg	Nutmeg	/pam/harvestcraft/pamhcnutmeg.png	17:16777215	pamsmods.common.harvestcraft.nutmeg.ItemPamFoodNutmeg
+15961	0	Banana	Banana	/pam/harvestcraft/pamhcbanana.png	17:16777215	pamsmods.common.harvestcraft.banana.ItemPamFoodBanana
+15962	0	Coconut	Coconut	/pam/harvestcraft/pamhccoconut.png	17:16777215	pamsmods.common.harvestcraft.coconut.ItemPamFoodCoconut
+15963	0	Toasted Coconut	Toasted Coconut	/pam/harvestcraft/pamhccoconut.png	32:16777215	pamsmods.common.harvestcraft.coconut.ItemPamFoodCoconut
+15964	0	Papaya	Papaya	/pam/harvestcraft/pamhcpapaya.png	17:16777215	pamsmods.common.harvestcraft.papaya.ItemPamFoodPapaya
+15965	0	Cinnamon	Cinnamon	/pam/harvestcraft/pamhccinnamon.png	17:16777215	pamsmods.common.harvestcraft.cinnamon.ItemPamFoodCinnamon
+15966	0	Orange	Orange	/pam/harvestcraft/pamhcorange.png	17:16777215	pamsmods.common.harvestcraft.orange.ItemPamFoodOrange
+15967	0	Peach	Peach	/pam/harvestcraft/pamhcpeach.png	17:16777215	pamsmods.common.harvestcraft.peach.ItemPamFoodPeach
+15968	0	Lime	Lime	/pam/harvestcraft/pamhclime.png	17:16777215	pamsmods.common.harvestcraft.lime.ItemPamFoodLime
+15969	0	Mango	Mango	/pam/harvestcraft/pamhcmango.png	17:16777215	pamsmods.common.harvestcraft.mango.ItemPamFoodMango
+15970	0	Olive	Olive	/pam/harvestcraft/pamhcolive.png	17:16777215	pamsmods.common.harvestcraft.olive.ItemPamFoodOlive
+15971	0	Pomergranate	Pomergranate	/pam/harvestcraft/pamhcpomergranate.png	17:16777215	pamsmods.common.harvestcraft.pomergranate.ItemPamFoodPomergranate
+15972	0	Vanilla Bean	Vanilla Bean	/pam/harvestcraft/pamhcvanillabean.png	17:16777215	pamsmods.common.harvestcraft.vanillabean.ItemPamFoodVanillabean
+15973	0	Vanilla	Vanilla	/pam/harvestcraft/pamhcvanillabean.png	17:16777215	pamsmods.common.harvestcraft.vanillabean.ItemPamFoodVanillabean
+15974	0	Peppercorn	Peppercorn	/pam/harvestcraft/pamhcpeppercorn.png	17:16777215	pamsmods.common.harvestcraft.peppercorn.ItemPamFoodPeppercorn
+15975	0	Starfruit	Starfruit	/pam/harvestcraft/pamhcstarfruit.png	17:16777215	pamsmods.common.harvestcraft.starfruit.ItemPamFoodStarfruit
+15976	0	Eggplant	Eggplant	/pam/harvestcraft/pamhceggplant.png	16:16777215	pamsmods.common.harvestcraft.eggplant.ItemPamFoodEggplant
+15977	0	Eggplant Seed	Eggplant Seed	/pam/harvestcraft/pamhceggplant.png	17:16777215	pamsmods.common.harvestcraft.eggplant.ItemPamEggplantSeed
+15978	0	Eggplant Seed Packet	Eggplant Seed Packet	/pam/harvestcraft/pamhceggplant.png	18:16777215	pamsmods.common.harvestcraft.eggplant.ItemPamEggplant
+15979	0	Eggplant Seed Box	Eggplant Seed Box	/pam/harvestcraft/pamhceggplant.png	19:16777215	pamsmods.common.harvestcraft.eggplant.ItemPamEggplant
+15980	0	Grilled Eggplant	Grilled Eggplant	/pam/harvestcraft/pamhceggplant.png	32:16777215	pamsmods.common.harvestcraft.eggplant.ItemPamFoodEggplant
+15981	0	Coffee Bean	Coffee Bean	/pam/harvestcraft/pamhccoffee.png	16:16777215	pamsmods.common.harvestcraft.coffee.ItemPamSeedFoodCoffee
+15982	0	Coffee Seed	Coffee Seed	/pam/harvestcraft/pamhccoffee.png	17:16777215	pamsmods.common.harvestcraft.coffee.ItemPamCoffeeSeed
+15983	0	Coffee Seed Packet	Coffee Seed Packet	/pam/harvestcraft/pamhccoffee.png	18:16777215	pamsmods.common.harvestcraft.coffee.ItemPamCoffee
+15984	0	Coffee Seed Box	Coffee Seed Box	/pam/harvestcraft/pamhccoffee.png	19:16777215	pamsmods.common.harvestcraft.coffee.ItemPamCoffee
+15985	0	Cup of Coffee	Cup of Coffee	/pam/harvestcraft/pamhccoffee.png	32:16777215	pamsmods.common.harvestcraft.coffee.ItemPamFoodCoffee
+15986	0	Peas	Peas	/pam/harvestcraft/pamhcpeas.png	16:16777215	pamsmods.common.harvestcraft.peas.ItemPamSeedFoodPeas
+15987	0	Peas Seed	Peas Seed	/pam/harvestcraft/pamhcpeas.png	17:16777215	pamsmods.common.harvestcraft.peas.ItemPamPeasSeed
+15988	0	Peas Seed Packet	Peas Seed Packet	/pam/harvestcraft/pamhcpeas.png	18:16777215	pamsmods.common.harvestcraft.peas.ItemPamPeas
+15989	0	Peas Seed Box	Peas Seed Box	/pam/harvestcraft/pamhcpeas.png	19:16777215	pamsmods.common.harvestcraft.peas.ItemPamPeas
+15990	0	Mustard Seeds	Mustard Seeds	/pam/harvestcraft/pamhcmustard.png	16:16777215	pamsmods.common.harvestcraft.mustard.ItemPamSeedFoodMustard
+15991	0	Mustard Seed	Mustard Seed	/pam/harvestcraft/pamhcmustard.png	17:16777215	pamsmods.common.harvestcraft.mustard.ItemPamMustardSeed
+15992	0	Mustard Seed Packet	Mustard Seed Packet	/pam/harvestcraft/pamhcmustard.png	18:16777215	pamsmods.common.harvestcraft.mustard.ItemPamMustard
+15993	0	Mustard Seed Box	Mustard Seed Box	/pam/harvestcraft/pamhcmustard.png	19:16777215	pamsmods.common.harvestcraft.mustard.ItemPamMustard
+15994	0	Zucchini	Zucchini	/pam/harvestcraft/pamhczucchini.png	16:16777215	pamsmods.common.harvestcraft.zucchini.ItemPamFoodZucchini
+15995	0	Zucchini Seed	Zucchini Seed	/pam/harvestcraft/pamhczucchini.png	17:16777215	pamsmods.common.harvestcraft.zucchini.ItemPamZucchiniSeed
+15996	0	Zucchini Seed Packet	Zucchini Seed Packet	/pam/harvestcraft/pamhczucchini.png	18:16777215	pamsmods.common.harvestcraft.zucchini.ItemPamZucchini
+15997	0	Zucchini Seed Box	Zucchini Seed Box	/pam/harvestcraft/pamhczucchini.png	19:16777215	pamsmods.common.harvestcraft.zucchini.ItemPamZucchini
+15998	0	Cantaloupe	Cantaloupe	/pam/harvestcraft/pamhccantaloupe.png	16:16777215	pamsmods.common.harvestcraft.cantaloupe.ItemPamFoodCantaloupe
+15999	0	Cantaloupe Seed	Cantaloupe Seed	/pam/harvestcraft/pamhccantaloupe.png	17:16777215	pamsmods.common.harvestcraft.cantaloupe.ItemPamCantaloupeSeed
+16000	0	Cantaloupe Seed Packet	Cantaloupe Seed Packet	/pam/harvestcraft/pamhccantaloupe.png	18:16777215	pamsmods.common.harvestcraft.cantaloupe.ItemPamCantaloupe
+16001	0	Cantaloupe Seed Box	Cantaloupe Seed Box	/pam/harvestcraft/pamhccantaloupe.png	19:16777215	pamsmods.common.harvestcraft.cantaloupe.ItemPamCantaloupe
+16002	0	Cactus Fruit	Cactus Fruit	/pam/harvestcraft/pamhccactusfruit.png	16:16777215	pamsmods.common.harvestcraft.cactusfruit.ItemPamFoodCactusfruit
+16003	0	Cactus Fruit Seed	Cactus Fruit Seed	/pam/harvestcraft/pamhccactusfruit.png	17:16777215	pamsmods.common.harvestcraft.cactusfruit.ItemPamCactusfruitSeed
+16004	0	Cactus Fruit Seed Packet	Cactus Fruit Seed Packet	/pam/harvestcraft/pamhccactusfruit.png	18:16777215	pamsmods.common.harvestcraft.cactusfruit.ItemPamCactusfruit
+16005	0	Cactus Fruit Seed Box	Cactus Fruit Seed Box	/pam/harvestcraft/pamhccactusfruit.png	19:16777215	pamsmods.common.harvestcraft.cactusfruit.ItemPamCactusfruit
+16007	0	Rotten Seed	Rotten Seed	/pam/harvestcraft/pamhcrotten.png	17:16777215	pamsmods.common.harvestcraft.rotten.ItemPamRottenSeed
+16008	0	Rotten Seed Packet	Rotten Seed Packet	/pam/harvestcraft/pamhcrotten.png	18:16777215	pamsmods.common.harvestcraft.rotten.ItemPamRotten
+16009	0	Rotten Seed Box	Rotten Seed Box	/pam/harvestcraft/pamhcrotten.png	19:16777215	pamsmods.common.harvestcraft.rotten.ItemPamRotten
+16010	0	Beet	Beet	/pam/harvestcraft/pamhcbeet.png	16:16777215	pamsmods.common.harvestcraft.beet.ItemPamSeedFoodBeet
+16011	0	Beet Seed	Beet Seed	/pam/harvestcraft/pamhcbeet.png	17:16777215	pamsmods.common.harvestcraft.beet.ItemPamBeetSeed
+16012	0	Beet Seed Packet	Beet Seed Packet	/pam/harvestcraft/pamhcbeet.png	18:16777215	pamsmods.common.harvestcraft.beet.ItemPamBeet
+16013	0	Beet Seed Box	Beet Seed Box	/pam/harvestcraft/pamhcbeet.png	19:16777215	pamsmods.common.harvestcraft.beet.ItemPamBeet
+16014	0	Broccoli	Broccoli	/pam/harvestcraft/pamhcbroccoli.png	16:16777215	pamsmods.common.harvestcraft.broccoli.ItemPamSeedFoodBroccoli
+16015	0	Broccoli Seed	Broccoli Seed	/pam/harvestcraft/pamhcbroccoli.png	17:16777215	pamsmods.common.harvestcraft.broccoli.ItemPamBroccoliSeed
+16016	0	Broccoli Seed Packet	Broccoli Seed Packet	/pam/harvestcraft/pamhcbroccoli.png	18:16777215	pamsmods.common.harvestcraft.broccoli.ItemPamBroccoli
+16017	0	Broccoli Seed Box	Broccoli Seed Box	/pam/harvestcraft/pamhcbroccoli.png	19:16777215	pamsmods.common.harvestcraft.broccoli.ItemPamBroccoli
+16018	0	Pineapple	Pineapple	/pam/harvestcraft/pamhcpineapple.png	16:16777215	pamsmods.common.harvestcraft.pineapple.ItemPamSeedFoodPineapple
+16019	0	Pineapple Seed	Pineapple Seed	/pam/harvestcraft/pamhcpineapple.png	17:16777215	pamsmods.common.harvestcraft.pineapple.ItemPamPineappleSeed
+16020	0	Pineapple Seed Packet	Pineapple Seed Packet	/pam/harvestcraft/pamhcpineapple.png	18:16777215	pamsmods.common.harvestcraft.pineapple.ItemPamPineapple
+16021	0	Pineapple Seed Box	Pineapple Seed Box	/pam/harvestcraft/pamhcpineapple.png	19:16777215	pamsmods.common.harvestcraft.pineapple.ItemPamPineapple
+16022	0	Turnip	Turnip	/pam/harvestcraft/pamhcturnip.png	16:16777215	pamsmods.common.harvestcraft.turnip.ItemPamSeedFoodTurnip
+16023	0	Turnip Seed	Turnip Seed	/pam/harvestcraft/pamhcturnip.png	17:16777215	pamsmods.common.harvestcraft.turnip.ItemPamTurnipSeed
+16024	0	Turnip Seed Packet	Turnip Seed Packet	/pam/harvestcraft/pamhcturnip.png	18:16777215	pamsmods.common.harvestcraft.turnip.ItemPamTurnip
+16025	0	Turnip Seed Box	Turnip Seed Box	/pam/harvestcraft/pamhcturnip.png	19:16777215	pamsmods.common.harvestcraft.turnip.ItemPamTurnip
+16026	0	Ginger	Ginger	/pam/harvestcraft/pamhcginger.png	16:16777215	pamsmods.common.harvestcraft.ginger.ItemPamSeedFoodGinger
+16027	0	Ginger Seed	Ginger Seed	/pam/harvestcraft/pamhcginger.png	17:16777215	pamsmods.common.harvestcraft.ginger.ItemPamGingerSeed
+16028	0	Ginger Seed Packet	Ginger Seed Packet	/pam/harvestcraft/pamhcginger.png	18:16777215	pamsmods.common.harvestcraft.ginger.ItemPamGinger
+16029	0	Ginger Seed Box	Ginger Seed Box	/pam/harvestcraft/pamhcginger.png	19:16777215	pamsmods.common.harvestcraft.ginger.ItemPamGinger
+16030	0	Garlic	Garlic	/pam/harvestcraft/pamhcgarlic.png	16:16777215	pamsmods.common.harvestcraft.garlic.ItemPamSeedFoodGarlic
+16031	0	Garlic Seed	Garlic Seed	/pam/harvestcraft/pamhcgarlic.png	17:16777215	pamsmods.common.harvestcraft.garlic.ItemPamGarlicSeed
+16032	0	Garlic Seed Packet	Garlic Seed Packet	/pam/harvestcraft/pamhcgarlic.png	18:16777215	pamsmods.common.harvestcraft.garlic.ItemPamGarlic
+16033	0	Garlic Seed Box	Garlic Seed Box	/pam/harvestcraft/pamhcgarlic.png	19:16777215	pamsmods.common.harvestcraft.garlic.ItemPamGarlic
+16034	0	Celery	Celery	/pam/harvestcraft/pamhccelery.png	16:16777215	pamsmods.common.harvestcraft.celery.ItemPamSeedFoodCelery
+16035	0	Celery Seed	Celery Seed	/pam/harvestcraft/pamhccelery.png	17:16777215	pamsmods.common.harvestcraft.celery.ItemPamCelerySeed
+16036	0	Celery Seed Packet	Celery Seed Packet	/pam/harvestcraft/pamhccelery.png	18:16777215	pamsmods.common.harvestcraft.celery.ItemPamCelery
+16037	0	Celery Seed Box	Celery Seed Box	/pam/harvestcraft/pamhccelery.png	19:16777215	pamsmods.common.harvestcraft.celery.ItemPamCelery
+16038	0	Radish	Radish	/pam/harvestcraft/pamhcradish.png	16:16777215	pamsmods.common.harvestcraft.radish.ItemPamSeedFoodRadish
+16039	0	Radish Seed	Radish Seed	/pam/harvestcraft/pamhcradish.png	17:16777215	pamsmods.common.harvestcraft.radish.ItemPamRadishSeed
+16040	0	Radish Seed Packet	Radish Seed Packet	/pam/harvestcraft/pamhcradish.png	18:16777215	pamsmods.common.harvestcraft.radish.ItemPamRadish
+16041	0	Radish Seed Box	Radish Seed Box	/pam/harvestcraft/pamhcradish.png	19:16777215	pamsmods.common.harvestcraft.radish.ItemPamRadish
+16042	0	Grilled Radish	Grilled Radish	/pam/harvestcraft/pamhcradish.png	32:16777215	pamsmods.common.harvestcraft.radish.ItemPamFoodRadish
+16043	0	Sweet Potato	Sweet Potato	/pam/harvestcraft/pamhcsweetpotato.png	16:16777215	pamsmods.common.harvestcraft.sweetpotato.ItemPamSeedFoodSweetpotato
+16044	0	Sweet Potato Seed	Sweet Potato Seed	/pam/harvestcraft/pamhcsweetpotato.png	17:16777215	pamsmods.common.harvestcraft.sweetpotato.ItemPamSweetpotatoSeed
+16045	0	Sweet Potato Seed Packet	Sweet Potato Seed Packet	/pam/harvestcraft/pamhcsweetpotato.png	18:16777215	pamsmods.common.harvestcraft.sweetpotato.ItemPamSweetpotato
+16046	0	Sweet Potato Seed Box	Sweet Potato Seed Box	/pam/harvestcraft/pamhcsweetpotato.png	19:16777215	pamsmods.common.harvestcraft.sweetpotato.ItemPamSweetpotato
+16047	0	Grilled Sweet Potato	Grilled Sweet Potato	/pam/harvestcraft/pamhcsweetpotato.png	32:16777215	pamsmods.common.harvestcraft.sweetpotato.ItemPamFoodSweetpotato
+16048	0	Asparagus	Asparagus	/pam/harvestcraft/pamhcasparagus.png	16:16777215	pamsmods.common.harvestcraft.asparagus.ItemPamSeedFoodAsparagus
+16049	0	Asparagus Seed	Asparagus Seed	/pam/harvestcraft/pamhcasparagus.png	17:16777215	pamsmods.common.harvestcraft.asparagus.ItemPamAsparagusSeed
+16050	0	Asparagus Seed Packet	Asparagus Seed Packet	/pam/harvestcraft/pamhcasparagus.png	18:16777215	pamsmods.common.harvestcraft.asparagus.ItemPamAsparagus
+16051	0	Asparagus Seed Box	Asparagus Seed Box	/pam/harvestcraft/pamhcasparagus.png	19:16777215	pamsmods.common.harvestcraft.asparagus.ItemPamAsparagus
+16052	0	Grilled Asparagus	Grilled Asparagus	/pam/harvestcraft/pamhcasparagus.png	32:16777215	pamsmods.common.harvestcraft.asparagus.ItemPamFoodAsparagus
+16053	0	Tea Leaf	Tea Leaf	/pam/harvestcraft/pamhctea.png	16:16777215	pamsmods.common.harvestcraft.tea.ItemPamFoodTea
+16054	0	Tea Seed	Tea Seed	/pam/harvestcraft/pamhctea.png	17:16777215	pamsmods.common.harvestcraft.tea.ItemPamTeaSeed
+16055	0	Tea Seed Packet	Tea Seed Packet	/pam/harvestcraft/pamhctea.png	18:16777215	pamsmods.common.harvestcraft.tea.ItemPamTea
+16056	0	Tea Seed Box	Tea Seed Box	/pam/harvestcraft/pamhctea.png	19:16777215	pamsmods.common.harvestcraft.tea.ItemPamTea
+16057	0	Cup of Tea	Cup of Tea	/pam/harvestcraft/pamhctea.png	32:16777215	pamsmods.common.harvestcraft.tea.ItemPamFoodTea
+26980	0	item.npcWand.name		/gui/items.png	130:9127187,130:9127187	noppes.npcs.items.ItemNpcWand
+26981	0	item.npcCloner.name		/gui/items.png	114:9127187,114:9127187	noppes.npcs.items.ItemNpcCloner
+26982	0	item.npcSpawner.name		/gui/items.png	82:9127187,82:9127187	noppes.npcs.items.ItemNpcSpawner
+26987	0	item.npcGuitar.name		/gui/customnpcs/items.png	172:16777215	noppes.npcs.items.ItemBanjo
+26988	0	item.npcBanjo.name		/gui/customnpcs/items.png	173:16777215	noppes.npcs.items.ItemBanjo
+26989	0	item.npcViolin.name		/gui/customnpcs/items.png	175:16777215	noppes.npcs.items.ItemViolin
+26990	0	item.npcViolinBow.name		/gui/customnpcs/items.png	174:16777215	noppes.npcs.items.ItemNpcInterface
+26991	0	item.npcHarp.name		/gui/customnpcs/items.png	171:16777215	noppes.npcs.items.ItemViolin
+27957	0	Naga Scale	Сердце Наги	/twilightforest/items.png	0:16777215	twilightforest.item.ItemTF
+27958	0	Naga Scale Tunic	Нугрудник из сердец Наги	/twilightforest/items.png	16:16777215	twilightforest.item.ItemTFNagaArmor
+27959	0	Naga Scale Leggings	Поножи из сердец Наги	/twilightforest/items.png	32:16777215	twilightforest.item.ItemTFNagaArmor
+27960	0	Scepter of Twilight	Сумеречный посох	/twilightforest/items.png	3:16777215	twilightforest.item.ItemTFTwilightWand
+27961	0	Scepter of Life Draining	Посох смерти	/twilightforest/items.png	4:16777215	twilightforest.item.ItemTFLifeDrainWand
+27962	0	Zombie Scepter	Посох зомби	/twilightforest/items.png	5:16777215	twilightforest.item.ItemTFZombieWand
+27964	0	Ore Meter [WIP]	Определитель руд [WIP]	/twilightforest/items.png	7:16777215	twilightforest.item.ItemTFOreMeter
+27965	0	Magic Map	Магическая карта	/twilightforest/items.png	8:16777215	twilightforest.item.ItemTFMagicMap
+27966	0	Maze Map	Карта лабиринта	/twilightforest/items.png	10:16777215	twilightforest.item.ItemTFMazeMap
+27967	0	Maze/Ore Map	Карта лабиринта/руд	/twilightforest/items.png	11:16777215	twilightforest.item.ItemTFMazeMap
+27968	0	Raven's Feather	Воронье перо	/twilightforest/items.png	12:16777215	twilightforest.item.ItemTF
+27969	0	Magic Map Focus	Фокус магической карты	/twilightforest/items.png	13:16777215	twilightforest.item.ItemTF
+27970	0	Maze Map Focus	Фокус карты лабаринта	/twilightforest/items.png	14:16777215	twilightforest.item.ItemTF
+27972	0	Liveroot	Замшелый корень	/twilightforest/items.png	1:16777215	twilightforest.item.ItemTF
+27973	0	Raw Ironwood Materials	Магический материал	/twilightforest/items.png	17:16777215	twilightforest.item.ItemTF
+27974	0	Ironwood Ingot	Зачарованное железо	/twilightforest/items.png	33:16777215	twilightforest.item.ItemTF
+27975	0	Ironwood Helm	Шлем из зачарованного железа	/twilightforest/items.png	49:16777215	twilightforest.item.ItemTFIronwoodArmor
+27976	0	Ironwood Plate	Нагрудник из зачарованного железа	/twilightforest/items.png	65:16777215	twilightforest.item.ItemTFIronwoodArmor
+27977	0	Ironwood Legs	Поножи из зачарованного железа	/twilightforest/items.png	81:16777215	twilightforest.item.ItemTFIronwoodArmor
+27978	0	Ironwood Boots	Ботинки из зачарованного железа	/twilightforest/items.png	97:16777215	twilightforest.item.ItemTFIronwoodArmor
+27979	0	Ironwood Sword	Меч из зачарованного железа	/twilightforest/items.png	113:16777215	twilightforest.item.ItemTFIronwoodSword
+27980	0	Ironwood Shovel	Лопата из зачарованного железа	/twilightforest/items.png	129:16777215	twilightforest.item.ItemTFIronwoodShovel
+27981	0	Ironwood Pick	Кирка из зачарованного железа	/twilightforest/items.png	145:16777215	twilightforest.item.ItemTFIronwoodPick
+27982	0	Ironwood Axe	Топор из зачарованного железа	/twilightforest/items.png	161:16777215	twilightforest.item.ItemTFIronwoodAxe
+27983	0	Ironwood Hoe	Мотыга из зачарованного железа	/twilightforest/items.png	177:16777215	twilightforest.item.ItemTFIronwoodHoe
+27984	0	Torchberries	Факелонт	/twilightforest/items.png	19:16777215	twilightforest.item.ItemTF
+27985	177	Spawn	Призвать существо - 	/gui/items.png	153:8611131,169:16773066	twilightforest.item.ItemTFSpawnEgg
+27985	178	Spawn	Призвать существо - 	/gui/items.png	153:14405295,169:14141297	twilightforest.item.ItemTFSpawnEgg
+27985	179	Spawn	Призвать существо - 	/gui/items.png	153:8080686,169:4924445	twilightforest.item.ItemTFSpawnEgg
+27985	180	Spawn	Призвать существо - 	/gui/items.png	153:3881580,169:11214356	twilightforest.item.ItemTFSpawnEgg
+27985	181	Spawn	Призвать существо - 	/gui/items.png	153:3277358,169:1516830	twilightforest.item.ItemTFSpawnEgg
+27985	182	Spawn	Призвать существо - 	/gui/items.png	153:10801942,169:1783819	twilightforest.item.ItemTFSpawnEgg
+27985	184	Spawn	Призвать существо - 	/gui/items.png	153:10724259,169:2767639	twilightforest.item.ItemTFSpawnEgg
+27985	185	Spawn	Призвать существо - 	/gui/items.png	153:14144467,169:11214356	twilightforest.item.ItemTFSpawnEgg
+27985	186	Spawn	Призвать существо - 	/gui/items.png	153:5263440,169:8618883	twilightforest.item.ItemTFSpawnEgg
+27985	187	Spawn	Призвать существо - 	/gui/items.png	153:2318099,169:5645907	twilightforest.item.ItemTFSpawnEgg
+27985	189	Spawn	Призвать существо - 	/gui/items.png	153:1321280,169:2719851	twilightforest.item.ItemTFSpawnEgg
+27985	190	Spawn	Призвать существо - 	/gui/items.png	153:11314313,169:3540082	twilightforest.item.ItemTFSpawnEgg
+27985	191	Spawn	Призвать существо - 	/gui/items.png	153:1185051,169:16379346	twilightforest.item.ItemTFSpawnEgg
+27985	194	Spawn	Призвать существо - 	/gui/items.png	153:3386077,169:1149166	twilightforest.item.ItemTFSpawnEgg
+27985	195	Spawn	Призвать существо - 	/gui/items.png	153:9457426,169:15658734	twilightforest.item.ItemTFSpawnEgg
+27985	196	Spawn	Призвать существо - 	/gui/items.png	153:16711406,169:13413017	twilightforest.item.ItemTFSpawnEgg
+27985	197	Spawn	Призвать существо - 	/gui/items.png	153:17,169:2236979	twilightforest.item.ItemTFSpawnEgg
+27985	199	Spawn	Призвать существо - 	/gui/items.png	153:3612822,169:9002267	twilightforest.item.ItemTFSpawnEgg
+27985	202	Spawn	Призвать существо - 	/gui/items.png	153:526596,169:2961185	twilightforest.item.ItemTFSpawnEgg
+27985	203	Spawn	Призвать существо - 	/gui/items.png	153:7818786,169:14405054	twilightforest.item.ItemTFSpawnEgg
+27985	204	Spawn	Призвать существо - 	/gui/items.png	153:4141092,169:11173222	twilightforest.item.ItemTFSpawnEgg
+27985	205	Spawn	Призвать существо - 	/gui/items.png	153:11014162,169:11173222	twilightforest.item.ItemTFSpawnEgg
+27985	206	Spawn	Призвать существо - 	/gui/items.png	153:1903360,169:13332261	twilightforest.item.ItemTFSpawnEgg
+27985	207	Spawn	Призвать существо - 	/gui/items.png	153:792070,169:6334284	twilightforest.item.ItemTFSpawnEgg
+27985	208	Spawn	Призвать существо - 	/gui/items.png	153:12358439,169:2364937	twilightforest.item.ItemTFSpawnEgg
+27985	209	Spawn	Призвать существо - 	/gui/items.png	153:10724259,169:2767639	twilightforest.item.ItemTFSpawnEgg
+27985	210	Spawn	Призвать существо - 	/gui/items.png	153:5725473,169:11214356	twilightforest.item.ItemTFSpawnEgg
+27985	211	Spawn	Призвать существо - 	/gui/items.png	153:3806225,169:14862474	twilightforest.item.ItemTFSpawnEgg
+27985	212	Spawn	Призвать существо - 	/gui/items.png	153:2318099,169:5645907	twilightforest.item.ItemTFSpawnEgg
+27985	213	Spawn	Призвать существо - 	/gui/items.png	153:10801942,169:1783819	twilightforest.item.ItemTFSpawnEgg
+27985	214	Spawn	Призвать существо - 	/gui/items.png	153:16382457,169:12369084	twilightforest.item.ItemTFSpawnEgg
+27985	215	Spawn	Призвать существо - 	/gui/items.png	153:16382457,169:12369084	twilightforest.item.ItemTFSpawnEgg
+27985	216	Spawn	Призвать существо - 	/gui/items.png	153:14144467,169:13545366	twilightforest.item.ItemTFSpawnEgg
+27985	218	Spawn	Призвать существо - 	/gui/items.png	153:7237230,169:3158064	twilightforest.item.ItemTFSpawnEgg
+27985	219	Spawn	Призвать существо - 	/gui/items.png	153:3277358,169:1516830	twilightforest.item.ItemTFSpawnEgg
+27985	217	Spawn	Призвать существо - 	/gui/items.png	153:16382457,169:12369084	twilightforest.item.ItemTFSpawnEgg
+27986	0	Raw Venison	Сырая оленятина	/gui/items.png	105:16777215	uk
+27987	0	Venison Steak	Олений стейк	/gui/items.png	106:16777215	uk
+27988	0	Hydra Chop	Мясо Гидры	/gui/items.png	88:16777215	uk
+27989	0	Fiery Blood	Огенная кровь	/twilightforest/items.png	21:16777215	twilightforest.item.ItemTF
+27990	0	Hydra Trophy	Трофей Гидры	/twilightforest/items.png	22:16777215	twilightforest.item.ItemTFTrophy
+27991	0	Fiery Ingot	Огненный слиток	/twilightforest/items.png	36:16777215	twilightforest.item.ItemTF
+27992	0	Fiery Helm	Огненный шлем	/twilightforest/items.png	52:16777215	twilightforest.item.ItemTFFieryArmor
+27993	0	Fiery Plate	Огненный нагрудник	/twilightforest/items.png	68:16777215	twilightforest.item.ItemTFFieryArmor
+27994	0	Fiery Legs	Огненные поножи	/twilightforest/items.png	84:16777215	twilightforest.item.ItemTFFieryArmor
+27995	0	Fiery Boots	Огненные ботинки	/twilightforest/items.png	100:16777215	twilightforest.item.ItemTFFieryArmor
+27996	0	Fiery Sword	Огненный меч	/twilightforest/items.png	116:16777215	twilightforest.item.ItemTFFierySword
+27997	0	Fiery Pick	Огненная кирка	/twilightforest/items.png	148:16777215	twilightforest.item.ItemTFFieryPick
+27998	0	Steeleaf	Магический лист	/twilightforest/items.png	34:16777215	twilightforest.item.ItemTF
+27999	0	Steeleaf Helm	Шлем из листьев	/twilightforest/items.png	50:16777215	twilightforest.item.ItemTFSteeleafArmor
+28000	0	Steeleaf Plate	Нагрудник из листьев	/twilightforest/items.png	66:16777215	twilightforest.item.ItemTFSteeleafArmor
+28001	0	Steeleaf Legs	Поножи из листьев	/twilightforest/items.png	82:16777215	twilightforest.item.ItemTFSteeleafArmor
+28002	0	Steeleaf Boots	Ботинки из листьев	/twilightforest/items.png	98:16777215	twilightforest.item.ItemTFSteeleafArmor
+28003	0	Steeleaf Sword	Меч из листьев	/twilightforest/items.png	114:16777215	twilightforest.item.ItemTFSteeleafSword
+28004	0	Steeleaf Shovel	Лопата из листьев	/twilightforest/items.png	130:16777215	twilightforest.item.ItemTFSteeleafShovel
+28005	0	Steeleaf Pick	Кирка из листьев	/twilightforest/items.png	146:16777215	twilightforest.item.ItemTFSteeleafPick
+28006	0	Steeleaf Axe	Топор из листьев	/twilightforest/items.png	162:16777215	twilightforest.item.ItemTFSteeleafAxe
+28007	0	Steeleaf Hoe	Мотыга из листьев	/twilightforest/items.png	178:16777215	twilightforest.item.ItemTFSteeleafHoe
+28008	0	Minotaur Axe	Топор Минотавра	/twilightforest/items.png	160:16777215	twilightforest.item.ItemTFMinotaurAxe
+28009	0	Mazebreaker	Кирка лабиринта	/twilightforest/items.png	144:16777215	twilightforest.item.ItemTFMazebreakerPick
+28010	0	Transformation Powder	Порошок трансформации	/twilightforest/items.png	23:16777215	twilightforest.item.ItemTFTransformPowder
+28011	0	Raw Meef	Мясо минотавра	/gui/items.png	105:16777215	uk
+28012	0	Meef Steak	Минотаврин стейк	/gui/items.png	106:16777215	uk
+28013	0	Meef Stroganoff	Суп из минотавра	/gui/items.png	72:16777215	tc
+28014	0	Maze Wafer	Вайли из лабиринта	/gui/items.png	92:16777215	uk
+28015	0	Blank Magic Map	Пустая Магическая карта	/twilightforest/items.png	24:16777215	twilightforest.item.ItemTFEmptyMagicMap
+28016	0	Blank Maze Map	Пустая карта лабиринта	/twilightforest/items.png	26:16777215	twilightforest.item.ItemTFEmptyMazeMap
+28017	0	Blank Maze/Ore Map	Пустая карта лабиринта/руд	/twilightforest/items.png	27:16777215	twilightforest.item.ItemTFEmptyMazeMap
+28018	0	Ore Magnet	Рудный магнит	/twilightforest/items.png	45:16777215	twilightforest.item.ItemTFOreMagnet
+28019	0	Crumble Horn	Бараний рог	/twilightforest/items.png	28:16777215	twilightforest.item.ItemTFCrumbleHorn
+28020	0	Peacock Feather Fan	Веер полёта	/twilightforest/items.png	29:16777215	twilightforest.item.ItemTFPeacockFan
+28021	0	Moonworm Queen	Королева гусениц	/twilightforest/items.png	30:16777215	twilightforest.item.ItemTFMoonwormQueen
+28022	0	Charm of Life I	Чарм жизни I	/twilightforest/items.png	40:16777215	twilightforest.item.ItemTFCharm
+28023	0	Charm of Life II	Чарм жизни II	/twilightforest/items.png	41:16777215	twilightforest.item.ItemTFCharm
+28024	0	Charm of Keeping II	Чарм инвентаря II	/twilightforest/items.png	43:16777215	twilightforest.item.ItemTFCharm
+28025	0	Charm of Keeping III	Чарм инвентаря III	/twilightforest/items.png	44:16777215	twilightforest.item.ItemTFCharm
+28026	0	Charm of Keeping I	Чарм инвентаря I	/twilightforest/items.png	42:16777215	twilightforest.item.ItemTFCharm
+28027	0	Tower Key	Ключ от башни	/twilightforest/items.png	39:16777215	twilightforest.item.ItemTFTowerKey
+28028	0	Borer Essence	Borer Essence	/twilightforest/items.png	57:16777215	twilightforest.item.ItemTF
+28029	0	Carminite	Carminite	/twilightforest/items.png	56:16777215	twilightforest.item.ItemTF

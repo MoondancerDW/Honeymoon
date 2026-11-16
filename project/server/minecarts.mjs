@@ -228,6 +228,7 @@ export function createMinecarts({base,store,clock,cellAt,solidAt,canMove}) {
       if (removed) { carts.delete(removed); drivers.delete(removed); history.delete(removed); }
     },
     snapshot: () => [...carts.values()].map(cart => cart.entity),
+    trackCells: () => [...carts.values()].flatMap(({track}) => track ? [[track.x,track.y,track.z]] : []),
     flush() { if (dirty) save(); },
   };
 }

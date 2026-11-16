@@ -4,6 +4,7 @@ import { RequestError } from './errors.mjs';
 import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
 import { createMinecarts } from './minecarts.mjs';
+import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
@@ -11,21 +12,23 @@ import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITIO
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
 import { orientedRail, railFor } from '../world/rails.mjs';
-import { blockKey, blockState, jammyAppliance, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
-import { CREATIVE_MINECART_KEY, shapedLampData } from '../world/creative-items.mjs';
+import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
+import { CREATIVE_FRAME_KEY, CREATIVE_MINECART_KEY, shapedLampData } from '../world/creative-items.mjs';
 import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush,
   VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
+const frameActions = new Set(['frame_item','frame_use','frame_remove']);
 const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', 'edit_sign',
-  'place_minecart', 'remove_minecart', ...partActions, ...voxelActions]);
+  'place_minecart', 'remove_minecart', 'place_frame', ...frameActions, ...partActions, ...voxelActions]);
 const axes = ['x', 'y', 'z'];
 const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 const bedDirections = [[0,1], [-1,0], [0,-1], [1,0]];
 const pairedBlocks = new Set([26, 64, 71]);
 const signBlocks = new Set([63, 68]);
+const mountingMeta = [0, 5, 4, 3, 2, 1];
 const MOVEMENT_GRACE = 0.24;
 const RUN_SPEED = FLIGHT_SPRINT_SPEED + 1;
 const MAX_ACTIVE_IDLE_MS = 30000;
@@ -53,25 +56,57 @@ function normalizeAction(body) {
   if (body.type === 'place_minecart') {
     if (body.creativeItem !== CREATIVE_MINECART_KEY) throw new RequestError(400, 'unknown_cell_type');
     input.creativeItem = body.creativeItem;
+  } else if (body.type === 'place_frame' || body.type === 'frame_item') {
+    if (body.type === 'place_frame' && body.creativeItem !== CREATIVE_FRAME_KEY ||
+        body.creativeItem !== undefined && !/^creative:\d{1,5}:\d{1,5}$/.test(body.creativeItem)) {
+      throw new RequestError(400,'unknown_cell_type');
+    }
+    if (body.creativeItem !== undefined) input.creativeItem = body.creativeItem;
+    if (body.type === 'frame_item' && body.cell !== undefined) {
+      if (typeof body.cell !== 'string' || !/^legacy:\d{1,4}:\d{1,2}$/.test(body.cell)) throw new RequestError(400,'invalid_cell');
+      input.cell = body.cell;
+    }
   } else if (body.creativeItem !== undefined) {
     if (!['place','place_part'].includes(body.type) || typeof body.creativeItem !== 'string' ||
         !/^creative:(?:750|753|768):\d{1,5}$/.test(body.creativeItem)) throw new RequestError(400, 'unknown_cell_type');
     input.creativeItem = body.creativeItem;
   }
   if (body.hit !== undefined) input.hit = point(body.hit);
-  if (body.type === 'remove_minecart') {
-    if (typeof body.entity !== 'string' || body.entity.length > 160) throw new RequestError(400,'not_a_minecart');
+  if (body.type === 'remove_minecart' || frameActions.has(body.type)) {
+    if (typeof body.entity !== 'string' || body.entity.length > 160) {
+      throw new RequestError(400,frameActions.has(body.type) ? 'not_a_frame' : 'not_a_minecart');
+    }
     input.entity = body.entity;
   }
-  if (body.type.endsWith('_minecart') && !input.hit) throw new RequestError(400,'invalid_coordinates');
+  if ((body.type.endsWith('_minecart') || body.type === 'place_frame' || frameActions.has(body.type)) && !input.hit) {
+    throw new RequestError(400,'invalid_coordinates');
+  }
   if (body.type === 'remove_microblocks' && !input.hit) throw new RequestError(400, 'invalid_coordinates');
-  if ((body.type === 'interact' || body.type === 'place' || body.type === 'place_minecart') && body.yaw !== undefined) {
+  if (['interact','place','place_minecart','place_frame'].includes(body.type) && body.yaw !== undefined) {
     if (!Number.isFinite(body.yaw)) throw new RequestError(400, 'invalid_heading');
     input.yaw = body.yaw % (2 * Math.PI);
+  }
+  if (body.type === 'place' && body.pitch !== undefined) {
+    if (!Number.isFinite(body.pitch) || Math.abs(body.pitch) > Math.PI / 2) throw new RequestError(400,'invalid_heading');
+    input.pitch = body.pitch;
   }
   if (body.type === 'interact' && body.sneaking !== undefined) {
     if (typeof body.sneaking !== 'boolean') throw new RequestError(400, 'invalid_modifier');
     if (body.sneaking) input.sneaking = true;
+  }
+  if (body.type === 'interact') {
+    if (body.heldItem !== undefined) {
+      if (typeof body.heldItem !== 'string' || !/^creative:\d{1,5}:\d{1,5}$/.test(body.heldItem)) {
+        throw new RequestError(400,'unknown_cell_type');
+      }
+      input.heldItem = body.heldItem;
+    }
+    if (body.heldCell !== undefined) {
+      if (typeof body.heldCell !== 'string' || !/^legacy:\d{1,4}:\d{1,2}$/.test(body.heldCell)) {
+        throw new RequestError(400,'invalid_cell');
+      }
+      input.heldCell = body.heldCell;
+    }
   }
   if (body.type === 'edit_sign') {
     if (!Array.isArray(body.lines) || body.lines.length !== 4 ||
@@ -142,7 +177,7 @@ function signObject(position, lines, original) {
 
 function newCreativeObject(key, position, input, item) {
   const [id, meta] = blockState(key);
-  let type = jammyAppliance(id, meta) ? 'JammyAppliance' : id === 2255 ? 'WeaponCaseTile' : null;
+  let type = jammyAppliance(id, meta) ? 'JammyAppliance' : id === 2255 ? 'WeaponCaseTile' : id === 23 ? 'Trap' : null;
   let data = {};
   const face = input.against && signalSides.findIndex(offset => axes.every((axis,i) => position[i] - input.against[axis] === offset[i]));
   const mount = face >= 0 ? face ^ 1 : 0;
@@ -168,7 +203,9 @@ export function createGame(base, store, geometry, {
   creativeItems = new Map(),
 } = {}) {
   const positions = new Map();
+  const spectators = new Set();
   const seats = new Map();
+  let occupiedDetectors = new Map();
   const mechanics = modules ?? registerMechanics(base, store, geometry);
   const [sx, sy, sz] = base.manifest.spawn;
   const spawn = Object.freeze({ x: sx, y: sy, z: sz });
@@ -182,6 +219,12 @@ export function createGame(base, store, geometry, {
     for (const variant of relatedBlockStates(key)) catalog.add(variant);
     if (pairedBlocks.has(id)) for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(id, meta));
   }
+  for (const id of [23,29,33,50,69,70,72,75,76,77,93,94,143]) {
+    if ([...catalog].some(key => blockState(key)[0] === id)) {
+      for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(id,meta));
+    }
+  }
+  for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(34,meta));
   if ([...catalog].some(key => signBlocks.has(blockState(key)[0]))) {
     for (let meta = 0; meta < 16; meta++) catalog.add(blockKey(63, meta));
     for (let meta = 2; meta <= 5; meta++) catalog.add(blockKey(68, meta));
@@ -191,6 +234,10 @@ export function createGame(base, store, geometry, {
     && y >= Math.floor(sy) && y <= Math.floor(sy + PLAYER.height);
   const originalAt = (x, y, z) => JSON.stringify(base.getCell(x, y, z));
   const conflicts = store.rebase({...base, catalog}, reserved, originalAt);
+  occupiedDetectors = new Map(store.edits().filter(cell => {
+    const [id,meta] = blockState(cell);
+    return id === 28 && Boolean(meta & 8);
+  }).map(({x,y,z}) => [cellAddress(x,y,z),[x,y,z]]));
 
   const snapshotCells = () => mechanics.flatMap(module => module.snapshot?.() ?? []);
   let mechanicCells = new Map();
@@ -228,6 +275,8 @@ export function createGame(base, store, geometry, {
     const current = getCurrent(x, y, z);
     return current.cell === null ? null : cellView(current);
   });
+  const frames = createItemFrames({base,store,physical,getCurrent,faceSupports,
+    protectedCell:(x,y,z) => reserved(x,y,z) || spawnProtected(x,y,z)});
   const carts = createMinecarts({
     base,store,clock,cellAt:getCurrent,
     solidAt:(x,y,z) => (geometry.collisionFor ?? geometry.shapeFor)(cellView(getCurrent(x,y,z)))
@@ -265,6 +314,7 @@ export function createGame(base, store, geometry, {
   }
 
   function poseFor(player, pose) {
+    if (spectators.has(player)) return {...pose, spectator:true};
     const seat = publicSeat(player);
     if (!seat) return pose?.motion === 'sit' ? {...pose, motion:'idle'} : pose;
     return { ...pose, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit' };
@@ -332,6 +382,7 @@ export function createGame(base, store, geometry, {
   }
 
   function sit(player, target, pose) {
+    if (spectators.has(player)) throw new RequestError(403, 'spectator_action');
     const previous = playerAt(player);
     const existing = publicSeat(player);
     if (existing || !target) {
@@ -358,7 +409,7 @@ export function createGame(base, store, geometry, {
     const now = clock();
     const active = player ? [position ?? playerAt(player)] : [];
     for (const [id, entry] of positions) {
-      if (id !== player && now - (entry.seen ?? entry.updated) < MAX_ACTIVE_IDLE_MS) active.push(entry.position);
+      if (id !== player && !spectators.has(id) && now - (entry.seen ?? entry.updated) < MAX_ACTIVE_IDLE_MS) active.push(entry.position);
     }
     return active;
   }
@@ -378,6 +429,13 @@ export function createGame(base, store, geometry, {
       activePositions: active,
       getCell: getCurrent,
       readState: (owner, key) => store.getState(module.id, owner, key),
+      ownerAt: ({x,y,z,moveOwner}) => moveOwner ?? store.getEditOwner(x,y,z),
+      pistonDestination: ({x,y,z}) => base.inBounds(x,y,z) && !reserved(x,y,z) &&
+        !spawnProtected(x,y,z) && !seatsAt(x,y,z) && !frames.hasMountAt(x,y,z),
+      pistonMovable: cell => !reserved(cell.x,cell.y,cell.z) && !spawnProtected(cell.x,cell.y,cell.z) &&
+        !seatsAt(cell.x,cell.y,cell.z) && !frames.hasMountAt(cell.x,cell.y,cell.z) &&
+        (allowRemoval || cell.moveOwner || store.getEditOwner(cell.x,cell.y,cell.z)) &&
+        geometry.collisionFor(cellView(cell)).some(box => box.solid !== false),
       playerOverlaps: (x, y, z, cell, plannedNeighbor) => active.some(position =>
         physical.overlaps(position, x, y, z, cell, plannedNeighbor)),
     };
@@ -385,12 +443,15 @@ export function createGame(base, store, geometry, {
 
   function writePlan(module, plan, placement) {
     const revision = plan.cells?.length ? store.nextRevision() : store.worldRevision();
-    const changes = (plan.cells ?? []).map(cell => ({ ...cell, revision }));
-    for (const change of changes) {
+    const changes = [];
+    for (const {moveOwner,...cell} of plan.cells ?? []) {
+      const change = {...cell,revision};
+      changes.push(change);
       const { x, y, z } = change;
       if (module.reserved?.(x, y, z)) continue;
-      const owner = change.cell !== null && (placement?.key === cellAddress(x, y, z) ||
-        placement?.keys?.has(cellAddress(x, y, z))) ? placement.player : null;
+      const placed = change.cell !== null && (placement?.key === cellAddress(x, y, z) ||
+        placement?.keys?.has(cellAddress(x, y, z)));
+      const owner = moveOwner ?? (placed ? placement.player : null);
       store.writeEdit(change, originalAt(x, y, z), owner);
     }
     for (const entry of plan.state ?? []) {
@@ -453,7 +514,7 @@ export function createGame(base, store, geometry, {
     const [id, meta] = blockState(input.cell);
     if (!pairedBlocks.has(id)) return {cell:input.cell};
     const isBed = id === 26;
-    const orientation = meta & 3;
+    const orientation = !isBed && input.yaw !== undefined ? (1 - Math.round(input.yaw * 2 / Math.PI)) & 3 : meta & 3;
     const [dx, dz] = bedDirections[orientation];
     const second = {x:x + (isBed ? dx : 0), y:y + (isBed ? 0 : 1), z:z + (isBed ? dz : 0)};
     if (!base.inBounds(second.x, second.y, second.z) || reserved(second.x, second.y, second.z) ||
@@ -461,13 +522,49 @@ export function createGame(base, store, geometry, {
       throw new RequestError(403, 'protected_cell');
     }
     if (getCurrent(second.x, second.y, second.z).cell !== null) throw new RequestError(409, 'occupied');
-    const cell = blockKey(id, isBed ? orientation : meta & 7);
+    const cell = blockKey(id, isBed ? orientation : orientation | (meta & 4));
     const other = blockKey(id, isBed ? orientation | 8 : 8 | (meta & 8 ? meta & 1 : 0));
     const atOther = (ax, ay, az) => x + ax === second.x && y + ay === second.y && z + az === second.z ? other : undefined;
     const atOrigin = (ax, ay, az) => second.x + ax === x && second.y + ay === y && second.z + az === z ? cell : undefined;
     if (playerOverlaps(x, y, z, cell, player, atOther) ||
         playerOverlaps(second.x, second.y, second.z, other, player, atOrigin)) throw new RequestError(409, 'occupied');
     return {cell, companion:{...second, cell:other, object:null}, paired:true};
+  }
+
+  function controlPlacement(input) {
+    const [id, meta] = blockState(input.cell);
+    if (!input.against || !input.creative && input.yaw === undefined) return null;
+    if ((id === 23 || id === 29 || id === 33) && input.yaw !== undefined) {
+      const direction = [3,4,2,5][-Math.round(input.yaw * 2 / Math.PI) & 3];
+      const pitch = input.pitch ?? 0;
+      return blockKey(id,id === 23 || Math.abs(pitch) < Math.PI / 3 ? direction : Number(pitch < 0));
+    }
+    const button = Boolean(buttonDuration(id));
+    const torch = id === 50 || id === 75 || id === 76;
+    const repeater = id === 93 || id === 94;
+    const floor = repeater || pressurePlate(id) || id === 55;
+    if (!floor && !button && !torch && id !== 69) return null;
+    const face = signalSides.findIndex(offset => axes.every((axis,index) => input[axis] - input.against[axis] === offset[index]));
+    if (face < 0 || floor && face !== 1 || (torch || button) && face === 0 || button && face === 1) {
+      throw new RequestError(409,'invalid_control_face');
+    }
+    const {x,y,z} = input.against;
+    if (!faceSupports(x,y,z,face,.35)) throw new RequestError(409,'invalid_control_face');
+    const heading = input.yaw === undefined ? meta & 3 : -Math.round(input.yaw * 2 / Math.PI) & 3;
+    if (repeater) return blockKey(93,heading | (meta & 12));
+    if (floor) return blockKey(id,0);
+    if (id === 69 && face <= 1) return blockKey(id,face ? 5 + (heading & 1) : (heading & 1) * 7);
+    return blockKey(id === 75 ? 76 : id,mountingMeta[face]);
+  }
+
+  function faceSupports(x,y,z,face,inset) {
+    const neighbors = (dx,dy,dz) => cellView(getCurrent(x + dx,y + dy,z + dz));
+    const axis = [1,1,2,2,0,0][face];
+    const lower = face % 2 === 0;
+    const minimum = ['x0','y0','z0'], maximum = ['x1','y1','z1'];
+    return geometry.collisionFor(neighbors(0,0,0),neighbors).some(box =>
+      (lower ? box[minimum[axis]] <= 0 : box[maximum[axis]] >= 1) &&
+      minimum.every((key,index) => index === axis || box[key] <= inset && box[maximum[index]] >= 1 - inset));
   }
 
   function placeSign(player, current, input) {
@@ -741,6 +838,14 @@ export function createGame(base, store, geometry, {
   function execute(player, input, transport) {
     const { x, y, z, type } = input;
     if (!base.inBounds(x, y, z)) throw new RequestError(403, 'outside_playable_area');
+    if (frameActions.has(type)) {
+      let stack;
+      if (type === 'frame_item') {
+        stack = heldStack(input.cell,input.creativeItem);
+        if (!stack) throw new RequestError(400,'unknown_cell_type');
+      }
+      return frames.edit(input,playerSight(player),stack);
+    }
     if (type === 'remove_minecart') {
       const entity = visibleMinecart(player,input,input.hit,input.entity,'not_a_minecart');
       if ([...seats.values()].some(seat => seat.entity === entity.key)) throw new RequestError(409,'seat_taken');
@@ -750,6 +855,10 @@ export function createGame(base, store, geometry, {
     const current = getCurrent(x, y, z);
     if (input.expectedRevision !== current.revision) {
       throw new RequestError(409, 'stale_cell', {current:publicChange(current), worldRevision:store.worldRevision()});
+    }
+    if (type === 'place_frame') {
+      if (creativeItems.get(input.creativeItem)?.kind !== 'item-frame') throw new RequestError(400,'unknown_cell_type');
+      return frames.place(input,playerSight(player));
     }
     if (type === 'place_minecart') {
       if (creativeItems.get(input.creativeItem)?.kind !== 'minecart') throw new RequestError(400,'unknown_cell_type');
@@ -781,6 +890,12 @@ export function createGame(base, store, geometry, {
       if (signBlocks.has(blockState(input.cell)[0])) return placeSign(player, current, input);
       const rail = railFor(input.cell);
       if (rail) return placeRail(player, current, input, rail);
+      const control = controlPlacement(input);
+      if (control) {
+        const object = newCreativeObject(control,[x,y,z],input,item);
+        if (playerOverlaps(x,y,z,{key:control,object},player)) throw new RequestError(409,'occupied');
+        return writeCell(player,current,control,object);
+      }
       const actual = input.creative ? creativePlacement(input, current, player) : input;
       const copied = input.creative ? null : store.getClipboard(player);
       const copiedObject = input.creative || item ? newCreativeObject(actual.cell, [x, y, z], input, item) :
@@ -794,6 +909,7 @@ export function createGame(base, store, geometry, {
     }
 
     if (type === 'remove' && reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
+    if (type === 'remove' && blockState(current)[0] === 34) throw new RequestError(403,'protected_cell');
     if (type === 'remove' && seatsAt(x, y, z)) throw new RequestError(409, 'seat_taken');
     if (current.cell === null) throw new RequestError(409, 'empty_cell');
     if ((type === 'remove' || type === 'copy') && current.cell === voxelKey) throw new RequestError(409, 'voxel_required');
@@ -815,7 +931,8 @@ export function createGame(base, store, geometry, {
     }
     if (type === 'interact') {
       for (const module of mechanics) {
-        const plan = module.prepareInteraction?.(moduleContext(module, player, { x, y, z, current, input }));
+        const plan = module.prepareInteraction?.(moduleContext(module,player,{x,y,z,current,input,
+          stack:heldStack(input.heldCell,input.heldItem)}));
         if (plan) return writePlan(module, plan);
       }
       throw new RequestError(409, 'no_interaction');
@@ -827,10 +944,20 @@ export function createGame(base, store, geometry, {
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
     }
     const adjusted = railFor(current) ? updateRailNeighbors(current, null) : [];
-    return writeCell(player, current, null, null, placedCompanion(current), adjusted);
+    const result = writeCell(player,current,null,null,placedCompanion(current),adjusted);
+    const remaining = frames.removeSupported(x,y,z);
+    return remaining === undefined ? result : {...result,frames:remaining};
+  }
+
+  function heldStack(cell,itemKey) {
+    const item = creativeItems.get(itemKey);
+    if (item) return {id:item.id,Damage:item.damage ?? item.meta ?? 0,...(item.blockKey && {Block:true})};
+    const [id,meta] = blockState(cell);
+    if (id && !itemKey && catalog.has(cell)) return {id,Damage:meta,Block:true};
   }
 
   function action(player, body) {
+    if (spectators.has(player)) throw new RequestError(403, 'spectator_action');
     const input = normalizeAction(body);
     const encoded = JSON.stringify(input);
     const { requestId } = body;
@@ -883,11 +1010,40 @@ export function createGame(base, store, geometry, {
         }
       }
     }
-    if (physical.collides(target)) throw new RequestError(409, 'teleport_blocked');
-    const entry = enterPosition(player, target, playerAt(player));
+    const observing = spectators.has(player);
+    if (!observing && physical.collides(target)) throw new RequestError(409, 'teleport_blocked');
+    const entry = observing ? passivePosition(target) : enterPosition(player, target, playerAt(player));
     releaseSeat(player);
     movePlayer(player, target);
     return {...entry, seat:null};
+  }
+
+  function passivePosition(position) {
+    return {position, effects:[], changes:[], worldRevision:store.worldRevision()};
+  }
+
+  function setSpectator(player, body) {
+    if (typeof body?.enabled !== 'boolean') throw new RequestError(400, 'invalid_spectator');
+    const previous = playerAt(player);
+    if (spectators.has(player) === body.enabled) {
+      return {...passivePosition(previous), seat:publicSeat(player), spectator:body.enabled, relocated:false};
+    }
+    let position = previous;
+    let relocated = false;
+    if (body.enabled) {
+      releaseSeat(player);
+      spectators.add(player);
+    } else {
+      if (physical.collides(previous)) {
+        const highest = base.manifest.bounds.maxY + 1 - PLAYER.height;
+        const center = {...previous, x:Math.floor(previous.x) + .5, z:Math.floor(previous.z) + .5};
+        position = physical.standAbove(previous, highest) ?? physical.standAbove(center, highest) ?? spawn;
+        relocated = !samePoint(position, previous);
+      }
+      spectators.delete(player);
+    }
+    movePlayer(player, position);
+    return {...passivePosition(position), seat:null, spectator:body.enabled, relocated};
   }
 
   function enterPosition(player, position, previous) {
@@ -949,9 +1105,10 @@ export function createGame(base, store, geometry, {
       if (distance > budget + MOVEMENT_GRACE || drop > 6) reject();
       from = step;
     }
-    if (!(hasTrail ? physical.movementTrailAllowed(previous, steps) : physical.movementAllowed(previous, target))) reject();
+    const observing = spectators.has(player);
+    if (!observing && !(hasTrail ? physical.movementTrailAllowed(previous, steps) : physical.movementAllowed(previous, target))) reject();
 
-    const entry = enterPosition(player, target, previous);
+    const entry = observing ? passivePosition(target) : enterPosition(player, target, previous);
     positions.set(player, { position: target, updated: now, budget: budget - distance, requestId });
     return entry;
   }
@@ -961,8 +1118,23 @@ export function createGame(base, store, geometry, {
       const plan = module.prepareTick?.(moduleContext(module, null, {}));
       return plan ? [[module, plan]] : [];
     });
-    if (!plans.length) return null;
-    const results = store.atomic(() => plans.map(([module, plan]) => writePlan(module, plan)));
+    const active = new Map(carts.trackCells().filter(point => blockState(getCurrent(...point))[0] === 28)
+      .map(point => [cellAddress(...point),point]));
+    const detectors = [...active].filter(([key]) => !occupiedDetectors.has(key))
+      .map(([,point]) => ({point,occupied:true}));
+    detectors.push(...[...occupiedDetectors].filter(([key]) => !active.has(key)).map(([,point]) => ({point,occupied:false})));
+    if (!plans.length && !detectors.length) return null;
+    const results = store.atomic(() => {
+      const written = plans.map(([module,plan]) => writePlan(module,plan));
+      if (detectors.length) {
+        for (const module of mechanics) {
+          const plan = module.prepareCartChange?.(moduleContext(module,null,{detectors}));
+          if (plan) written.push(writePlan(module,plan));
+        }
+      }
+      return written;
+    });
+    occupiedDetectors = active;
     const changes = results.flatMap(result => result.changes);
     if (changes.length) refreshMechanicCells();
     return {changes, effects: results.flatMap(result => result.effects), worldRevision: store.worldRevision()};
@@ -993,6 +1165,7 @@ export function createGame(base, store, geometry, {
     action,
     position,
     teleport,
+    setSpectator,
     advance,
     advanceMinecarts,
     driveMinecart(player,pose,direction) {
@@ -1025,7 +1198,7 @@ export function createGame(base, store, geometry, {
       return {
         playerId, spawn: base.manifest.spawn, position: playerAt(playerId), worldRevision: store.worldRevision(),
         catalogVersion: base.manifest.catalogVersion ?? 1, importVersion: base.manifest.importVersion, contentHash: base.hash,
-        mechanics: descriptions(playerId), seat:publicSeat(playerId),
+        mechanics: descriptions(playerId), seat:publicSeat(playerId), spectator:spectators.has(playerId),
       };
     },
     snapshot(player) {
@@ -1033,6 +1206,7 @@ export function createGame(base, store, geometry, {
         bounds: base.manifest.bounds, spawn: base.manifest.spawn, worldRevision: store.worldRevision(), contentHash: base.hash,
         overrides: [...store.edits().map(edit => publicChange(edit, editObject(edit))),
           ...snapshotCells()],
+        frames:frames.snapshot(),
         mechanics: descriptions(player),
       };
     },

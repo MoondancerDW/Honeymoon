@@ -7,6 +7,7 @@ import {promisify} from 'node:util';
 import {chromium} from 'playwright-core';
 import {loadBase} from '../server/base.mjs';
 import {createHoneymoonServer} from '../server/index.mjs';
+import {loadLodAssets} from '../server/lod-assets.mjs';
 import * as geometry from '../world/geometry.mjs';
 
 const [generatedArg = 'generated', outputArg = 'work/city-performance/benchmark', ...selected] = process.argv.slice(2);
@@ -22,6 +23,7 @@ const report = {hash:base.hash, browser:null, gpu:null, cases:[]};
 const errors = [];
 const corrections = [];
 const lodBenchmark = process.env.HONEYMOON_BENCH_LOD === '1';
+const horizon = loadLodAssets(generated,base.hash)?.descriptor.maxDistance;
 const occlusion = process.env.HONEYMOON_BENCH_OCCLUSION === '1';
 const perspective = process.env.HONEYMOON_BENCH_PERSPECTIVE ?? 'first';
 assert.ok(['first','back'].includes(perspective), 'Set benchmark perspective to first or back');
@@ -113,7 +115,7 @@ async function measure(browser, cdp, sample, width, height, distance) {
       const {streaming, residentChunks, farTerrain, occlusion:visibility} = honeymoon.stats();
       if (occlusion && (!visibility?.enabled || !visibility.classifiedSections)) return false;
       if (!settled) return streaming && residentChunks >= 40;
-      return streaming?.ready && (distance !== 24 || farTerrain?.active && farTerrain.ready && farTerrain.packs > 0);
+      return streaming?.ready && (distance < 24 || farTerrain?.radius === distance && farTerrain.ready && farTerrain.packs > 0);
     }, {settled,distance,occlusion}, {timeout:150_000,polling:250});
     const initial = await page.evaluate(() => honeymoon.stats());
     const before = await memory(cdp, tab);
@@ -201,6 +203,7 @@ try {
   const cases = lodBenchmark ? [
     [1280,720,4,[samples[0],samples[1],samples[5],samples[4]]],
     [1280,720,24,[samples[0],samples[1],samples[5],samples[4]]],
+    ...(horizon >= 32 ? [[1280,720,32,[samples[0],samples[1],samples[5],samples[4]]]] : []),
   ] : [
     [1280,720,4,[samples[0],samples[1]]],
     [1280,720,8,samples],

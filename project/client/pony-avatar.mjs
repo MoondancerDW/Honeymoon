@@ -1,6 +1,7 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {ponyModels} from '../world/pony-model-data.mjs';
 import {defaultPonyPixels, ponySkinHeight, readPonySkin} from '../world/pony-skins.mjs';
+import {createPonyHeldItem, magicMaterial} from './pony-held-item.mjs';
 
 const LEG_NAMES = ['frontRight', 'frontLeft', 'hindRight', 'hindLeft'];
 const TAU = Math.PI * 2;
@@ -188,9 +189,9 @@ function buildRig(visual, materials, skin) {
 
   const headNames = ['head', 'helmet', 'mane', skin.male ? 'muzzleMale' : 'muzzleFemale',
     'headpiece.0', 'headpiece.1'];
-  if (hasHorn) headNames.push('headpiece.2');
   const hornScale = skin.size === 'large' ? 1.05 : skin.size === 'tall' ? 1.2 : 1;
-  const head = attach(headGroup, groupParts(parts, headNames), pivot, undefined, hornScale);
+  const head = attach(headGroup, groupParts(parts, headNames));
+  const horn = hasHorn ? attach(head, ['headpiece.2'], pivot, undefined, hornScale) : null;
   const maneNames = skin.mane === 1 ? ['mohawk'] : skin.mane === 2 ? ['maneLeft'] :
     skin.mane === 3 ? ['maneRight'] : skin.mane === 4 ? ['maneLeft', 'maneRight'] : [];
   const maneParts = groupParts(parts, maneNames);
@@ -217,7 +218,7 @@ function buildRig(visual, materials, skin) {
   // Ground the rendered hooves for each native body scale.
   visual.position.y = legGroup.position.y + legGroup.scale.y * 1.5;
   let headTop = 0;
-  for (const part of [head, mane]) {
+  for (const part of [head, mane, horn]) {
     if (!part) continue;
     const vertices = part.geometry.attributes.position;
     for (let i = 0; i < vertices.count; i++) {
@@ -229,12 +230,12 @@ function buildRig(visual, materials, skin) {
   const labelHeight = visual.position.y - headGroup.position.y + headGroup.scale.y * headTop + 0.19;
   const fore = legs.slice(0, 2).map(leg => leg.position.clone());
   const hind = legs.slice(2).map(leg => leg.position.clone());
-  return {head, mane, neck, body, hips, legs, tail, foldedWings, openWings, meshes, labelHeight, fore, hind,
+  return {head, mane, horn, neck, body, hips, legs, tail, foldedWings, openWings, meshes, labelHeight, fore, hind,
     tailPivot:tail?.position.clone(), wingPivots:foldedWings.map(wing => wing.position.clone()),
     headScale:headGroup.scale.y, sitHeight:skin.size === 'small' ? .5 : .2};
 }
 
-export function createPonyAvatar() {
+export function createPonyAvatar(isAir) {
   const object = new THREE.Group(), visual = new THREE.Group();
   visual.scale.set(-1, -1, 1);
   object.add(visual);
@@ -248,6 +249,9 @@ export function createPonyAvatar() {
   let skinUrl = null, skinReady = true, pending, revision = 0, disposed = false;
   let lightColor = 0xffffff;
   let time = 0, limbSwing = 0, swing = 0, flight = 0, boost = 0, sitting = 0, motion = 'idle';
+  let leapTop, previousFallDistance = 0, gliding = false;
+  let previousSwing, strikeTime = Infinity, activeProp, heldItem, hornGlow, firstPerson;
+  let heldAssets, strike = 0, strikeTurn = 0;
 
   function applySkin(next, nextTexture) {
     const changed = Object.keys(next).some(key => next[key] !== skin[key]);
@@ -258,6 +262,9 @@ export function createPonyAvatar() {
     if (changed) {
       visual.clear();
       rig = buildRig(visual, materials, skin);
+      hornGlow?.material.dispose();
+      hornGlow = null;
+      firstPerson?.hooves.forEach((hoof, index) => { hoof.geometry = rig.legs[index].geometry; });
     }
   }
 
@@ -294,8 +301,35 @@ export function createPonyAvatar() {
     return pending;
   }
 
+  function jumpFlight(position) {
+    if (!position || motion !== 'jump') {
+      leapTop = undefined;
+      previousFallDistance = 0;
+      gliding = false;
+      return false;
+    }
+    leapTop = Math.max(position.y, leapTop ?? position.y);
+    const fallDistance = leapTop - position.y;
+    if (!isAir) return fallDistance >= 2;
+    // Mine Little Pony keeps its wings folded where the hoof-level cells are occupied.
+    const unchanged = fallDistance === previousFallDistance;
+    const span = fallDistance > 0 && !unchanged ? 1.5 : 1;
+    const y = Math.floor(position.y - .01);
+    for (let dz = -span; dz <= span; dz += span) {
+      for (let dx = -span; dx <= span; dx += span) {
+        if (!isAir(Math.floor(position.x + dx), y, Math.floor(position.z + dz))) {
+          gliding = false;
+          return false;
+        }
+      }
+    }
+    if (gliding) return true;
+    previousFallDistance = fallDistance;
+    return gliding = unchanged || fallDistance >= 2;
+  }
+
   function animate({time: now = time, dt = 1 / 60, speed = 0, yawOffset = 0, pitch = 0, strideDirection = 1,
-    motion: nextMotion = 'idle'} = {}) {
+    motion: nextMotion = 'idle', position, swing: swingId = 0, held = null, itemAssets} = {}) {
     time = now;
     motion = nextMotion === 'air' ? 'jump' : nextMotion;
     const elapsed = THREE.MathUtils.clamp(dt, 0, 0.1);
@@ -304,8 +338,9 @@ export function createPonyAvatar() {
     const targetSwing = motion === 'idle' || motion === 'sit' ? 0 : Math.min(1, speed * .2);
     swing += (targetSwing - swing) * (1 - .6 ** (elapsed * 20));
     limbSwing += strideDirection * swing * elapsed * 20;
-    const extended = motion === 'fly' && rig.openWings.length > 0;
-    const boosted = extended && swing >= .9999;
+    const airborne = rig.openWings.length > 0 && jumpFlight(position);
+    const extended = rig.openWings.length > 0 && (motion === 'fly' || airborne);
+    const boosted = extended && motion === 'fly' && swing >= .9999;
     flight += (Number(extended) - flight) * fade;
     boost += (Number(boosted) - boost) * fade;
     sitting += (Number(motion === 'sit') - sitting) * fade;
@@ -315,6 +350,14 @@ export function createPonyAvatar() {
       const sway = Math.sin(time * .66) * (skin.mane === 1 ? .02 : .012) * (1 - boost);
       rig.mane.rotation.set(sway, sway, 0);
     }
+    if (previousSwing !== undefined && previousSwing !== swingId) strikeTime = 0;
+    previousSwing = swingId;
+    const progress = Math.min(1, strikeTime / .3);
+    strikeTime += elapsed;
+    const hit = progress < 1 ? Math.sin(progress * Math.PI) : 0;
+    strikeTurn = hit * -.4;
+    strike = progress < 1 ? Math.sin((1 - (1 - progress) ** 3) * Math.PI) * 1.2 +
+      hit * (.7 - rig.head.rotation.x) * .75 : 0;
 
     const gait = Math.PI * swing ** 16;
     const phase = limbSwing * .6662;
@@ -326,6 +369,16 @@ export function createPonyAvatar() {
       const glide = direction * (flyPitch * (flight - boost) + Math.PI / 2 * boost);
       rig.legs[i].rotation.set(step + glide, flightLegYaw[i] * flight, 0);
     }
+    const hoof = rig.legs[0].rotation;
+    const holdingWithMagic = rig.horn && held;
+    if (held && !holdingWithMagic) {
+      hoof.x = THREE.MathUtils.lerp(hoof.x * .5 - Math.PI / 10, hoof.x, boost);
+      hoof.x += Math.sin(time * 1.34) * .05;
+      hoof.z = Math.cos(time * 1.8) * .05 + .05;
+    }
+    const hoofStrike = holdingWithMagic ? .3 : 1;
+    hoof.x -= strike * hoofStrike;
+    hoof.z += strikeTurn * hoofStrike;
     const hipSwing = swing ** 16 > .5 ? .05 : .03;
     const hipFlight = Math.sin(swing * .05) * (flight - boost) + .2 * boost;
     for (let i = 0; i < rig.hips.length; i++) {
@@ -383,12 +436,96 @@ export function createPonyAvatar() {
       rig.openWings[i].visible = extended;
       rig.openWings[i].rotation.z = (i === 0 ? -1 : 1) * (5.112 + flap);
     }
+    activeProp = held;
+    heldAssets = itemAssets;
+    updateHeldItem();
+  }
+
+  function updateHeldItem() {
+    if (!heldItem && activeProp && heldAssets) heldItem = createPonyHeldItem();
+    const magic = rig.horn ? skin.glowColor : null;
+    heldItem?.show(activeProp, heldAssets, magic);
+    if (heldItem?.object.visible) {
+      const {object:prop} = heldItem;
+      heldItem.setLight(lightColor);
+      if (magic === null) {
+        if (prop.parent !== rig.legs[0]) rig.legs[0].add(prop);
+        prop.position.set(.04,.79,-.11);
+        prop.rotation.set(-.35,.2,Math.PI);
+      } else {
+        if (prop.parent !== visual) visual.add(prop);
+        prop.position.set(-.48 - .09 * strike, .43 + .04 * Math.sin(time * 3) - .11 * strike, -.76 - .19 * strike);
+        prop.rotation.set(.05,.3 + .14 * Math.sin(time * 1.4),Math.PI);
+      }
+      prop.scale.setScalar(activeProp.kind === 'item' ? .38 : .28);
+    }
+    if (rig.horn && activeProp && !hornGlow) {
+      const geometry = rig.horn.geometry;
+      geometry.computeBoundingBox();
+      const center = geometry.boundingBox.getCenter(new THREE.Vector3());
+      hornGlow = new THREE.Mesh(geometry, magicMaterial(.3));
+      hornGlow.scale.setScalar(1.30);
+      hornGlow.position.copy(center).multiplyScalar(-.30);
+      hornGlow.renderOrder = 1;
+      rig.horn.add(hornGlow);
+    }
+    if (hornGlow) {
+      hornGlow.visible = Boolean(activeProp);
+      hornGlow.material.color.setHex(skin.glowColor);
+      hornGlow.material.opacity = .3 + strike * .11;
+    }
+  }
+
+  function updateFirstPerson(scene, camera, visible) {
+    if (!visible) {
+      if (firstPerson) firstPerson.object.visible = false;
+      return;
+    }
+    if (!firstPerson) {
+      const object = new THREE.Group();
+      const hooves = rig.legs.slice(0, 2).map(leg => {
+        const hoof = new THREE.Mesh(leg.geometry, materials[0]);
+        object.add(hoof);
+        return hoof;
+      });
+      firstPerson = {object, hooves, item:null};
+      scene.add(object);
+    }
+    const {object:model, hooves} = firstPerson;
+    model.visible = true;
+    const spread = Math.min(1.62, camera.aspect) * .31;
+    const pace = motion === 'fly' ? .035 * Math.sin(time * 5) : 0;
+    for (let i = 0; i < hooves.length; i++) {
+      const hoof = hooves[i], angle = rig.legs[i].rotation.x;
+      hoof.position.set((i === 0 ? 1 : -1) * spread, -.62 + Math.abs(angle) * .033 + pace, -.54 - angle * .13);
+      hoof.rotation.set(-1.10 + angle * .25, i === 0 ? .24 : -.24, i === 0 ? -.14 + strikeTurn * .23 : .14);
+      hoof.scale.setScalar(.64);
+    }
+    if (!firstPerson.item && activeProp && heldAssets) firstPerson.item = createPonyHeldItem();
+    const item = firstPerson.item;
+    if (!item) return;
+    item.show(activeProp, heldAssets, rig.horn ? skin.glowColor : null);
+    item.setLight(lightColor);
+    if (!item.object.visible) return;
+    if (rig.horn) {
+      if (item.object.parent !== model) model.add(item.object);
+      item.object.position.set(spread * .93,-.27 + .022 * Math.sin(time * 3) + .035 * strike,-1.10 - .11 * strike);
+      item.object.rotation.set(.15,-.46 + .14 * Math.sin(time * 1.4),.07);
+      item.object.scale.setScalar(activeProp.kind === 'item' ? .36 : .30);
+    } else {
+      if (item.object.parent !== hooves[0]) hooves[0].add(item.object);
+      item.object.position.set(.035,.82,.08);
+      item.object.rotation.set(1.15,-.45,.10);
+      item.object.scale.setScalar(activeProp.kind === 'item' ? .48 : .39);
+    }
   }
 
   function inspect() {
     return {skinReady, ponyType: skin.ponyType, advanced: skin.advanced, size: skin.size, phase:limbSwing * .6662 % TAU,
       meshCount: rig.meshes, motion, legAngles: rig.legs.map(leg => leg.rotation.x),
       headYaw:-rig.head.rotation.y, headPitch:-rig.head.rotation.x, flightBoost:boost,
+      held:activeProp, strike, magicGlow:hornGlow?.visible ? skin.glowColor : null,
+      firstPersonHooves:firstPerson?.object.visible ? firstPerson.hooves.map(hoof => hoof.rotation.x) : null,
       wingsExtended: rig.openWings.some(wing => wing.visible),
       wingAngles: rig.openWings.map(wing => wing.rotation.z)};
   }
@@ -405,10 +542,14 @@ export function createPonyAvatar() {
     revision++;
     if (texture !== defaultTexture) texture.dispose();
     for (const material of materials) material.dispose();
+    hornGlow?.material.dispose();
+    heldItem?.dispose();
+    firstPerson?.item?.dispose();
+    firstPerson?.object.removeFromParent();
     visual.clear();
     object.removeFromParent();
   }
   return {object, get labelHeight() {
     return rig.labelHeight - rig.head.position.y * rig.headScale;
-  }, setSkin, setLight, animate, inspect, dispose};
+  }, setSkin, setLight, animate, updateFirstPerson, inspect, dispose};
 }

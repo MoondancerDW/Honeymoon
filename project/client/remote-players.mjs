@@ -3,41 +3,57 @@ import {FLIGHT_SPRINT_SPEED, PLAYER} from '../world/player-body.mjs';
 import {createPonyAvatar, createPonyFacing} from './pony-avatar.mjs';
 
 const maxVisibleDistance = 96;
+const maxNameplateDistance = 64;
 const corner = Math.PI * 2;
 const angleBetween = (from, to) => ((to - from + Math.PI) % corner + corner) % corner - Math.PI;
 
-function nameTexture(nickname) {
+function nameTexture(nickname, typing) {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
-  context.font = '600 29px "Segoe UI", sans-serif';
-  const width = Math.ceil(context.measureText(nickname).width + 22);
+  const font = 'bold 18px monospace';
+  context.font = font;
+  const width = Math.max(30, Math.ceil(context.measureText(nickname).width) + 8);
+  const height = typing ? 46 : 24;
   canvas.width = width;
-  canvas.height = 46;
-  context.fillStyle = 'rgba(17, 27, 32, 0.87)';
-  context.beginPath();
-  context.roundRect(0, 1, width, 44, 7);
-  context.fill();
-  context.font = '600 29px "Segoe UI", sans-serif';
-  context.textBaseline = 'middle';
+  canvas.height = height;
+  context.fillStyle = 'rgba(0, 0, 0, .28)';
+  context.fillRect(0, height - 24, width, 24);
+  if (typing) {
+    const left = Math.round(width / 2) - 12;
+    context.fillRect(left - 2, 0, 28, 18);
+    context.fillStyle = '#fff';
+    for (let i = 0; i < 3; i++) context.fillRect(left + 4 + i * 8, 8, 4, 4);
+  }
+  context.font = font;
+  context.textBaseline = 'alphabetic';
   context.textAlign = 'center';
-  context.fillStyle = '#fff8e7';
-  context.fillText(nickname, width / 2, 23);
+  context.fillStyle = '#292929';
+  context.fillText(nickname, width / 2 + 2, height - 4);
+  context.fillStyle = '#fff';
+  context.fillText(nickname, width / 2, height - 6);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.generateMipmaps = false;
-  texture.minFilter = THREE.LinearFilter;
+  texture.minFilter = texture.magFilter = THREE.NearestFilter;
   return texture;
 }
 
-function setProfile(player, {nickname, skin}) {
-  if (player.nickname !== nickname) {
-    const texture = nameTexture(nickname);
-    player.label.material.map?.dispose();
-    player.label.material.map = texture;
-    player.label.material.needsUpdate = true;
-    player.label.scale.set(texture.image.width / 145, texture.image.height / 145, 1);
-    player.nickname = nickname;
+function setNameplate(player) {
+  if (player.labelName === player.nickname && player.labelTyping === player.typing) return;
+  const texture = nameTexture(player.nickname, player.typing);
+  player.label.material.map?.dispose();
+  for (const sprite of [player.label, player.labelBack]) {
+    sprite.material.map = texture;
+    sprite.material.needsUpdate = true;
+    sprite.scale.set(texture.image.width / 80, texture.image.height / 80, 1);
+    sprite.center.set(.5,0);
   }
+  player.labelName = player.nickname;
+  player.labelTyping = player.typing;
+}
+
+function setProfile(player, {nickname, skin}) {
+  player.nickname = nickname;
   if (player.skin !== skin) {
     player.skin = skin;
     player.avatar.setSkin(skin);
@@ -51,12 +67,19 @@ function setPose(player, pose) {
   player.lookYaw = pose.lookYaw ?? pose.yaw;
   player.pitch = pose.pitch;
   player.motion = pose.motion;
+  player.spectator = pose.spectator === true;
+  player.typing = pose.typing === true;
+  player.swing = pose.swing ?? 0;
+  player.held = pose.held;
+  setNameplate(player);
 }
 
 export class RemotePlayers {
-  constructor(scene, camera) {
+  constructor(scene, camera, itemAssets, isAir) {
     this.scene = scene;
     this.camera = camera;
+    this.itemAssets = itemAssets;
+    this.isAir = isAir;
     this.entries = new Map();
     this.projected = new THREE.Vector3();
   }
@@ -68,21 +91,27 @@ export class RemotePlayers {
       player.avatar.dispose();
       player.label.material.map?.dispose();
       player.label.material.dispose();
+      player.labelBack.material.dispose();
       this.scene.remove(player.object);
       this.entries.delete(id);
     }
     for (const profile of profiles) {
       if (!this.entries.has(profile.id)) {
-        const avatar = createPonyAvatar();
+        const avatar = createPonyAvatar(this.isAir);
         const object = new THREE.Group();
         const label = new THREE.Sprite(new THREE.SpriteMaterial({transparent:true, depthWrite:false, toneMapped:false}));
-        object.add(avatar.object, label);
+        const labelBack = new THREE.Sprite(new THREE.SpriteMaterial({
+          transparent:true, opacity:.28, depthTest:false, depthWrite:false, toneMapped:false,
+        }));
+        labelBack.renderOrder = 1;
+        label.renderOrder = 2;
+        object.add(avatar.object, labelBack, label);
         const {x, y, z} = profile.position;
         object.position.set(x, y, z);
         object.rotation.y = profile.yaw;
         object.visible = false;
         this.scene.add(object);
-        this.entries.set(profile.id, {avatar, object, label, target:object.position.clone(), facing:createPonyFacing(),
+        this.entries.set(profile.id, {avatar, object, label, labelBack, target:object.position.clone(), facing:createPonyFacing(),
           drawnPitch:profile.pitch, drawnLookYaw:profile.lookYaw ?? profile.yaw});
       }
       const player = this.entries.get(profile.id);
@@ -106,20 +135,22 @@ export class RemotePlayers {
       const overlapsCamera = Math.abs(eye.y - target.y - PLAYER.eye) < .75 &&
         Math.hypot(target.x - eye.x, target.z - eye.z) < .4;
       const distance = eye.distanceToSquared(target);
-      object.visible = distance < maxVisibleDistance ** 2 && !overlapsCamera;
+      object.visible = !player.spectator && distance < maxVisibleDistance ** 2 && !overlapsCamera;
       const {x, z} = object.position;
       object.position.lerp(target, mix);
       player.drawnLookYaw += angleBetween(player.drawnLookYaw, player.lookYaw) * mix;
       const facing = player.facing(object.position, player.drawnLookYaw, dt, player.motion === 'sit' ? player.yaw : undefined);
       object.rotation.y = facing.bodyYaw;
       if (!object.visible) continue;
-      player.label.position.y = player.avatar.labelHeight + .55 * Math.max(0, target.y - eye.y) /
-        Math.max(1, Math.sqrt(distance));
       player.drawnPitch += (player.pitch - player.drawnPitch) * mix;
       const speed = dt > 0 ? Math.min(FLIGHT_SPRINT_SPEED, Math.hypot(object.position.x - x, object.position.z - z) / dt) : 0;
       player.avatar.animate({time: now / 1000, dt, speed, pitch: player.drawnPitch,
         yawOffset:facing.yawOffset, strideDirection:facing.strideDirection,
-        motion: player.motion === 'air' ? 'jump' : player.motion});
+        motion:player.motion, position:object.position, swing:player.swing, held:player.held, itemAssets:this.itemAssets?.()});
+      for (const sprite of [player.label, player.labelBack]) {
+        sprite.visible = distance < maxNameplateDistance ** 2;
+        sprite.position.y = player.avatar.labelHeight - .12;
+      }
       object.updateMatrixWorld(true);
     }
   }
@@ -135,6 +166,7 @@ export class RemotePlayers {
       player.avatar.object.traverse(mesh => { if (mesh.isMesh && mesh.visible) meshCount++; });
       return {...player.avatar.inspect(), id, nickname:player.nickname, skin:player.skin, position:{x:target.x, y:target.y, z:target.z},
         yaw:player.yaw, bodyYaw:object.rotation.y, pitch:player.pitch, motion:player.motion, visible:object.visible, meshCount,
+        typing:player.typing, nameplate:object.visible && player.label.visible,
         onScreen:object.visible && Math.abs(x) <= 1 && Math.abs(y) <= 1 && z >= -1 && z <= 1};
     });
   }

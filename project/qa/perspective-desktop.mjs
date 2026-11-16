@@ -147,7 +147,10 @@ try {
 
   stage = 'camera cycle and skin';
   assert.equal(await page.evaluate(() => honeymoon.perspective().mode),'first');
-  assert.equal(await page.evaluate(() => honeymoon.localAvatar()),null);
+  await page.waitForFunction(() => {
+    const avatar = honeymoon.localAvatar();
+    return avatar?.visible === false && avatar.firstPersonHooves?.length === 2;
+  });
   await camera('back');
   await page.waitForFunction(() => {
     const avatar = honeymoon.localAvatar();

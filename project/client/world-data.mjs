@@ -37,11 +37,19 @@ export class World {
     this.indices = new Map(this.palette.map((key, index) => [key, index]));
     this.chunks = new Map();
     this.minecarts = new Map();
+    this.frames = new Map();
+    this.frameRevision = -1;
     this.minecartSnapshotTime = undefined;
     this.overrides = new Map();
     this.overridesByChunk = new Map();
     this.blockLightOverrides = new Map();
     this.pendingLights = new Map();
+  }
+
+  setFrames(frames,revision) {
+    if (revision <= this.frameRevision) return;
+    this.frameRevision = revision;
+    this.frames = new Map(frames.map(frame => [frame.key,frame]));
   }
 
   setMinecarts(entities, now) {

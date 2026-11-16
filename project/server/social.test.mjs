@@ -21,8 +21,10 @@ test('all 1440 clock minutes round trip and the shared clock freezes, resumes an
     assert.deepEqual(clock.snapshot(), {tick:23999, frozen:true});
     assert.deepEqual(createWorldTime(store, () => now).snapshot(), clock.snapshot());
     clock.set({frozen:false});
-    now += 150;
+    now += 180;
     assert.deepEqual(clock.snapshot(), {tick:2, frozen:false});
+    now += 60000;
+    assert.equal(formatClock(clock.snapshot().tick), '07:00');
     assert.throws(() => clock.set({tick:24000}), {code:'invalid_world_time'});
   } finally { store.close(); }
 });

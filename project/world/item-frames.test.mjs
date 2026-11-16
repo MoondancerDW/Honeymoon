@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {itemFrameModel} from './item-frames.mjs';
+import {itemFrameHit,itemFrameModel} from './item-frames.mjs';
 import {mapPixels} from './item-frame-maps.mjs';
 
 test('frame attaches at the supporting block face in all four legacy directions', () => {
@@ -14,6 +14,20 @@ test('frame attaches at the supporting block face in all four legacy directions'
     assert.equal(model.frame.length, 30);
     assert.deepEqual(model.item, []);
   }
+});
+
+test('floor and ceiling frames face outward and sample the expanded terrain atlas', () => {
+  const floor = {data:{TileX:2,TileY:4,TileZ:6,MountSide:1,MountTurn:2,Item:{id:1,Damage:0,Block:true}}};
+  const ceiling = {data:{...floor.data,MountSide:0}};
+  const model = itemFrameModel(floor,{},90);
+  assert.deepEqual(model.center,[2.5,5,6.5]);
+  assert.equal(model.rotationX,-Math.PI / 2);
+  assert.equal(model.rotationY,Math.PI);
+  assert.equal(model.terrainItem,true);
+  assert.ok(Math.max(...model.frame.flatMap(surface => surface.uv.filter((_,index) => index & 1))) < .05);
+  assert.ok(itemFrameHit(floor,[2.5,7,6.5],[0,-1,0]) < 2);
+  assert.ok(itemFrameHit(ceiling,[2.5,2,6.5],[0,1,0]) < 2);
+  assert.equal(itemFrameHit(ceiling,[3.1,2,6.5],[0,1,0]),Infinity);
 });
 
 test('framed sprites rotate in 90-degree steps and unsupported items leave an empty frame', () => {

@@ -173,9 +173,12 @@ function wallPlate(meta, width, y0, y1, depth, tile, options = GROUND_DECOR) {
 }
 
 function torch(tile, meta, emissive) {
-  const options = {mode:'cutout', solid:false, emissive, uv:'box'};
-  if (meta === 5 || meta === 0) return [box([0.4375, 0, 0.4375, 0.5625, 0.625, 0.5625], tile, options)];
-  return [wallPlate(({1:5, 2:4, 3:3, 4:2})[meta], 0.125, 0.25, 0.875, 0.1875, tile, options)];
+  const mount = [[0,0], [-1,0], [1,0], [0,-1], [0,1]][meta] ?? [0,0];
+  const [x,z] = mount;
+  const bottom = x || z ? .2 : 0;
+  const bounds = [.4375 + Math.min(0, x * .5), bottom, .4375 + Math.min(0, z * .5),
+    .5625 + Math.max(0, x * .25), bottom + .625, .5625 + Math.max(0, z * .25)];
+  return [box(bounds, tile, {mode:'cutout', solid:false, emissive, uv:'box', torchMount:mount})];
 }
 
 function log(meta) {
@@ -899,7 +902,7 @@ function specialShape(id, meta, cell, neighbors) {
   if (id === 162 && meta === 1) return uniform(3653);
   if (id === 701 && meta === 1) return uniform(topSides(3654, 3655));
   if (id === 3943) return meta < 4 ? uniform(topSides(3645 + meta, 3641 + meta, 3649 + meta)) : uniform(3641);
-  if (id === 241) return cross(tiles.redPowerWorld + 0);
+  if (id === 241) return cross(creativeBlock(id, meta)?.[0][4] ?? 4161, meta === 0 ? .625 : 1);
   if (id === 242) return uniform(tiles.redPowerWorld + 32 + meta);
   if (id === 243) return uniform(tiles.redPowerWorld + 49, { tint: WARM_LEAVES });
   if (id === 244) return uniform(tiles.redPowerWorld + 16 + meta);
@@ -923,6 +926,24 @@ function specialShape(id, meta, cell, neighbors) {
     box([0.1875, 0.875, 0.4375, 0.8125, 1, 0.5625], 4, { approximation: APPROX_BIBLIO }),
   ];
   return null;
+}
+
+function pistonShape(id,meta) {
+  const side = meta & 7;
+  const axis = [1,1,2,2,0,0][side] ?? 1;
+  const forward = Boolean(side & 1);
+  const face = axis * 2 + Number(forward);
+  const front = (id === 29 || id === 34 && meta & 8) ? 106 : 107;
+  if (id === 34) {
+    const plate = [...CUBE], shaft = [.375,.375,.375,.625,.625,.625];
+    plate[axis + (forward ? 0 : 3)] = forward ? .75 : .25;
+    shaft[axis] = forward ? 0 : .25;
+    shaft[axis + 3] = forward ? .75 : 1;
+    return [box(plate,faceMaterial(108,face,front),{uv:'box'}),box(shaft,108,{uv:'box'})];
+  }
+  const bounds = [...CUBE];
+  if (meta & 8) bounds[axis + (forward ? 3 : 0)] = forward ? .75 : .25;
+  return [box(bounds,faceMaterial(108,face,meta & 8 ? 109 : front),{uv:'box'})];
 }
 
 function vanillaShape(id, meta, neighbors) {
@@ -966,7 +987,7 @@ function vanillaShape(id, meta, neighbors) {
     case 66: return [railShape(id, meta)];
     case 29:
     case 33:
-    case 34: return uniform(faceMaterial(109, [2, 3, 4, 5, 0, 1][meta & 7] ?? 3, id === 29 ? 106 : 107));
+    case 34: return pistonShape(id,meta);
     case 36: return [box(CUBE, 107, {solid:false, approximation:'Moving piston without a saved payload'})];
     case 35: return uniform(wool[meta]);
     case 43:
@@ -987,7 +1008,12 @@ function vanillaShape(id, meta, neighbors) {
     }
     case 54:
     case 130: return [box(chestCollision(id, neighbors), 3660 + Number(id === 130) * 18)];
-    case 55: return [box([0, 0.0125, 0, 1, 0.025, 1], 164, { mode: 'cutout', solid: false })];
+    case 55: {
+      const strength = (meta & 15) / 15;
+      const tint = Math.round((strength ? .4 + .6 * strength : .3) * 255) << 16 |
+        Math.round(Math.max(0,.7 * strength ** 2 - .5) * 255) << 8;
+      return [box([0,0.0125,0,1,0.025,1],164,{mode:'cutout',solid:false,tint})];
+    }
     case 58: return uniform(topSides(59, 43, 4));
     case 60: return [box([0, 0, 0, 1, 0.9375, 1], topSides(2, meta > 0 ? 86 : 87))];
     case 63:
@@ -1028,7 +1054,8 @@ function vanillaShape(id, meta, neighbors) {
     case 90: return [box([0, 0, 0.375, 1, 1, 0.625], 14, { mode: 'blend', solid: false, emissive: true })];
     case 92: return [box([0.0625 + (meta & 7) * 0.125, 0, 0.0625, 0.9375, 0.5, 0.9375], topSides(122, 121, 124))];
     case 93:
-    case 94: return [box([0, 0, 0, 1, 0.125, 1], topSides(5, id === 94 ? 147 : 131), GROUND_DECOR)];
+    case 94: return [box([0,0,0,1,.125,1],topSides(5,id === 94 ? 147 : 131),
+      {...GROUND_DECOR,redPowerUv:[0,0,0,meta & 3,0,0]})];
     case 96: {
       const y = meta & 8 ? 0.8125 : 0;
       return [meta & 4 ? wallPlate([2, 3, 4, 5][meta & 3], 1, 0, 1, 0.1875, 84, GLASS)

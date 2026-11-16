@@ -19,6 +19,8 @@ export function readPonySkin(pixels, width, height) {
   const skinHeight = ponySkinHeight(width, height);
   if (!skinHeight || pixels.length < width * skinHeight * 4) throw new RangeError('Invalid pony skin atlas');
   const scale = width / 64;
+  const glowPixel = width * 4;
+  const glowColor = pixels[glowPixel + 3] && (pixels[glowPixel] << 16 | pixels[glowPixel + 1] << 8 | pixels[glowPixel + 2]);
   function rgb(x, y) {
     const i = (y * width + x) * 4;
     return pixels[i + 3] === 255 ? pixels[i] * 65536 + pixels[i + 1] * 256 + pixels[i + 2] : -1;
@@ -44,6 +46,7 @@ export function readPonySkin(pixels, width, height) {
     male: rgb(2, 0) === 0xffffff || rgb(2 * scale, 0) === 0xffffff,
     size: marker(3, 0, sizes) ?? 'normal',
     mane: marker(1, 1, manes) ?? 0,
+    glowColor: glowColor || 0x4444aa,
     advanced,
   };
 }

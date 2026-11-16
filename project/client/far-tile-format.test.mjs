@@ -65,3 +65,17 @@ test('fractional source water heights use the same file size and correct mesh bo
   data.setUint8(96,128);
   assert.throws(() => decodeFarTile(buffer),/face/);
 });
+
+test('transition faces are reserved for vertical boundaries in version 3', () => {
+  const buffer = sample();
+  const data = new DataView(buffer);
+  data.setUint16(4,2,true);
+  data.setUint8(80,8);
+  assert.throws(() => decodeFarTile(buffer),/face/);
+  data.setUint16(4,LOD_VERSION,true);
+  const [land,,boundary] = decodeFarTile(buffer).layers;
+  assert.equal(land.count,0);
+  assert.deepEqual([...boundary.surface],[4096,168]);
+  data.setUint8(80,11);
+  assert.throws(() => decodeFarTile(buffer),/face/);
+});

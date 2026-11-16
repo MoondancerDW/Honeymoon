@@ -1,4 +1,5 @@
 import { blockState, buttonDuration, pressurePlate, signalSides } from '../world/block-interactions.mjs';
+import { railFor } from '../world/rails.mjs';
 import { cellAddress } from './base.mjs';
 
 const horizontal = signalSides.slice(2);
@@ -10,10 +11,10 @@ const dial = [3, 4, 2, 5];
 const attached = [0, 5, 4, 3, 2, 1, 1, 0];
 const allSides = [0, 1, 2, 3, 4, 5];
 const NOT_NORMAL_CUBE = new Set([
-  8, 9, 10, 11, 18, 20, 30, 52, 54, 55, 64, 65, 69, 70, 71, 72, 75, 76, 77, 79, 85, 90, 92,
+  8, 9, 10, 11, 18, 20, 27, 28, 30, 34, 52, 54, 55, 64, 65, 66, 69, 70, 71, 72, 75, 76, 77, 79, 85, 90, 92,
   93, 94, 95, 96, 101, 102, 107, 113, 116, 117, 118, 120, 122, 130, 138, 139, 143, 145, 750, 765, 768,
 ]);
-const receiverIds = new Set([25, 27, 64, 71, 75, 76, 93, 94, 96, 107, 123, 124, 756, 757, 758, 759, 768]);
+const receiverIds = new Set([23,25,27,29,33,64,71,75,76,93,94,96,107,123,124,756,757,758,759,768]);
 
 function cellView(cell, compositions) {
   return {key: cell?.cell ?? 'air', object: cell?.object, parts: compositions?.[cell?.cell]?.parts};
@@ -45,7 +46,7 @@ export function redstone(getCell, geometry, compositions) {
       const neighbor = offset(point, delta);
       const [id, meta] = block(neighbor);
       if (repeater(id)) return ((dial[meta & 3] - 2) >> 1) === (direction >> 1);
-      if (id === 27 || id === 55 || id === 69 || buttonDuration(id) || pressurePlate(id) || torch(id)) return true;
+      if (id === 27 || id === 28 || id === 55 || id === 69 || buttonDuration(id) || pressurePlate(id) || torch(id)) return true;
       return cube(neighbor)
         ? !cube(above) && block(offset(neighbor, signalSides[1]))[0] === 55
         : block(offset(neighbor, signalSides[0]))[0] === 55;
@@ -54,7 +55,7 @@ export function redstone(getCell, geometry, compositions) {
   function output(point, side, strong = false, dust = true) {
     const [id, meta] = block(point);
     if (id === 69 || buttonDuration(id)) return Boolean(meta & 8) && (!strong || attached[meta & 7] === side);
-    if (pressurePlate(id)) return Boolean(meta) && (!strong || side === 1);
+    if (pressurePlate(id) || id === 28) return Boolean(id === 28 ? meta & 8 : meta) && (!strong || side === 1);
     if (id === 76) return strong ? side === 0 : attached[meta & 7] !== side;
     if (id === 94) return dial[meta & 3] === side;
     if (id !== 55 || !meta || !dust) return false;
@@ -96,7 +97,34 @@ export function redstone(getCell, geometry, compositions) {
     if (!cube(support)) return output(support, side ^ 1, true);
     return signalSides.some((delta, face) => output(offset(support, delta), face, true));
   }
-  return { block, ports, powered, repeaterInput, repeaterLocked, torchPowered };
+  function railPorts(point) {
+    const rail = railFor(getCell(...point));
+    if (rail?.id !== 27) return [];
+    return rail.ends.flatMap(([x,rise,z]) => {
+      const nextX = point[0] + 2 * x - 1, nextZ = point[2] + 2 * z - 1, level = point[1] + rise;
+      for (const y of [level,level - 1]) {
+        const other = railFor(getCell(nextX,y,nextZ));
+        if (other?.id === 27 && other.ends.some(([a,b,c]) => a === 1 - x && c === 1 - z && b + y === level)) {
+          return [[nextX,y,nextZ]];
+        }
+      }
+      return [];
+    });
+  }
+  function poweredRailInput(point) {
+    const queue = [[point,0]], seen = new Set([address(point)]);
+    for (let i = 0; i < queue.length; i++) {
+      const [cell,depth] = queue[i];
+      if (powered(cell)) return true;
+      if (depth >= 8) continue;
+      for (const next of railPorts(cell)) {
+        const key = address(next);
+        if (!seen.has(key)) { seen.add(key); queue.push([next,depth + 1]); }
+      }
+    }
+    return false;
+  }
+  return { block, ports, powered, railPorts, poweredRailInput, repeaterInput, repeaterLocked, torchPowered };
 }
 
 export function affectedCircuit(sources, lookup) {
@@ -124,6 +152,19 @@ export function affectedCircuit(sources, lookup) {
       if (seen.has(key)) continue;
       seen.add(key);
       changes.push(point);
+    }
+  }
+  const rails = [...receivers.values()].filter(point => lookup.block(point)[0] === 27);
+  const depths = new Map(rails.map(point => [address(point),0]));
+  for (let i = 0; i < rails.length; i++) {
+    const depth = depths.get(address(rails[i]));
+    if (depth >= 8) continue;
+    for (const point of lookup.railPorts(rails[i])) {
+      const key = address(point);
+      if (depths.has(key)) continue;
+      depths.set(key,depth + 1);
+      rails.push(point);
+      receivers.set(key,point);
     }
   }
   return { wires, receivers };

@@ -174,6 +174,7 @@ export function createSocialHud({post, notice, pause, resume, teleport}) {
 
   return {
     isOpen: () => !!panel,
+    isChatOpen: () => panel === 'chat',
     close,
     keydown(event, playing) {
       if (panel) {

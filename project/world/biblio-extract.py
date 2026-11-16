@@ -6,6 +6,7 @@ from contextlib import ExitStack
 import json
 from math import cos, pi, sin
 from pathlib import Path
+from csv import DictReader
 import re
 from subprocess import run
 
@@ -19,6 +20,7 @@ DEFAULT_OUTPUT = HERE.parent / 'generated' / 'models'
 DEFAULT_WORLD_DATA = HERE.parent / 'generated' / 'world'
 MODEL_BOXES = HERE / 'biblio-model-boxes.json'
 ITEM_TEXTURES = HERE / 'biblio-item-textures.json'
+FLAT_ITEM_REGISTRY = HERE / 'flat-item-registry.tsv'
 MODELS = ('ArmorStand', 'Bookcase', 'GenericShelf', 'Label', 'PotionShelf', 'ToolRack',
           'WeaponCase', 'WritingDesk')
 TEXTURE_DIR = 'jds/bibliocraft/textures/'
@@ -88,9 +90,9 @@ def rotate(point, axis, radians):
 
 
 class PackedTextures:
-    def __init__(self, textures):
+    def __init__(self, textures, height=1024):
         self.textures = textures
-        self.image = Image.new('RGBA', (2048, 1024))
+        self.image = Image.new('RGBA', (2048, height))
         self.offsets = {}
         self.x = self.y = self.row = 0
 
@@ -255,9 +257,24 @@ def build_item_textures(raw, atlas):
 
     def tile(resource, index):
         if resource not in sheets:
-            sheets[resource] = atlas.textures.resolve(resource, texture_dependency(resource), required=False)
+            dependency = texture_dependency(resource)
+            image = atlas.textures.resolve(resource, dependency, required=False)
+            if image is None:
+                # A mod can return an old unnamespaced sheet path in getTextureFile.
+                for archive in atlas.textures.archive_paths:
+                    if archive in ('pack', 'vanilla', dependency):
+                        continue
+                    source = atlas.textures.open_archive(archive)
+                    if source is not None and resource in source.NameToInfo:
+                        image = atlas.textures.resolve(resource, archive, required=False)
+                        break
+            sheets[resource] = image
         image = sheets[resource]
         if image is None:
+            return None
+        if index is None:
+            return image
+        if not 0 <= index < 256 or image.width % 16 or image.height % 16:
             return None
         x, y = index % 16, index // 16
         w, h = image.width // 16, image.height // 16
@@ -280,9 +297,61 @@ def build_item_textures(raw, atlas):
                 break
             layer = paint(layer, tint)
             image = layer if image is None else Image.alpha_composite(image, layer)
-        if image is not None:
-            result[key] = {'uv': atlas.sprite(f'item:{key}', image), 'block': bool(block)}
+        if image is not None and image.getchannel('A').getbbox():
+            signature = resource + ':' + json.dumps(passes,separators=(',', ':'))
+            result[key] = {'uv': atlas.sprite(signature, image), 'block': bool(block)}
     return result
+
+
+def inventory(registry):
+    defaults = {
+        '260:0': (10, 'Яблоко', 'Apple'),
+        '264:0': (55, 'Алмаз', 'Diamond'),
+        '265:0': (23, 'Железный слиток', 'Iron Ingot'),
+        '266:0': (39, 'Золотой слиток', 'Gold Ingot'),
+        '280:0': (53, 'Палка', 'Stick'),
+        '287:0': (8, 'Нить', 'String'),
+        '288:0': (24, 'Перо', 'Feather'),
+        '328:0': (135, 'Вагонетка', 'Minecart'),
+        '331:0': (56, 'Красная пыль', 'Redstone'),
+        '339:0': (58, 'Бумага', 'Paper'),
+        '340:0': (59, 'Книга', 'Book'),
+        '389:0': (206, 'Рамка для предметов', 'Item Frame'),
+        '388:0': (186, 'Изумруд', 'Emerald'),
+    }
+    textures = {key:['gui/items.png',[[tile,0xffffff]]] for key,(tile,_,_) in defaults.items()}
+    names = {key:(name,english,'Minecraft') for key,(_,name,english) in defaults.items()}
+    armor = {}
+    for start,prefix,suffix in [(12,'reptile',''),(60,'fur',''),(94,'hide',''),
+                                (106,'',''),(110,'','frost'),(114,'','black'),(118,'','nether')]:
+        armor.update({start+offset:prefix+part+suffix
+                      for offset,part in enumerate(('plate','helmet','legs','boots'))})
+    chisel = {0:'chisel',1:'cloudinabottle',2:'ballomoss'}
+    if registry:
+        with registry.open(encoding='utf-8-sig') as source:
+            for item in DictReader(source,delimiter='\t'):
+                id, damage = int(item['id']), int(item['damage'])
+                if not 1 <= id <= 32767 or not 0 <= damage <= 32767:
+                    continue
+                passes = [tuple(map(int,pair.split(':'))) for pair in item['passes'].split(',') if pair]
+                resource = item['textureFile'].strip().lstrip('/')
+                if not resource or not passes or any(not 0 <= index < 256 for index,_ in passes):
+                    continue
+                index = passes[0][0]
+                if resource == 'mocreatures/items.png' and index in armor:
+                    resource = 'mods/mocreatures/textures/items/' + armor[index] + '.png'
+                    passes = [[None,0xffffff]]
+                if resource == 'atlas_72_items' and index in chisel:
+                    resource = 'assets/chisel/textures/items/' + chisel[index] + '.png'
+                    passes = [[None,0xffffff]]
+                key = f'{id}:{damage}'
+                english = item.get('nameEn', '').strip()
+                name = item.get('nameRu', '').strip() or english
+                class_name = item.get('class', '')
+                mod = '.'.join(class_name.split('.')[:-1]) or 'Minecraft'
+                textures[key] = [resource,passes]
+                names[key] = (name or key,english or name or key,mod)
+    return textures,names
 
 
 def build_armor(atlas):
@@ -345,21 +414,38 @@ def build_framed_maps(world, world_data, atlas, items, map_ids):
         items[f'358:{map_id}'] = {'uv': atlas.sprite(f'map:{map_id}', image), 'map': True}
 
 
-def build(source, output, vanilla_jar=None, world=None, world_data=DEFAULT_WORLD_DATA, map_ids=()):
+def build(source, output, vanilla_jar=None, world=None, world_data=DEFAULT_WORLD_DATA, map_ids=(), flat_registry=None):
     with ExitStack() as stack:
         textures = TextureAtlas(source, stack, vanilla_jar)
         textures.archive_paths.update({name: source / path for name, path in EXTRA_ARCHIVES.items()})
         textures.archive_labels.update(EXTRA_ARCHIVES)
-        atlas = PackedTextures(textures)
+        tracked_archives = {path.resolve() for path in textures.archive_paths.values()}
+        for path in sorted((source / 'mods').glob('*')):
+            if path.suffix.lower() in ('.jar','.zip') and path.resolve() not in tracked_archives:
+                archive = 'mods/' + path.name
+                textures.archive_paths[archive] = path
+                textures.archive_labels[archive] = archive
+        native,names = inventory(flat_registry)
+        atlas = PackedTextures(textures,2048 if len(native) > 350 else 1024)
         models = build_models(json.loads(MODEL_BOXES.read_text(encoding='utf-8')), atlas)
         items = build_item_textures(json.loads(ITEM_TEXTURES.read_text(encoding='utf-8')), atlas)
+        sprites = build_item_textures(native,atlas)
+        items.update(sprites)
         armor = build_armor(atlas)
         build_framed_maps(world or source / 'saves' / 'equestria', world_data, atlas, items, map_ids)
+        flat = []
+        for key,(name,english,mod) in names.items():
+            if not items.get(key, {}).get('uv'):
+                continue
+            id,damage = map(int,key.split(':'))
+            flat.append({'id':id,'damage':damage,'name':name,'english':english,'mod':mod})
         output.mkdir(parents=True, exist_ok=True)
         atlas.image.save(output / 'biblio.png', optimize=True)
         (output / 'biblio.json').write_text(json.dumps({
             'schemaVersion': 2, 'models': models, 'items': items, 'armor': armor, 'resources': textures.resources,
+            'flatItems': flat,
         }, separators=(',', ':')) + '\n', encoding='utf-8')
+    print(f'Extracted {len(flat)} creative flat item variants from {len(names)} native entries')
     return len(models)
 
 
@@ -373,6 +459,8 @@ if __name__ == '__main__':
                         help='Find mounted maps in this generated world manifest and chunks')
     parser.add_argument('--map-id', type=int, action='append', default=[],
                         help='Include an additional source map even when no generated world is present')
+    parser.add_argument('--flat-registry', type=Path, default=FLAT_ITEM_REGISTRY,
+                        help='Flat item registry TSV from the native creative registry probe')
     parser.add_argument('--refresh-boxes', type=Path, metavar='CFR_OUTPUT',
                         help='Refresh the checked-in ModelRenderer specification from decompiled BiblioCraft.zip')
     args = parser.parse_args()
@@ -385,5 +473,5 @@ if __name__ == '__main__':
             lines.append('  }}' + (',' if index + 1 < len(boxes) else ''))
         lines.append('}')
         MODEL_BOXES.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    count = build(args.source, args.output, args.vanilla_jar, args.world, args.world_data, args.map_id)
+    count = build(args.source,args.output,args.vanilla_jar,args.world,args.world_data,args.map_id,args.flat_registry)
     print(f'Extracted {count} BiblioCraft variants to {args.output}')

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { FACE_SHADE, contactShade, coverShade, legacyLight, linearByte, sunlightAt, writeLightmap } from './lighting.mjs';
+import { FACE_SHADE, averageLight, contactShade, coverShade, legacyLight, linearByte, sunlightAt, writeLightmap } from './lighting.mjs';
 import { World } from './world-data.mjs';
 import { filledVoxels, voxelKey, writeVoxel } from '../world/voxel-chisel.mjs';
 import { lightChanged } from './block-light.mjs';
@@ -62,6 +62,12 @@ test('contact shade preserves exposed corners and increases beside solid blocks'
   assert.equal(contactShade(true, false, false), contactShade(false, false, true));
   assert.ok(contactShade(true, false, false) > contactShade(true, false, true));
   assert.equal(contactShade(true, true, false), contactShade(true, true, true));
+});
+
+test('smooth corner lighting averages sky and block light independently', () => {
+  assert.equal(averageLight(0xf1, 0xa3, 0x54, 0x08), 0x84);
+  assert.equal(averageLight(0x00, 0x00, 0x00, 0x00), 0x00);
+  assert.equal(averageLight(0xf0, 0xf0, 0xf0, 0xf0), 0xf0);
 });
 
 test('a sculpture only changes block lighting when its cell opens or closes', () => {

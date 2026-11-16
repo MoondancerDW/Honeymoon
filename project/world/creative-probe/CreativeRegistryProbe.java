@@ -93,6 +93,55 @@ public final class CreativeRegistryProbe {
     out.println();
   }
 
+  private static void captureFlatItems(ClassLoader loader, String output, Object[] items,
+      Properties english, Properties russian) throws Exception {
+    Class<?> item = loader.loadClass("up"), stack = loader.loadClass("ur"), tab = loader.loadClass("tj");
+    Class<?> itemBlock = loader.loadClass("vq");
+    Field stackId = stack.getField("c");
+    Method damage = stack.getMethod("j"), stackKey = item.getMethod("i", stack);
+    Method itemTab = item.getMethod("w"), itemTabs = item.getMethod("getCreativeTabs");
+    Method subtypes = item.getMethod("a", int.class, tab, List.class);
+    Method texture = item.getMethod("getTextureFile");
+    Method passCount = item.getMethod("getRenderPasses", int.class);
+    Method icon = item.getMethod("getIconIndex", stack, int.class);
+    Method color = item.getMethod("a", stack, int.class);
+    try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(Paths.get(output + ".flat"), StandardCharsets.UTF_8))) {
+      row(out, "id", "damage", "nameEn", "nameRu", "textureFile", "passes", "class");
+      for (int id = 1; id < items.length; id++) {
+        Object value = items[id];
+        if (value == null || itemBlock.isInstance(value)) continue;
+        List<Object> variants = new ArrayList<>();
+        Object mainTab = safe(itemTab, value);
+        safe(subtypes, value, id, mainTab, variants);
+        Object[] tabs = (Object[]) safe(itemTabs, value);
+        if (tabs != null) for (Object other : tabs) {
+          if (other != null && other != mainTab) safe(subtypes, value, id, other, variants);
+        }
+        if (variants.isEmpty()) variants.add(stack.getConstructor(int.class, int.class, int.class).newInstance(id, 1, 0));
+        Set<Integer> emitted = new HashSet<>();
+        for (Object variant : variants) {
+          if (variant == null || stackId.getInt(variant) != id) continue;
+          int metadata = (Integer) damage.invoke(variant);
+          if (!emitted.add(metadata)) continue;
+          String key = column(safe(stackKey, value, variant)) + ".name";
+          String name = english.getProperty(key);
+          String text = russian.getProperty(key);
+          Object count = safe(passCount, value, metadata);
+          List<String> passes = new ArrayList<>();
+          for (int pass = 0; pass < (count instanceof Integer ? (Integer) count : 1); pass++) {
+            Object index = safe(icon, value, variant, pass);
+            if (!(index instanceof Integer) || (Integer) index < 0) continue;
+            Object tint = safe(color, value, variant, pass);
+            passes.add(index + ":" + (tint instanceof Integer ? (Integer) tint & 0xFFFFFF : 0xFFFFFF));
+          }
+          if (!passes.isEmpty()) row(out, id, metadata, name == null ? key : name,
+            text == null ? name : text, safe(texture, value), String.join(",", passes), value.getClass().getName());
+        }
+      }
+      if (out.checkError()) throw new IllegalStateException("Failed to write the flat item registry");
+    }
+  }
+
   private static void capture(ClassLoader loader, String output) throws Exception {
     Class<?> block = loader.loadClass("amq"), item = loader.loadClass("up"), stack = loader.loadClass("ur");
     Class<?> tab = loader.loadClass("tj"), material = loader.loadClass("agi");
@@ -125,6 +174,7 @@ public final class CreativeRegistryProbe {
     Method coverData = covers.getMethod("damageToCoverData", int.class), coverValue = covers.getMethod("damageToCoverValue", int.class);
     Method coverName = covers.getMethod("getName", int.class);
 
+    captureFlatItems(loader, output, items, english, russian);
     try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(Paths.get(output), StandardCharsets.UTF_8));
          PrintWriter inventory = new PrintWriter(Files.newBufferedWriter(Paths.get(output + ".items"), StandardCharsets.UTF_8))) {
       row(out, "id", "meta", "creative", "stackName", "stackKey", "blockName", "translation", "class", "tab",

@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import * as geometry from '../world/geometry.mjs';
 import { blockKey, relatedBlockStates } from '../world/block-interactions.mjs';
 import { railFor, railPoint, railTangent } from '../world/rails.mjs';
+import { CREATIVE_MINECART_KEY } from '../world/creative-items.mjs';
+import { minecartHit } from '../world/minecarts.mjs';
 import { extractedModel } from '../world/extracted-models.mjs';
 import { cellAddress, loadBase } from './base.mjs';
 import { createGame } from './game.mjs';
@@ -86,6 +88,110 @@ test('a neighboring lever powers and brakes a player-placed powered rail', t => 
   const off = game.action(player, command('brake-track', lever, on.output.worldRevision));
   assert.ok(off.output.changes.some(cell => cell.cell === 'legacy:27:0'));
   assert.equal(railFor(store.getEdit(6, 1, 4)).powered, false);
+});
+
+test('a newly mounted lever energizes a normal RedPower lamp and extinguishes its inverted partner', t => {
+  const base = fixture([[6,1,5,757,3],[7,1,4,758,9]]);
+  base.catalog.add('legacy:69:0');
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const game = gameFor(base,store,() => 0);
+  const player = store.createPlayer().id;
+  game.session(player);
+  const lever = [6,1,4];
+  const place = game.action(player,{...command('mount-floor-lever',lever),type:'place',yaw:0,
+    cell:'legacy:69:0',against:{x:6,y:0,z:4},hit:{x:6.5,y:1,z:4.5}});
+  assert.equal(place.output.changes?.[0].cell,'legacy:69:5',JSON.stringify(place));
+  const on = game.action(player,command('new-lever-on',lever,place.output.worldRevision));
+  assert.equal(on.status,200,JSON.stringify(on));
+  assert.equal(store.getEdit(6,1,5).cell,'legacy:756:3');
+  assert.equal(store.getEdit(7,1,4).cell,'legacy:759:9');
+  const off = game.action(player,command('new-lever-off',lever,on.output.worldRevision));
+  assert.equal(off.status,200,JSON.stringify(off));
+  assert.equal(store.getEdit(6,1,5).cell,'legacy:757:3');
+  assert.equal(store.getEdit(7,1,4).cell,'legacy:758:9');
+});
+
+test('a detector rail powers its lamp while a passenger cart occupies the track', t => {
+  const base = fixture([[6,1,6,28,0],[7,1,6,123,0]]);
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const modules = registerMechanics(base,store,geometry).filter(module => module.id !== 'diagnostic');
+  const cartItem = {id:328,damage:0,kind:'minecart'};
+  let now = 0;
+  const game = createGame(base,store,geometry,{clock:() => now,modules,
+    creativeItems:new Map([[CREATIVE_MINECART_KEY,cartItem]])});
+  const player = store.createPlayer().id;
+  game.session(player);
+  const placed = game.action(player,{...command('cart-detector',[6,1,6]),type:'place_minecart',
+    creativeItem:CREATIVE_MINECART_KEY,hit:{x:6.5,y:1.125,z:6.5}});
+  assert.equal(placed.status,200,JSON.stringify(placed));
+  game.advance();
+  assert.equal(store.getEdit(6,1,6).cell,'legacy:28:8');
+  assert.equal(store.getEdit(7,1,6).cell,'legacy:124:0');
+  const cart = placed.output.minecart;
+  const origin = [5.5,2.62,4.5];
+  const delta = cart.position.map((value,index) => value - origin[index]);
+  const dir = delta.map(n => n / Math.hypot(...delta));
+  const distance = minecartHit(cart,origin,dir);
+  const hit = Object.fromEntries(['x','y','z'].map((axis,index) => [axis,origin[index] + dir[index] * distance]));
+  const removed = game.action(player,{...command('cart-detector-clear',[6,1,6]),type:'remove_minecart',entity:cart.key,hit});
+  assert.equal(removed.status,200,JSON.stringify(removed));
+  game.advance();
+  assert.equal(store.getEdit(6,1,6).cell,'legacy:28:0');
+  now += 200;
+  game.advance();
+  assert.equal(store.getEdit(7,1,6).cell,'legacy:123:0');
+});
+
+test('a sticky piston moves an owned block, persists its head, and pulls the same block back', t => {
+  const base = fixture([[4,1,7,69,5],[5,1,7,29,5]]);
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  let now = 0;
+  let game = gameFor(base,store,() => now);
+  const player = store.createPlayer().id;
+  game.session(player);
+  store.atomic(() => store.writeEdit({x:6,y:1,z:7,cell:'legacy:1:0',revision:store.nextRevision()},
+    JSON.stringify(base.getCell(6,1,7)),player));
+  const on = game.action(player,command('sticky-piston-rise',[4,1,7]));
+  assert.equal(on.status,200,JSON.stringify(on));
+  now += 100;
+  game.advance();
+  assert.equal(store.getEdit(5,1,7).cell,'legacy:29:13');
+  assert.equal(store.getEdit(6,1,7).cell,'legacy:34:13');
+  assert.equal(store.getEditOwner(7,1,7),player);
+  game = gameFor(base,store,() => now);
+  game.session(player);
+  assert.ok(game.snapshot(player).overrides.some(cell => cell.cell === 'legacy:34:13'));
+  const off = game.action(player,command('sticky-piston-fall',[4,1,7],on.output.worldRevision));
+  assert.equal(off.status,200,JSON.stringify(off));
+  now += 100;
+  game.advance();
+  assert.equal(store.getEdit(5,1,7).cell,'legacy:29:5');
+  assert.equal(store.getEdit(6,1,7).cell,'legacy:1:0');
+  assert.equal(store.getEditOwner(6,1,7),player);
+  assert.equal(store.getEdit(7,1,7).cell,null);
+});
+
+test('a lever pulse dispenses one stored item and held items refill the dispenser', t => {
+  const base = fixture([[4,1,6,69,5],[5,1,6,23,5]]);
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  let now = 0;
+  const game = gameFor(base,store,() => now);
+  const player = store.createPlayer().id;
+  game.session(player);
+  const load = game.action(player,{...command('fill-dispenser',[5,1,6]),heldCell:'legacy:1:0'});
+  assert.equal(load.status,200,JSON.stringify(load));
+  assert.equal(store.getEdit(5,1,6).object.data.Items[0].Count,1);
+  const on = game.action(player,command('pulse-dispenser',[4,1,6]));
+  assert.equal(on.status,200,JSON.stringify(on));
+  now += 200;
+  const fired = game.advance();
+  assert.deepEqual(fired.effects.find(effect => effect.type === 'dispense')?.stack,{id:1,Damage:0,Block:true});
+  assert.deepEqual(store.getEdit(5,1,6).object.data.Items,[]);
+  assert.equal(game.advance(),null);
 });
 
 test('a double chest opens both halves, preserves inventory and respects an obstructed lid', t => {

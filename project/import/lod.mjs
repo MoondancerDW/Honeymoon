@@ -4,8 +4,8 @@ import {basename,dirname,isAbsolute,join,relative,resolve,sep} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {gzipSync} from 'node:zlib';
-import {buildRegion,makeMaterials,sampleChunk,TILE_CHUNKS} from './lod-mesh.mjs';
-import {LOD_VERSION} from '../client/far-tile-format.mjs';
+import {buildRegion,makeMaterials,outerChunk,sampleChunk,OUTER_STEP,TILE_CHUNKS} from './lod-mesh.mjs';
+import {LOD_VERSION,lodDistance} from '../client/far-tile-format.mjs';
 
 const DEFAULT_WORLD = fileURLToPath(new URL('../generated/world',import.meta.url));
 const DEFAULT_OUTPUT = fileURLToPath(new URL('../generated/lod',import.meta.url));
@@ -18,7 +18,7 @@ function inside(path,root) {
 function checkOutput(path) {
   if (!existsSync(path)) return;
   const names = readdirSync(path);
-  if (!names.includes('manifest.json') || !names.every(name => name==='manifest.json' || /^-?\d+\.-?\d+\.bin(?:\.gz)?$/.test(name))) {
+  if (!names.includes('manifest.json') || !names.every(name => name==='manifest.json' || /^-?\d+\.-?\d+(?:\.outer)?\.bin(?:\.gz)?$/.test(name))) {
     throw new Error(`Output directory contains unrelated files: ${path}`);
   }
 }
@@ -66,15 +66,19 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
     if (!sampled.has(key)) {
       const chunk = JSON.parse(readFileSync(join(world,'chunks',`${key}.json`),'utf8'));
       if (chunk.x!==x || chunk.z!==z) throw new Error(`Unexpected coordinates in chunk ${key}`);
-      sampled.set(key,{z,chunk:sampleChunk({ ...chunk, palette:chunk.palette ?? manifest.palette,
-        compositions:chunk.compositions ?? manifest.compositions },catalog)});
+      const inner = sampleChunk({ ...chunk, palette:chunk.palette ?? manifest.palette,
+        compositions:chunk.compositions ?? manifest.compositions },catalog);
+      sampled.set(key,{z,inner,outer:outerChunk(inner)});
     }
-    return sampled.get(key).chunk;
+    return sampled.get(key);
   }
+  const loadInner = (x,z) => load(x,z)?.inner;
+  const loadOuter = (x,z) => load(x,z)?.outer;
 
   let quadCount = 0, bytes = 0, compressedBytes = 0, done = 0;
+  const maxDistance = lodDistance(LOD_VERSION);
   const hash = createHash('sha256');
-  hash.update(`HLOD:${LOD_VERSION}:${TILE_CHUNKS}:24:${contentHash}\n`);
+  hash.update(`HLOD:${LOD_VERSION}:${TILE_CHUNKS}:${maxDistance}:${contentHash}\n`);
   try {
     let row;
     for (const [x,z] of regions) {
@@ -82,19 +86,21 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
         row = z;
         for (const [key, entry] of sampled) if (entry.z<z*TILE_CHUNKS-1) sampled.delete(key);
       }
-      const {content,quads} = buildRegion(x,z,load,catalog,minX,maxX,minZ,maxZ);
-      const name = `${x}.${z}.bin`;
-      const compressed = gzipSync(content,{level:3});
-      writeFileSync(join(data,name),content);
-      writeFileSync(join(data,name+'.gz'),compressed);
-      hash.update(`${name}:${content.length}\n`);
-      hash.update(content);
-      quadCount += quads;
-      bytes += content.length;
-      compressedBytes += compressed.length;
+      for (const [suffix,loadTier,step] of [['',loadInner,undefined],['.outer',loadOuter,OUTER_STEP]]) {
+        const {content,quads} = buildRegion(x,z,loadTier,catalog,minX,maxX,minZ,maxZ,step);
+        const name = `${x}.${z}${suffix}.bin`;
+        const compressed = gzipSync(content,{level:3});
+        writeFileSync(join(data,name),content);
+        writeFileSync(join(data,name+'.gz'),compressed);
+        hash.update(`${name}:${content.length}\n`);
+        hash.update(content);
+        quadCount += quads;
+        bytes += content.length;
+        compressedBytes += compressed.length;
+      }
       if (++done%64===0) progress({done,total:regions.length,quadCount,bytes,compressedBytes});
     }
-    const metadata = {schemaVersion:LOD_VERSION,contentHash,assetHash:hash.digest('hex'),maxDistance:24,tileChunks:TILE_CHUNKS,
+    const metadata = {schemaVersion:LOD_VERSION,contentHash,assetHash:hash.digest('hex'),maxDistance,tileChunks:TILE_CHUNKS,
       regions,quadCount,bytes,compressedBytes};
     writeFileSync(join(data,'manifest.json'),JSON.stringify(metadata)+'\n');
     if (existsSync(out)) {

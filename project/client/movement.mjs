@@ -4,6 +4,7 @@ import {movementMedium} from '../world/block-movement.mjs';
 import {FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, PLAYER, WALK_SPEED} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
 import {isRideableMinecart, minecartHit} from '../world/minecarts.mjs';
+import {itemFrameHit} from '../world/item-frames.mjs';
 import {isChiselMaterial, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 
@@ -14,6 +15,7 @@ const EPSILON = .00001;
 const CAMERA_OFFSET = 4;
 const CAMERA_RADIUS = .1;
 const cartsByChunk = new WeakMap();
+const framesByChunk = new WeakMap();
 
 export function movementSpeed({flying = false, sprint = false} = {}) {
   if (flying) return sprint ? FLIGHT_SPRINT_SPEED : FLIGHT_SPEED;
@@ -46,6 +48,34 @@ export function cameraClearance(world, origin, direction, distance = CAMERA_OFFS
   return nearest;
 }
 
+export function pickItemFrame(world,origin,direction,block) {
+  let target = null, nearest = Math.min(6,block?.length ?? 6);
+  const consider = entity => {
+    const length = itemFrameHit(entity,origin,direction,nearest);
+    if (length >= nearest) return;
+    nearest = length;
+    const [x,y,z] = entity.position.map(Math.floor);
+    const [hx,hy,hz] = origin.map((value,index) => value + length * direction[index]);
+    target = {x,y,z,entity:entity.key,length,revision:entity.revision ?? 0,hit:{x:hx,y:hy,z:hz}};
+  };
+  const [ox,,oz] = origin;
+  for (let z = Math.floor((oz - 7) / 16); z <= Math.floor((oz + 7) / 16); z++) {
+    for (let x = Math.floor((ox - 7) / 16); x <= Math.floor((ox + 7) / 16); x++) {
+      const source = world.chunks?.get(x + ',' + z);
+      if (!source || source.visualOnly) continue;
+      if (!framesByChunk.has(source)) framesByChunk.set(source,(source.entities ?? []).filter(entity => entity.type === 'ItemFrame'));
+      for (const entity of framesByChunk.get(source)) {
+        if (!world.frames?.has(entity.key)) consider(entity);
+      }
+    }
+  }
+  for (const entity of world.frames?.values() ?? []) {
+    const [x,,z] = entity.position;
+    if (Math.abs(x-ox) <= 7 && Math.abs(z-oz) <= 7 && world.hasChunk(x,z)) consider(entity);
+  }
+  return target;
+}
+
 export function pickMinecart(world, origin, direction, block) {
   const chunk = (n, offset) => Math.floor((n + offset) / 16);
   const endX = origin[0] + direction[0] * 6, endZ = origin[2] + direction[2] * 6;
@@ -56,7 +86,7 @@ export function pickMinecart(world, origin, direction, block) {
     if (distance >= nearest) return;
     nearest = distance;
     const [hx, hy, hz] = origin.map((n,axis) => n + direction[axis] * distance);
-    target = {x:cx,y:cy,z:cz,entity:entity.key,hit:{x:hx,y:hy,z:hz}};
+    target = {x:cx,y:cy,z:cz,entity:entity.key,length:distance,hit:{x:hx,y:hy,z:hz}};
   };
   for (let z = chunk(Math.min(origin[2], endZ),-1); z <= chunk(Math.max(origin[2], endZ),1); z++) {
     for (let x = chunk(Math.min(origin[0], endX),-1); x <= chunk(Math.max(origin[0], endX),1); x++) {
@@ -205,7 +235,7 @@ export class Movement {
     }
   }
 
-  fly(position, dx, dy, dz, dt, recordStep) {
+  fly(position, dx, dy, dz, dt, recordStep, spectator = false) {
     this.fall = 0;
     this.grounded = false;
     this.medium = null;
@@ -213,9 +243,16 @@ export class Movement {
     const steps = Math.max(1, Math.ceil(dt / .016));
     const time = dt / steps;
     for (let i = 0; i < steps; i++) {
-      this.axis(position, 'y', dy * time);
-      this.axis(position, 'x', dx * time);
-      this.axis(position, 'z', dz * time);
+      if (spectator) {
+        const {minX,maxX,minY,maxY,minZ,maxZ} = this.world.manifest.bounds;
+        position.x = Math.max(minX + HALF, Math.min(maxX + 1 - HALF, position.x + dx * time));
+        position.y = Math.max(minY, Math.min(maxY + 1 - HEIGHT, position.y + dy * time));
+        position.z = Math.max(minZ + HALF, Math.min(maxZ + 1 - HALF, position.z + dz * time));
+      } else {
+        this.axis(position, 'y', dy * time);
+        this.axis(position, 'x', dx * time);
+        this.axis(position, 'z', dz * time);
+      }
       recordStep?.(position);
     }
   }

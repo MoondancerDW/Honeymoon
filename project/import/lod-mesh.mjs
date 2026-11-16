@@ -1,10 +1,11 @@
 import {shapeFor, FACES} from '../world/geometry.mjs';
 import {fullCoverMaterial} from '../world/cover-plane.mjs';
 import {FACE_SHADE} from '../client/lighting.mjs';
-import {LOD_VERSION, WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
+import {LOD_VERSION, TRANSITION_FACE, WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
 
 export const TILE_CHUNKS = 4;
 export const STEP = 2;
+export const OUTER_STEP = 4;
 export const CHUNK_SIDE = 16 / STEP;
 const RECORD_BYTES = 16;
 const AXES = [[2,1], [1,2], [0,2], [2,0], [1,0], [0,1]];
@@ -42,27 +43,30 @@ export function makeMaterials() {
     return byStyle.get(key);
   }
 
-  function materialFor(key) {
+  function materialFor(key, data) {
     if (key === 'legacy:750:0') return 0;
-    if (byKey.has(key)) return byKey.get(key);
+    const cacheKey = data ? `${key}:${data.color ?? data.Color ?? 0}:${(data.ps ?? 0) & 3}` : key;
+    if (byKey.has(cacheKey)) return byKey.get(cacheKey);
     const id = Number(key.split(':')[1]);
     const cover = key.startsWith('cover-material:');
     const fluid = !cover && (id === 8 || id === 9);
     const kind = cover ? CONSTRUCTION : fluid ? LIQUID : leaves.has(id) ? LEAVES : natural.has(id) ? NATURAL : CONSTRUCTION;
-    const boxes = !cover && tiny.has(id) ? [] : shapeFor(key);
+    const boxes = !cover && tiny.has(id) ? [] : shapeFor(data ? {key,data} : key);
     let shape, largest = 0;
     for (const box of boxes) {
       const volume = (box.x1-box.x0) * (box.y1-box.y0) * (box.z1-box.z0);
-      if (box.kind || (!box.solid && !fluid) || volume <= largest || volume < .03125) continue;
+      if (box.kind || (!box.solid && !fluid && !box.emissive) ||
+          volume < (box.emissive ? .004 : .03125) || shape && (shape.emissive && !box.emissive ||
+          Boolean(shape.emissive) === Boolean(box.emissive) && volume <= largest)) continue;
       largest = volume;
       shape = box;
     }
     if (!shape || shape.approximation === 'Unknown legacy block definition') {
-      byKey.set(key, 0);
+      byKey.set(cacheKey, 0);
       return 0;
     }
     const slot = materials.length;
-    byKey.set(key, slot);
+    byKey.set(cacheKey, slot);
     materials.push({kind, sides:FACES.map((_,face) => styleFor(shape,face,fluid,240,true)), shape});
     return slot;
   }
@@ -77,7 +81,7 @@ export function makeMaterials() {
     return byComposition.get(key);
   }
 
-  return {get,materials,styles,styleFor};
+  return {get,materialFor,materials,styles,styleFor};
 }
 
 function sectionData(section) {
@@ -96,11 +100,29 @@ function lightAt(section, index) {
     ((section.block ? section.block[index >> 1] >> shift : 0) & 15);
 }
 
+function brightest(left, right) {
+  return Math.max(left & 240, right & 240) | Math.max(left & 15, right & 15);
+}
+
+const quantizeLight = light => (light & 240) | Math.min(15, Math.round((light & 15) / 3) * 3);
+
+function shapedLights(chunk, sections, catalog) {
+  const lamps = new Map();
+  for (const object of chunk.objects ?? []) {
+    const [x,y,z] = object.position;
+    const index = (x & 15) + (z & 15) * 16 + (y & 15) * 256;
+    const key = chunk.palette[sections.get(y >> 4)?.indices[index]];
+    if (key?.startsWith('legacy:768:')) lamps.set((y >> 4) * 4096 + index, catalog.materialFor(key,object.data));
+  }
+  return lamps;
+}
+
 export function sampleChunk(chunk, catalog) {
   const entries = chunk.palette.map(key => catalog.get(key, chunk.compositions));
   const samplePlane = CHUNK_SIDE ** 2;
   const grid = new Uint16Array(samplePlane * 128);
   const occupancy = new Uint8Array(samplePlane * 128);
+  const packedLight = new Uint8Array(samplePlane * 129).fill(240);
   let tops, waterLight;
   let highest = 0;
   const kind = catalog.materials;
@@ -108,18 +130,22 @@ export function sampleChunk(chunk, catalog) {
   const counts = new Uint8Array(8);
   const upper = new Uint8Array(8);
   const sections = new Map(chunk.sections.map(section => [section.y, sectionData(section)]));
+  const lamps = shapedLights(chunk, sections, catalog);
   const water = new Map();
-  const shores = new Map();
+  const details = new Map();
 
   for (const [sectionY, section] of sections) {
     const source = section.indices;
     for (let y=0; y<8; y++) for (let z=0; z<CHUNK_SIDE; z++) for (let x=0; x<CHUNK_SIDE; x++) {
       const at = x * 2 + z * 32 + y * 512;
       const cy = sectionY * 8 + y;
-      let distinct = 0, occupied = 0, architecture = 0, leaf = 0, wet = 0, fluidLight = 0;
+      let distinct = 0, occupied = 0, architecture = 0, leaf = 0, wet = 0, fluidLight = 0, light = 0;
+      const index = x+CHUNK_SIDE*z+samplePlane*cy;
       for (let dy=0; dy<2; dy++) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
         const raw = at+dx+dz*16+dy*256;
-        const value = entries[source[raw]];
+        const savedLight = lightAt(section,raw);
+        light = brightest(light,savedLight);
+        const value = lamps.get(sectionY * 4096 + raw) ?? entries[source[raw]];
         if (!value) continue;
         const {kind:material,shape} = kind[value];
         occupied++;
@@ -127,7 +153,7 @@ export function sampleChunk(chunk, catalog) {
         if (material === LEAVES) leaf++;
         if (material === LIQUID) {
           wet++;
-          const localLight = lightAt(section,raw);
+          const localLight = savedLight;
           fluidLight = Math.max(fluidLight,localLight);
           const next = raw >= 3840 ? sections.get(sectionY + 1) : section;
           const above = (raw + 256) & 4095;
@@ -152,6 +178,7 @@ export function sampleChunk(chunk, catalog) {
         counts[slot]++;
         upper[slot] += dy;
       }
+      packedLight[index] = quantizeLight(light);
       if (occupied < 4 && architecture < 1 && leaf < 2) continue;
       let selected = 0, score = -1;
       const exteriorBuild = architecture > 0 && occupied < 8;
@@ -164,15 +191,15 @@ export function sampleChunk(chunk, catalog) {
           selected = id;
         }
       }
-      const index = x+CHUNK_SIDE*z+samplePlane*cy;
       grid[index] = selected;
-      if (wet > 0 && wet < occupied) {
+      if (wet > 0 ? wet < occupied : architecture > 0 && occupied < 8) {
         const cubes = new Uint16Array(8);
         for (let dy=0; dy<2; dy++) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
-          const material = entries[source[at+dx+dz*16+dy*256]];
+          const raw = at+dx+dz*16+dy*256;
+          const material = lamps.get(sectionY * 4096 + raw) ?? entries[source[raw]];
           if (material && kind[material].kind !== LIQUID) cubes[dx+dz*2+dy*4] = material;
         }
-        shores.set(index,cubes);
+        details.set(index,cubes);
       }
       // Preserve the exposed material of grass, thin snow and roof courses
       // when the lower cells would otherwise determine the entire cube.
@@ -214,7 +241,36 @@ export function sampleChunk(chunk, catalog) {
   }
 
   return {grid:grid.slice(0,highest*samplePlane), tops:tops?.slice(0,highest*samplePlane), highest,
-    shores, water:[...water.values()], waterLight:waterLight?.slice(0,highest*samplePlane)};
+    details, water:[...water.values()], waterLight:waterLight?.slice(0,highest*samplePlane),
+    light:packedLight.slice(0,(highest+1)*samplePlane)};
+}
+
+export function outerChunk(chunk) {
+  const side = 16 / OUTER_STEP, plane = side ** 2, innerPlane = CHUNK_SIDE ** 2;
+  const highest = Math.ceil(chunk.highest / 2);
+  const grid = new Uint16Array(plane * highest), light = new Uint8Array(plane * (highest + 1)).fill(240);
+  const variants = new Uint16Array(8), scores = new Uint8Array(8);
+  for (let y=0; y<=highest; y++) for (let z=0; z<side; z++) for (let x=0; x<side; x++) {
+    let packed = 0, used = 0, occupied = 0;
+    for (let dy=0; dy<2; dy++) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
+      const source = (y * 2 + dy) * innerPlane + (z * 2 + dz) * CHUNK_SIDE + x * 2 + dx;
+      packed = brightest(packed, chunk.light[source] ?? 240);
+      const value = chunk.tops?.[source] || chunk.grid[source];
+      if (!value) continue;
+      occupied++;
+      let index = 0;
+      while (index < used && variants[index] !== value) index++;
+      if (index === used) { variants[used] = value; scores[used++] = 0; }
+      scores[index] += 2 + dy;
+    }
+    const at = y * plane + z * side + x;
+    light[at] = quantizeLight(packed);
+    if (occupied < 2 || y === highest) continue;
+    let winner = 0;
+    for (let index=1; index<used; index++) if (scores[index] > scores[winner]) winner = index;
+    grid[at] = variants[winner];
+  }
+  return {grid, light, highest, details:new Map(), water:chunk.water};
 }
 
 function floodExterior(grid, size, yCount, plane, liquid, shores) {
@@ -261,10 +317,10 @@ function chunkBoundary(mask, uSize, vSize, consume) {
   }
 }
 
-function shoreFaces(masks, width, start, catalog, terrain, face, at, adjacent, cutoff) {
-  const {grid,waterLight,liquid,visited,shores} = terrain;
+function detailFaces(masks, skirt, width, start, catalog, terrain, face, at, adjacent, cutoff) {
+  const {grid,light,waterLight,liquid,visited,details} = terrain;
   const {materials,styleFor} = catalog;
-  const here = shores.get(at), there = shores.get(adjacent);
+  const here = details.get(at), there = details.get(adjacent);
   const hereSolid = liquid[grid[at]] ? 0 : grid[at];
   const thereSolid = liquid[grid[adjacent]] ? 0 : grid[adjacent];
   const axis = face >> 1, upper = face & 1;
@@ -280,17 +336,20 @@ function shoreFaces(masks, width, start, catalog, terrain, face, at, adjacent, c
     const facing = here ? here[front] : hereSolid;
     const other = there ? there[back] : thereSolid;
     const slot = start + u + v*width;
-    if (!cutoff && visited[adjacent] && facing && !other) masks[0][slot] = style(facing,waterLight[adjacent]);
-    if (here && visited[at] && here[back] && !facing) masks[1][slot] = style(here[back],waterLight[at]);
+    const packed = liquid[grid[adjacent]] ? waterLight[adjacent] : light[adjacent];
+    if (!cutoff && visited[adjacent] && facing && !other) masks[0][slot] = style(facing,packed);
+    else if (skirt && facing) skirt[slot] = style(facing,brightest(light[at],packed));
+    if (here && visited[at] && here[back] && !facing) masks[1][slot] = style(here[back],light[at]);
   }
 }
 
-function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary) {
-  const {grid, tops, waterLight, visited, size, plane, liquid, shores} = terrain;
+function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary, sampleStep) {
+  const {grid, tops, light, waterLight, visited, size, plane, liquid, details} = terrain;
   const {materials, styles, styleFor} = catalog;
   const highest = chunk.highest;
   const begin = gx+gz*size;
-  const limits = [CHUNK_SIDE,highest,CHUNK_SIDE];
+  const chunkSide = 16 / sampleStep;
+  const limits = [chunkSide,highest,chunkSide];
   const strides = [1,plane,size];
   const records = [];
   for (let face=0; face<6; face++) {
@@ -299,40 +358,50 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary) {
     const offset = direction * strides[axis];
     const [uAxis,vAxis] = AXES[face];
     const uSize = limits[uAxis], vSize = limits[vAxis];
-    const mask = new Uint16Array(uSize*vSize);
-    const fine = shores.size ? [new Uint16Array(uSize*vSize*4),new Uint16Array(uSize*vSize*4)] : null;
+    const mask = new Uint32Array(uSize*vSize);
+    const skirt = axis !== 1 ? new Uint32Array(uSize*vSize) : null;
+    const fine = details.size ? [new Uint32Array(uSize*vSize*4),new Uint32Array(uSize*vSize*4)] : null;
+    const fineSkirt = fine && skirt ? new Uint32Array(uSize*vSize*4) : null;
     const point = [0,0,0];
-    const emit = (mask,step) => chunkBoundary(mask,uSize*STEP/step,vSize*STEP/step,(u,v,width,height,style) => {
+    const emit = (mask,step,transition = 0) => chunkBoundary(mask,uSize*sampleStep/step,vSize*sampleStep/step,(u,v,width,height,style) => {
       point[uAxis] = u*step;
       point[vAxis] = v*step;
       const [tile,light,flags,r,g,b] = styles[style];
-      records.push(point[0],point[2],point[1],width*step,height*step,flags,tile,light,r,g,b);
+      records.push(point[0],point[2],point[1],width*step,height*step,flags|transition,tile,light,r,g,b);
     });
     for (let slice=0; slice<limits[axis]; slice++) {
-      const cutoff = face===2 && slice===0 || boundary[face] && slice===(face&1 ? limits[axis]-1 : 0);
+      const edge = slice===(face&1 ? limits[axis]-1 : 0);
+      const cutoff = face===2 && slice===0 || boundary[face] && edge;
       if (cutoff && !fine) continue;
-      point[axis] = (slice + (face&1)) * STEP;
+      point[axis] = (slice + (face&1)) * sampleStep;
       const slabOrigin = begin+slice*strides[axis];
+      const transition = skirt && edge && !cutoff;
       let refined = false;
       for (let v=0; v<vSize; v++) {
         let at=slabOrigin+v*strides[vAxis];
         for (let u=0; u<uSize; u++,at+=strides[uAxis]) {
           const value=grid[at], neighbor=grid[at+offset];
-          if (fine && value && (shores.has(at) || !cutoff && shores.has(at+offset))) {
+          if (fine && value && (details.has(at) || !cutoff && details.has(at+offset))) {
             refined = true;
-            shoreFaces(fine,uSize*2,u*2+v*uSize*4,catalog,terrain,face,at,at+offset,cutoff);
+            detailFaces(fine,transition && fineSkirt,uSize*2,u*2+v*uSize*4,catalog,terrain,face,at,at+offset,cutoff);
             continue;
           }
-          if (cutoff || !value || liquid[value] || !visited[at+offset] || neighbor && !liquid[neighbor]) continue;
+          if (cutoff || !value || liquid[value]) continue;
           const material = materials[face === 3 && tops[at] ? tops[at] : value];
-          const packed = waterLight[at+offset];
-          mask[u+v*uSize] = liquid[neighbor] && packed !== 240
-            ? styleFor(material.shape,face,false,packed,true) : material.sides[face];
+          const packed = liquid[neighbor] ? waterLight[at+offset] : light[at+offset];
+          const slot = u+v*uSize;
+          if (visited[at+offset] && (!neighbor || liquid[neighbor])) {
+            mask[slot] = packed === 240 ? material.sides[face] : styleFor(material.shape,face,false,packed,true);
+          } else if (transition) {
+            skirt[slot] = styleFor(material.shape,face,false,brightest(light[at],packed),true);
+          }
         }
       }
-      emit(mask,STEP);
+      emit(mask,sampleStep);
+      if (transition) emit(skirt,sampleStep,TRANSITION_FACE);
       if (refined) {
         emit(fine[0],1);
+        if (transition) emit(fineSkirt,1,TRANSITION_FACE);
         point[axis] -= direction;
         emit(fine[1],1);
       }
@@ -343,9 +412,9 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary) {
     // Keep the source surface height and outline, including one-block streams.
     // The coarse flood still excludes water deep inside sealed volumes.
     const y = Math.ceil(surfaceY / WATER_HEIGHT_SCALE) - 1;
-    const waterPlane = begin + Math.floor(y / STEP) * plane;
+    const waterPlane = begin + Math.floor(y / sampleStep) * plane;
     for (const cell of cells) {
-      const at = waterPlane + ((cell & 15) >> 1) + (cell >> 5) * size;
+      const at = waterPlane + Math.floor((cell & 15) / sampleStep) + Math.floor((cell >> 4) / sampleStep) * size;
       if (visited[at] || visited[at + plane]) mask[cell] = 1;
     }
     const [tile,light,flags,r,g,b] = styles[style];
@@ -357,10 +426,11 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary) {
   return records;
 }
 
-export function buildRegion(rx,rz,loadChunk,catalog,minX,maxX,minZ,maxZ) {
+export function buildRegion(rx,rz,loadChunk,catalog,minX,maxX,minZ,maxZ,sampleStep = STEP) {
   const halo = 1;
   const span = TILE_CHUNKS+halo*2;
-  const size = span*CHUNK_SIDE;
+  const chunkSide = 16 / sampleStep;
+  const size = span*chunkSide;
   const plane = size*size;
   const regionX = rx*TILE_CHUNKS, regionZ = rz*TILE_CHUNKS;
   const chunks = [];
@@ -373,34 +443,36 @@ export function buildRegion(rx,rz,loadChunk,catalog,minX,maxX,minZ,maxZ) {
   const yCount = highest+1;
   const grid = new Uint16Array(plane*yCount);
   const tops = new Uint16Array(grid.length);
+  const light = new Uint8Array(grid.length).fill(240);
   const waterLight = new Uint8Array(grid.length).fill(240);
-  const shores = new Map();
+  const details = new Map();
   for (let z=0; z<span; z++) for (let x=0; x<span; x++) {
     const chunk = chunks[x+z*span];
     if (!chunk) continue;
-    for (const [index,shape] of chunk.shores) {
-      const cy = Math.floor(index / (CHUNK_SIDE ** 2));
-      const cz = Math.floor(index / CHUNK_SIDE) % CHUNK_SIDE;
-      const cx = index % CHUNK_SIDE;
-      shores.set(cy*plane+size*(z*CHUNK_SIDE+cz)+x*CHUNK_SIDE+cx,shape);
+    for (const [index,shape] of chunk.details) {
+      const cy = Math.floor(index / (chunkSide ** 2));
+      const cz = Math.floor(index / chunkSide) % chunkSide;
+      const cx = index % chunkSide;
+      details.set(cy*plane+size*(z*chunkSide+cz)+x*chunkSide+cx,shape);
     }
-    for (let y=0; y<chunk.highest; y++) for (let row=0; row<CHUNK_SIDE; row++) {
-      const from = (y*CHUNK_SIDE+row)*CHUNK_SIDE;
-      const to = y*plane+size*(z*CHUNK_SIDE+row)+x*CHUNK_SIDE;
-      grid.set(chunk.grid.subarray(from,from+CHUNK_SIDE),to);
-      if (chunk.tops) tops.set(chunk.tops.subarray(from,from+CHUNK_SIDE),to);
-      if (chunk.waterLight) waterLight.set(chunk.waterLight.subarray(from,from+CHUNK_SIDE),to);
+    for (let y=0; y<=chunk.highest; y++) for (let row=0; row<chunkSide; row++) {
+      const from = (y*chunkSide+row)*chunkSide;
+      const to = y*plane+size*(z*chunkSide+row)+x*chunkSide;
+      grid.set(chunk.grid.subarray(from,from+chunkSide),to);
+      light.set(chunk.light.subarray(from,from+chunkSide),to);
+      if (chunk.tops) tops.set(chunk.tops.subarray(from,from+chunkSide),to);
+      if (chunk.waterLight) waterLight.set(chunk.waterLight.subarray(from,from+chunkSide),to);
     }
   }
   const liquid = catalog.materials.map(material => material?.kind === LIQUID);
-  const terrain = {grid, tops, waterLight, size, plane, liquid, shores, visited:floodExterior(grid,size,yCount,plane,liquid,shores)};
+  const terrain = {grid, tops, light, waterLight, size, plane, liquid, details, visited:floodExterior(grid,size,yCount,plane,liquid,details)};
   const records = [];
   for (let z=0; z<TILE_CHUNKS; z++) for (let x=0; x<TILE_CHUNKS; x++) {
     const cx = regionX+x, cz=regionZ+z;
     const chunk = chunks[x+halo+(z+halo)*span];
     if (!chunk) { records.push([]); continue; }
     const boundary = [cx===minX,cx===maxX,false,false,cz===minZ,cz===maxZ];
-    records.push(makeChunkQuads(terrain,(x+halo)*CHUNK_SIDE,(z+halo)*CHUNK_SIDE,chunk,catalog,boundary));
+    records.push(makeChunkQuads(terrain,(x+halo)*chunkSide,(z+halo)*chunkSide,chunk,catalog,boundary,sampleStep));
   }
   const quads = records.reduce((total,record) => total+record.length/11,0);
   const headerBytes = 8 + TILE_CHUNKS ** 2 * 4;

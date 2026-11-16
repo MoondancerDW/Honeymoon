@@ -1,9 +1,11 @@
 const HEADER = 72;
 const RECORD = 16;
 const CHUNKS = 16;
-export const LOD_VERSION = 2;
+export const LOD_VERSION = 3;
 export const WATER_HEIGHT_SCALE = 9;
-export const supportedLodVersion = value => value === 1 || value === LOD_VERSION;
+export const TRANSITION_FACE = 8;
+export const supportedLodVersion = value => value === 1 || value === 2 || value === LOD_VERSION;
+export const lodDistance = version => version === LOD_VERSION ? 32 : 24;
 
 export function decodeFarTile(buffer) {
   const view = new DataView(buffer);
@@ -19,16 +21,18 @@ export function decodeFarTile(buffer) {
   }
   if (total !== (view.byteLength - HEADER) / RECORD) throw new Error('Invalid far terrain tile size');
 
-  let water = 0;
+  let water = 0, transitions = 0;
   for (let offset = HEADER; offset < view.byteLength; offset += RECORD) {
-    if (view.getUint8(offset + 8) & 128) water++;
+    const flags = view.getUint8(offset + 8);
+    if (flags & 128) water++;
+    else if (flags & TRANSITION_FACE) transitions++;
   }
   function layer(count, heightScale = 1) {
     return {count, at:0, offset:new Uint16Array(count * 3), span:new Uint16Array(count * 2),
       surface:new Uint16Array(count * 2), light:new Uint16Array(count), color:new Uint8Array(count * 3),
       minY:256, maxY:0, heightScale};
   }
-  const layers = [layer(total - water), layer(water,version === 1 ? 1 : WATER_HEIGHT_SCALE)];
+  const layers = [layer(total-water-transitions), layer(water,version === 1 ? 1 : WATER_HEIGHT_SCALE), layer(transitions)];
   const heightAxes = [[2,1], [1,2], [0,2], [2,0], [1,0], [0,1]];
   let byte = HEADER;
   for (let chunk = 0; chunk < CHUNKS; chunk++) {
@@ -36,10 +40,12 @@ export function decodeFarTile(buffer) {
     for (let i = 0; i < counts[chunk]; i++, byte += RECORD) {
       const flags = view.getUint8(byte + 8);
       const face = flags & 7;
-      if (face >= 6 || flags & 0x78 || version !== 1 && (flags & 128) && face !== 3) {
+      const skirt = flags & TRANSITION_FACE;
+      if (face >= 6 || flags & 0x70 || skirt && (version < 3 || face === 2 || face === 3 || flags & 128) ||
+          version !== 1 && (flags & 128) && face !== 3) {
         throw new Error('Invalid far terrain face');
       }
-      const data = layers[flags >> 7];
+      const data = layers[skirt ? 2 : flags >> 7];
       const at = data.at++;
       const y = view.getUint16(byte + 2, true);
       const width = view.getUint16(byte + 4, true);
@@ -50,7 +56,7 @@ export function decodeFarTile(buffer) {
       data.span[at * 2] = width;
       data.span[at * 2 + 1] = height;
       data.surface[at * 2] = view.getUint16(byte + 9, true);
-      data.surface[at * 2 + 1] = face + chunk * 8;
+      data.surface[at * 2 + 1] = face + chunk * 8 + (skirt ? 128 : 0);
       data.light[at] = view.getUint16(byte + 11, true);
       data.color[at * 3] = view.getUint8(byte + 13);
       data.color[at * 3 + 1] = view.getUint8(byte + 14);

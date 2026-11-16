@@ -4,7 +4,13 @@ export const FACE_SHADE = Object.freeze([.6, .6, .5, 1, .8, .8]);
 
 export function contactShade(sideU, sideV, corner) {
   const covered = sideU && sideV ? 3 : Number(sideU) + Number(sideV) + Number(corner);
-  return 1 - covered * .105;
+  return 1 - covered * .09;
+}
+
+export function averageLight(a, b, c, d) {
+  const sky = ((a >> 4) + (b >> 4) + (c >> 4) + (d >> 4) + 2) >> 2;
+  const block = ((a & 15) + (b & 15) + (c & 15) + (d & 15) + 2) >> 2;
+  return sky << 4 | block;
 }
 
 function level(nibble) {

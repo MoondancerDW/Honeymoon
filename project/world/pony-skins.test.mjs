@@ -14,8 +14,10 @@ test('legacy pony metadata selects the source renderer, species, proportions and
   set(pixels, 64, 2, 0, [255, 255, 255, 255]);
   set(pixels, 64, 3, 0, [42, 60, 120, 255]);
   set(pixels, 64, 1, 1, [20, 0, 0, 255]);
+  assert.equal(readPonySkin(pixels, 64, 32).glowColor, 0x4444aa);
+  set(pixels, 64, 0, 1, [194, 52, 218, 255]);
   assert.deepEqual(readPonySkin(pixels, 64, 32), {
-    ponyType: 'alicorn', tail: 3, male: true, size: 'tall', mane: 3, advanced: false,
+    ponyType: 'alicorn', tail: 3, male: true, size: 'tall', mane: 3, advanced: false, glowColor:0xc234da,
   });
   set(pixels, 64, 4, 0, [35, 110, 70, 255]);
   assert.equal(readPonySkin(pixels, 64, 32).advanced, true);

@@ -107,6 +107,10 @@ export class Display {
     this.scene.add(this.visualEntities);
     this.entityLights = new Map();
     this.importedMinecarts = new Map();
+    this.importedFrames = new Map();
+    this.editedFrames = new Map();
+    this.dispenserItems = [];
+    this.frameChunksDirty = true;
     this.movingMinecarts = new Map();
     this.chunkEntities = new Map();
     this.exactChunks = new Set();
@@ -117,7 +121,9 @@ export class Display {
     this.perspective = 0;
     this.cameraDistance = .1;
     this.localSkin = null;
-    this.players = new RemotePlayers(this.scene, this.camera);
+    const ponyAirAt = (x,y,z) => this.world.hasChunk(x,z) && !this.world.cellAt(x,y,z);
+    this.ponyAirAt = ponyAirAt;
+    this.players = new RemotePlayers(this.scene, this.camera, () => this.heldItemAssets(), ponyAirAt);
     this.ponyShadows = new PonyShadows(this.scene, this.world);
     this.renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: 'high-performance'});
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
@@ -312,21 +318,22 @@ export class Display {
 
   async whenReady(chunks) {
     this.startupChunks = chunks && new Set(chunks.map(([cx, cz]) => chunkKey(cx, cz)));
-    const waiting = () => {
-      if (!chunks) return this.pendingWork > 0;
-      return chunks.some(([cx, cz]) => {
-        const chunk = this.world.chunks.get(chunkKey(cx, cz));
-        return !chunk || [...chunk.sections.keys()].some(cy => {
-          const id = sectionKey(cx, cy, cz);
-          return this.installedVersions.get(id) !== this.versions.get(id);
-        });
+    try {
+      while (!this.workerFailure && (chunks ? !this.chunksReady(chunks) : this.pendingWork > 0)) {
+        await new Promise(resolve => requestAnimationFrame(resolve));
+      }
+      if (this.workerFailure) throw this.workerFailure;
+    } finally { this.startupChunks = null; }
+  }
+
+  chunksReady(chunks) {
+    return chunks.every(([cx, cz]) => {
+      const chunk = this.world.chunks.get(chunkKey(cx, cz));
+      return chunk && [...chunk.sections.keys()].every(cy => {
+        const id = sectionKey(cx, cy, cz);
+        return this.installedVersions.has(id) && this.installedVersions.get(id) === this.versions.get(id);
       });
-    };
-    while (!this.workerFailure && waiting()) {
-      await new Promise(resolve => requestAnimationFrame(resolve));
-    }
-    this.startupChunks = null;
-    if (this.workerFailure) throw this.workerFailure;
+    });
   }
 
   useLightmap(material, textures = null, water = false) {
@@ -413,24 +420,42 @@ export class Display {
     this.localAvatar?.setSkin(skin);
   }
 
-  updateLocalAvatar(now, dt, position, pose, speed, seat) {
+  heldItemAssets() {
+    if (!this.materials) return undefined;
+    return this.ponyItemAssets ??= {
+      terrain:this.materials.opaque.map, rows:this.atlasRows,
+      itemSprite:key => {
+        const items = this.world.models?.biblio?.items;
+        const entry = items?.[key] ?? items?.[`${key.split(':', 1)[0]}:0`];
+        const map = this.materials['biblio:cutout']?.map;
+        return entry?.uv && map ? {uv:entry.uv, map} : null;
+      },
+    };
+  }
+
+  updateLocalAvatar(now, dt, position, pose, speed, seat, spectator) {
     this.localPonyFacing ??= createPonyFacing();
     const facing = this.localPonyFacing(position, pose.yaw, dt, seat?.yaw);
-    if (this.perspective === 0) {
-      if (this.localAvatar) this.localAvatar.object.visible = false;
-      return;
-    }
     if (!this.localAvatar) {
-      this.localAvatar = createPonyAvatar();
+      this.localAvatar = createPonyAvatar(this.ponyAirAt);
       this.scene.add(this.localAvatar.object);
       this.localAvatar.setSkin(this.localSkin);
+      this.firstPersonScene = new THREE.Scene();
+      this.firstPersonCamera = new THREE.PerspectiveCamera();
     }
+    const firstPerson = this.perspective === 0;
     const {object} = this.localAvatar;
-    object.visible = this.cameraDistance > .36;
+    object.visible = !spectator && !firstPerson && this.cameraDistance > .36;
+    if (spectator) {
+      this.localAvatar.updateFirstPerson(this.firstPersonScene, this.camera, false);
+      return;
+    }
     object.position.set(position.x, position.y, position.z);
     object.rotation.y = facing.bodyYaw;
     this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion,
-      yawOffset:facing.yawOffset, strideDirection:facing.strideDirection});
+      yawOffset:facing.yawOffset, strideDirection:facing.strideDirection, position, swing:pose.swing, held:pose.held,
+      itemAssets:this.heldItemAssets()});
+    this.localAvatar.updateFirstPerson(this.firstPersonScene, this.camera, firstPerson);
     object.updateMatrixWorld(true);
   }
 
@@ -463,6 +488,7 @@ export class Display {
   }
 
   addChunk(chunk) {
+    this.frameChunksDirty = true;
     this.remeshLighting(this.world.updateLighting(chunk));
     const levels = new Set(chunk.sections.keys());
     const localFantasy = chunk.palette?.indexOf(CHISEL_FANTASY);
@@ -494,6 +520,10 @@ export class Display {
           object.userData.minecartKey = entity.key;
           object.visible = !this.world.minecarts.has(entity.key);
           this.importedMinecarts.set(entity.key, object);
+        } else if (entity.type === 'ItemFrame') {
+          object.userData.frameKey = entity.key;
+          object.visible = !this.world.frames?.has(entity.key);
+          this.importedFrames.set(entity.key,object);
         }
         group.add(object);
       }
@@ -509,6 +539,7 @@ export class Display {
   }
 
   removeChunks(chunks) {
+    this.frameChunksDirty = true;
     const removedEntities = new Set();
     for (const {x, z} of chunks) {
       const key = chunkKey(x, z);
@@ -520,7 +551,10 @@ export class Display {
       if (entities) {
         removedEntities.add(entities);
         this.chunkEntities.delete(key);
-        for (const object of entities.children) this.importedMinecarts.delete(object.userData.minecartKey);
+        for (const object of entities.children) {
+          this.importedMinecarts.delete(object.userData.minecartKey);
+          this.importedFrames.delete(object.userData.frameKey);
+        }
         this.discardGroup(entities);
       }
       for (let y = 0; y < 16; y++) {
@@ -560,7 +594,7 @@ export class Display {
   }
 
   get detailedDistance() {
-    return this.requestedDistance === 24 ? 4 : Math.min(this.requestedDistance,8);
+    return this.requestedDistance === 24 || this.requestedDistance === 32 ? 4 : Math.min(this.requestedDistance,8);
   }
 
   isPreciseVisible(x,z) {
@@ -634,9 +668,9 @@ export class Display {
   }
 
   async setDistance(distance) {
-    if (distance === 24 && !this.farTerrain) return;
+    if ((distance === 24 || distance === 32) && !(this.farTerrain?.lod.maxDistance >= distance)) return;
     this.requestedDistance = distance;
-    this.farTerrain?.setActive(distance === 24);
+    this.farTerrain?.setDistance(distance);
     this.exactChunks.clear();
     if (this.farTerrain?.active && this.streamArea) this.farTerrain.move(this.streamArea.x,this.streamArea.z);
     this.visualEntities.visible = distance > 4;
@@ -648,8 +682,9 @@ export class Display {
       if (id.startsWith('lod:') && Number(id.split(':')[1]) > distance) this.pending.delete(id);
     }
     if (this.world.manifest.chunkPalettes) {
-      this.scene.fog.near = distance === 4 ? 56 : distance * 14;
-      this.scene.fog.far = distance * 16;
+      const layered = distance >= 24 && this.farTerrain?.lod.maxDistance === 32;
+      this.scene.fog.near = distance === 4 ? 56 : layered ? 128 : distance * 14;
+      this.scene.fog.far = distance === 32 ? 496 : distance * 16;
     } else {
       this.scene.fog.near = distance === 4 ? 60 : distance * 8;
       this.scene.fog.far = Math.max(115, distance * 22);
@@ -802,20 +837,74 @@ export class Display {
   }
 
   makeItemFrame(entity) {
-    const model = itemFrameModel(entity, this.world.models.biblio?.items);
+    const model = itemFrameModel(entity,this.world.models.biblio?.items,this.atlasRows);
     if (!model) return;
     const group = new THREE.Group();
     group.position.set(...model.center);
-    group.rotation.y = model.rotationY;
+    group.rotation.set(model.rotationX,model.rotationY,0,'YXZ');
     const position = entity.position.map(Math.floor);
     const light = this.world.lightAt(...position);
-    for (const [quads, material, shade] of [[model.frame, this.materials.opaque, 186], [model.item, this.materials['biblio:cutout'], 255]]) {
-      if (!quads?.length || !material) continue;
-      const mesh = new THREE.Mesh(quadGeometry(quads, light, shade), material);
+    const material = model.terrainItem ? this.materials.cutout : this.materials['biblio:cutout'];
+    for (const [quads, surface, shade] of [[model.frame,this.materials.opaque,216],[model.item,material,255]]) {
+      if (!quads?.length || !surface) continue;
+      const mesh = new THREE.Mesh(quadGeometry(quads,light,shade),surface);
       group.add(mesh);
       this.trackEntityLight(mesh, position);
     }
     if (group.children.length) return group;
+  }
+
+  updateFrames() {
+    const frames = this.world.frames;
+    if (!frames || frames === this.frameSnapshot && !this.frameChunksDirty) return;
+    this.frameSnapshot = frames;
+    this.frameChunksDirty = false;
+    for (const [key,original] of this.importedFrames) original.visible = !frames.has(key);
+    for (const [key,group] of this.editedFrames) {
+      const frame = frames.get(key);
+      if (frame?.revision === group.userData.frameRevision && this.world.hasChunk(frame.position[0],frame.position[2])) continue;
+      this.discardGroup(group);
+      this.editedFrames.delete(key);
+    }
+    for (const [key,frame] of frames) {
+      if (this.editedFrames.has(key) || !this.world.hasChunk(frame.position[0],frame.position[2])) continue;
+      const group = this.makeItemFrame(frame);
+      if (!group) continue;
+      group.userData.frameRevision = frame.revision;
+      this.editedFrames.set(key,group);
+      this.scene.add(group);
+    }
+  }
+
+  dispense({position,direction,stack}) {
+    if (!this.world.hasChunk(position[0],position[2]) || this.dispenserItems.length >= 48) return;
+    const model = itemFrameModel({data:{TileX:0,TileY:0,TileZ:0,MountSide:3,Item:stack}},
+      this.world.models.biblio?.items,this.atlasRows);
+    const material = model?.terrainItem ? this.materials.cutout : this.materials['biblio:cutout'];
+    if (!model?.item.length || !material) return;
+    const mesh = new THREE.Mesh(quadGeometry(model.item,this.world.lightAt(...position),255),material);
+    const start = position.map((value,index) => value + .5 + .55 * direction[index]);
+    const speed = stack.id === 262 ? 5 : 2.1;
+    const velocity = direction.map((value,index) => value * speed + (index === 1 ? 1.25 : 0));
+    mesh.position.set(...start);
+    mesh.rotation.y = Math.atan2(direction[0],direction[2]);
+    this.scene.add(mesh);
+    this.dispenserItems.push({mesh,start,velocity,time:performance.now()});
+  }
+
+  updateDispensers(now) {
+    if (!this.dispenserItems.length) return;
+    this.dispenserItems = this.dispenserItems.filter(({mesh,start,velocity,time}) => {
+      const elapsed = (now - time) / 1000;
+      if (elapsed > .75) {
+        this.discardGroup(mesh);
+        return false;
+      }
+      mesh.position.set(start[0] + velocity[0] * elapsed,
+        start[1] + velocity[1] * elapsed - 2 * elapsed ** 2,start[2] + velocity[2] * elapsed);
+      mesh.rotation.y += .1;
+      return true;
+    });
   }
 
   trackEntityLight(mesh, position) {
@@ -1078,6 +1167,8 @@ export class Display {
   }
 
   render(now, selection, playing = false, placement = null, foreground = true) {
+    this.updateFrames();
+    this.updateDispensers(now);
     if (now >= (this.nextSkyUpdate ?? 0)) {
       this.updateSky(this.dayTick(now));
       this.nextSkyUpdate = now + 200;
@@ -1139,7 +1230,7 @@ export class Display {
       const ponies = [...this.players.entries.values()];
       if (this.localAvatar) ponies.push({object:this.localAvatar.object, avatar:this.localAvatar});
       for (const {object,avatar} of ponies) {
-        if (!object.visible) continue;
+        if (!object.visible && avatar !== this.localAvatar) continue;
         const {x,y,z} = object.position;
         const offset = 4 * this.world.lightAt(Math.floor(x), Math.floor(y + .85), Math.floor(z));
         avatar.setLight(this.lightBytes[offset] << 16 | this.lightBytes[offset + 1] << 8 | this.lightBytes[offset + 2]);
@@ -1147,6 +1238,19 @@ export class Display {
       this.ponyShadows.update(ponies.map(pony => pony.object), this.camera.position);
       this.updateOcclusion(now);
       this.renderer.render(this.scene, this.camera);
+      if (this.perspective === 0 && this.firstPersonScene) {
+        const camera = this.firstPersonCamera;
+        camera.projectionMatrix.copy(this.camera.projectionMatrix);
+        camera.projectionMatrixInverse.copy(this.camera.projectionMatrixInverse);
+        this.renderer.clearDepth();
+        const {autoClear, info:{autoReset}} = this.renderer;
+        this.renderer.autoClear = this.renderer.info.autoReset = false;
+        try { this.renderer.render(this.firstPersonScene, camera); }
+        finally {
+          this.renderer.autoClear = autoClear;
+          this.renderer.info.autoReset = autoReset;
+        }
+      }
       this.nextIdleRender = now + 100;
     }
   }

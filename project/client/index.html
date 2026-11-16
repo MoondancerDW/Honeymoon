@@ -11,6 +11,10 @@
 <body>
   <main id="game" aria-label="Игровой мир Honeymoon">
     <div id="scene"></div>
+    <section id="teleport-loading" role="status" aria-live="polite" hidden>
+      <span id="teleport-loading-text">Загрузка, подождите...</span>
+      <button id="teleport-reload" type="button" hidden>Перезагрузить игру</button>
+    </section>
     <div id="aim" aria-hidden="true"></div>
     <header class="top">
       <div class="brand"><strong>Honeymoon</strong><span>Equestria</span></div>
@@ -46,7 +50,7 @@
           <span id="skin-status" class="skin-status" role="status"></span>
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
-        <small id="entry-help">WASD — ходьба · Пробел — прыжок · Shift — ускорение · F — полёт · F5 — камера · I — блоки · V — резец · B — размер резца · X — сброс выбора · G — телепорт · Esc — пауза</small>
+        <small id="entry-help">WASD — ходьба · Пробел — прыжок · Shift — ускорение · F — полёт · F5/Y — камера · U — обзор · P — наблюдатель · I — блоки · V — резец · G — телепорт · Esc — пауза</small>
       </div>
     </section>
     <div id="toast" role="status" aria-live="polite"></div>
@@ -127,7 +131,9 @@
       <span id="chisel-hint" role="status" hidden>Резец 1/8 · ЛКМ убрать · ПКМ добавить · Q взять материал</span>
       <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift ×2</span>
       <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
-      <span id="keys">ЛКМ — сломать блок игрока · ПКМ — поставить · E — действие / сесть / встать · Q — копировать · F5 — камера · F — полёт · V — резец</span>
+      <span id="orbit-status" role="status" hidden>Свободный обзор · U — выйти</span>
+      <span id="spectator-status" role="status" hidden>Наблюдатель · Пробел вверх · Ctrl/C вниз · P — выйти</span>
+      <span id="keys">ЛКМ — сломать блок игрока · ПКМ — поставить · E — действие / сесть / встать · Q — копировать · F5/Y — камера · F — полёт · P — наблюдатель · V — резец</span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>

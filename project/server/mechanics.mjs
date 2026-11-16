@@ -1,10 +1,12 @@
 import { cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
-import { biblioWeaponCase, blockKey, blockState, buttonDuration, jammyAppliance, jammyLamp, jammyUseSound, manualHatch, pressurePlate } from '../world/block-interactions.mjs';
+import { biblioWeaponCase, blockKey, blockState, buttonDuration, jammyAppliance, jammyLamp, jammyUseSound, manualHatch, pressurePlate, signalSides } from '../world/block-interactions.mjs';
 import { paneOpaqueBlocks } from '../world/block-geometry-properties.mjs';
 import { PLAYER } from './physics.mjs';
 import { affectedCircuit, redstone, wireLevels } from './redstone.mjs';
 import { musicBlocks, noteSound } from './music-blocks.mjs';
+import { isPiston, movePiston, pistonHead } from './pistons.mjs';
+import { dispense, loadDispenser } from './dispensers.mjs';
 
 const DIAGNOSTIC = 'diagnostic';
 const WORLD = 'world';
@@ -251,6 +253,7 @@ function makeControls(base, geometry) {
     const prior = redstone(context.getCell, geometry, base.manifest.compositions);
     const lookup = redstone(current.get, geometry, base.manifest.compositions);
     const observed = new Set();
+    const movedPistons = new Set();
     let pending = sources;
     while (pending.length) {
       const {wires, receivers} = affectedCircuit(pending, lookup);
@@ -284,6 +287,22 @@ function makeControls(base, geometry) {
       for (const [key, point] of receivers) {
         const cell = current.get(...point);
         const [id, meta] = blockState(cell);
+        if (isPiston(id)) {
+          const sides = signalSides.map((_,side) => side).filter(side => side !== (meta & 7));
+          const powered = lookup.powered(point,true,sides);
+          if (powered === Boolean(meta & 8)) current.clear(key);
+          else if (due.has(key) && !movedPistons.has(key)) {
+            movedPistons.add(key);
+            const plan = movePiston(cell,powered,current.get,context);
+            if (plan?.blocked) current.schedule(point,id,200);
+            if (plan?.cells) {
+              plan.cells.forEach(current.put);
+              current.effects.push(...plan.effects);
+              pending.push(...plan.cells.map(pointOf));
+            }
+          } else current.schedule(point,id,100);
+          continue;
+        }
         const torch = id === 75 || id === 76, repeater = id === 93 || id === 94;
         if (torch || repeater) {
           if (repeater && lookup.repeaterLocked(point, meta)) {
@@ -298,10 +317,21 @@ function makeControls(base, geometry) {
         const side = cell.object?.data?.rot;
         const sides = id === 768 && Number.isInteger(side) && side >= 0 && side < 6 ? [side] : undefined;
         function inputPower(circuit) {
-          return circuit.powered(point, true, sides) ||
+          return (id === 27 ? circuit.poweredRailInput(point) : circuit.powered(point, true, sides)) ||
             ((id === 64 || id === 71) && circuit.powered([cell.x, cell.y + 1, cell.z]));
         }
         const powered = inputPower(lookup);
+        if (id === 23) {
+          if (!powered) current.clear(key);
+          else if (due.has(key)) {
+            const plan = dispense(cell,current.get,context);
+            if (plan) {
+              plan.cells.forEach(current.put);
+              current.effects.push(...plan.effects);
+            }
+          } else if (!inputPower(prior)) current.schedule(point,id,200);
+          continue;
+        }
         if (id === 25) {
           if (powered && !inputPower(prior)) {
             const effect = noteSound(current.get, ...point, cell.object?.data?.note ?? 0);
@@ -359,6 +389,7 @@ function makeControls(base, geometry) {
     prepareInteraction(context) {
       const {current: cell, playerOverlaps, playerPosition} = context;
       const [id, meta] = blockState(cell);
+      if (id === 23) return loadDispenser(cell,context.stack);
       if (isChest(id)) return chestAction(cell, context.getCell);
       if (biblioWeaponCase(id)) return context.input?.sneaking ? weaponCaseAction(cell, playerPosition) : null;
       const appliance = jammyAppliance(id, meta);
@@ -405,9 +436,25 @@ function makeControls(base, geometry) {
       const point = pointOf(change), [id, meta] = blockState(change);
       const current = plan(context);
       for (const item of changed) current.put(item);
+      const previous = context.getCell(...point);
+      const head = change.cell === null && pistonHead(previous,current.get);
+      if (head) current.put({...head,cell:null,object:null});
       if (buttonDuration(id) && (meta & 8)) current.schedule(point, id, buttonDuration(id));
       if (pressurePlate(id) && meta) current.schedule(point, id, 1000);
-      updatePower(context, current, changed.map(pointOf));
+      updatePower(context,current,(head ? [...changed,head] : changed).map(pointOf));
+      return current.finish();
+    },
+    prepareCartChange(context) {
+      const current = plan(context), sources = [];
+      for (const {point,occupied} of context.detectors) {
+        const cell = current.get(...point);
+        const [id,meta] = blockState(cell);
+        if (id !== 28 || Boolean(meta & 8) === occupied) continue;
+        current.put(metaChanged(cell,id,meta & 7 | (occupied ? 8 : 0)));
+        sources.push(point);
+      }
+      if (!sources.length) return null;
+      updatePower(context,current,sources);
       return current.finish();
     },
     prepareTick(context) {
