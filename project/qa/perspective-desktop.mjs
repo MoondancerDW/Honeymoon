@@ -149,7 +149,7 @@ try {
   assert.equal(await page.evaluate(() => honeymoon.perspective().mode),'first');
   await page.waitForFunction(() => {
     const avatar = honeymoon.localAvatar();
-    return avatar?.visible === false && avatar.firstPersonHooves?.length === 2;
+    return avatar?.visible === true && avatar.firstPersonBody && avatar.firstPersonHooves?.length === 2;
   });
   await camera('back');
   await page.waitForFunction(() => {
@@ -160,7 +160,7 @@ try {
   const front = await camera('front','front.png');
   assert.ok(front.distance > 3.6 && front.avatar.visible);
   await camera('first','first.png');
-  assert.equal(await page.evaluate(() => honeymoon.localAvatar()?.visible),false);
+  assert.equal(await page.evaluate(() => honeymoon.localAvatar()?.firstPersonBody),true);
   await camera('back');
 
   stage = 'walk, sprint and flight';

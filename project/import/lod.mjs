@@ -60,14 +60,29 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
   let retainPrevious = false;
   const catalog = makeMaterials();
   const sampled = new Map();
+  const sources = new Map();
+  function sourceAt(x,z) {
+    const key = `${x}.${z}`;
+    if (!worldChunks.has(key)) return null;
+    if (!sources.has(key)) {
+      const source = JSON.parse(readFileSync(join(world,'chunks',`${key}.json`),'utf8'));
+      if (source.x!==x || source.z!==z) throw new Error(`Unexpected coordinates in chunk ${key}`);
+      sources.set(key,{...source, palette:source.palette ?? manifest.palette,
+        compositions:source.compositions ?? manifest.compositions});
+    }
+    return sources.get(key);
+  }
   function load(x,z) {
     const key = `${x}.${z}`;
     if (!worldChunks.has(key)) return null;
     if (!sampled.has(key)) {
-      const chunk = JSON.parse(readFileSync(join(world,'chunks',`${key}.json`),'utf8'));
-      if (chunk.x!==x || chunk.z!==z) throw new Error(`Unexpected coordinates in chunk ${key}`);
-      const inner = sampleChunk({ ...chunk, palette:chunk.palette ?? manifest.palette,
-        compositions:chunk.compositions ?? manifest.compositions },catalog);
+      const neighbors = [];
+      for (let dz=-1; dz<=1; dz++) for (let dx=-1; dx<=1; dx++) {
+        if (!dx && !dz) continue;
+        const source = sourceAt(x+dx,z+dz);
+        if (source) neighbors.push(source);
+      }
+      const inner = sampleChunk(sourceAt(x,z),catalog,neighbors);
       sampled.set(key,{z,inner,outer:outerChunk(inner)});
     }
     return sampled.get(key);
@@ -85,6 +100,7 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
       if (z !== row) {
         row = z;
         for (const [key, entry] of sampled) if (entry.z<z*TILE_CHUNKS-1) sampled.delete(key);
+        for (const [key, entry] of sources) if (entry.z<z*TILE_CHUNKS-2) sources.delete(key);
       }
       for (const [suffix,loadTier,step] of [['',loadInner,undefined],['.outer',loadOuter,OUTER_STEP]]) {
         const {content,quads} = buildRegion(x,z,loadTier,catalog,minX,maxX,minZ,maxZ,step);

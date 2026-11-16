@@ -9,7 +9,7 @@ import {blockState, jammyUseSound} from '../world/block-interactions.mjs';
 import {seatFor, SEATED_EYE} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
-import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
+import {FLIGHT_VERTICAL_MULTIPLIER, POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
@@ -333,6 +333,7 @@ function playerPose() {
   const motion = seat ? 'sit' : !playing ? 'idle' : flying ? 'fly' : movement.medium === 'water' ? 'swim' :
     !movement.grounded && !movement.medium ? 'air' : horizontalSpeed > .15 ? (sprinting() ? 'run' : 'walk') : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
+    eye:view.eyeOffset(),
     typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(),
     seq:Math.round(performance.timeOrigin + performance.now())};
 }
@@ -613,7 +614,8 @@ function closeSign() {
 async function saveSign(event) {
   event.preventDefault();
   if (!signTarget || acting || resetting) return;
-  const request = {requestId:requestId(), type:'edit_sign', ...signTarget, lines:signFields.map(field => field.value)};
+  const request = {requestId:requestId(), type:'edit_sign', ...signTarget, lines:signFields.map(field => field.value),
+    eye:view.eyeOffset()};
   signStatus.textContent = '';
   signSave.disabled = true;
   acting = true;
@@ -847,7 +849,7 @@ function updateSelection() {
   if (!changed && !world.minecarts.size && !world.boats.size && !seatTarget) return;
   selectionInputs = stamp;
   const cp = Math.cos(pitch);
-  const origin = [x,y + (seat ? SEATED_EYE : EYE),z];
+  const origin = view.sightOrigin(position,seat ? SEATED_EYE : EYE);
   const direction = [-Math.sin(yaw) * cp,Math.sin(pitch),-Math.cos(yaw) * cp];
   if (changed) selection = pick(world, origin, direction, chiseling);
   seatTarget = pickVehicle(world,origin,direction,selection);
@@ -900,6 +902,7 @@ async function action(type, sneaking = false) {
     if (heldPart && type === 'place') type = 'place_part';
   }
   const request = {requestId: requestId(), type, x: target.x, y: target.y, z: target.z, hit: target.hit};
+  request.eye = view.eyeOffset();
   if (placingCart || placingBoat || placingFrame) Object.assign(request,{creativeItem:heldCreativeItem.key,yaw:heading.yaw});
   if (frame) request.entity = frame.entity;
   if (type === 'frame_item') {
@@ -1032,7 +1035,7 @@ function tick(now) {
     if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
       const dx = (-sin * forward + cos * strafe) * speed;
       const dz = (-cos * forward - sin * strafe) * speed;
-      if (flying) movement.fly(position, dx, vertical * speed, dz, dt, recordPosition, spectator);
+      if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, dt, recordPosition, spectator);
       else movement.update(position, dx, dz, jump, dt,
         {rise: jump || keys.has('Space'), descend: descending, recordStep: recordPosition});
     }
@@ -1048,10 +1051,10 @@ function tick(now) {
   } else {
     view.viewBob.step(0, dt, true, 0);
   }
-  updateCamera();
   view.updateVehicles();
-  view.players.frame(now, dt);
   view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat, spectator);
+  updateCamera();
+  view.players.frame(now, dt);
   updateSelection();
   updatePlacement(selection);
   const selected = frameTarget ? 'Рамка · ПКМ — вложить предмет · E — повернуть' :

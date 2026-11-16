@@ -408,8 +408,20 @@ export class Display {
     this.camera.rotation.set(front ? -pitch : pitch, yaw + (front ? Math.PI : 0), 0, 'YXZ');
     this.camera.position.set(position.x, eyeY, position.z);
     if (this.perspective === 0) {
-      this.cameraDistance = .1;
-      this.camera.translateZ(this.cameraDistance);
+      this.cameraDistance = 0;
+      if (this.localAvatar && !this.spectating) {
+        const target = this.localAvatar.eyesWorldPosition();
+        target.x += position.x - this.localAvatar.object.position.x;
+        target.y += position.y - this.localAvatar.object.position.y;
+        target.z += position.z - this.localAvatar.object.position.z;
+        const origin = [position.x,target.y,position.z];
+        const delta = new THREE.Vector3(target.x - origin[0],0,target.z - origin[2]);
+        const distance = delta.length();
+        delta.normalize();
+        const clearance = cameraClearance(this.world,origin,delta.toArray(),distance);
+        this.camera.position.set(origin[0] + delta.x * clearance,target.y,origin[2] + delta.z * clearance);
+      }
+      this.actionEye = this.camera.position.toArray().map((value,index) => value - position[['x','y','z'][index]]);
       const bob = this.viewBob.sample();
       this.camera.rotateX(bob.pitch);
       this.camera.rotateZ(bob.roll);
@@ -424,6 +436,18 @@ export class Display {
         eyeY + direction[1] * this.cameraDistance, position.z + direction[2] * this.cameraDistance);
     }
     this.camera.updateMatrixWorld();
+    if (this.localAvatar) this.localAvatar.object.visible = !this.spectating &&
+      (this.perspective === 0 || this.cameraDistance > .36);
+  }
+
+  eyeOffset() {
+    if (!this.actionEye || this.perspective !== 0) return undefined;
+    return this.actionEye.slice();
+  }
+
+  sightOrigin(position, eyeHeight) {
+    return this.perspective === 0 && this.actionEye ?
+      this.actionEye.map((value,index) => value + position[['x','y','z'][index]]) : [position.x,position.y + eyeHeight,position.z];
   }
 
   setLocalSkin(skin) {
@@ -451,14 +475,12 @@ export class Display {
       this.localAvatar = createPonyAvatar(this.ponyAirAt);
       this.scene.add(this.localAvatar.object);
       this.localAvatar.setSkin(this.localSkin);
-      this.firstPersonScene = new THREE.Scene();
-      this.firstPersonCamera = new THREE.PerspectiveCamera();
     }
     const firstPerson = this.perspective === 0;
     const {object} = this.localAvatar;
-    object.visible = !spectator && !firstPerson && this.cameraDistance > .36;
+    this.spectating = spectator;
+    this.localAvatar.setFirstPerson(firstPerson && !spectator);
     if (spectator) {
-      this.localAvatar.updateFirstPerson(this.firstPersonScene, this.camera, false);
       return;
     }
     object.position.set(position.x, position.y, position.z);
@@ -466,7 +488,6 @@ export class Display {
     this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion,
       yawOffset:facing.yawOffset, strideDirection:facing.strideDirection, position, swing:pose.swing, held:pose.held,
       itemAssets:this.heldItemAssets()});
-    this.localAvatar.updateFirstPerson(this.firstPersonScene, this.camera, firstPerson);
     object.updateMatrixWorld(true);
   }
 
@@ -694,8 +715,8 @@ export class Display {
     }
     if (this.world.manifest.chunkPalettes) {
       const layered = distance >= 24 && this.farTerrain?.lod.maxDistance === 32;
-      this.scene.fog.near = distance === 4 ? 56 : layered ? 128 : distance * 14;
-      this.scene.fog.far = distance === 32 ? 496 : distance * 16;
+      this.scene.fog.near = distance === 32 ? 448 : distance === 4 ? 56 : layered ? 128 : distance * 14;
+      this.scene.fog.far = distance * 16;
     } else {
       this.scene.fog.near = distance === 4 ? 60 : distance * 8;
       this.scene.fog.far = Math.max(115, distance * 22);
@@ -1265,19 +1286,6 @@ export class Display {
       this.ponyShadows.update(ponies.map(pony => pony.object), this.camera.position);
       this.updateOcclusion(now);
       this.renderer.render(this.scene, this.camera);
-      if (this.perspective === 0 && this.firstPersonScene) {
-        const camera = this.firstPersonCamera;
-        camera.projectionMatrix.copy(this.camera.projectionMatrix);
-        camera.projectionMatrixInverse.copy(this.camera.projectionMatrixInverse);
-        this.renderer.clearDepth();
-        const {autoClear, info:{autoReset}} = this.renderer;
-        this.renderer.autoClear = this.renderer.info.autoReset = false;
-        try { this.renderer.render(this.firstPersonScene, camera); }
-        finally {
-          this.renderer.autoClear = autoClear;
-          this.renderer.info.autoReset = autoReset;
-        }
-      }
       this.nextIdleRender = now + 100;
     }
   }

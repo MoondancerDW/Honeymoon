@@ -6,6 +6,15 @@ const reconnectGrace = 2000;
 const maxEntries = 128;
 const heldKey = /^[a-z0-9][a-z0-9:_-]{0,95}$/;
 
+export function readEye(eye) {
+  if (eye === undefined) return undefined;
+  if (!Array.isArray(eye) || eye.length !== 3 || eye.some(value => !Number.isFinite(value)) ||
+      Math.hypot(eye[0],eye[2]) > .75 || eye[1] < .1 || eye[1] > 2.1) {
+    throw new RequestError(400, 'invalid_pose');
+  }
+  return eye.slice();
+}
+
 export function readPose(body) {
   if (!body || !Number.isFinite(body.yaw) || !Number.isFinite(body.pitch) ||
       Math.abs(body.yaw) > 1e6 || Math.abs(body.pitch) > Math.PI / 2 ||
@@ -19,6 +28,7 @@ export function readPose(body) {
   const yaw = (body.yaw + Math.PI) % (2 * Math.PI);
   return { yaw: (yaw < 0 ? yaw + 2 * Math.PI : yaw) - Math.PI,
     pitch: body.pitch, motion: body.motion, seq: body.seq,
+    ...(body.eye !== undefined && {eye:readEye(body.eye)}),
     ...(body.typing !== undefined && {typing:body.typing}),
     ...(body.swing !== undefined && {swing:body.swing}),
     ...(body.held !== undefined && {held:body.held === null ? null : {kind:body.held.kind, key:body.held.key}}) };

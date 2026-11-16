@@ -73,6 +73,36 @@ test('a powered rail launches a resting cart away from a solid end stop', t => {
   assert.ok(carts.snapshot()[0].position[0] > 3);
 });
 
+test('an ordinary slope accelerates an idle cart downhill and slows it uphill', t => {
+  for (const [meta, uphill] of [[2,1],[3,-1]]) {
+    const {carts,blocks,tick} = fixture(t);
+    const key = 'legacy:66:' + meta;
+    blocks.set('2,1,2',key);
+    const cart = carts.place({x:2,y:1,z:2,yaw:-Math.PI/2},railFor(key));
+    carts.accept(cart);
+    const advance = () => {
+      tick();
+      carts.advance(new Map(),assert.fail);
+      return cart.entity.position;
+    };
+
+    const [startX,startY] = cart.entity.position;
+    const [downX,downY] = advance();
+    const [furtherX] = advance();
+    assert.ok(downY < startY);
+    assert.ok((downX - startX) * uphill < 0);
+    assert.ok(Math.abs(furtherX - downX) > Math.abs(downX - startX));
+
+    cart.speed = uphill * 2.8;
+    const [, beforeY] = cart.entity.position;
+    const [upX,upY] = advance();
+    const [higherX,higherY] = advance();
+    assert.ok(higherY > upY && upY > beforeY);
+    assert.ok((upX - furtherX) * uphill > 0);
+    assert.ok(Math.abs(higherX - upX) < Math.abs(upX - furtherX));
+  }
+});
+
 test('an on-foot collision pushes a cart along its rail and saves only one cart', t => {
   const {store,carts,blocks,options,tick} = fixture(t);
   for (let x = 1; x < 6; x++) blocks.set(`${x},1,2`,'legacy:66:1');

@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { displayObject, cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
+import {readEye} from './presence.mjs';
 import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
 import { createMinecarts } from './minecarts.mjs';
@@ -9,7 +10,7 @@ import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
-import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT } from '../world/player-body.mjs';
+import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT, positionCost } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
 import { isRideableBoat,boatHeading,boatHit,boatSeat } from '../world/boats.mjs';
@@ -58,6 +59,7 @@ function normalizeAction(body) {
   if (!actions.has(body.type)) throw new RequestError(400, 'unknown_action');
   if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw new RequestError(400, 'invalid_revision');
   const input = { type: body.type, ...point(body, true), expectedRevision: body.expectedRevision };
+  if (body.eye !== undefined) input.eye = readEye(body.eye);
   if (vehiclePlacements.has(body.type)) {
     if (body.creativeItem !== vehiclePlacements.get(body.type)) throw new RequestError(400,'unknown_cell_type');
     input.creativeItem = body.creativeItem;
@@ -209,6 +211,7 @@ export function createGame(base, store, geometry, {
   creativeItems = new Map(),
 } = {}) {
   const positions = new Map();
+  const eyes = new Map();
   const spectators = new Set();
   const seats = new Map();
   let occupiedDetectors = new Map();
@@ -314,6 +317,13 @@ export function createGame(base, store, geometry, {
 
   function playerSight(player) {
     const position = playerAt(player);
+    const eye = eyes.get(player);
+    if (eye) {
+      const origin = [position.x,position.y + eye[1],position.z];
+      const target = [origin[0] + eye[0],origin[1],origin[2] + eye[2]];
+      if (physical.visiblePoint([target[0],target[1] + .02,target[2]],target) &&
+          physical.visiblePoint(origin,target)) return {x:target[0],y:position.y,z:target[2],eye:eye[1]};
+    }
     return seats.has(player) ? {...position, eye:SEATED_EYE} : position;
   }
 
@@ -332,6 +342,8 @@ export function createGame(base, store, geometry, {
   }
 
   function poseFor(player, pose) {
+    if (pose?.eye) eyes.set(player,pose.eye);
+    else if (pose) eyes.delete(player);
     if (spectators.has(player)) return {...pose, spectator:true};
     const seat = publicSeat(player);
     if (!seat) return pose?.motion === 'sit' ? {...pose, motion:'idle'} : pose;
@@ -427,6 +439,8 @@ export function createGame(base, store, geometry, {
   }
 
   function sit(player, target, pose) {
+    if (pose?.eye) eyes.set(player,pose.eye);
+    else eyes.delete(player);
     if (spectators.has(player)) throw new RequestError(403, 'spectator_action');
     const previous = playerAt(player);
     const existing = publicSeat(player);
@@ -443,7 +457,7 @@ export function createGame(base, store, geometry, {
     const profile = seatFor(cellView(current), models, pose.yaw,
       (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz)));
     if (!profile) throw new RequestError(409, 'not_a_seat');
-    if (!physical.targetAtHit(previous, x, y, z, hit)) throw new RequestError(403, 'outside_reach');
+    if (!physical.targetAtHit(playerSight(player), x, y, z, hit)) throw new RequestError(403, 'outside_reach');
     const other = profile.bed ? bedMate(current, address, getCurrent) : null;
     const blocks = other ? [address, other] : [address];
     if (blocks.some(block => seatsAt(block.x, block.y, block.z))) throw new RequestError(409, 'seat_taken');
@@ -1013,6 +1027,8 @@ export function createGame(base, store, geometry, {
   function action(player, body) {
     if (spectators.has(player)) throw new RequestError(403, 'spectator_action');
     const input = normalizeAction(body);
+    if (input.eye) eyes.set(player,input.eye);
+    else eyes.delete(player);
     const encoded = JSON.stringify(input);
     const { requestId } = body;
     const transport = {};
@@ -1155,7 +1171,7 @@ export function createGame(base, store, geometry, {
       const planar = Math.hypot(step.x - from.x, step.z - from.z);
       const vertical = step.y - from.y;
       if (!bodyWithinMap(step) || hasTrail && (planar > POSITION_STEP_LIMIT || Math.abs(vertical) > .55)) reject();
-      distance += Math.hypot(planar, Math.max(vertical, 0));
+      distance += positionCost(planar,vertical);
       drop += Math.max(-vertical, 0);
       if (distance > budget + MOVEMENT_GRACE || drop > 6) reject();
       from = step;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {positionBatch} from './position-packet.mjs';
-import {FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT} from '../world/player-body.mjs';
+import {FLIGHT_SPRINT_SPEED, FLIGHT_VERTICAL_MULTIPLIER, POSITION_BATCH_LIMIT} from '../world/player-body.mjs';
 
 test('batches a long fall in steps allowed by the server', () => {
   const start = [0,220,0];
@@ -23,4 +23,12 @@ test('batches a full 130 ms flight sprint update without accumulating client mov
   const start = [0,65,0];
   const sprint = Array.from({length:13}, (_, index) => [(index + 1) * .01 * FLIGHT_SPRINT_SPEED,65,0]);
   assert.deepEqual(positionBatch(start, sprint).trail, sprint);
+});
+
+test('batches a full 130 ms climbing flight sprint at twice the horizontal speed', () => {
+  const start = [0,65,0];
+  const ascent = Array.from({length:13}, (_, i) =>
+    [0,65 + (i + 1) * .01 * FLIGHT_SPRINT_SPEED * FLIGHT_VERTICAL_MULTIPLIER,0]);
+  assert.ok(ascent.at(-1)[1] - start[1] > POSITION_BATCH_LIMIT);
+  assert.deepEqual(positionBatch(start, ascent).trail, ascent);
 });

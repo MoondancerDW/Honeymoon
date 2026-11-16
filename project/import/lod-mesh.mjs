@@ -2,6 +2,7 @@ import {shapeFor, FACES} from '../world/geometry.mjs';
 import {fullCoverMaterial} from '../world/cover-plane.mjs';
 import {FACE_SHADE} from '../client/lighting.mjs';
 import {LOD_VERSION, TRANSITION_FACE, WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
+import {lampCoverOverrides} from './lod-lamps.mjs';
 
 export const TILE_CHUNKS = 4;
 export const STEP = 2;
@@ -117,7 +118,7 @@ function shapedLights(chunk, sections, catalog) {
   return lamps;
 }
 
-export function sampleChunk(chunk, catalog) {
+export function sampleChunk(chunk, catalog, neighbors) {
   const entries = chunk.palette.map(key => catalog.get(key, chunk.compositions));
   const samplePlane = CHUNK_SIDE ** 2;
   const grid = new Uint16Array(samplePlane * 128);
@@ -131,6 +132,9 @@ export function sampleChunk(chunk, catalog) {
   const upper = new Uint8Array(8);
   const sections = new Map(chunk.sections.map(section => [section.y, sectionData(section)]));
   const lamps = shapedLights(chunk, sections, catalog);
+  for (const [index, key] of lampCoverOverrides(chunk, neighbors)) {
+    lamps.set(index, key === 'air' ? 0 : catalog.materialFor(key));
+  }
   const water = new Map();
   const details = new Map();
 

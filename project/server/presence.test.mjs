@@ -109,6 +109,14 @@ const base = {
 };
 const geometry = {shapeFor:()=>[], collisionFor:()=>[]};
 
+test('avatar eye offsets keep a bounded local camera and remain optional for older clients', () => {
+  assert.equal(readPose({yaw:0,pitch:0}).eye,undefined);
+  assert.deepEqual(readPose({yaw:0,pitch:-1.5,eye:[.12,1.31,-.29]}).eye,[.12,1.31,-.29]);
+  for (const eye of [[1,1,0],[0,3,0],[0,-1,0],[0,1,NaN],[0,1],[0,1,0,0]]) {
+    assert.throws(() => readPose({yaw:0,pitch:0,eye}),{code:'invalid_pose'});
+  }
+});
+
 async function eventFeed(url, cookie, signal, social = false) {
   const response = await fetch(url + '/api/events?since=0&presence=1' + (social ? '&social=1' : ''), {headers:{Cookie:cookie}, signal});
   assert.equal(response.status, 200);

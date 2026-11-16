@@ -4,7 +4,7 @@ import {terrainFilterShader} from './terrain-filter.mjs';
 
 const PACK_CHUNKS = 4;
 const PACK_BLOCKS = PACK_CHUNKS * 16;
-const INNER_RADIUS = 8;
+const INNER_RADIUS = 20;
 const MAX_FETCH = 2;
 const MAX_PENDING_UPLOADS = 6;
 const RETAIN_MARGIN = 1;
@@ -161,6 +161,12 @@ export class FarTerrain {
     if (cx !== undefined) this.move(cx,cz);
   }
 
+  get coverageRadius() {
+    // Guard rings keep the circular horizon covered while the camera is
+    // between chunk centers. They are hidden by the last part of the fog.
+    return this.radius + (this.radius === 32 ? 2 : 0);
+  }
+
   setActive(active) {
     if (this.active === active) return;
     this.active = active;
@@ -191,7 +197,7 @@ export class FarTerrain {
     this.cz = cz;
     this.targets.clear();
     const {minX,maxX,minZ,maxZ} = this.bounds;
-    const {radius,innerRadius} = this;
+    const radius = this.coverageRadius, {innerRadius} = this;
     const radius2 = radius ** 2, innerRadius2 = innerRadius ** 2;
     for (let rz = Math.max(minZ,packAt(cz-radius)); rz <= Math.min(maxZ,packAt(cz+radius)); rz++) {
       for (let rx = Math.max(minX,packAt(cx-radius)); rx <= Math.min(maxX,packAt(cx+radius)); rx++) {
@@ -238,7 +244,7 @@ export class FarTerrain {
 
   visibilityLookup() {
     const cached = new Map();
-    const {cx,cz,radius} = this;
+    const {cx,cz} = this, radius = this.coverageRadius;
     const rowSize = radius * 2 + 1;
     return (x,z) => {
       const dx = x - cx, dz = z - cz;
@@ -285,7 +291,7 @@ export class FarTerrain {
   }
 
   regionAt(x,z,distance = distanceSquared(x-this.cx,z-this.cz)) {
-    if (!(distance <= this.radius ** 2)) return;
+    if (!(distance <= this.coverageRadius ** 2)) return;
     const rx = packAt(x), rz = packAt(z);
     const index = x - rx * PACK_CHUNKS + 4 * (z - rz * PACK_CHUNKS);
     const outer = distance > this.innerRadius ** 2;
@@ -374,7 +380,8 @@ export class FarTerrain {
       if (region.group.visible) for (let i=0; i<16; i++) if (region.mask & (1 << i)) chunks++;
     }
     const pending = this.pending.size + this.decoded.length + this.display.uploads.filter(job => job.far).length;
-    return {active:this.active,radius:this.active ? this.radius : 0,packs,outerPacks,chunks,pending,
+    return {active:this.active,radius:this.active ? this.radius : 0,innerRadius:this.innerRadius,
+      coverageRadius:this.coverageRadius,packs,outerPacks,chunks,pending,
       ready:this.active && this.targets.size > 0 && !missing,bytes,triangles,missing,errors:this.errors};
   }
 }

@@ -59,12 +59,22 @@ try {
     const source = await response.text();
     const marker = 'globalThis.honeymoon = Object.freeze({';
     assert.ok(source.includes(marker));
-    const code = `\nqaCamera: ({feet,yaw,pitch}) => {
+    const code = `\nqaCamera: async ({feet,yaw,pitch}) => {
       view.cycleTime = 6000;
       view.updateSky(6000);
       Object.assign(position,{x:feet[0],y:feet[1],z:feet[2]});
       Object.assign(heading,{yaw,pitch}); updateCamera();
+      await new Promise(resolve => requestAnimationFrame(resolve));
       return view.perspectiveView();
+    },
+    qaHorizonState: () => {
+      const terrain = view.farTerrain;
+      const probes = [19,21].map(distance => ({distance,outer:
+        [[distance,0],[-distance,0],[0,distance],[0,-distance]].map(([x,z]) =>
+          terrain?.regionAt(terrain.cx+x,terrain.cz+z)?.outer)}));
+      const coverage = [34,35].map(distance => ({distance,present:
+        Boolean(terrain?.regionAt(terrain.cx+distance,terrain.cz))}));
+      return {fog:[view.scene.fog.near,view.scene.fog.far],probes,coverage};
     },\n`;
     await route.fulfill({response, body:source.replace(marker,marker+code+
       '\nqaFireFrame: () => view.fireTexture?.offset.y,\n')});
@@ -73,14 +83,17 @@ try {
   await page.waitForFunction(() => globalThis.honeymoon?.stats().playable, undefined, {timeout:90000});
   const initialDistance = Number(await page.locator('#distance').inputValue());
   assert.ok(initialDistance === 24 || initialDistance === 32);
+  const supports32 = await page.locator('#distance option[value="32"]').isEnabled();
   await page.addStyleTag({content:'#game > :not(#scene) {display:none !important;}'});
   for (const {id,feet,yaw,pitch,surfaceY} of points) {
     if (selected && id !== selected) continue;
     const camera = {feet,yaw:rad(180-yaw),pitch:-rad(pitch)};
     const perspective = await page.evaluate(pose => honeymoon.qaCamera(pose),camera);
     assert.equal(perspective.mode,'first');
-    assert.ok(Math.abs(perspective.position[1] - feet[1] - 1.62) < .11);
-    const modes = id === 'fire-eye' ? [[4,false]] : id === 'boundary' && initialDistance === 32 ? [[24,false],[32,false]]
+    assert.ok(perspective.position.every(Number.isFinite));
+    assert.ok(perspective.position[1] > feet[1] + .1 && perspective.position[1] < feet[1] + 2.1);
+    assert.ok(Math.hypot(perspective.position[0]-feet[0],perspective.position[2]-feet[2]) <= .75);
+    const modes = id === 'fire-eye' ? [[4,false]] : id === 'boundary' && supports32 ? [[24,false],[32,false]]
       : compareWater ? [[8,false],[initialDistance,false]]
       : id === 'mine-room' ? [[4,false],[initialDistance,false],[initialDistance,true]] : [[4,false],[initialDistance,false]];
     for (const [distance,occlusion] of modes) {
@@ -94,8 +107,18 @@ try {
       }, {feet,distance,occlusion},{timeout:120000,polling:220});
       const facts = await page.evaluate(() => {
         const {farTerrain,residentChunks,triangles,calls,occlusion} = honeymoon.stats();
-        return {farTerrain,residentChunks,triangles,calls,occlusion};
+        return {farTerrain,residentChunks,triangles,calls,occlusion,horizon:honeymoon.qaHorizonState()};
       });
+      if (distance === 32) {
+        assert.deepEqual(facts.horizon.fog,[448,512]);
+        assert.equal(facts.farTerrain.innerRadius,20);
+        assert.equal(facts.farTerrain.coverageRadius,34);
+        if (id === 'boundary') {
+          assert.ok(facts.horizon.probes[0].outer.every(outer => outer === false));
+          assert.ok(facts.horizon.probes[1].outer.every(outer => outer === true));
+          assert.deepEqual(facts.horizon.coverage,[{distance:34,present:true},{distance:35,present:false}]);
+        }
+      }
       await page.waitForTimeout(160);
       const name = `${id}-${distance}${occlusion ? '-occlusion' : ''}`;
       const screenshot = await page.screenshot({path:join(output,`${name}.png`)});
