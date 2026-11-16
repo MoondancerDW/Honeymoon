@@ -35,7 +35,7 @@ test('sculpture overrides keep their distinct data in section halos and movement
   assert.deepEqual(sculpted, [[342,two],[343,one]]);
   const player = new Movement(world);
   assert.equal(player.blocked(.3,.08,.3), true);
-  assert.equal(player.blocked(.5,.08,.5), false);
+  assert.equal(player.blocked(.64,.08,.64), false);
   world.setOverride({x:0,y:0,z:0,cell:null,voxels:null,revision:3});
   assert.equal(player.blocked(.3,.08,.3), false);
 });
@@ -44,14 +44,14 @@ test('a pending material placement prevents local movement into its eighth until
   const world = new World(manifest);
   for (const x of [-1,0]) for (const z of [-1,0]) world.addChunk({x,z,sections:[]});
   const movement = new Movement(world);
-  const feet = {x:-.31,y:.08,z:.25};
+  const feet = {x:-.51,y:.08,z:.25};
   const placement = {x:0,y:0,z:0,boxes:[voxelBox(voxelIndex(0,0,1))]};
   assert.equal(overlapsPlacement(feet, placement), false);
   movement.pendingPlacement = placement;
   movement.fly(feet, 5.1, 0, 0, .05);
-  assert.ok(feet.x <= -.2999);
+  assert.ok(feet.x <= -.4999);
   assert.equal(overlapsPlacement(feet, placement), false);
   movement.pendingPlacement = null;
   movement.fly(feet, 5.1, 0, 0, .05);
-  assert.ok(feet.x > -.1);
+  assert.ok(feet.x > -.3);
 });

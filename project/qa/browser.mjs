@@ -90,7 +90,7 @@ try {
     const {x,y,z,cell,offset} = honeymoon.target();
     return {x,y,z,key: typeof cell === 'string' ? cell : cell.key,offset};
   });
-  await page.keyboard.press('KeyQ');
+  await page.keyboard.press('KeyO');
   await page.waitForFunction(() => document.querySelector('#selected').textContent.includes('В руке'));
   await page.mouse.down({button:'left'});
   await page.mouse.up({button:'left'});

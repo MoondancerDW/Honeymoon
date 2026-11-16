@@ -5,13 +5,13 @@ export { PLAYER };
 const epsilon = 0.00001;
 const axisNames = ['x', 'y', 'z'];
 
-function overlapsPlayer(position, box, x, y, z, height = PLAYER.height) {
-  return position.x + PLAYER.halfWidth > x + box.x0 + epsilon
-    && position.x - PLAYER.halfWidth < x + box.x1 - epsilon
+function overlapsPlayer(position, box, x, y, z, {height,halfWidth} = position.body ?? PLAYER) {
+  return position.x + halfWidth > x + box.x0 + epsilon
+    && position.x - halfWidth < x + box.x1 - epsilon
     && position.y + height > y + box.y0 + epsilon
     && position.y < y + box.y1 - epsilon
-    && position.z + PLAYER.halfWidth > z + box.z0 + epsilon
-    && position.z - PLAYER.halfWidth < z + box.z1 - epsilon;
+    && position.z + halfWidth > z + box.z0 + epsilon
+    && position.z - halfWidth < z + box.z1 - epsilon;
 }
 
 function rayBox(origin, delta, minima, maxima, open = false) {
@@ -43,19 +43,24 @@ export function physics(base, geometry, getCell) {
     return geometry[kind](cell, (dx, dy, dz) => plannedNeighbor?.(dx, dy, dz) ?? getCell(x + dx, y + dy, z + dz));
   }
 
-  function collides(position, height = PLAYER.height, ignored = []) {
+  function collides(position, body = position.body ?? PLAYER, ignored = []) {
+    // Numeric heights remain available for entity hull samples.
+    if (typeof body === 'number') body = {height:body,halfWidth:.3};
+    const {height,halfWidth} = body;
     for (let y = Math.floor(position.y) - 1; y <= Math.floor(position.y + height); y++) {
-      for (let z = Math.floor(position.z - PLAYER.halfWidth) - 1; z <= Math.floor(position.z + PLAYER.halfWidth) + 1; z++) {
-        for (let x = Math.floor(position.x - PLAYER.halfWidth) - 1; x <= Math.floor(position.x + PLAYER.halfWidth) + 1; x++) {
+      for (let z = Math.floor(position.z - halfWidth) - 1; z <= Math.floor(position.z + halfWidth) + 1; z++) {
+        for (let x = Math.floor(position.x - halfWidth) - 1; x <= Math.floor(position.x + halfWidth) + 1; x++) {
           if (ignored.some(cell => cell.x === x && cell.y === y && cell.z === z)) continue;
-          if (boxesAt('collisionFor', x, y, z).some(box => overlapsPlayer(position, box, x, y, z, height))) return true;
+          if (boxesAt('collisionFor', x, y, z).some(box => overlapsPlayer(position, box, x, y, z, body))) return true;
         }
       }
     }
     return false;
   }
 
-  function standAbove({x, y, z}, highest) {
+  const supported = (position, body, depth = .03) => collides({...position,y:position.y-depth}, body);
+
+  function standAbove({x, y, z}, highest, body = PLAYER) {
     const bx = Math.floor(x), bz = Math.floor(z);
     for (let by = Math.floor(y) - 1; by <= highest; by++) {
       const surfaces = boxesAt('collisionFor', bx, by, bz).filter(box =>
@@ -64,30 +69,30 @@ export function physics(base, geometry, getCell) {
       for (const level of surfaces) {
         if (level < y || level > highest) continue;
         const target = {x, y:level, z};
-        if (!collides(target)) return target;
+        if (!collides(target, body)) return target;
       }
     }
   }
 
-  function movePathClear(start, end) {
+  function movePathClear(start, end, body) {
     const steps = Math.ceil(Math.hypot(end.x - start.x, end.y - start.y, end.z - start.z) * 8);
     for (let step = 1; step <= steps; step++) {
       const fraction = step / steps;
       const position = Object.fromEntries(axisNames.map(axis => [axis, start[axis] + (end[axis] - start[axis]) * fraction]));
-      if (collides(position)) return false;
+      if (collides(position, body)) return false;
     }
     return true;
   }
 
-  function movementAllowed(start, end) {
-    if (collides(end)) return false;
-    if (movePathClear(start, end)) return true;
+  function movementAllowed(start, end, body = PLAYER) {
+    if (collides(end, body)) return false;
+    if (movePathClear(start, end, body)) return true;
     // A sampled stair step may rise before moving horizontally, or land after moving.
     const corner = end.y > start.y ? { ...start, y: end.y } : { ...end, y: start.y };
-    return movePathClear(start, corner) && movePathClear(corner, end);
+    return movePathClear(start, corner, body) && movePathClear(corner, end, body);
   }
 
-  function movementTrailAllowed(start, trail) {
+  function movementTrailAllowed(start, trail, {height,halfWidth} = PLAYER) {
     const cached = new Map();
     function clear(from, to) {
       const delta = axisNames.map(axis => to[axis] - from[axis]);
@@ -95,15 +100,15 @@ export function physics(base, geometry, getCell) {
       const origin = axisNames.map(axis => from[axis]);
       const low = axisNames.map(axis => Math.floor(Math.min(from[axis], to[axis])));
       const highX = Math.floor(Math.max(from.x, to.x)) + 1;
-      const highY = Math.floor(Math.max(from.y, to.y) + PLAYER.height);
+      const highY = Math.floor(Math.max(from.y, to.y) + height);
       const highZ = Math.floor(Math.max(from.z, to.z)) + 1;
       for (let y = low[1] - 1; y <= highY; y++) {
         for (let z = low[2] - 1; z <= highZ; z++) {
           for (let x = low[0] - 1; x <= highX; x++) {
             const key = `${x},${y},${z}`;
             if (!cached.has(key)) cached.set(key, boxesAt('collisionFor', x, y, z).map(box => [
-              [x + box.x0 - PLAYER.halfWidth + epsilon, y + box.y0 - PLAYER.height + epsilon, z + box.z0 - PLAYER.halfWidth + epsilon],
-              [x + box.x1 + PLAYER.halfWidth - epsilon, y + box.y1 - epsilon, z + box.z1 + PLAYER.halfWidth - epsilon],
+              [x + box.x0 - halfWidth + epsilon, y + box.y0 - height + epsilon, z + box.z0 - halfWidth + epsilon],
+              [x + box.x1 + halfWidth - epsilon, y + box.y1 - epsilon, z + box.z1 + halfWidth - epsilon],
             ]));
             for (const [min, max] of cached.get(key)) {
               if (rayBox(origin, delta, min, max, true) !== Infinity) return false;
@@ -217,6 +222,7 @@ export function physics(base, geometry, getCell) {
 
   return {
     collides,
+    supported,
     standAbove,
     movementAllowed,
     movementTrailAllowed,

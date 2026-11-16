@@ -52,7 +52,7 @@ export function caveMoodSource(world, player, random = Math.random) {
   return null;
 }
 
-function support(world, position) {
+function support(world, position, body = PLAYER) {
   const x = Math.floor(position.x), z = Math.floor(position.z);
   const startY = Math.floor(position.y + .001);
   let closest;
@@ -67,8 +67,8 @@ function support(world, position) {
         for (const box of boxes) {
           const top = y + box.y1;
           if (top > position.y + .0125 || top <= height || top < position.y - .125 ||
-              position.x + PLAYER.halfWidth <= xx + box.x0 || position.x - PLAYER.halfWidth >= xx + box.x1 ||
-              position.z + PLAYER.halfWidth <= zz + box.z0 || position.z - PLAYER.halfWidth >= zz + box.z1) continue;
+              position.x + body.halfWidth <= xx + box.x0 || position.x - body.halfWidth >= xx + box.x1 ||
+              position.z + body.halfWidth <= zz + box.z0 || position.z - body.halfWidth >= zz + box.z1) continue;
           height = top;
           closest = {cell, material: box.material};
         }
@@ -234,6 +234,9 @@ export class WorldAudio {
       if (!effect.sound) continue;
       if (effect.sound === 'block.place') {
         this.placed(world, effect);
+      } else if (effect.sound === 'block.break') {
+        const [,event,volume,pitch] = blockSoundProfile(this.#catalog,effect.voxelMaterial ?? effect.cell,effect.material);
+        void this.play(event,effect.position,{volume:(volume + 1) / 2,pitch:pitch * .8});
       } else if (effect.sound.startsWith('record.')) {
         this.#record(effect.sound, effect.position);
       } else {
@@ -249,7 +252,7 @@ export class WorldAudio {
     void this.play(event, position, {volume: (volume + 1) / 2, pitch: pitch * .8});
   }
 
-  frame(world, position, {grounded = false, swimming = false, climbing = false, yaw = 0} = {}) {
+  frame(world, position, {grounded = false, swimming = false, climbing = false, yaw = 0, body = PLAYER} = {}) {
     if (!this.#playing || !this.#catalog) return;
     this.#listener = {x: position.x, y: position.y + 1.62, z: position.z};
     this.#right = [Math.cos(yaw), -Math.sin(yaw)];
@@ -281,7 +284,7 @@ export class WorldAudio {
         if (swimming) {
           void this.play('liquid.swim', undefined, {volume: .2, pitch: .8 + Math.random() * .4});
         } else {
-          const surface = climbing ? {cell: 'legacy:65:0'} : support(world, position);
+          const surface = climbing ? {cell: 'legacy:65:0'} : support(world,position,body);
           if (surface) {
             const [event, , volume, pitch] = blockSoundProfile(this.#catalog, surface.cell, surface.material);
             void this.play(event, undefined, {volume: volume * .15, pitch});

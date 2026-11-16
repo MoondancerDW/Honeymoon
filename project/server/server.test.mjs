@@ -154,8 +154,12 @@ test('two guests edit one cell and receive the same durable changes after confli
   assert.equal(racing.find(response => response.status === 409).data.error, 'stale_cell');
   assert.equal(winner.changes[0].cell, null);
   assert.equal(winner.worldRevision, 1);
-  assert.deepEqual(await a.next(), { type: 'commit', data: winner });
-  assert.deepEqual(await b.next(), { type: 'commit', data: winner });
+  assert.deepEqual(winner.effects, [{type:'break',sound:'block.break',cell:'legacy:1:0',position:[8,1,10]}]);
+  const commits = await Promise.all([a.next(),b.next()]);
+  for (const [index,commit] of commits.entries()) {
+    const effects = racing[index].status === 200 ? [] : winner.effects;
+    assert.deepEqual(commit, {type:'commit',data:{...winner,effects}});
+  }
   const replay = await request(app, '/api/action', { cookie: first.cookie, payload: duplicateRemove });
   assert.deepEqual(replay, racing[0]);
   const wrongReplay = await request(app, '/api/action', { cookie: first.cookie, payload: { ...duplicateRemove, y: 2 } });

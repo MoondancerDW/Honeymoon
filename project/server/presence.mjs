@@ -1,5 +1,6 @@
 import { RequestError } from './errors.mjs';
 import { publicProfile } from './presence-profile.mjs';
+import { isPlayerStance } from '../world/player-body.mjs';
 
 const poses = new Set(['idle', 'walk', 'run', 'air', 'fly', 'swim', 'sit']);
 const reconnectGrace = 2000;
@@ -9,7 +10,7 @@ const heldKey = /^[a-z0-9][a-z0-9:_-]{0,95}$/;
 export function readEye(eye) {
   if (eye === undefined) return undefined;
   if (!Array.isArray(eye) || eye.length !== 3 || eye.some(value => !Number.isFinite(value)) ||
-      Math.hypot(eye[0],eye[2]) > .75 || eye[1] < .1 || eye[1] > 2.1) {
+      Math.hypot(eye[0],eye[2]) > .75 || eye[1] < .05 || eye[1] > 2.1) {
     throw new RequestError(400, 'invalid_pose');
   }
   return eye.slice();
@@ -19,6 +20,8 @@ export function readPose(body) {
   if (!body || !Number.isFinite(body.yaw) || !Number.isFinite(body.pitch) ||
       Math.abs(body.yaw) > 1e6 || Math.abs(body.pitch) > Math.PI / 2 ||
       body.motion !== undefined && !poses.has(body.motion) ||
+      body.stance !== undefined && !isPlayerStance(body.stance) ||
+      body.boost !== undefined && typeof body.boost !== 'boolean' ||
       body.seq !== undefined && (!Number.isSafeInteger(body.seq) || body.seq < 0) ||
       body.typing !== undefined && typeof body.typing !== 'boolean' ||
       body.swing !== undefined && (!Number.isInteger(body.swing) || body.swing < 0 || body.swing > 2147483647) ||
@@ -28,6 +31,8 @@ export function readPose(body) {
   const yaw = (body.yaw + Math.PI) % (2 * Math.PI);
   return { yaw: (yaw < 0 ? yaw + 2 * Math.PI : yaw) - Math.PI,
     pitch: body.pitch, motion: body.motion, seq: body.seq,
+    ...(body.stance !== undefined && {stance:body.stance}),
+    ...(body.boost !== undefined && {boost:body.boost}),
     ...(body.eye !== undefined && {eye:readEye(body.eye)}),
     ...(body.typing !== undefined && {typing:body.typing}),
     ...(body.swing !== undefined && {swing:body.swing}),
@@ -38,7 +43,7 @@ function roundPosition({x, y, z}) {
   return {x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000, z: Math.round(z * 1000) / 1000};
 }
 
-export function createPresence({ store, send, onVisibility, now = Date.now }) {
+export function createPresence({store, profileFor = player => publicProfile(player,store.getProfile(player)), send, onVisibility, now = Date.now}) {
   const players = new Map();
   const listeners = new Set();
   const changed = new Set();
@@ -48,16 +53,16 @@ export function createPresence({ store, send, onVisibility, now = Date.now }) {
     if (!players.has(player)) {
       if (players.size >= maxEntries) throw new RequestError(503, 'presence_limit');
       players.set(player, {
-        profile: publicProfile(player, store.getProfile(player)), connections: 0, until: now() + reconnectGrace,
+        profile: profileFor(player), connections: 0, until: now() + reconnectGrace,
       });
     }
     return players.get(player);
   }
 
-  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, spectator}) => ({
+  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, spectator, stance, boost}) => ({
     id:profile.id, position, yaw, pitch, motion, lookYaw,
     ...(typing !== undefined && {typing}), ...(swing !== undefined && {swing}), ...(held !== undefined && {held}),
-    ...(spectator !== undefined && {spectator})});
+    ...(spectator !== undefined && {spectator}), ...(stance !== undefined && {stance}), ...(boost !== undefined && {boost})});
   const snapshot = except => [...players].flatMap(([player, entry]) => player !== except && entry.visible
     ? [{ ...entry.profile, ...motionOf(entry) }] : []);
   const roster = stream => ({players:snapshot(stream.player),
@@ -78,15 +83,19 @@ export function createPresence({ store, send, onVisibility, now = Date.now }) {
     const previous = entry.position;
     let dirty = previous.x !== next.x || previous.y !== next.y || previous.z !== next.z;
     if (dirty) entry.position = next;
-    if (pose?.spectator !== undefined && entry.spectator !== pose.spectator) {
-      entry.spectator = pose.spectator;
-      dirty = true;
+    for (const key of ['spectator','stance']) {
+      if (pose?.[key] !== undefined && entry[key] !== pose[key]) {
+        entry[key] = pose[key];
+        dirty = true;
+      }
     }
     if (pose && (pose.seq === undefined || entry.seq === undefined || pose.seq >= entry.seq)) {
       const motion = pose.motion ?? entry.motion;
-      dirty ||= entry.yaw !== pose.yaw || entry.pitch !== pose.pitch || entry.motion !== motion || entry.lookYaw !== pose.lookYaw;
-      Object.assign(entry, {yaw:pose.yaw, pitch:pose.pitch, motion, lookYaw:pose.lookYaw});
-      for (const key of ['typing','swing']) {
+      if (pose.yaw !== undefined) {
+        dirty ||= entry.yaw !== pose.yaw || entry.pitch !== pose.pitch || entry.motion !== motion || entry.lookYaw !== pose.lookYaw;
+        Object.assign(entry, {yaw:pose.yaw, pitch:pose.pitch, motion, lookYaw:pose.lookYaw});
+      }
+      for (const key of ['typing','swing','boost']) {
         if (pose[key] === undefined || entry[key] === pose[key]) continue;
         dirty = true;
         entry[key] = pose[key];
@@ -137,7 +146,7 @@ export function createPresence({ store, send, onVisibility, now = Date.now }) {
         entry.yaw = 0;
         entry.pitch = 0;
         entry.motion = 'idle';
-        entry.typing = entry.swing = entry.held = entry.spectator = undefined;
+        entry.typing = entry.swing = entry.held = entry.spectator = entry.stance = entry.boost = undefined;
       }
       if (entry.connections) visibility(player, entry, true);
       update(player, position, pose);

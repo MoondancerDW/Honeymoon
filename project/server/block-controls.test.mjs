@@ -373,7 +373,7 @@ test('plate uses actual player overlap, and the handmade trapdoor and lamps pres
   assert.equal(entry.effects[0].sound, 'click.on');
   now = 1000;
   assert.deepEqual(game.advance().changes, []);
-  game.position(player, {x:5.5, y:1, z:4.65});
+  game.position(player, {x:5.5, y:1, z:4.6});
   now = 2000;
   assert.equal(game.advance().changes[0].cell, 'legacy:72:0');
   const hatch = game.action(player, command('toggle-trapdoor', [4, 1, 6]));

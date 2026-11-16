@@ -16,6 +16,7 @@ import {FIRE_FRAMES, FIRE_SIZE, FIRE_STEP_MS, fireSpriteSheet} from '../world/fi
 import {addTerrainFilter, terrainFilter} from './terrain-filter.mjs';
 import {ViewBobbing} from './view-bobbing.mjs';
 import {PonyShadows} from './pony-shadows.mjs';
+import {BlockDebris} from './block-debris.mjs';
 
 const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
@@ -402,18 +403,21 @@ export class Display {
       position:this.camera.position.toArray()};
   }
 
-  updateCamera(position, {yaw, pitch}, eyeHeight) {
-    const eyeY = position.y + eyeHeight;
+  updateCamera(position,{yaw,pitch},eyeHeight,stanceHeight) {
+    const avatar = this.localAvatar;
+    const eyes = avatar && !this.spectating ? avatar.eyesWorldPosition() : null;
+    const stanceEye = stanceHeight && eyes ? Math.max(.08,Math.min(stanceHeight-.035,eyes.y-avatar.object.position.y)) : undefined;
+    const eyeY = position.y + (stanceEye ?? eyeHeight);
     const front = this.perspective === 2;
     this.camera.rotation.set(front ? -pitch : pitch, yaw + (front ? Math.PI : 0), 0, 'YXZ');
     this.camera.position.set(position.x, eyeY, position.z);
     if (this.perspective === 0) {
       this.cameraDistance = 0;
-      if (this.localAvatar && !this.spectating) {
-        const target = this.localAvatar.eyesWorldPosition();
-        target.x += position.x - this.localAvatar.object.position.x;
-        target.y += position.y - this.localAvatar.object.position.y;
-        target.z += position.z - this.localAvatar.object.position.z;
+      if (eyes) {
+        const target = eyes;
+        target.x += position.x - avatar.object.position.x;
+        target.y = stanceEye === undefined ? target.y + position.y - avatar.object.position.y : eyeY;
+        target.z += position.z - avatar.object.position.z;
         const origin = [position.x,target.y,position.z];
         const delta = new THREE.Vector3(target.x - origin[0],0,target.z - origin[2]);
         const distance = delta.length();
@@ -422,12 +426,15 @@ export class Display {
         this.camera.position.set(origin[0] + delta.x * clearance,target.y,origin[2] + delta.z * clearance);
       }
       this.actionEye = this.camera.position.toArray().map((value,index) => value - position[['x','y','z'][index]]);
-      const bob = this.viewBob.sample();
-      this.camera.rotateX(bob.pitch);
-      this.camera.rotateZ(bob.roll);
-      this.camera.translateX(bob.x);
-      this.camera.translateY(bob.y);
+      if (stanceEye === undefined) {
+        const bob = this.viewBob.sample();
+        this.camera.rotateX(bob.pitch);
+        this.camera.rotateZ(bob.roll);
+        this.camera.translateX(bob.x);
+        this.camera.translateY(bob.y);
+      }
     } else {
+      this.actionEye = stanceEye === undefined ? undefined : [0,stanceEye,0];
       const sign = front ? -1 : 1;
       const direction = [sign * Math.sin(yaw) * Math.cos(pitch), -sign * Math.sin(pitch),
         sign * Math.cos(yaw) * Math.cos(pitch)];
@@ -441,12 +448,11 @@ export class Display {
   }
 
   eyeOffset() {
-    if (!this.actionEye || this.perspective !== 0) return undefined;
-    return this.actionEye.slice();
+    return this.actionEye?.slice();
   }
 
   sightOrigin(position, eyeHeight) {
-    return this.perspective === 0 && this.actionEye ?
+    return this.actionEye ?
       this.actionEye.map((value,index) => value + position[['x','y','z'][index]]) : [position.x,position.y + eyeHeight,position.z];
   }
 
@@ -485,7 +491,7 @@ export class Display {
     }
     object.position.set(position.x, position.y, position.z);
     object.rotation.y = facing.bodyYaw;
-    this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion,
+    this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion, stance:pose.stance, boost:pose.boost,
       yawOffset:facing.yawOffset, strideDirection:facing.strideDirection, position, swing:pose.swing, held:pose.held,
       itemAssets:this.heldItemAssets()});
     object.updateMatrixWorld(true);
@@ -932,6 +938,11 @@ export class Display {
     }
   }
 
+  breakBlock(effect) {
+    this.blockDebris ??= new BlockDebris(this.scene,this.world);
+    this.blockDebris.add(effect,this.materials?.cutout,this.atlasRows,performance.now());
+  }
+
   dispense({position,direction,stack}) {
     if (!this.world.hasChunk(position[0],position[2]) || this.dispenserItems.length >= 48) return;
     const model = itemFrameModel({data:{TileX:0,TileY:0,TileZ:0,MountSide:3,Item:stack}},
@@ -1228,6 +1239,7 @@ export class Display {
   render(now, selection, playing = false, placement = null, foreground = true) {
     this.updateFrames();
     this.updateDispensers(now);
+    this.blockDebris?.update(now,this.camera);
     if (now >= (this.nextSkyUpdate ?? 0)) {
       this.updateSky(this.dayTick(now));
       this.nextSkyUpdate = now + 200;

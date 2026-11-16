@@ -91,6 +91,7 @@ export function displayEntity(entity) {
     if (type === 'Painting') data.Motive = Motive;
     else {
       data.ItemRotation = ItemRotation;
+      if (entity.data?.Invisible === true || entity.data?.Invisible === 1) data.Invisible = true;
       if (Number.isInteger(Item?.id)) data.Item = {id: Item.id, Damage: Number.isInteger(Item.Damage) ? Item.Damage : 0};
     }
   } else if (isRideableMinecart(entity)) {

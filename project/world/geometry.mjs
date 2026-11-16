@@ -1311,6 +1311,11 @@ export function selectionFor(cell, neighbors) {
 export function collisionFor(cell, neighbors) {
   if (keyOf(cell) === voxelKey) return voxelCollisionBoxes(cell.voxels);
   const [id, meta] = unpack(cell);
+  if (id === 64 || id === 71) {
+    const lower = meta & 8 ? unpack(neighbors?.(0,-1,0)) : [id,meta];
+    // Keep the swung leaf in the visual and selection shapes, allowing a full-width pony through.
+    if (lower[0] === id && lower[1] & 4) return AIR;
+  }
   // BlockTFHedge lowers the hedge collision top by one sixteenth; darkwood leaves use a full cube.
   if (id === 2166 && meta === 0) return [{...shapeFor(cell)[0], y1: 15 / 16}];
   if (id === 2168) return [fireflyJarCollision];

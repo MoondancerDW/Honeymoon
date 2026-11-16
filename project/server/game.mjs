@@ -10,14 +10,15 @@ import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
-import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT, positionCost } from '../world/player-body.mjs';
+import { FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT,
+  isPlayerStance, playerBody, positionCost } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
 import { isRideableBoat,boatHeading,boatHit,boatSeat } from '../world/boats.mjs';
 import { orientedRail, railFor } from '../world/rails.mjs';
 import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
-import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData } from '../world/creative-items.mjs';
-import { liquidLevel } from '../world/block-movement.mjs';
+import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData } from '../world/creative-items.mjs';
+import { liquidLevel, movementMedium } from '../world/block-movement.mjs';
 import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush,
   VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
@@ -47,8 +48,10 @@ function point(input, integers = false) {
 }
 
 function trailPoint(input) {
-  if (!Array.isArray(input) || input.length !== 3) throw new RequestError(400, 'invalid_position_trail');
-  return point({ x: input[0], y: input[1], z: input[2] });
+  if (!Array.isArray(input) || ![3,4].includes(input.length) || input.length === 4 && !isPlayerStance(input[3])) {
+    throw new RequestError(400, 'invalid_position_trail');
+  }
+  return {...point({x:input[0], y:input[1], z:input[2]}), stance:input[3]};
 }
 
 const samePoint = (left, right) => axes.every(axis => left[axis] === right[axis]);
@@ -64,7 +67,7 @@ function normalizeAction(body) {
     if (body.creativeItem !== vehiclePlacements.get(body.type)) throw new RequestError(400,'unknown_cell_type');
     input.creativeItem = body.creativeItem;
   } else if (body.type === 'place_frame' || body.type === 'frame_item') {
-    if (body.type === 'place_frame' && body.creativeItem !== CREATIVE_FRAME_KEY ||
+    if (body.type === 'place_frame' && ![CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY].includes(body.creativeItem) ||
         body.creativeItem !== undefined && !/^creative:\d{1,5}:\d{1,5}$/.test(body.creativeItem)) {
       throw new RequestError(400,'unknown_cell_type');
     }
@@ -208,7 +211,7 @@ function newCreativeObject(key, position, input, item) {
 
 export function createGame(base, store, geometry, {
   clock = () => performance.timeOrigin + performance.now(), modules, allowRemoval = false, models, creativeBlocks = new Set(),
-  creativeItems = new Map(),
+  creativeItems = new Map(), playerSize = () => 'normal',
 } = {}) {
   const positions = new Map();
   const eyes = new Map();
@@ -280,10 +283,11 @@ export function createGame(base, store, geometry, {
     return {...change, ...(parts && {parts}), object:displayObject(object)};
   }
 
-  const physical = physics(base, geometry, (x, y, z) => {
+  const cellAt = (x, y, z) => {
     const current = getCurrent(x, y, z);
     return current.cell === null ? null : cellView(current);
-  });
+  };
+  const physical = physics(base, geometry, cellAt);
   const frames = createItemFrames({base,store,physical,getCurrent,faceSupports,
     protectedCell:(x,y,z) => reserved(x,y,z) || spawnProtected(x,y,z)});
   const carts = createMinecarts({
@@ -296,14 +300,16 @@ export function createGame(base, store, geometry, {
       const feet = {x,y:y - 3 / 16,z};
       const raised = rail.ends.find(end => end[1] === 1);
       const ignored = raised ? [{x:track.x + raised[0] * 2 - 1,y:track.y,z:track.z + raised[2] * 2 - 1}] : [];
-      return bodyWithinMap(feet) && !physical.collides(feet,rider ? SEATED_HEIGHT : .44,ignored);
+      const body = rider ? bodyAtSeat(rider.player,{}) : {halfWidth:.3,height:.44};
+      return bodyWithinMap(feet,body) && !physical.collides(feet,body,ignored);
     },
   });
   const boats = createBoats({base,store,clock,cellAt:getCurrent,canMove(entity,rider) {
     const [x,y,z] = entity.position;
     const yaw = boatHeading(entity), cos = Math.cos(yaw), sin = Math.sin(yaw);
     const anchor = boatSeat(entity);
-    if (!bodyWithinMap(anchor) || rider && physical.collides(anchor,SEATED_HEIGHT)) return false;
+    const body = rider ? bodyAtSeat(rider.player,anchor) : {halfWidth:.3,height:.56};
+    if (!bodyWithinMap(anchor,body) || rider && physical.collides(anchor,body)) return false;
     return [[0,0],[-.31,-.43],[-.31,.43],[.31,-.43],[.31,.43]].every(([side,end]) => {
       const sample = {x:x + side*cos + end*sin,y:y-.12,z:z - side*sin + end*cos};
       return base.inBounds(Math.floor(sample.x),Math.floor(sample.y),Math.floor(sample.z)) &&
@@ -315,6 +321,11 @@ export function createGame(base, store, geometry, {
     return positions.get(player)?.position ?? spawn;
   }
 
+  const stanceFor = player => positions.get(player)?.stance ?? 'stand';
+  const bodyFor = (player, stance = stanceFor(player)) => playerBody(playerSize(player), stance);
+  const bodyAtSeat = (player, anchor) => anchor.bed ? bodyFor(player,'crawl') :
+    {halfWidth:.3, height:Math.min(bodyFor(player,'stand').height,SEATED_HEIGHT)};
+
   function playerSight(player) {
     const position = playerAt(player);
     const eye = eyes.get(player);
@@ -324,12 +335,15 @@ export function createGame(base, store, geometry, {
       if (physical.visiblePoint([target[0],target[1] + .02,target[2]],target) &&
           physical.visiblePoint(origin,target)) return {x:target[0],y:position.y,z:target[2],eye:eye[1]};
     }
-    return seats.has(player) ? {...position, eye:SEATED_EYE} : position;
+    const seat = publicSeat(player);
+    if (seat && !seat.bed) return {...position, eye:SEATED_EYE};
+    const stance = seat?.bed ? 'crawl' : stanceFor(player);
+    return stance === 'stand' ? position : {...position, eye:bodyFor(player,stance).height * .85};
   }
 
-  function movePlayer(player, position) {
+  function movePlayer(player, position, stance = 'stand') {
     const now = clock();
-    positions.set(player, {position, updated:now, seen:now, budget:1});
+    positions.set(player, {position, stance, updated:now, seen:now, budget:1});
   }
 
   function seatsAt(x, y, z) {
@@ -344,32 +358,32 @@ export function createGame(base, store, geometry, {
   function poseFor(player, pose) {
     if (pose?.eye) eyes.set(player,pose.eye);
     else if (pose) eyes.delete(player);
-    if (spectators.has(player)) return {...pose, spectator:true};
+    if (spectators.has(player)) return {...pose, spectator:true, stance:'stand'};
     const seat = publicSeat(player);
-    if (!seat) return pose?.motion === 'sit' ? {...pose, motion:'idle'} : pose;
-    return { ...pose, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit' };
+    if (!seat) return {...pose, stance:stanceFor(player), ...(pose?.motion === 'sit' && {motion:'idle'})};
+    return {...pose, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit',
+      stance:seat.bed ? 'crawl' : 'stand', boost:false};
   }
 
   function leaveSeat(player) {
     const seat = seats.get(player);
     if (!seat) return;
-    const withinBounds = point => base.inBounds(Math.floor(point.x), Math.floor(point.y), Math.floor(point.z)) &&
-      base.inBounds(Math.floor(point.x), Math.floor(point.y + PLAYER.height - 1e-5), Math.floor(point.z));
-    const standable = point => withinBounds(point) && !physical.collides(point);
+    const body = bodyFor(player,'stand');
+    const standable = point => bodyWithinMap(point,body) && !physical.collides(point,body);
     const prior = seat.previous;
     const {x, y, z, yaw} = seat.anchor;
     const offsets = [[-Math.round(Math.sin(yaw)), -Math.round(Math.cos(yaw))], [1, 0], [-1, 0], [0, 1], [0, -1]];
     const nearby = offsets.flatMap(([dx, dz]) => [y, y + .5, y + 1].map(level =>
       ({x:x + dx, y:level, z:z + dz})));
     const stillNearby = !seat.ridden || Math.hypot(prior.x - x,prior.y - y,prior.z - z) < 2;
-    const shore = seat.anchor.kind === 'boat' ? boatLanding(seat.anchor) : null;
+    const shore = seat.anchor.kind === 'boat' ? boatLanding(seat.anchor,body) : null;
     const position = shore ?? [...(stillNearby ? [prior] : []),...nearby,{x,y,z}].find(standable) ?? spawn;
     releaseSeat(player);
     movePlayer(player, position);
     return position;
   }
 
-  function boatLanding({x,y,z}) {
+  function boatLanding({x,y,z},body) {
     const candidates = [];
     for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
       const distance = dx*dx + dz*dz;
@@ -377,8 +391,8 @@ export function createGame(base, store, geometry, {
     }
     candidates.sort((a,b) => a.distance-b.distance);
     for (const {dx,dz} of candidates) {
-      const stand = physical.standAbove({x:x+dx,y:y-.18,z:z+dz},y+1.12);
-      if (!stand || !bodyWithinMap(stand)) continue;
+      const stand = physical.standAbove({x:x+dx,y:y-.18,z:z+dz},y+1.12,body);
+      if (!stand || !bodyWithinMap(stand,body)) continue;
       const floor = [stand.x,stand.y+.01,stand.z].map(Math.floor);
       if (liquidLevel(getCurrent(...floor).cell) !== null) continue;
       if (physical.visiblePoint([x,y+SEATED_EYE,z],[stand.x,stand.y+.85,stand.z])) return stand;
@@ -398,7 +412,7 @@ export function createGame(base, store, geometry, {
   function takeSeat(player, previous, anchor, blocks, entity) {
     const {x, y, z} = anchor;
     const position = {x, y, z};
-    if (physical.collides(position, SEATED_HEIGHT, blocks)) throw new RequestError(409, 'seat_blocked');
+    if (physical.collides(position, bodyAtSeat(player,anchor), blocks)) throw new RequestError(409, 'seat_blocked');
     seats.set(player, {anchor, blocks, previous, entity});
     movePlayer(player, position);
     return {seat:anchor, position};
@@ -461,14 +475,23 @@ export function createGame(base, store, geometry, {
     const other = profile.bed ? bedMate(current, address, getCurrent) : null;
     const blocks = other ? [address, other] : [address];
     if (blocks.some(block => seatsAt(block.x, block.y, block.z))) throw new RequestError(409, 'seat_taken');
-    return takeSeat(player, previous, {x:x + .5, y:y + profile.height, z:z + .5, yaw:profile.yaw}, blocks);
+    const anchor = {x:x + .5, y:y + profile.height, z:z + .5, yaw:profile.yaw};
+    if (profile.bed) {
+      anchor.bed = true;
+      if (other) { anchor.x += (other.x-x) / 2; anchor.z += (other.z-z) / 2; }
+    }
+    return takeSeat(player, previous, anchor, blocks);
   }
 
   function activePositions(player, position) {
     const now = clock();
-    const active = player ? [position ?? playerAt(player)] : [];
+    const withBody = (id, feet) => {
+      const seat = publicSeat(id);
+      return {...feet, body:feet.body ?? (seat ? bodyAtSeat(id,seat) : bodyFor(id))};
+    };
+    const active = player ? [withBody(player,position ?? playerAt(player))] : [];
     for (const [id, entry] of positions) {
-      if (id !== player && !spectators.has(id) && now - (entry.seen ?? entry.updated) < MAX_ACTIVE_IDLE_MS) active.push(entry.position);
+      if (id !== player && !spectators.has(id) && now - (entry.seen ?? entry.updated) < MAX_ACTIVE_IDLE_MS) active.push(withBody(id,entry.position));
     }
     return active;
   }
@@ -482,6 +505,7 @@ export function createGame(base, store, geometry, {
     const active = activePositions(player, position);
     return {
       ...fields,
+      ...(fields.position && {position:active[0]}),
       player,
       now: clock(),
       playerPosition: position,
@@ -539,7 +563,8 @@ export function createGame(base, store, geometry, {
     }
   }
 
-  function writeCell(player, {x, y, z}, cell, object, companion, adjusted = []) {
+  function writeCell(player, previous, cell, object, companion, adjusted = []) {
+    const {x,y,z} = previous;
     const change = { x, y, z, cell, object };
     const replaced = companion ? [change, companion] : [change];
     const changed = [...replaced, ...adjusted];
@@ -548,7 +573,8 @@ export function createGame(base, store, geometry, {
         parts:base.manifest.compositions?.[item.cell]?.parts});
     }
     const placement = cell === null ? undefined : {keys:new Set(replaced.map(item => cellAddress(item.x, item.y, item.z))), player};
-    const effects = cell === null ? [] : [{type: 'sound', sound: 'block.place', cell, position: [x, y, z]}];
+    const effects = cell === null ? [breakEffect(previous), ...(companion ? [breakEffect(getCurrent(companion.x,companion.y,companion.z))] : [])] :
+      [{type:'sound', sound:'block.place', cell, position:[x,y,z]}];
     for (const module of mechanics) {
       const plan = module.prepareBlockChange?.(moduleContext(module, player, {change, changed}));
       if (plan) return writePlan(module, {...plan, effects: [...effects, ...plan.effects]}, placement);
@@ -708,7 +734,11 @@ export function createGame(base, store, geometry, {
     return {x:mate.x, y:mate.y, z:mate.z, cell:null, object:null};
   }
 
-  function writeMicroParts(current, ownedParts, placed, voxels = current.voxels) {
+  function breakEffect({x,y,z,cell}, material, voxelMaterial, boxes) {
+    return {type:'break', sound:'block.break', cell, position:[x,y,z], material, voxelMaterial, boxes};
+  }
+
+  function writeMicroParts(current, ownedParts, placed, voxels = current.voxels, removed = []) {
     const {x, y, z} = current;
     const revision = store.nextRevision();
     const parts = ownedParts.map(publicMicroPart);
@@ -719,7 +749,7 @@ export function createGame(base, store, geometry, {
       ...(parts.length || !voxels ? {parts} : {}), ...(voxels && {voxels})};
     const owner = voxels ? store.getEditOwner(x, y, z) : null;
     store.writeEdit(change, originalAt(x, y, z), owner, parts.length || !voxels ? ownedParts : null);
-    const effects = placed ? [{type: 'sound', sound: 'block.place', cell, position: [x, y, z], material: placed.material}] : [];
+    const effects = placed ? [{type:'sound', sound:'block.place', cell, position:[x,y,z], material:placed.material}] : removed;
     return {worldRevision: revision, changes: [publicChange(change)], effects};
   }
 
@@ -737,7 +767,9 @@ export function createGame(base, store, geometry, {
     const remaining = parts.filter(part => !part.owner);
     const clearVoxels = current.voxels && store.getEditOwner(x, y, z);
     if (remaining.length === parts.length && !clearVoxels) throw new RequestError(403, 'part_not_owned');
-    return writeMicroParts(current, remaining, null, clearVoxels ? null : current.voxels);
+    const effects = parts.filter(part => part.owner).map(part => breakEffect(current,part.material,undefined,coverBoxes([part])));
+    if (clearVoxels) effects.push(breakEffect(current,undefined,current.voxels.materials[0]));
+    return writeMicroParts(current, remaining, null, clearVoxels ? null : current.voxels,effects);
   }
 
   function editMicroParts(player, input, current) {
@@ -780,7 +812,9 @@ export function createGame(base, store, geometry, {
       if (next.reshaped && playerOverlaps(x, y, z, {key: microblockKey, parts: next.parts}, player)) {
         throw new RequestError(409, 'occupied');
       }
-      return writeMicroParts(current, owned.filter(({slot}) => slot !== part.slot));
+      const boxes = coverBoxes(parts).filter(box => box.partSlot === part.slot);
+      return writeMicroParts(current, owned.filter(({slot}) => slot !== part.slot),null,current.voxels,
+        [breakEffect(current,part.material,undefined,boxes)]);
     }
 
     const against = input.against;
@@ -820,7 +854,7 @@ export function createGame(base, store, geometry, {
     }
   }
 
-  function writeVoxels(player, current, voxels, material) {
+  function writeVoxels(player, current, voxels, material, removed) {
     const {x, y, z} = current;
     const parts = cellView(current).parts;
     const cell = parts?.length ? microblockKey : voxels ? voxelKey : null;
@@ -828,10 +862,10 @@ export function createGame(base, store, geometry, {
     const change = {x, y, z, cell, object: null, ...(voxels && {voxels})};
     const placement = voxels ? {key: cellAddress(x, y, z), player} : undefined;
     const effects = material ? [{type: 'sound', sound: 'block.place', cell: voxelKey,
-      position: [x, y, z], voxelMaterial: material}] : [];
+      position: [x, y, z], voxelMaterial: material}] : [removed];
     if (parts?.length) {
       const owned = microParts(current);
-      if (!voxels) return writeMicroParts(current, owned, null, null);
+      if (!voxels) return writeMicroParts(current, owned, null, null,effects);
       const revision = store.nextRevision();
       const combined = {...change, parts, revision};
       store.writeEdit(combined, originalAt(x, y, z), player, owned);
@@ -891,7 +925,8 @@ export function createGame(base, store, geometry, {
     if (type === 'copy_voxel') return {worldRevision: store.worldRevision(), changes: [], effects: [], material};
     const voxels = current.voxels ?? chiselSourceVolume(current.cell, geometry.shapeFor(cellView(current),
       (dx, dy, dz) => cellView(getCurrent(x + dx, y + dy, z + dz))));
-    return writeVoxels(player, current, writeVoxelBrush(voxels, voxelRemovalBrush(current.voxels, voxel, size), null));
+    const brush = voxelRemovalBrush(current.voxels, voxel, size);
+    return writeVoxels(player,current,writeVoxelBrush(voxels,brush,null),null,breakEffect(current,undefined,material,[brush.box]));
   }
 
   function execute(player, input, transport) {
@@ -918,8 +953,9 @@ export function createGame(base, store, geometry, {
       throw new RequestError(409, 'stale_cell', {current:publicChange(current), worldRevision:store.worldRevision()});
     }
     if (type === 'place_frame') {
-      if (creativeItems.get(input.creativeItem)?.kind !== 'item-frame') throw new RequestError(400,'unknown_cell_type');
-      return frames.place(input,playerSight(player));
+      const frame = creativeItems.get(input.creativeItem);
+      if (frame?.kind !== 'item-frame') throw new RequestError(400,'unknown_cell_type');
+      return frames.place(input,playerSight(player),frame.invisible);
     }
     if (type === 'place_minecart') {
       if (creativeItems.get(input.creativeItem)?.kind !== 'minecart') throw new RequestError(400,'unknown_cell_type');
@@ -1063,30 +1099,31 @@ export function createGame(base, store, geometry, {
     return result;
   }
 
-  function bodyWithinMap({x, y, z}) {
+  function bodyWithinMap({x, y, z}, {halfWidth,height} = PLAYER) {
     const bounds = base.manifest.bounds;
-    return x - PLAYER.halfWidth >= bounds.minX && x + PLAYER.halfWidth <= bounds.maxX + 1
-      && z - PLAYER.halfWidth >= bounds.minZ && z + PLAYER.halfWidth <= bounds.maxZ + 1
-      && y >= bounds.minY && y + PLAYER.height <= bounds.maxY + 1;
+    return x - halfWidth >= bounds.minX && x + halfWidth <= bounds.maxX + 1
+      && z - halfWidth >= bounds.minZ && z + halfWidth <= bounds.maxZ + 1
+      && y >= bounds.minY && y + height <= bounds.maxY + 1;
   }
 
   function teleport(player, body) {
     const target = point(body);
-    if (!bodyWithinMap(target)) throw new RequestError(403, 'outside_playable_area');
+    const dimensions = bodyFor(player,'stand');
+    if (!bodyWithinMap(target,dimensions)) throw new RequestError(403, 'outside_playable_area');
     if (base.hasPlayableChunk) {
       const chunk = value => Math.floor(value / 16);
-      for (const x of [chunk(target.x - PLAYER.halfWidth), chunk(target.x + PLAYER.halfWidth - 1e-6)]) {
-        for (const z of [chunk(target.z - PLAYER.halfWidth), chunk(target.z + PLAYER.halfWidth - 1e-6)]) {
+      for (const x of [chunk(target.x - dimensions.halfWidth), chunk(target.x + dimensions.halfWidth - 1e-6)]) {
+        for (const z of [chunk(target.z - dimensions.halfWidth), chunk(target.z + dimensions.halfWidth - 1e-6)]) {
           if (!base.hasPlayableChunk(x, z)) throw new RequestError(403, 'outside_playable_area');
         }
       }
     }
     const observing = spectators.has(player);
-    if (!observing && physical.collides(target)) throw new RequestError(409, 'teleport_blocked');
-    const entry = observing ? passivePosition(target) : enterPosition(player, target, playerAt(player));
+    if (!observing && physical.collides(target,dimensions)) throw new RequestError(409, 'teleport_blocked');
+    const entry = observing ? passivePosition(target) : enterPosition(player, target, playerAt(player),'stand');
     releaseSeat(player);
     movePlayer(player, target);
-    return {...entry, seat:null};
+    return {...entry, seat:null, stance:'stand'};
   }
 
   function passivePosition(position) {
@@ -1097,7 +1134,7 @@ export function createGame(base, store, geometry, {
     if (typeof body?.enabled !== 'boolean') throw new RequestError(400, 'invalid_spectator');
     const previous = playerAt(player);
     if (spectators.has(player) === body.enabled) {
-      return {...passivePosition(previous), seat:publicSeat(player), spectator:body.enabled, relocated:false};
+      return {...passivePosition(previous), seat:publicSeat(player), stance:stanceFor(player), spectator:body.enabled, relocated:false};
     }
     let position = previous;
     let relocated = false;
@@ -1105,23 +1142,24 @@ export function createGame(base, store, geometry, {
       releaseSeat(player);
       spectators.add(player);
     } else {
-      if (physical.collides(previous)) {
-        const highest = base.manifest.bounds.maxY + 1 - PLAYER.height;
+      const dimensions = bodyFor(player,'stand');
+      if (physical.collides(previous,dimensions)) {
+        const highest = base.manifest.bounds.maxY + 1 - dimensions.height;
         const center = {...previous, x:Math.floor(previous.x) + .5, z:Math.floor(previous.z) + .5};
-        position = physical.standAbove(previous, highest) ?? physical.standAbove(center, highest) ?? spawn;
+        position = physical.standAbove(previous, highest,dimensions) ?? physical.standAbove(center, highest,dimensions) ?? spawn;
         relocated = !samePoint(position, previous);
       }
       spectators.delete(player);
     }
     movePlayer(player, position);
-    return {...passivePosition(position), seat:null, spectator:body.enabled, relocated};
+    return {...passivePosition(position), seat:null, stance:'stand', spectator:body.enabled, relocated};
   }
 
-  function enterPosition(player, position, previous) {
+  function enterPosition(player, position, previous, stance) {
     const results = store.atomic(() => {
       const entries = [];
       for (const module of mechanics) {
-        const plan = module.prepareEntry?.(moduleContext(module, player, { position, previous }));
+        const plan = module.prepareEntry?.(moduleContext(module, player, {position:{...position,body:bodyFor(player,stance)}, previous}));
         if (plan) entries.push(writePlan(module, plan));
       }
       return entries;
@@ -1136,8 +1174,10 @@ export function createGame(base, store, geometry, {
     const target = point(body);
     const previous = playerAt(player);
     if (seats.has(player)) {
-      if (!samePoint(previous, target)) throw new RequestError(409, 'movement_blocked', {position:previous, seat:publicSeat(player)});
-      return {position:previous, seat:publicSeat(player), effects:[], changes:[], worldRevision:store.worldRevision()};
+      const seat = publicSeat(player);
+      const stance = seat.bed ? 'crawl' : 'stand';
+      if (!samePoint(previous, target)) throw new RequestError(409, 'movement_blocked', {position:previous, seat, stance});
+      return {...passivePosition(previous), seat, stance};
     }
     const now = clock();
     const old = positions.get(player);
@@ -1145,7 +1185,7 @@ export function createGame(base, store, geometry, {
     const budget = Math.min(POSITION_BATCH_LIMIT + .4, (old?.budget ?? 1) + elapsed * RUN_SPEED);
     const hasTrail = body.trail !== undefined || body.from !== undefined;
     const reject = () => {
-      throw new RequestError(409, 'movement_blocked', { position: previous });
+      throw new RequestError(409, 'movement_blocked', {position:previous, stance:stanceFor(player)});
     };
     let steps = [target];
     let requestId;
@@ -1161,28 +1201,51 @@ export function createGame(base, store, geometry, {
       // A response can be lost after the server has already applied the batch.
       if (old?.requestId === requestId) {
         if (!samePoint(previous, target)) reject();
-        return { position: previous, effects: [], changes: [], worldRevision: store.worldRevision() };
+        return {...passivePosition(previous), stance:stanceFor(player)};
       }
-      if (!samePoint(previous, from)) reject();
+      if (!samePoint(previous, from) || from.stance !== undefined && from.stance !== stanceFor(player)) reject();
     }
 
     let distance = 0, drop = 0, from = previous;
+    let stance = stanceFor(player);
+    const size = playerSize(player);
+    let dimensions = playerBody(size,stance);
+    let segmentStart = previous, segment = [];
+    const observing = spectators.has(player);
+    const validateSegment = () => {
+      if (!segment.length || observing) return;
+      if (!(hasTrail ? physical.movementTrailAllowed(segmentStart,segment,dimensions) :
+        physical.movementAllowed(segmentStart,segment[0],dimensions))) reject();
+    };
     for (const step of steps) {
+      const nextStance = observing ? 'stand' : step.stance ?? stance;
+      if (nextStance !== stance) {
+        validateSegment();
+        segmentStart = from;
+        segment = [];
+        const next = playerBody(size,nextStance);
+        if (!samePoint(from,step) || physical.collides(from,next) || nextStance !== 'stand' &&
+            (!physical.supported(from,dimensions) || movementMedium(cellAt,from.x,from.y,from.z))) reject();
+        stance = nextStance;
+        dimensions = next;
+      }
       const planar = Math.hypot(step.x - from.x, step.z - from.z);
       const vertical = step.y - from.y;
-      if (!bodyWithinMap(step) || hasTrail && (planar > POSITION_STEP_LIMIT || Math.abs(vertical) > .55)) reject();
+      if (!bodyWithinMap(step,dimensions) || hasTrail && (planar > POSITION_STEP_LIMIT || Math.abs(vertical) > .55)) reject();
+      if (stance === 'crouch' && planar > 0 && vertical <= .02 && physical.supported(from,dimensions) &&
+          !physical.supported({...step,y:from.y},dimensions,.5)) reject();
       distance += positionCost(planar,vertical);
       drop += Math.max(-vertical, 0);
       if (distance > budget + MOVEMENT_GRACE || drop > 6) reject();
+      segment.push(step);
       from = step;
     }
-    const observing = spectators.has(player);
-    if (!observing && !(hasTrail ? physical.movementTrailAllowed(previous, steps) : physical.movementAllowed(previous, target))) reject();
+    validateSegment();
 
-    const entry = observing ? passivePosition(target) : enterPosition(player, target, previous);
-    positions.set(player, { position: target, updated: now, budget: budget - distance, requestId });
-    if (!observing) carts.pushAlongPath(previous,steps);
-    return entry;
+    const entry = observing ? passivePosition(target) : enterPosition(player, target, previous,stance);
+    positions.set(player, {position:target, stance, updated:now, budget:budget-distance, requestId});
+    if (!observing) carts.pushAlongPath(previous,steps.map(step => ({...step,body:playerBody(size,step.stance ?? stance)})));
+    return {...entry, stance};
   }
 
   function advance() {
@@ -1235,6 +1298,37 @@ export function createGame(base, store, geometry, {
 
   const descriptions = player => diagnostic?.describe(player) ?? null;
 
+  function reconcileProfile(player) {
+    if (!positions.has(player)) return;
+    const previous = playerAt(player);
+    const seat = publicSeat(player);
+    const body = seat ? bodyAtSeat(player,seat) : bodyFor(player);
+    const observing = spectators.has(player);
+    if (bodyWithinMap(previous,body) && (observing || !physical.collides(previous,body,seats.get(player)?.blocks))) return;
+
+    const standing = bodyFor(player,'stand');
+    const highest = base.manifest.bounds.maxY + 1 - standing.height;
+    let position;
+    if (observing) position = {...previous,y:Math.min(previous.y,highest)};
+    else if (seat) position = leaveSeat(player);
+    else {
+      const center = {x:Math.floor(previous.x)+.5,y:previous.y,z:Math.floor(previous.z)+.5};
+      const candidates = [previous, center,
+        ...faceOffsets.filter(([,dy]) => !dy).map(([dx, ,dz]) => ({...center,x:center.x+dx,z:center.z+dz}))];
+      for (const candidate of candidates) {
+        if (bodyWithinMap(candidate,standing) && !physical.collides(candidate,standing)) {
+          position = candidate;
+          break;
+        }
+        const above = physical.standAbove(candidate,Math.min(highest,previous.y+2),standing);
+        if (above && bodyWithinMap(above,standing)) { position = above; break; }
+      }
+    }
+    position ??= spawn;
+    movePlayer(player,position);
+    return {position, stance:'stand', seat:null};
+  }
+
   return {
     action,
     position,
@@ -1257,6 +1351,7 @@ export function createGame(base, store, geometry, {
     sit,
     leaveSeat,
     poseFor,
+    reconcileProfile,
     touch(player) {
       const entry = positions.get(player);
       if (entry) entry.seen = clock();
@@ -1264,7 +1359,7 @@ export function createGame(base, store, geometry, {
     respawn(player) {
       releaseSeat(player);
       movePlayer(player, spawn);
-      return { position: spawn, seat:null, effects: [], worldRevision: store.worldRevision() };
+      return { position:spawn, seat:null, stance:'stand', effects:[], worldRevision:store.worldRevision() };
     },
     conflicts,
     contentHash: base.hash,
@@ -1275,6 +1370,7 @@ export function createGame(base, store, geometry, {
         playerId, spawn: base.manifest.spawn, position: playerAt(playerId), worldRevision: store.worldRevision(),
         catalogVersion: base.manifest.catalogVersion ?? 1, importVersion: base.manifest.importVersion, contentHash: base.hash,
         mechanics: descriptions(playerId), seat:publicSeat(playerId), spectator:spectators.has(playerId),
+        stance:publicSeat(playerId)?.bed ? 'crawl' : stanceFor(playerId),
       };
     },
     snapshot(player) {

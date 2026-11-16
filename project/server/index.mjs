@@ -11,7 +11,7 @@ import { createChat } from './chat.mjs';
 import { loadLodAssets, serveLodTile } from './lod-assets.mjs';
 import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
-import { MAX_PROFILE_BODY, profileChanges, publicProfile } from './presence-profile.mjs';
+import { MAX_PROFILE_BODY, profileChanges, publicProfile, savedSkinSize } from './presence-profile.mjs';
 import { openStore } from './store.mjs';
 import { createWorldTime } from './world-time.mjs';
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
@@ -178,10 +178,24 @@ export function createHoneymoonServer({
   const creative = readCreativeCatalog(generated, project, models.biblio?.flatItems);
   if (state !== ':memory:') mkdirSync(dirname(state), { recursive: true });
   const store = openStore(state);
+  const playerSizes = new Map();
+  function rememberSize(player,size) {
+    if (!playerSizes.has(player) && playerSizes.size >= 512) playerSizes.delete(playerSizes.keys().next().value);
+    playerSizes.set(player,size);
+    return size;
+  }
+  function playerSize(player, saved) {
+    if (playerSizes.has(player)) return playerSizes.get(player);
+    saved ??= store.getProfile(player);
+    return rememberSize(player,savedSkinSize(saved?.skinHash && store.getSkin(saved.skinHash)));
+  }
+  function profileFor(player, saved = store.getProfile(player)) {
+    return publicProfile(player,saved,playerSize(player,saved));
+  }
   let game;
   try {
     game = createGame(base, store, withExtractedModels(geometry, models),
-      { clock, allowRemoval, models, creativeBlocks:creative?.placeable, creativeItems:creative?.items });
+      {clock, allowRemoval, models, creativeBlocks:creative?.placeable, creativeItems:creative?.items, playerSize});
   } catch (error) {
     store.close();
     throw error;
@@ -198,7 +212,7 @@ export function createHoneymoonServer({
       }).map(({player}) => player);
     },
   });
-  const presence = createPresence({ store, send: writeEvent, onVisibility(profile, online, player) {
+  const presence = createPresence({store, profileFor, send:writeEvent, onVisibility(profile, online, player) {
     if (!online) game.leaveSeat(player);
     try { chat.playerStatus(profile, online); }
     catch (error) { console.error(error); }
@@ -207,7 +221,7 @@ export function createHoneymoonServer({
   const session = player => {
     const time = worldTime.snapshot();
     return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,creative:Boolean(creative),
-      profile: publicProfile(player, store.getProfile(player)) };
+      profile:profileFor(player) };
   };
 
   function writeEvent(response, name, event, revision) {
@@ -274,13 +288,20 @@ export function createHoneymoonServer({
         const saved = store.getProfile(player);
         if (updates.nickname === saved?.nickname) delete updates.nickname;
         if (updates.skin !== undefined && (updates.skin?.hash ?? null) === (saved?.skinHash ?? null)) delete updates.skin;
+        const previousSize = updates.skin === undefined ? undefined : playerSize(player,saved);
         const different = updates.nickname !== undefined || updates.skin !== undefined;
         const renamed = different && store.updateProfile(player, updates,
           saved?.nickname ?? presence.onlineProfile(player)?.nickname);
-        const profile = publicProfile(player, different ? store.getProfile(player) : saved);
+        let relocation;
+        if (updates.skin !== undefined) {
+          const size = rememberSize(player,updates.skin?.size ?? 'normal');
+          if (size !== previousSize) relocation = game.reconcileProfile(player);
+        }
+        const profile = profileFor(player, different ? store.getProfile(player) : saved);
         if (different) presence.profile(player, profile);
+        if (relocation) presence.update(player,relocation.position,game.poseFor(player,{motion:'idle'}));
         if (renamed) sendSocial('chat', renamed);
-        return json(response, 200, profile);
+        return json(response, 200, {...profile,...relocation});
       }
       if (path === '/api/presence') {
         if (method === 'POST') {
@@ -329,7 +350,7 @@ export function createHoneymoonServer({
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const pose = readPose(body.pose);
         const result = game.setSpectator(player, body);
-        presence.update(player, result.position, {...pose, spectator:result.spectator});
+        presence.update(player, result.position, {...pose, stance:result.stance, spectator:result.spectator});
         return json(response, 200, result);
       }
       if (path === '/api/teleport' && method === 'POST') {

@@ -110,7 +110,7 @@ export function itemFrameModel(entity, items, atlasRows = 64) {
   const terrainItem = stack && !atlasItem && (stack.Block || stack.id < 256);
   const item = terrainItem ? blockItem(stack,atlasRows) : atlasItem;
   const scale = 64 / atlasRows;
-  const surfaces = scale === 1 ? frame : frame.map(quad => ({
+  const surfaces = entity.data?.Invisible ? [] : scale === 1 ? frame : frame.map(quad => ({
     ...quad,uv:quad.uv.map((coordinate,index) => index & 1 ? coordinate * scale : coordinate),
   }));
   return {...mount,frame:surfaces,item:displayItem(item,ItemRotation),terrainItem};

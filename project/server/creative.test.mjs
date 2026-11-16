@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {readCreativeCatalog} from './creative-catalog.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import * as geometry from '../world/geometry.mjs';
-import {CREATIVE_FRAME_KEY, CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
+import {CREATIVE_FRAME_KEY, CREATIVE_INVISIBLE_FRAME_KEY, CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
 import {guidedMicroblock} from '../world/microblocks.mjs';
 
 const fixture = fileURLToPath(new URL('../work/', import.meta.url));
@@ -20,6 +20,7 @@ test('creative catalog supplies the transport items when the generated catalog i
   assert.equal(items.get(CREATIVE_MINECART_KEY)?.kind, 'minecart');
   assert.equal(items.get(CREATIVE_MINECART_KEY)?.blockKey, undefined);
   assert.equal(items.get(CREATIVE_FRAME_KEY)?.kind,'item-frame');
+  assert.equal(items.get(CREATIVE_INVISIBLE_FRAME_KEY)?.invisible,true);
   assert.ok(placeable.has('legacy:1:0'));
 });
 
@@ -132,8 +133,10 @@ test('creative places registered off-map states with normal ownership, and build
   assert.deepEqual(replaced.body.frames?.[0].data.Item,{id:264,Damage:0},JSON.stringify(replaced));
   const rotated = await command(b,'frame_use',floor.position.map(Math.floor),{...insert,expectedRevision:replaced.body.worldRevision});
   assert.equal(rotated.body.frames?.[0].data.ItemRotation,1,JSON.stringify(rotated));
-  const ceiling = await command(a,'place_frame',[8,4,6],{creativeItem:CREATIVE_FRAME_KEY,hit:{x:8.5,y:4,z:6.5}});
-  assert.equal(ceiling.body.frames?.find(entry => entry.data.TileY === 4)?.data.MountSide,0,JSON.stringify(ceiling));
+  const ceiling = await command(a,'place_frame',[8,4,6],{creativeItem:CREATIVE_INVISIBLE_FRAME_KEY,hit:{x:8.5,y:4,z:6.5}});
+  const invisible = ceiling.body.frames?.find(entry => entry.data.TileY === 4);
+  assert.equal(invisible?.data.MountSide,0,JSON.stringify(ceiling));
+  assert.equal(invisible?.data.Invisible,true);
   await app.close();
   base.hash = 'creative-b';
   await launch();
@@ -144,4 +147,5 @@ test('creative places registered off-map states with normal ownership, and build
   assert.equal(world.overrides.find(change => change.x === 8 && change.z === 7)?.object.data.Text1,'Тихая улица');
   assert.equal(world.overrides.find(change => change.x === 9 && change.z === 8)?.cell,'legacy:68:3');
   assert.equal(world.frames.find(entry => entry.key === floor.key)?.data.Item.id,264);
+  assert.equal(world.frames.find(entry => entry.key === invisible.key)?.data.Invisible,true);
 });

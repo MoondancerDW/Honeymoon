@@ -57,9 +57,11 @@ test('bed halves share occupancy and releasing a seat restores a collision-free 
   const pose = {yaw:0,pitch:0,motion:'idle'};
   assert.equal(game.poseFor(one,{...pose,motion:'sit'}).motion,'idle');
   const seated = game.sit(one,foot,pose);
-  assert.deepEqual(seated.position,{x:3.5,y:1.5625,z:2.5});
+  assert.deepEqual(seated.position,{x:3.5,y:1.5625,z:3});
+  assert.equal(seated.seat.bed,true);
   assert.deepEqual(game.sit(one,foot,pose),seated);
   assert.equal(game.poseFor(one,pose).motion,'sit');
+  assert.equal(game.poseFor(one,pose).stance,'crawl');
   assert.throws(() => game.sit(two,head,pose),{code:'seat_taken'});
   assert.throws(() => game.position(one,spawn),{code:'movement_blocked'});
   const removing = game.action(two,{x:3,y:1,z:3,requestId:'seat-break',type:'remove',expectedRevision:0});
@@ -67,9 +69,9 @@ test('bed halves share occupancy and releasing a seat restores a collision-free 
   assert.equal(removing.output.error,'seat_taken');
   assert.deepEqual(game.leaveSeat(one),spawn);
   assert.deepEqual(game.sit(one,undefined,pose),{seat:null,position:spawn});
-  assert.equal(game.sit(two,head,pose).position.z,3.5);
+  assert.equal(game.sit(two,head,pose).position.z,3);
   assert.equal(game.respawn(two).seat,null);
-  assert.equal(game.sit(one,head,pose).position.z,3.5);
+  assert.equal(game.sit(one,head,pose).position.z,3);
 });
 
 test('imported passenger cart seats one player through water and rejects forged or occluded hits', t => {

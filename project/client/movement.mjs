@@ -1,7 +1,7 @@
 import * as geometry from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {movementMedium} from '../world/block-movement.mjs';
-import {FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, PLAYER, WALK_SPEED} from '../world/player-body.mjs';
+import {FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, PLAYER, WALK_SPEED, isPlayerStance, playerBody} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
 import {isRideableMinecart, minecartHit} from '../world/minecarts.mjs';
 import {isRideableBoat,boatHit} from '../world/boats.mjs';
@@ -9,7 +9,7 @@ import {itemFrameHit} from '../world/item-frames.mjs';
 import {isChiselMaterial, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 
-const {halfWidth: HALF, height: HEIGHT, eye: EYE} = PLAYER;
+const {height: HEIGHT, eye: EYE} = PLAYER;
 const {collisionFor} = geometry;
 export {HEIGHT, EYE};
 const EPSILON = .00001;
@@ -18,8 +18,9 @@ const CAMERA_RADIUS = .1;
 const cartsByChunk = new WeakMap();
 const framesByChunk = new WeakMap();
 
-export function movementSpeed({flying = false, sprint = false} = {}) {
+export function movementSpeed({flying = false, sprint = false, stance = 'stand'} = {}) {
   if (flying) return sprint ? FLIGHT_SPRINT_SPEED : FLIGHT_SPEED;
+  if (stance !== 'stand') return WALK_SPEED * (stance === 'crawl' ? .26 : .3);
   return sprint ? GROUND_SPRINT_SPEED : WALK_SPEED;
 }
 
@@ -114,17 +115,19 @@ export function pickVehicle(world,origin,direction,block) {
 }
 export {pickVehicle as pickMinecart};
 
-export function overlapsPlacement(position, placement) {
+export function overlapsPlacement(position, placement, {halfWidth, height} = PLAYER) {
   const {x, y, z} = position;
   const {x: cx, y: cy, z: cz, boxes} = placement;
-  return boxes.some(box => x + HALF > cx + box.x0 + EPSILON && x - HALF < cx + box.x1 - EPSILON &&
-    y + HEIGHT > cy + box.y0 + EPSILON && y < cy + box.y1 - EPSILON &&
-    z + HALF > cz + box.z0 + EPSILON && z - HALF < cz + box.z1 - EPSILON);
+  return boxes.some(box => x + halfWidth > cx + box.x0 + EPSILON && x - halfWidth < cx + box.x1 - EPSILON &&
+    y + height > cy + box.y0 + EPSILON && y < cy + box.y1 - EPSILON &&
+    z + halfWidth > cz + box.z0 + EPSILON && z - halfWidth < cz + box.z1 - EPSILON);
 }
 
 export class Movement {
   constructor(world) {
     this.world = world;
+    this.size = 'normal';
+    this.stance = 'stand';
     this.fall = 0;
     this.grounded = false;
     this.medium = null;
@@ -132,24 +135,35 @@ export class Movement {
     this.cellAt = (...coordinates) => this.world.cellAt(...coordinates);
   }
 
-  blocked(x, y, z) {
+  get body() { return playerBody(this.size, this.stance); }
+
+  setStance({x,y,z}, stance) {
+    if (stance === this.stance || !isPlayerStance(stance)) return this.stance;
+    if (stance !== 'stand' && (!this.grounded || movementMedium(this.cellAt,x,y,z))) return this.stance;
+    if (!this.blocked(x,y,z,playerBody(this.size, stance))) this.stance = stance;
+    return this.stance;
+  }
+
+  blocked(x, y, z, body = this.body) {
+    const {halfWidth:half, height} = body;
     const b = this.world.manifest.bounds;
-    if (x - HALF < b.minX || x + HALF > b.maxX + 1 || z - HALF < b.minZ || z + HALF > b.maxZ + 1 ||
-        y < b.minY || y + HEIGHT > b.maxY + 1) return true;
-    if (this.pendingPlacement && overlapsPlacement({x,y,z}, this.pendingPlacement)) return true;
-    for (let yy = Math.floor(y) - 1; yy <= Math.floor(y + HEIGHT); yy++) {
-      for (let zz = Math.floor(z - HALF - .0625); zz <= Math.floor(z + HALF + .0625); zz++) {
-        for (let xx = Math.floor(x - HALF - .0625); xx <= Math.floor(x + HALF + .0625); xx++) {
-          if (!this.world.hasChunk(xx, zz) && xx >= Math.floor(x - HALF) && xx <= Math.floor(x + HALF) && zz >= Math.floor(z - HALF) && zz <= Math.floor(z + HALF)) return true;
+    if (x - half < b.minX || x + half > b.maxX + 1 || z - half < b.minZ || z + half > b.maxZ + 1 ||
+        y < b.minY || y + height > b.maxY + 1) return true;
+    if (this.pendingPlacement && overlapsPlacement({x,y,z}, this.pendingPlacement,body)) return true;
+    for (let yy = Math.floor(y) - 1; yy <= Math.floor(y + height); yy++) {
+      for (let zz = Math.floor(z - half - .0625); zz <= Math.floor(z + half + .0625); zz++) {
+        for (let xx = Math.floor(x - half - .0625); xx <= Math.floor(x + half + .0625); xx++) {
+          if (!this.world.hasChunk(xx, zz) && xx >= Math.floor(x - half + EPSILON) && xx <= Math.floor(x + half - EPSILON) &&
+              zz >= Math.floor(z - half + EPSILON) && zz <= Math.floor(z + half - EPSILON)) return true;
           const cell = this.world.cellAt(xx, yy, zz);
           if (!cell) continue;
           const neighbors = (dx, dy, dz) => this.world.cellAt(xx + dx, yy + dy, zz + dz);
           const boxes = extractedModel(this.world.models, cell, neighbors)?.collision
             ?? collisionFor(cell, neighbors);
           for (const box of boxes) {
-            if (x + HALF > xx + box.x0 + EPSILON && x - HALF < xx + box.x1 - EPSILON &&
-                y + HEIGHT > yy + box.y0 + EPSILON && y < yy + box.y1 - EPSILON &&
-                z + HALF > zz + box.z0 + EPSILON && z - HALF < zz + box.z1 - EPSILON) return true;
+            if (x + half > xx + box.x0 + EPSILON && x - half < xx + box.x1 - EPSILON &&
+                y + height > yy + box.y0 + EPSILON && y < yy + box.y1 - EPSILON &&
+                z + half > zz + box.z0 + EPSILON && z - half < zz + box.z1 - EPSILON) return true;
           }
         }
       }
@@ -159,28 +173,30 @@ export class Movement {
 
   axis(position, axis, amount) {
     if (!amount) return false;
-    const target = position[axis] + amount;
-    position[axis] = target;
+    const start = position[axis];
+    position[axis] = start + amount;
     if (!this.blocked(position.x, position.y, position.z)) return false;
-    position[axis] = target - amount;
     let safe = 0, hit = 1;
     for (let i = 0; i < 7; i++) {
       const fraction = (safe + hit) / 2;
-      position[axis] += amount * fraction;
+      position[axis] = start + amount * fraction;
       const blocked = this.blocked(position.x, position.y, position.z);
-      position[axis] -= amount * fraction;
       if (blocked) hit = fraction;
       else safe = fraction;
     }
-    position[axis] += amount * safe;
+    position[axis] = start + amount * safe;
     return true;
   }
 
   horizontal(position, axis, amount, swimOut = false) {
     if (!amount) return false;
+    if (this.stance === 'crouch' && this.grounded && !this.medium) {
+      const target = {...position, [axis]:position[axis] + amount};
+      if (!this.blocked(target.x, target.y - .5, target.z)) return true;
+    }
     const before = position[axis];
     if (!this.axis(position, axis, amount)) return false;
-    if (!(this.grounded && !this.medium) && !swimOut) return true;
+    if (!(this.grounded && !this.medium && this.stance !== 'crawl') && !swimOut) return true;
     const partial = position[axis];
     const feet = position.y;
     if (!swimOut) {
@@ -215,21 +231,33 @@ export class Movement {
 
   update(position, dx, dz, jump, dt, {descend = false, rise = jump, recordStep} = {}) {
     this.medium = movementMedium(this.cellAt, position.x, position.y, position.z);
-    if (!this.medium && jump && this.grounded) { this.fall = 6.8; this.grounded = false; }
+    if (!this.medium && jump && this.grounded && this.stance !== 'crawl') {
+      this.fall = Math.sqrt(40 * this.body.jumpHeight);
+      this.grounded = false;
+    }
     const n = Math.max(1, Math.ceil(dt / .016));
     const step = dt / n;
     for (let i = 0; i < n; i++) {
       const startMedium = this.medium;
+      let deltaY;
       if (startMedium === 'ladder') {
         this.fall = descend ? -1.8 : rise ? 2.4 : Math.max(-1.8, this.fall - 12 * step);
       } else if (startMedium === 'water') {
         this.fall = descend ? -2 : rise ? 2.5 : Math.max(-.85, this.fall - 5 * step);
       } else {
-        this.fall = Math.max(-16, this.fall - 20 * step);
+        const initial = this.fall;
+        this.fall = Math.max(-16, initial - 20 * step);
+        if (initial > 0 && this.fall < 0) {
+          // Resolve the top of a one-block jump exactly so it can land on a full block.
+          deltaY = initial * initial / 40;
+          this.fall = 0;
+        } else {
+          deltaY = (initial + this.fall) * .5 * step;
+        }
       }
       // Resolve Y before X and Z, including when leaving a ledge or climbing
       // past a ceiling. Contact with a wall can start ascent on the next step.
-      this.vertical(position, step);
+      this.vertical(position, deltaY ?? this.fall * step);
       const drag = startMedium === 'water' ? .48 : startMedium === 'ladder' ? .62 : 1;
       const swimOut = startMedium === 'water' && rise && !descend;
       const wallX = this.horizontal(position, 'x', dx * step * drag, swimOut);
@@ -252,10 +280,11 @@ export class Movement {
     const time = dt / steps;
     for (let i = 0; i < steps; i++) {
       if (spectator) {
+        const {halfWidth, height} = this.body;
         const {minX,maxX,minY,maxY,minZ,maxZ} = this.world.manifest.bounds;
-        position.x = Math.max(minX + HALF, Math.min(maxX + 1 - HALF, position.x + dx * time));
-        position.y = Math.max(minY, Math.min(maxY + 1 - HEIGHT, position.y + dy * time));
-        position.z = Math.max(minZ + HALF, Math.min(maxZ + 1 - HALF, position.z + dz * time));
+        position.x = Math.max(minX + halfWidth, Math.min(maxX + 1 - halfWidth, position.x + dx * time));
+        position.y = Math.max(minY, Math.min(maxY + 1 - height, position.y + dy * time));
+        position.z = Math.max(minZ + halfWidth, Math.min(maxZ + 1 - halfWidth, position.z + dz * time));
       } else {
         this.axis(position, 'y', dy * time);
         this.axis(position, 'x', dx * time);
@@ -265,9 +294,9 @@ export class Movement {
     }
   }
 
-  vertical(position, step) {
-    const hit = this.axis(position, 'y', this.fall * step);
-    this.grounded = hit && this.fall < 0;
+  vertical(position, amount) {
+    const hit = this.axis(position, 'y', amount);
+    this.grounded = hit && amount < 0;
     if (hit) this.fall = 0;
   }
 }

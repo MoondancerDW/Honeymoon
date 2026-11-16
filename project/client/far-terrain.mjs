@@ -19,7 +19,7 @@ export function supportsFarTerrain({lod}) {
     /^[0-9a-f]{64}$/.test(lod.contentHash ?? '');
 }
 
-function farMaterial(textures, lightmap, rows, {water = false, outer = false} = {}) {
+function farMaterial(textures, lightmap, rows, {water = false, outer = false, rail = false} = {}) {
   const uniforms = {
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
     atlas:{value:textures.source}, terrainMid:{value:textures.mid}, terrainAverage:{value:textures.average},
@@ -28,7 +28,7 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false} = 
     seamMasks:{value:new THREE.Vector4()},
   };
   return new THREE.ShaderMaterial({uniforms, fog:true, transparent:water, depthWrite:!water,
-    side:water ? THREE.DoubleSide : THREE.FrontSide,
+    side:water || rail ? THREE.DoubleSide : THREE.FrontSide,
     vertexShader:`
       attribute vec3 faceOrigin;
       attribute vec2 faceSize;
@@ -58,7 +58,24 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false} = 
         vec2 extent = faceSize * position.xy;
         vec3 point = faceOrigin;
         point.y /= heightScale;
-        if (face < .5) point.zy += extent;
+        ${rail ? `
+        // Follow the source rail quad's corner order for bends and grades.
+        float direction = faceSize.x;
+        float x = position.x, z = position.y;
+        if (direction == 1.0 || direction == 2.0 || direction == 3.0 || direction == 7.0) {
+          point.xz += vec2(1.0-x,1.0-z);
+        } else if (direction == 8.0) {
+          point.xz += vec2(z,1.0-x);
+        } else if (direction == 9.0) {
+          point.xz += vec2(x,z);
+        } else {
+          point.xz += vec2(1.0-z,x);
+        }
+        point.y += .0625;
+        if (direction == 2.0 || direction == 4.0) point.y += 1.0-x;
+        if (direction == 3.0 || direction == 5.0) point.y += x;
+        localUv = vec2(1.0-z,1.0-x);
+        ` : `if (face < .5) point.zy += extent;
         else if (face < 1.5) point.yz += extent;
         else if (face < 2.5) point.xz += extent;
         else if (face < 3.5) point.zx += extent;
@@ -66,7 +83,7 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false} = 
         else point.xy += extent;
         if (face < 1.5) localUv = vec2(face < .5 ? point.z : -point.z, -point.y);
         else if (face < 3.5) localUv = point.xz;
-        else localUv = vec2(face < 4.5 ? -point.x : point.x, -point.y);
+        else localUv = vec2(face < 4.5 ? -point.x : point.x, -point.y);`}
         tile = faceSurface.x;
         vec2 lightUv = vec2((mod(faceLight, 16.0) + .5) / 16.0, (floor(faceLight / 16.0) + .5) / 17.0);
         tint = srgbToLinear(faceColor * texture2D(lightmap, lightUv).rgb);
@@ -77,7 +94,7 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false} = 
         #endif
       }`,
     fragmentShader:`
-      ${water ? 'uniform sampler2D terrainWater;' : outer ?
+      ${water ? 'uniform sampler2D terrainWater;' : rail ? 'uniform float terrainRows;' : outer ?
         'uniform sampler2D terrainAverage; uniform float terrainRows;' : terrainFilterShader}
       uniform sampler2D atlas;
       varying vec2 localUv;
@@ -88,14 +105,17 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false} = 
         ${water ? 'vec4 color = texture2D(terrainWater,vec2(localUv.x,-localUv.y));' : `
         float tileIndex = floor(tile + .5);
         vec2 cell = vec2(mod(tileIndex,64.0),terrainRows - 1.0 - floor(tileIndex / 64.0));
-        ${outer ? 'vec4 color = texture2D(terrainAverage,(cell + .5) / vec2(64.0,terrainRows));' : `
+        ${rail ? `
+          vec4 color = texture2D(atlas,(cell + .015625 + localUv * .96875) / vec2(64.0,terrainRows));
+          if (color.a < .47) discard;
+        ` : `${outer ? 'vec4 color = texture2D(terrainAverage,(cell + .5) / vec2(64.0,terrainRows));' : `
           vec2 within = vec2(fract(localUv.x),1.0 - fract(localUv.y));
           vec4 color = terrainSample(atlas,cell,within,terrainFootprint(localUv));`}
         if (tileIndex == 49.0 || tileIndex >= 3328.0 && tileIndex < 3388.0) {
           vec2 glassUv = vec2(fract(localUv.x),1.0 - fract(localUv.y));
           color = texture2D(atlas,(cell + clamp(glassUv,vec2(.03125),vec2(.96875))) / vec2(64.0,terrainRows));
           if (color.a < .47) discard;
-        }`}
+        }`}`}
         gl_FragColor = vec4(color.rgb * tint, ${water ? 'color.a' : '1.0'});
         #include <colorspace_fragment>
         #include <fog_fragment>
@@ -134,7 +154,7 @@ export class FarTerrain {
     this.bounds = {minX:Math.floor(bounds.minX / PACK_BLOCKS),maxX:Math.floor(bounds.maxX / PACK_BLOCKS),
       minZ:Math.floor(bounds.minZ / PACK_BLOCKS),maxZ:Math.floor(bounds.maxZ / PACK_BLOCKS)};
     const material = options => farMaterial(textures,display.lightmap,display.atlasRows,options);
-    this.materials = {inner:material(),water:material({water:true}),outer:material({outer:true})};
+    this.materials = {inner:material(),water:material({water:true}),outer:material({outer:true}),rail:material({rail:true})};
     this.packs = new Map();
     this.pending = new Map();
     this.failed = new Map();
@@ -329,7 +349,7 @@ export class FarTerrain {
       mask:65535,seams:new THREE.Vector4(),installed:false};
     for (const [index,layer] of tile.layers.entries()) {
       if (!layer.count) continue;
-      const material = this.materials[index === 1 ? 'water' : outer ? 'outer' : 'inner'];
+      const material = this.materials[index === 1 ? 'water' : index === 3 ? 'rail' : outer ? 'outer' : 'inner'];
       const mesh = meshFor(layer,material,region);
       if (index === 2) region.transition = mesh;
       group.add(mesh);

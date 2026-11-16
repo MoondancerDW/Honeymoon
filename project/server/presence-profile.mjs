@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
-import { crc32, inflate } from 'node:zlib';
-import { maxSkinBytes, skinSizes } from '../world/pony-skins.mjs';
+import { crc32, inflate, inflateSync } from 'node:zlib';
+import { maxSkinBytes, ponySizeMarker, skinSizes } from '../world/pony-skins.mjs';
 import { RequestError } from './errors.mjs';
 
 export const MAX_PROFILE_BODY = Math.ceil(maxSkinBytes / 3) * 4 + 1024;
@@ -15,10 +15,10 @@ const inflatePng = promisify(inflate);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const invalidSkin = () => new RequestError(400, 'invalid_skin');
 
-export function publicProfile(player, { nickname, skinHash } = {}) {
+export function publicProfile(player, { nickname, skinHash } = {}, size = 'normal') {
   const id = hash(`pony:${player}`).slice(0, 24);
   return { id, nickname: nickname ?? `Игрок ${id.slice(0, 5)}`, nicknameChosen: Boolean(nickname),
-    skin: skinHash ? `/skins/${skinHash}.png` : null };
+    skin: skinHash ? `/skins/${skinHash}.png` : null, size };
 }
 
 function scanlineLayout(width, height, bits, interlaced) {
@@ -31,6 +31,68 @@ function scanlineLayout(width, height, bits, interlaced) {
   }));
 }
 
+function markerSize(pixels, layout, depth, type, palette, transparency) {
+  // In Adam7 the marker at (3, 0) is sample 1 in the first row of pass 6.
+  const interlaced = layout.length > 1;
+  const at = interlaced ? layout.slice(0,5).reduce((count,{rows,bytes}) => count + rows * bytes, 0) : 0;
+  const bits = channels[type] * depth;
+  const stride = Math.ceil(bits / 8);
+  const sample = interlaced ? 1 : 3;
+  const bytes = Buffer.from(pixels.subarray(at + 1, at + 1 + Math.ceil((sample + 1) * bits / 8)));
+  const filter = pixels[at];
+  // The preceding row is zero on every pass's first scanline.
+  for (let i = stride; i < bytes.length; i++) {
+    const left = bytes[i-stride];
+    bytes[i] += filter === 1 || filter === 4 ? left : filter === 3 ? left >> 1 : 0;
+  }
+  const index = sample * bits;
+  const masks = 2 ** depth - 1;
+  const values = Array.from({length:channels[type]}, (_, channel) => {
+    const offset = index + channel * depth;
+    const byte = offset >> 3;
+    if (depth === 16) return bytes.readUInt16BE(byte);
+    return bytes[byte] >> (8 - depth - (offset & 7)) & masks;
+  });
+  if (type === 0 || type === 4) return 'normal';
+  if (type === 3) {
+    const entry = values[0];
+    if ((transparency?.[entry] ?? 255) !== 255 || entry * 3 + 2 >= palette.length) return 'normal';
+    return ponySizeMarker(palette.readUIntBE(entry * 3, 3));
+  }
+  if (type === 6 && values[3] !== masks || type === 2 && transparency &&
+      values.every((value, channel) => value === transparency.readUInt16BE(channel * 2))) return 'normal';
+  const [red,green,blue] = depth === 16 ? values.map(value => value >> 8) : values;
+  return ponySizeMarker(red << 16 | green << 8 | blue);
+}
+
+export function savedSkinSize(input) {
+  if (!input) return 'normal';
+  const png = Buffer.from(input);
+  try {
+    if (!png.subarray(0,signature.length).equals(signature) || png.length > maxSkinBytes) return 'normal';
+    const width = png.readUInt32BE(16), height = png.readUInt32BE(20);
+    const depth = png[24], type = png[25];
+    if (!skinSizes.includes(`${width}x${height}`) || !colorDepths[type]?.includes(depth) || png[28] > 1) return 'normal';
+    const layout = scanlineLayout(width,height,depth * channels[type],png[28] === 1);
+    const chunks = [];
+    let palette, transparency;
+    for (let start = signature.length; start + 12 <= png.length;) {
+      const end = start + 12 + png.readUInt32BE(start);
+      if (end > png.length) return 'normal';
+      const key = png.toString('ascii',start + 4,start + 8);
+      const data = png.subarray(start + 8,end - 4);
+      if (key === 'IDAT') chunks.push(data);
+      if (key === 'PLTE') palette = data;
+      if (key === 'tRNS') transparency = data;
+      if (key === 'IEND') break;
+      start = end;
+    }
+    const expected = layout.reduce((sum,{rows,bytes}) => sum + rows * bytes, 0);
+    const pixels = inflateSync(Buffer.concat(chunks), {maxOutputLength:expected});
+    return pixels.length === expected ? markerSize(pixels,layout,depth,type,palette,transparency) : 'normal';
+  } catch { return 'normal'; }
+}
+
 async function readSkin(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) throw invalidSkin();
   const original = Buffer.from(value, 'base64');
@@ -39,7 +101,7 @@ async function readSkin(value) {
   const retained = [signature];
   const imageData = [];
   const adjustments = new Set();
-  let stage = -1, paletteEntries = 0, layout, colorType, bitDepth, hasTransparency = false;
+  let stage = -1, paletteEntries = 0, layout, colorType, bitDepth, palette, transparency;
   let start = signature.length;
   for (let chunks = 0; start < original.length; chunks++) {
     if (chunks >= MAX_PNG_CHUNKS || start + 12 > original.length) throw invalidSkin();
@@ -71,8 +133,9 @@ async function readSkin(value) {
       } else if (name === 'PLTE') {
         paletteEntries = size / 3;
         const limit = colorType === 3 ? 2 ** bitDepth : 256;
-        if (hasTransparency || colorType === 0 || colorType === 4 || size % 3 !== 0 ||
+        if (transparency || colorType === 0 || colorType === 4 || size % 3 !== 0 ||
             paletteEntries < 1 || paletteEntries > limit) throw invalidSkin();
+        palette = data;
       } else if (name === 'IDAT') {
         if (colorType === 3 && !paletteEntries) throw invalidSkin();
         imageData.push(data);
@@ -80,8 +143,8 @@ async function readSkin(value) {
       retained.push(original.subarray(start, end));
     } else if (name === 'tRNS') {
       const transparencySize = colorType === 0 ? size === 2 : colorType === 2 ? size === 6 : colorType === 3 && size > 0 && size <= paletteEntries;
-      if (stage >= 2 || hasTransparency || !transparencySize) throw invalidSkin();
-      hasTransparency = true;
+      if (stage >= 2 || transparency || !transparencySize) throw invalidSkin();
+      transparency = data;
       retained.push(original.subarray(start, end));
     } else if (Object.hasOwn(colorChunks, name)) {
       if (stage !== 0 || size !== colorChunks[name] || adjustments.has(name)) throw invalidSkin();
@@ -109,7 +172,7 @@ async function readSkin(value) {
     }
   }
   const png = Buffer.concat(retained);
-  return { png, hash: hash(png) };
+  return { png, hash: hash(png), size:markerSize(pixels,layout,bitDepth,colorType,palette,transparency) };
 }
 
 export async function profileChanges({ nickname, skin }) {

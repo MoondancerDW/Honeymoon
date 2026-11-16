@@ -14,7 +14,7 @@ test('batches a long fall in steps allowed by the server', () => {
 
 test('retains predicted walk steps through the requested final step', () => {
   const start = [0,65,0];
-  const walking = Array.from({length:30}, (_, index) => [(index + 1) / 10,65,0]);
+  const walking = Array.from({length:36}, (_, index) => [3 * (index + 1) / 20,65,0]);
   assert.equal(positionBatch(start, walking).target[0], POSITION_BATCH_LIMIT);
   assert.deepEqual(positionBatch(start, walking, walking[2]).target, walking[2]);
 });
@@ -25,10 +25,10 @@ test('batches a full 130 ms flight sprint update without accumulating client mov
   assert.deepEqual(positionBatch(start, sprint).trail, sprint);
 });
 
-test('batches a full 130 ms climbing flight sprint at twice the horizontal speed', () => {
+test('batches a full 130 ms vertical flight sprint at the horizontal speed', () => {
   const start = [0,65,0];
   const ascent = Array.from({length:13}, (_, i) =>
     [0,65 + (i + 1) * .01 * FLIGHT_SPRINT_SPEED * FLIGHT_VERTICAL_MULTIPLIER,0]);
-  assert.ok(ascent.at(-1)[1] - start[1] > POSITION_BATCH_LIMIT);
+  assert.ok(ascent.at(-1)[1] - start[1] < POSITION_BATCH_LIMIT);
   assert.deepEqual(positionBatch(start, ascent).trail, ascent);
 });

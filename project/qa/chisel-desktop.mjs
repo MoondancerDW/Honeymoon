@@ -67,18 +67,18 @@ try {
   const before = await snapshot();
 
   await aim([-9.52,65,-19.47],floor);
-  const copy = await action('copy',()=>page.keyboard.press('KeyQ'));
+  const copy = await action('copy',()=>page.keyboard.press('KeyO'));
   assert.equal(copy.cell,'legacy:2:0');
   await page.waitForFunction(() => document.querySelector('#selected').textContent.includes('В руке'));
   const originalPlacement = await action('place',click('right'));
   assert.equal(originalPlacement.changes[0].cell,copy.cell);
   await rendered(originalPlacement.worldRevision);
 
-  await page.keyboard.press('KeyV');
+  await page.keyboard.press('KeyZ');
   await page.waitForFunction(()=>honeymoon.stats().chiseling);
   const sourceIndex = voxelIndex(7,5,3);
   await aim([-9,65.6875,-19.5625],destination,sourceIndex);
-  const material = (await action('copy_voxel',()=>page.keyboard.press('KeyQ'))).material;
+  const material = (await action('copy_voxel',()=>page.keyboard.press('KeyO'))).material;
   assert.equal(material,copy.cell);
   await page.waitForFunction(material => honeymoon.stats().chiselMaterial === material,material);
 

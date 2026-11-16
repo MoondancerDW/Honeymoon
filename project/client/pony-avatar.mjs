@@ -7,6 +7,12 @@ const LEG_NAMES = ['frontRight', 'frontLeft', 'hindRight', 'hindLeft'];
 const TAU = Math.PI * 2;
 const seatedLegAngles = [-.4, -.4, 4.712 - TAU, 4.712 - TAU];
 const flightLegYaw = [.2, -.2, -.2, .2];
+const proneHeights = {
+  small: {head:.23, neck:.3, leg:.11, tail:.19},
+  normal: {head:.36, neck:.46, leg:.16, tail:.27},
+  large: {head:.48, neck:.59, leg:.21, tail:.34},
+  tall: {head:.48, neck:.59, leg:.21, tail:.34},
+};
 const headTurnLimit = 75 * Math.PI / 180;
 const geometryCache = new Map();
 const imageLoader = new THREE.ImageLoader();
@@ -238,6 +244,7 @@ function buildRig(visual, materials, skin) {
   const hind = legs.slice(2).map(leg => leg.position.clone());
   return {head, eyes, mane, horn, neck, body, hips, legs, tail, foldedWings, openWings, meshes, labelHeight, fore, hind,
     tailPivot:tail?.position.clone(), wingPivots:foldedWings.map(wing => wing.position.clone()),
+    openWingPivots:openWings.map(wing => wing.position.clone()),
     headScale:headGroup.scale.y, sitHeight:skin.size === 'small' ? .5 : .2};
 }
 
@@ -255,6 +262,7 @@ export function createPonyAvatar(isAir) {
   let skinUrl = null, skinReady = true, pending, revision = 0, disposed = false;
   let lightColor = 0xffffff;
   let time = 0, limbSwing = 0, swing = 0, flight = 0, boost = 0, sitting = 0, motion = 'idle';
+  let stance = 'stand', crouching = 0, crawling = 0;
   let leapTop, previousFallDistance = 0, gliding = false;
   let previousSwing, strikeTime = Infinity, activeProp, heldItem, hornGlow, firstPerson = false;
   const eyePosition = new THREE.Vector3();
@@ -338,9 +346,11 @@ export function createPonyAvatar(isAir) {
   }
 
   function animate({time: now = time, dt = 1 / 60, speed = 0, yawOffset = 0, pitch = 0, strideDirection = 1,
-    motion: nextMotion = 'idle', position, swing: swingId = 0, held = null, itemAssets} = {}) {
+    motion: nextMotion = 'idle', stance: nextStance = 'stand', boost: flightBoost = false,
+    position, swing: swingId = 0, held = null, itemAssets} = {}) {
     time = now;
     motion = nextMotion === 'air' ? 'jump' : nextMotion;
+    stance = nextStance;
     const elapsed = THREE.MathUtils.clamp(dt, 0, 0.1);
     const fade = 1 - Math.exp(-elapsed * 14);
     // EntityLiving uses four times the horizontal distance per 20 Hz tick for limb swing.
@@ -348,11 +358,13 @@ export function createPonyAvatar(isAir) {
     swing += (targetSwing - swing) * (1 - .6 ** (elapsed * 20));
     limbSwing += strideDirection * swing * elapsed * 20;
     const airborne = rig.openWings.length > 0 && jumpFlight(position);
-    const extended = rig.openWings.length > 0 && (motion === 'fly' || airborne);
-    const boosted = extended && motion === 'fly' && swing >= .9999;
+    const flying = motion === 'fly';
+    const extended = flying || airborne;
     flight += (Number(extended) - flight) * fade;
-    boost += (Number(boosted) - boost) * fade;
-    sitting += (Number(motion === 'sit') - sitting) * fade;
+    boost += (Number(flying && flightBoost) - boost) * fade;
+    sitting += (Number(motion === 'sit' && stance !== 'crawl') - sitting) * fade;
+    crouching += (Number(stance === 'crouch') - crouching) * fade;
+    crawling += (Number(stance === 'crawl') - crawling) * fade;
     rig.head.rotation.set(-THREE.MathUtils.clamp(pitch, -0.5, 0.5),
       -THREE.MathUtils.clamp(yawOffset, -headTurnLimit, headTurnLimit), 0);
     if (rig.mane) {
@@ -371,7 +383,7 @@ export function createPonyAvatar(isAir) {
     const gait = Math.PI * swing ** 16;
     const phase = limbSwing * .6662;
     const cycle = [phase + Math.PI + gait * .5, phase + gait, phase + gait * .2, phase + Math.PI - gait * .4];
-    const flyPitch = Math.sin(swing * .5);
+    const flyPitch = Math.sin(swing * .35);
     for (let i = 0; i < rig.legs.length; i++) {
       const direction = i < 2 ? -1 : 1;
       const step = Math.cos(cycle[i]) * .45 * swing * (1 - flight);
@@ -402,52 +414,105 @@ export function createPonyAvatar(isAir) {
     // and repositions the shoulders, wings and tail in the original 1/16-block model space.
     const part = sitting / 16;
     const height = rig.sitHeight;
-    rig.head.position.set(0, (3.5 + height) * part, 1.2 * part);
-    rig.neck.position.set(0, (2.5 + height) * part, .8 * part);
-    rig.body.position.set(0, (4 + height) * part, 3 * part);
-    rig.body.rotation.x = -.4 * sitting;
+    // The native sneak animation drops the head and shoulders, tips the body
+    // forward and bends the front legs without moving the standing root.
+    const sneak = crouching / 16;
+    rig.head.position.set(0, (3.5 + height) * part + 6 * sneak, 1.2 * part - 2 * sneak);
+    rig.neck.position.set(0, (2.5 + height) * part + 5 * sneak, .8 * part - 1.4 * sneak);
+    rig.body.position.set(0, (4 + height) * part + 7 * sneak, 3 * part - 4 * sneak);
+    rig.body.rotation.set(.4 * (crouching - sitting), 0, 0);
     for (let i = 0; i < rig.legs.length; i++) {
       const leg = rig.legs[i];
       leg.rotation.x += (seatedLegAngles[i] - leg.rotation.x) * sitting;
       if (i < 2) {
         leg.position.copy(rig.fore[i]);
-        leg.position.y += (2 + height) * part;
+        leg.rotation.x -= .4 * crouching;
+        leg.position.y += (2 + height) * part + .5 * sneak;
         leg.position.z += boost / 16;
       } else {
         const side = i === 2 ? 1 : -1;
         leg.rotation.y += (.5 * side - leg.rotation.y) * sitting;
         leg.position.copy(rig.hind[i - 2]);
         leg.position.x += 2 * side * part;
-        leg.position.y += (13 + height) * part;
+        leg.position.y += (13 + height) * part - sneak;
         leg.position.z += 5 * part - boost / 32;
       }
     }
     for (const hip of rig.hips) {
-      hip.position.y = (8 + height) * part + (swing * .5 * (flight - boost) + 2.5 * boost) / 16;
-      hip.position.z = -(swing * .5 * (flight - boost) + 2 * boost) / 16;
+      hip.position.y = (8 + height) * part + 7 * sneak + (swing * .5 * (flight - boost) + 2.5 * boost) / 16;
+      hip.position.z = -4 * sneak - (swing * .5 * (flight - boost) + 2 * boost) / 16;
+      hip.rotation.x += .4 * crouching;
     }
     if (rig.tail) {
       rig.tail.position.copy(rig.tailPivot);
       rig.tail.position.x -= 3.5 * part;
       rig.tail.position.y += (11.2 + height) * part + 6 * boost / 16;
-      rig.tail.position.z += part + boost / 16;
-      rig.tail.rotation.x += (-.5 - rig.tail.rotation.x) * sitting;
+      rig.tail.position.z += part + boost / 16 - 4 * sneak;
+      rig.tail.rotation.x += (-.5 - rig.tail.rotation.x) * sitting - rig.tail.rotation.x * crouching;
       rig.tail.rotation.z += (-1.1 - rig.tail.rotation.z) * sitting;
     }
     const flap = Math.sin(time * 10.72);
+    const sneakWings = stance === 'crouch' && !extended;
     for (let i = 0; i < rig.openWings.length; i++) {
       const folded = rig.foldedWings[i];
-      folded.visible = !extended;
+      folded.visible = !extended && !sneakWings;
       folded.position.copy(rig.wingPivots[i]);
       folded.position.y += (1.75 + height) * part;
       folded.position.z -= 2.5 * part;
       folded.rotation.x = (1.1 - 1.571) * sitting;
-      rig.openWings[i].visible = extended;
-      rig.openWings[i].rotation.z = (i === 0 ? -1 : 1) * (5.112 + flap);
+      const open = rig.openWings[i];
+      open.visible = extended || sneakWings;
+      open.position.copy(rig.openWingPivots[i]);
+      open.position.y += (3.25 + i) * sneak;
+      open.position.z -= 2.5 * sneak;
+      open.rotation.z = (i === 0 ? -1 : 1) * THREE.MathUtils.lerp(5.112 + flap, 6, crouching);
     }
+    if (crawling > .0001) applyPronePose(phase, motion === 'sit' ? 0 : swing);
     activeProp = held;
     heldAssets = itemAssets;
     updateHeldItem();
+  }
+
+  function applyPronePose(phase, pace) {
+    const {lerp} = THREE.MathUtils;
+    const heights = proneHeights[skin.size];
+    const rock = Math.sin(phase) * pace;
+    function lower(part, worldHeight) {
+      // Rig coordinates run downwards and groups have different native scales.
+      const y = (visual.position.y - part.parent.position.y - worldHeight) / part.parent.scale.y;
+      part.position.y = lerp(part.position.y, y, crawling);
+    }
+    lower(rig.head, heights.head + .014 * rock);
+    lower(rig.neck, heights.neck + .012 * rock);
+    rig.head.position.z = lerp(rig.head.position.z, -.04, crawling);
+    rig.neck.position.z = lerp(rig.neck.position.z, -.02, crawling);
+    rig.body.rotation.x *= 1 - crawling;
+    rig.body.rotation.y = .05 * rock * crawling;
+    rig.body.rotation.z = .04 * rock * crawling;
+    lower(rig.body, rig.body.parent.scale.y * .78 + .035);
+    for (const hip of rig.hips) {
+      lower(hip, hip.parent.scale.y * .8 + .035);
+      hip.position.z = lerp(hip.position.z, -.03, crawling);
+      hip.rotation.x *= 1 - crawling;
+    }
+    for (let i = 0; i < rig.legs.length; i++) {
+      const leg = rig.legs[i], front = i < 2;
+      const side = i % 2 === 0 ? 1 : -1;
+      const stroke = (front ? side : -side) * rock;
+      const angle = front ? -1.48 - .16 * stroke : 1.53 + .16 * stroke;
+      lower(leg, heights.leg - (front ? .03 : 0) + .045 * Math.max(0, stroke));
+      leg.position.x *= 1 - (front ? .15 : 0) * crawling;
+      leg.position.z = lerp(leg.position.z, (front ? .39 : .36) + .17 * stroke, crawling);
+      leg.rotation.x = lerp(leg.rotation.x, angle, crawling);
+      leg.rotation.y = lerp(leg.rotation.y, side * (front ? .055 : .19), crawling);
+      leg.rotation.z *= 1 - crawling;
+    }
+    if (rig.tail) {
+      lower(rig.tail, heights.tail);
+      rig.tail.rotation.x = lerp(rig.tail.rotation.x, 1.32, crawling);
+      rig.tail.rotation.z = lerp(rig.tail.rotation.z, .09 * rock, crawling);
+    }
+    for (const wing of rig.foldedWings) lower(wing, heights.leg + .04);
   }
 
   function updateHeldItem() {
@@ -506,7 +571,7 @@ export function createPonyAvatar(isAir) {
   function inspect() {
     return {skinReady, ponyType: skin.ponyType, advanced: skin.advanced, size: skin.size, phase:limbSwing * .6662 % TAU,
       tail:skin.tail, male:skin.male, mane:skin.mane,
-      meshCount: rig.meshes, motion, legAngles: rig.legs.map(leg => leg.rotation.x),
+      meshCount: rig.meshes, motion, stance, legAngles: rig.legs.map(leg => leg.rotation.x),
       headYaw:-rig.head.rotation.y, headPitch:-rig.head.rotation.x, flightBoost:boost,
       held:activeProp, strike, magicGlow:hornGlow?.visible ? skin.glowColor : null,
       firstPersonHooves:firstPerson ? rig.legs.slice(0, 2).map(hoof => hoof.rotation.x) : null,

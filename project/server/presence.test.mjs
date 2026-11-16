@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { createHoneymoonServer } from './index.mjs';
-import { profileChanges } from './presence-profile.mjs';
+import { profileChanges, savedSkinSize } from './presence-profile.mjs';
 import { createPresence, readPose } from './presence.mjs';
 
 const work = fileURLToPath(new URL('../work/', import.meta.url));
@@ -32,6 +32,30 @@ function skin(width = 64, height = 32, { text, pixels, trailingBytes } = {}) {
   return Buffer.concat([signature, chunk('IHDR', header), ...(text ? [chunk('tEXt', Buffer.from(text))] : []),
     chunk('IDAT', trailingBytes ? Buffer.concat([imageData, trailingBytes]) : imageData), chunk('IEND', Buffer.alloc(0))]);
 }
+
+function markedSkin(red,green,blue,alpha = 255) {
+  const pixels = Buffer.alloc((1 + 64 * 4) * 32);
+  pixels.set([red,green,blue,alpha],13);
+  return skin(64,32,{pixels});
+}
+
+test('server reads the exact size marker for new and previously saved skin pixels', async () => {
+  for (const [rgba,size] of [[[255,190,83],'small'],[[206,50,84],'large'],[[42,60,120],'tall'],[[255,190,83,254],'normal']]) {
+    const png = markedSkin(...rgba);
+    const uploaded = await profileChanges({skin:png.toString('base64')});
+    assert.equal(uploaded.skin.size,size);
+    assert.equal(savedSkinSize(uploaded.skin.png),size);
+  }
+  const header = Buffer.from(skin().subarray(16,29));
+  header[8] = 2;
+  header[9] = 3;
+  const pixels = Buffer.alloc(17 * 32);
+  pixels[1] = 1; // Palette index 1 at the fourth 2-bit pixel.
+  const indexed = Buffer.concat([signature, chunk('IHDR',header),
+    chunk('PLTE',Buffer.from([0,0,0,255,190,83])), chunk('IDAT',deflateSync(pixels)), chunk('IEND',Buffer.alloc(0))]);
+  assert.equal((await profileChanges({skin:indexed.toString('base64')})).skin.size,'small');
+  assert.equal(savedSkinSize(indexed),'small');
+});
 
 test('skins accept supported layouts and discard private PNG metadata with bounded decompression', async () => {
   for (const [width, height] of [[64,32], [64,64], [128,64], [256,128], [512,256]]) {
@@ -173,17 +197,19 @@ test('independent cookies share profiles and only confirmed movement, and retain
   assert.notEqual(a.data.profile.id, b.data.profile.id);
   assert.equal((await post('profile',{nickname:'Ветер'}, undefined)).status,401);
   assert.equal((await post('profile',{nickname:'Ветер'}, b.cookie,'https://example.test')).status,403);
-  const chosen = await post('profile',{nickname:' Лунный Ветер ',skin:skin().toString('base64')}, b.cookie);
+  const chosenSkin = markedSkin(255,190,83);
+  const chosen = await post('profile',{nickname:' Лунный Ветер ',skin:chosenSkin.toString('base64')}, b.cookie);
   assert.equal(chosen.status,200);
   assert.equal(chosen.data.nickname,'Лунный Ветер');
   assert.equal(chosen.data.nicknameChosen,true);
+  assert.equal(chosen.data.size,'small');
   assert.equal((await post('session',{},a.cookie)).data.profile.nicknameChosen,false);
   assert.match(chosen.data.skin, /^\/skins\/[a-f0-9]{64}\.png$/);
   const image = await fetch(url + chosen.data.skin);
   assert.equal(image.status,200);
   assert.equal(image.headers.get('Content-Type'),'image/png');
   assert.match(image.headers.get('Cache-Control'),/immutable/);
-  assert.deepEqual(Buffer.from(await image.arrayBuffer()),skin());
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()),chosenSkin);
   const options = {yaw:0, pitch:0, motion:'idle'};
   const signal = AbortSignal.timeout(12000);
   const [observer, observed] = await Promise.all([eventFeed(url,a.cookie,signal,true), eventFeed(url,b.cookie,signal)]);
@@ -192,11 +218,11 @@ test('independent cookies share profiles and only confirmed movement, and retain
   const joined = await post('presence',{...options,x:25,y:25,z:25},b.cookie);
   assert.equal(joined.status,200);
   const entered = await observer.next('presence');
-  assert.deepEqual(entered, {revision:undefined,data:{players:[{...chosen.data,position:point,...options}],selfOnline:false}});
+  assert.deepEqual(entered, {revision:undefined,data:{players:[{...chosen.data,position:point,...options,stance:'stand'}],selfOnline:false}});
   assert.equal((await post('position',{...point,x:100,pose:{...options,motion:'fly'}},b.cookie)).status,409);
   assert.equal((await post('position',{...point,z:8.75,pose:{...options,motion:'walk'}},b.cookie)).status,200);
   const moved = await observer.next('presence-motion');
-  assert.deepEqual(moved, {revision:undefined,data:{players:[{id:chosen.data.id,position:{...point,z:8.75},...options,motion:'walk'}]}});
+  assert.deepEqual(moved, {revision:undefined,data:{players:[{id:chosen.data.id,position:{...point,z:8.75},...options,motion:'walk',stance:'stand'}]}});
   const renamed = await post('profile',{nickname:'Другой ник'}, b.cookie);
   assert.equal(renamed.status,200);
   assert.deepEqual(renamed.data, {...chosen.data,nickname:'Другой ник'});
@@ -219,7 +245,7 @@ test('independent cookies share profiles and only confirmed movement, and retain
   assert.equal(skinChanged.data.nickname,renamed.data.nickname);
   assert.notEqual(skinChanged.data.skin,chosen.data.skin);
   assert.equal((await post('profile',{skin:null},b.cookie)).data.skin,null);
-  assert.equal((await post('profile',{skin:skin().toString('base64')},b.cookie)).data.skin,chosen.data.skin);
+  assert.equal((await post('profile',{skin:chosenSkin.toString('base64')},b.cookie)).data.skin,chosen.data.skin);
   assert.equal((await post('profile',{skin:null},b.cookie)).data.skin,null);
   assert.equal((await fetch(url + chosen.data.skin)).status,404);
 });

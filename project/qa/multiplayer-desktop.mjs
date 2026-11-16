@@ -292,7 +292,7 @@ try {
   await enter(duskPage);
   const buildAt = {x:-10,y:65,z:-20};
   await aimBlock(duskPage, {...buildAt,y:64});
-  const copied = await action(duskPage, 'copy', () => duskPage.keyboard.press('KeyQ'));
+  const copied = await action(duskPage, 'copy', () => duskPage.keyboard.press('KeyO'));
   const placed = await action(duskPage, 'place', () => duskPage.mouse.click(640,360,{button:'right'}));
   assert.equal(placed.changes[0].cell, copied.cell);
   await dawnPage.waitForFunction(({x,y,z,key}) => {

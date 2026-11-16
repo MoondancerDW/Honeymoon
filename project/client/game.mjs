@@ -9,7 +9,7 @@ import {blockState, jammyUseSound} from '../world/block-interactions.mjs';
 import {seatFor, SEATED_EYE} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
-import {FLIGHT_VERTICAL_MULTIPLIER, POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
+import {FLIGHT_VERTICAL_MULTIPLIER,POSITION_TRAIL_LIMIT,playerBody} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
@@ -63,6 +63,7 @@ const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 const positionTrail = [];
 let playing = false, jump = false, lastFrame = 0, nextPositionSync = 0, timer;
 let flying = false;
+let crawlRequested = false, confirmedStance = 'stand';
 let spectator = false, spectatorReturn = null;
 let seat = null, seatPending = false, seatEpoch = 0;
 let signTarget;
@@ -129,7 +130,7 @@ function chooseCreative(entry) {
 }
 
 async function drawCreativeIcon(entry, canvas) {
-  const sprite = world.models.biblio?.items?.[entry.id + ':' + (entry.damage ?? 0)];
+  const sprite = world.models.biblio?.items?.[entry.id + ':' + (entry.invisible ? 0 : entry.damage ?? 0)];
   if (sprite?.uv && ['flat-item','item-frame','minecart','boat'].includes(entry.kind)) {
     if (!itemIconImage) {
       const image = new Image();
@@ -215,7 +216,7 @@ const messages = {
   part_missing: 'Деталь уже убрана', invalid_part: 'Эта форма или материал недоступны',
   part_required: 'Наведите прицел на отдельную деталь',
   incompatible_part: 'Деталь здесь не помещается',
-  voxel_required: 'Нажмите V, чтобы взять резец',
+  voxel_required: 'Нажмите Z, чтобы взять резец',
   voxel_not_owned: 'Резцом можно менять блоки, установленные игроками',
   invalid_voxel: 'Наведите прицел на нужную часть блока',
   invalid_material: 'Резец берёт материал с полного блока, жидкости или уже вырезанной части',
@@ -266,6 +267,7 @@ function effects(data, showMessages = true) {
   audio.effects(data.effects ?? [], world);
   for (const effect of data.effects || []) {
     if (effect.type === 'dispense') view.dispense(effect);
+    if (effect.type === 'break') view.breakBlock(effect);
     if (showMessages && effect.message) notice(effect.message);
   }
 }
@@ -332,7 +334,7 @@ function stream() {
 function heldPonyItem() {
   const item = heldCreativeItem;
   if (item && ['flat-item','item-frame','minecart','boat'].includes(item.kind)) {
-    return {kind:'item', key:`${item.id}:${item.damage ?? 0}`};
+    return {kind:'item', key:`${item.id}:${item.invisible ? 0 : item.damage ?? 0}`};
   }
   const partKey = heldPart ? `cover-material:${heldPart.material}` : null;
   const key = chiseling ? chiselMaterial : partKey ?? clipboard;
@@ -341,9 +343,10 @@ function heldPonyItem() {
 
 function playerPose() {
   const motion = seat ? 'sit' : !playing ? 'idle' : flying ? 'fly' : movement.medium === 'water' ? 'swim' :
-    !movement.grounded && !movement.medium ? 'air' : horizontalSpeed > .15 ? (sprinting() ? 'run' : 'walk') : 'idle';
+    !movement.grounded && !movement.medium && movement.stance === 'stand' ? 'air' : horizontalSpeed > .15 ?
+      (sprinting() && movement.stance === 'stand' ? 'run' : 'walk') : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
-    eye:view.eyeOffset(),
+    stance:seat?.bed ? 'crawl' : movement.stance, boost:!seat && flying && playing && sprinting(), eye:view.eyeOffset(),
     typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(),
     seq:Math.round(performance.timeOrigin + performance.now())};
 }
@@ -356,7 +359,7 @@ function sendPresence(now) {
   } else if (seat?.entity) {
     pose.cartDrive = playing && !menuOpen() ? Math.sign(forwardInput()) : 0;
   }
-  const changed = !lastSentPose || pose.motion !== lastSentPose.motion ||
+  const changed = !lastSentPose || pose.motion !== lastSentPose.motion || pose.stance !== lastSentPose.stance || pose.boost !== lastSentPose.boost ||
     pose.typing !== lastSentPose.typing || pose.swing !== lastSentPose.swing ||
     pose.held?.key !== lastSentPose.held?.key || pose.held?.kind !== lastSentPose.held?.kind ||
     pose.cartDrive !== lastSentPose.cartDrive || Boolean(pose.cartDrive) ||
@@ -370,14 +373,18 @@ function sendPresence(now) {
   presenceRequest = post('presence', pose, AbortSignal.timeout(3000)).then(({ok, body}) => {
     if (ok && (!lastSentPose || pose.seq >= lastSentPose.seq)) {
       lastSentPose = pose;
-      if (epoch === seatEpoch && !acting && !resetting && Boolean(body.seat) !== Boolean(seat)) setSeat(body.seat, body.position);
+      if (epoch === seatEpoch && !acting && !resetting && Boolean(body.seat) !== Boolean(seat)) {
+        setSeat(body.seat, body.position,body.stance);
+      }
     }
     else presenceDirty = true;
   }).catch(() => { presenceDirty = true; }).finally(() => { presenceRequest = null; });
 }
 
 function updateCamera() {
-  view.updateCamera(position, orbitHeading ?? heading, seat ? SEATED_EYE : EYE);
+  const stance = seat?.bed ? 'crawl' : movement.stance;
+  const lowCeiling = !spectator && stance !== 'stand' ? playerBody(movement.size,stance).height : undefined;
+  view.updateCamera(position,orbitHeading ?? heading,seat ? SEATED_EYE : EYE,lowCeiling);
 }
 
 function cameraMode() {
@@ -454,6 +461,12 @@ function setPlaying(active) {
 }
 
 function setFlight(active) {
+  if (active && !spectator && movement.stance !== 'stand') {
+    const stance = movement.setStance(position,'stand');
+    if (stance !== 'stand') return;
+    crawlRequested = false;
+    recordPosition(position);
+  }
   flying = active;
   movement.fall = 0;
   movement.grounded = false;
@@ -491,8 +504,8 @@ async function toggleSpectator() {
     }
     seatEpoch++;
     setSpectator(body.spectator);
-    if (body.relocated) await arriveAt(body.position);
-    else setSeat(null, body.position);
+    if (body.relocated) await arriveAt(body.position,body.stance);
+    else setSeat(null, body.position,body.stance);
   } catch {
     notice('Связь с сервером прервалась');
   } finally {
@@ -503,31 +516,33 @@ async function toggleSpectator() {
 const positionTuple = ({x, y, z}) => [x, y, z];
 
 function recordPosition(feet) {
-  const sample = positionTuple(feet);
-  const previous = positionTrail.at(-1) ?? confirmedPosition;
+  const sample = [...positionTuple(feet),movement.stance];
+  const previous = positionTrail.at(-1) ?? [...confirmedPosition,confirmedStance];
   if (sample.some((value, axis) => value !== previous[axis])) positionTrail.push(sample);
 }
 
-function setAuthoritativePosition(feet) {
+function setAuthoritativePosition(feet, stance = 'stand') {
   Object.assign(position, feet);
   view?.viewBob.reset();
   confirmedPosition = positionTuple(feet);
+  confirmedStance = movement.stance = stance;
+  crawlRequested = stance === 'crawl' && !seat;
   positionTrail.length = 0;
   pendingPosition = null;
   movement.fall = 0;
   movement.grounded = false;
 }
 
-function setSeat(next, feet) {
+function setSeat(next, feet, stance) {
   seatEpoch++;
   seat = next;
-  setAuthoritativePosition(feet);
+  setAuthoritativePosition(feet,stance);
   game.classList.toggle('seated', Boolean(seat));
   const status = element('seat-status');
   status.hidden = !seat;
   status.textContent = seat?.kind === 'boat' ? (touchMode ? 'Лодка · стик — управление · Действие — выйти' :
     'Лодка · WASD или стрелки · E — выйти') : seat?.entity ? (touchMode ? 'Вагонетка · стик — движение · Действие — встать' :
-      'Вагонетка · W/S или ↑/↓ — движение · E — встать') : 'Сидите · E — встать';
+      'Вагонетка · W/S или ↑/↓ — движение · E — встать') : seat?.bed ? 'Лежите · E — встать' : 'Сидите · E — встать';
   if (seat) {
     setFlight(false);
     heading.yaw = seat.yaw;
@@ -543,7 +558,7 @@ async function teleport(coordinates) {
     await sync;
     const result = await post('teleport', coordinates, AbortSignal.timeout(5000));
     if (result.ok) {
-      const arriving = arriveAt(result.body.position);
+      const arriving = arriveAt(result.body.position,result.body.stance);
       changes(result.body.changes, result.body.worldRevision);
       effects(result.body);
       presenceDirty = true;
@@ -557,13 +572,13 @@ async function teleport(coordinates) {
   }
 }
 
-async function arriveAt(feet) {
+async function arriveAt(feet, stance) {
   const cx = Math.floor(feet.x / 16), cz = Math.floor(feet.z / 16);
   const visible = world.manifest.chunks.filter(([x,z]) =>
     Math.max(Math.abs(x - cx), Math.abs(z - cz)) <= view.detailedDistance);
   const covered = !view.chunksReady(visible);
   if (covered) teleportLoading.hidden = false;
-  setSeat(null, feet);
+  setSeat(null, feet,stance);
   nearbyStream?.update();
   if (!covered) return;
   try {
@@ -586,7 +601,7 @@ async function toggleSeat() {
   try {
     if (!await flushPosition()) return;
     const {ok, body} = await post('seat', {...playerPose(), target}, AbortSignal.timeout(4000));
-    if (ok) setSeat(body.seat, body.position);
+    if (ok) setSeat(body.seat, body.position,body.stance);
     else notice(messages[body.error] ?? body.error);
   } catch {
     presenceDirty = true;
@@ -665,13 +680,14 @@ function syncPosition(lastStep) {
   sync = post('position', payload, AbortSignal.timeout(3000)).then(({ok, body}) => {
     if (ok) {
       confirmedPosition = positionTuple(body.position);
+      confirmedStance = body.stance ?? payload.trail.at(-1)[3];
       positionTrail.splice(0, payload.trail.length);
       pendingPosition = null;
       if (payload.pose && (!lastSentPose || payload.pose.seq >= lastSentPose.seq)) lastSentPose = payload.pose;
     } else if (body.position) {
       positionMetrics.corrections++;
-      if (body.seat) setSeat(body.seat, body.position);
-      else setAuthoritativePosition(body.position);
+      if (body.seat) setSeat(body.seat, body.position,body.stance);
+      else setAuthoritativePosition(body.position,body.stance);
     } else {
       throw new Error(body.error || 'Position sync failed');
     }
@@ -743,7 +759,7 @@ function updatePlacement(target) {
       placement = model && {x, y, z, boxes: model.collision, surfaces: model.surfaces,
         unavailable: !world.hasChunk(x, z) || world.cellAt(x, y, z)};
     }
-    if (placement) placement.blocked = Boolean(placement.unavailable) || overlapsPlacement(position, placement);
+    if (placement) placement.blocked = Boolean(placement.unavailable) || overlapsPlacement(position,placement,movement.body);
     return;
   }
   const {x, y, z, hit, partSlot, offset: [dx, dy, dz]} = target;
@@ -766,7 +782,7 @@ function updatePlacement(target) {
     }
   }
   if (placement) placement.blocked = Boolean(placement.unavailable) ||
-    placement.solid !== false && overlapsPlacement(position, placement);
+    placement.solid !== false && overlapsPlacement(position,placement,movement.body);
 }
 
 function previewVoxel(target) {
@@ -836,7 +852,7 @@ function toggleChisel() {
 }
 
 function updateChiselHint() {
-  chiselHint.textContent = `Резец 1/${8 / chiselSize} · B — сменить размер · ЛКМ — убрать · ПКМ — добавить · Q — взять материал`;
+  chiselHint.textContent = `Резец 1/${8 / chiselSize} · B — сменить размер · ЛКМ — убрать · ПКМ — добавить · O/СКМ — взять материал`;
 }
 
 function toggleChiselSize() {
@@ -856,7 +872,7 @@ function updateSelection() {
   }
   const {x,y,z} = position;
   const {yaw,pitch} = heading;
-  const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,chiselSize,seat];
+  const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,chiselSize,seat,movement.stance];
   const changed = !selectionInputs || stamp.some((value, index) => value !== selectionInputs[index]);
   if (!changed && !world.minecarts.size && !world.boats.size && !seatTarget) return;
   selectionInputs = stamp;
@@ -904,7 +920,7 @@ async function action(type, sneaking = false) {
       notice(messages.invalid_material);
       return;
     }
-    if (type === 'place' && !chiselMaterial) { notice('Сначала скопируйте материал клавишей Q'); return; }
+    if (type === 'place' && !chiselMaterial) { notice('Сначала скопируйте материал клавишей O или СКМ'); return; }
     type += '_voxel';
   } else {
     if (target.part && type === 'copy') type = 'copy_part';
@@ -977,7 +993,7 @@ async function action(type, sneaking = false) {
   try {
     if (pendingPlacement) movement.pendingPlacement = pendingPlacement;
     if (!await flushPosition()) { notice(messages.movement_blocked); return; }
-    if (pendingPlacement && overlapsPlacement(position, pendingPlacement)) { notice(messages.occupied); return; }
+    if (pendingPlacement && overlapsPlacement(position,pendingPlacement,movement.body)) { notice(messages.occupied); return; }
     const result = await postAction(request);
     if (!result.ok) {
       if (result.body.current || result.body.frames) {
@@ -1042,9 +1058,14 @@ function tick(now) {
     const strafe = turnInput();
     const descending = flying ? keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC') : sprinting();
     const vertical = flying ? Number(keys.has('Space')) - Number(descending) : 0;
-    const speed = movementSpeed({flying, sprint:sprinting()}) / Math.max(1, Math.hypot(forward, strafe, vertical));
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
     if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
+      if (!flying) {
+        const previous = movement.stance;
+        const stance = crawlRequested ? 'crawl' : keys.has('KeyC') ? 'crouch' : 'stand';
+        if (movement.setStance(position,stance) !== previous) recordPosition(position);
+      }
+      const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance}) / Math.max(1,Math.hypot(forward,strafe,vertical));
       const dx = (-sin * forward + cos * strafe) * speed;
       const dz = (-cos * forward - sin * strafe) * speed;
       if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, dt, recordPosition, spectator);
@@ -1052,13 +1073,13 @@ function tick(now) {
         {rise: jump || keys.has('Space'), descend: descending, recordStep: recordPosition});
     }
     horizontalSpeed = dt > 0 ? Math.hypot(position.x - startX, position.z - startZ) / dt : 0;
-    audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw,
+    audio.frame(world, position, {grounded:movement.grounded, yaw:heading.yaw, body:movement.body,
       climbing:movement.medium === 'ladder', swimming:movement.medium === 'water'});
     jump = false;
   } else horizontalSpeed = 0;
   if (!resetting && now >= nextPositionSync && !acting) syncPosition();
   if (!sync || presenceDirty) sendPresence(now);
-  if (playing && !menuOpen() && !seat && !flying) {
+  if (playing && !menuOpen() && !seat && !flying && movement.stance === 'stand') {
     view.viewBob.step(horizontalSpeed * dt, dt, movement.grounded && !movement.medium, movement.fall);
   } else {
     view.viewBob.step(0, dt, true, 0);
@@ -1078,8 +1099,10 @@ function tick(now) {
     seatTarget ? (seatTarget.kind === 'boat' ? 'Лодка · E — сесть' : 'Вагонетка · E — сесть') :
     selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
-  const interaction = !seat && !seatTarget && !frameTarget && (seatFor(selection?.cell, world.models) ? 'E — сесть' :
-    selection && signFor(selection.cell) && world.revisionAt(selection.x, selection.y, selection.z) ? 'E — редактировать' : '');
+  const targetSeat = !seat && !seatTarget && !frameTarget && seatFor(selection?.cell,world.models);
+  const interaction = targetSeat ? targetSeat.bed ? 'E — лечь' : 'E — сесть' :
+    !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) &&
+    world.revisionAt(selection.x,selection.y,selection.z) ? 'E — редактировать' : '';
   const held = chiseling ? labelFor(chiselMaterial) : heldCreativeItem?.name ?? (heldPart ? partLabel(heldPart) : labelFor(clipboard));
   const status = [selected, interaction, held && 'В руке · ' + held].filter(Boolean).join('  /  ') || 'Ячейка не выбрана';
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
@@ -1114,6 +1137,8 @@ function bindControls() {
           throw new Error(messages[body.error] || 'Не удалось сохранить профиль');
         }
         profile.saved(body, pending);
+        movement.size = body.size ?? 'normal';
+        if (body.position) setSeat(body.seat,body.position,body.stance);
         social.profileUpdated(profile.confirmed);
         view.setLocalSkin(profile.confirmed.skin);
         if (playing) {
@@ -1206,10 +1231,17 @@ function bindControls() {
     if (event.code === 'Space') jump = true;
     if (spectator) return;
     if (event.code === 'KeyF' && !resetting && !seat) setFlight(!flying);
-    if (event.code === 'KeyV' && !resetting && !acting) toggleChisel();
+    if (event.code === 'KeyV' && !resetting && !acting && !flying && !seat) {
+      if (crawlRequested) crawlRequested = false;
+      else if (movement.setStance(position,'crawl') === 'crawl') {
+        crawlRequested = true;
+        recordPosition(position);
+      }
+    }
+    if (event.code === 'KeyZ' && !resetting && !acting) toggleChisel();
     if (event.code === 'KeyB') toggleChiselSize();
-    if (event.code === 'KeyX') clearHeld();
-    if (event.code === 'KeyQ') action('copy');
+    if (event.code === 'KeyQ' || event.code === 'KeyX') clearHeld();
+    if (event.code === 'KeyO') action('copy');
     if (event.code === 'KeyR') cyclePlacement();
     if (event.code === 'KeyE') {
       event.preventDefault();
@@ -1329,7 +1361,7 @@ function bindControls() {
       await sync;
       const {ok, body} = await post('respawn', {});
       if (ok) {
-        await arriveAt(body.position);
+        await arriveAt(body.position,body.stance);
         setFlight(spectator);
         presenceDirty = true;
       }
@@ -1466,10 +1498,13 @@ async function start() {
   position = p ? {...p} : {x, y, z};
   confirmedPosition = positionTuple(position);
   movement = new Movement(world);
+  movement.size = profile.confirmed.size ?? 'normal';
+  movement.stance = confirmedStance = session.body.stance ?? 'stand';
+  crawlRequested = movement.stance === 'crawl';
   view = new Display(surface, world, session.body.dayTick);
   view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
-  if (session.body.seat) setSeat(session.body.seat, p);
+  if (session.body.seat) setSeat(session.body.seat, p,session.body.stance);
   if (session.body.spectator) setSpectator(true);
   if (session.body.time) view.setWorldTime(session.body.time);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
@@ -1487,7 +1522,7 @@ async function start() {
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
       revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
-      flying, spectator, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
+      flying, spectator, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
       movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },

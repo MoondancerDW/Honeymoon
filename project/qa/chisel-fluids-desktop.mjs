@@ -71,13 +71,13 @@ try {
     assert.equal((await action('place',() => click('right'))).changes[0].cell,material);
   }
 
-  await page.keyboard.press('KeyV');
+  await page.keyboard.press('KeyZ');
   const positions = [[.6875,1,.5625],[.3125,1,.5625]];
   const added = [];
   for (const [index,[material,cell]] of sources.entries()) {
     const surface = geometry.shapeFor(material)[0].y1;
     await aim(cell,[.5,surface,.5],material);
-    assert.equal((await action('copy_voxel',() => page.keyboard.press('KeyQ'))).material,material);
+    assert.equal((await action('copy_voxel',() => page.keyboard.press('KeyO'))).material,material);
     await page.waitForFunction(key => honeymoon.stats().chiselMaterial === key,material);
     await aim(below(destination),positions[index]);
     const voxel = await page.evaluate(() => honeymoon.placement()?.voxel);
@@ -96,7 +96,7 @@ try {
 
   const waterCell = sources[0][1];
   await aim(waterCell,[.5,geometry.shapeFor(water)[0].y1,.5],water);
-  await action('copy_voxel',() => page.keyboard.press('KeyQ'));
+  await action('copy_voxel',() => page.keyboard.press('KeyO'));
   await page.keyboard.press('KeyB');
   assert.equal(await page.evaluate(() => honeymoon.stats().chiselSize),2);
   await aim(below(destination),positions[0]);

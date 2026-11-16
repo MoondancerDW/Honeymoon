@@ -7,9 +7,9 @@ Honeymoon. Здесь можно ходить, летать, строить из
 Правки сохраняются и видны другим гостевым сессиям.
 
 - [Подготовка и запуск](project/README.md)
-- [Готовая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-controls-and-glass/Honeymoon-Controls-and-Glass-Windows-x64.zip)
-- [Архив браузерного клиента и Node.js-сервера](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-controls-and-glass/honeymoon-browser-client.zip)
-- [Тестовый релиз с обновлённым управлением и визуалом](https://github.com/MoondancerDW/Honeymoon/releases/tag/pc-test-controls-and-glass)
+- [Готовая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-pony-movement-and-terrain/Honeymoon-Pony-Movement-Windows-x64.zip)
+- [Архив браузерного клиента и Node.js-сервера](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-pony-movement-and-terrain/honeymoon-browser-client.zip)
+- [Тестовый релиз с новыми движениями пони и дальним рендером](https://github.com/MoondancerDW/Honeymoon/releases/tag/pc-test-pony-movement-and-terrain)
 - [Манифест исходного клиента Minecraft](project/legacy/README.md)
 - [Проверки, визуальные замены и замеры](project/REPORT.md)
 - [Архивы карты Equestria](https://github.com/MoondancerDW/Honeymoon/releases/tag/equestria-source)

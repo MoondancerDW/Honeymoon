@@ -57,6 +57,7 @@ function degreeDelta(from,to) {
 }
 
 function walkingContact(from,to,[x,y,z],canTouch) {
+  const body = to.body ?? PLAYER;
   const dx = to.x - from.x, dz = to.z - from.z;
   const distanceSquared = dx * dx + dz * dz;
   const offsetX = x - from.x, offsetZ = z - from.z;
@@ -64,8 +65,8 @@ function walkingContact(from,to,[x,y,z],canTouch) {
   if (distanceSquared < .000025 || approach <= 0) return null;
   const t = Math.min(1,approach / distanceSquared);
   const feet = [from.x + dx * t, from.y + (to.y - from.y) * t, from.z + dz * t];
-  if (feet[1] >= y + .32 || feet[1] + PLAYER.height <= y - height ||
-      Math.hypot(x - feet[0],z - feet[2]) >= contactRadius) return null;
+  if (feet[1] >= y + .32 || feet[1] + body.height <= y - height ||
+      Math.hypot(x - feet[0],z - feet[2]) >= .54 + body.halfWidth) return null;
   if (!canTouch([feet[0],Math.max(feet[1] + .04,y),feet[2]],[x,y,z])) return null;
   return [offsetX,offsetZ];
 }

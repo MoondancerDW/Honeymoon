@@ -161,10 +161,10 @@ test('voxel edits preserve ownership, material, revision and exact hit through s
   const putSmall = command('place_voxel','place-small-piece',small,0,{
     material:planks,against:{...small,y:0},voxel:smallTarget,hit:smallBottom,
   });
-  const firstPosition = await request('position',{x:9.3125,y:1,z:9.3125},b);
+  const firstPosition = await request('position',{x:9.5,y:1,z:9.3125},b);
   assert.equal(firstPosition.status,200);
   now += 250;
-  assert.equal((await request('position',{x:9.3125,y:1,z:10.3125},b)).status,200);
+  assert.equal((await request('position',{x:9.5,y:1,z:10.3125},b)).status,200);
   assert.equal((await edit(a,{...putSmall,requestId:'avoid-occupying-player'})).body.error,'occupied');
   await request('respawn',{},b);
   const smallPlaced = await edit(a,putSmall);

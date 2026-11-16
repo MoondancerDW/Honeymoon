@@ -41,13 +41,12 @@ function nameTexture(nickname, typing) {
 function setNameplate(player) {
   if (player.labelName === player.nickname && player.labelTyping === player.typing) return;
   const texture = nameTexture(player.nickname, player.typing);
-  player.label.material.map?.dispose();
-  for (const sprite of [player.label, player.labelBack]) {
-    sprite.material.map = texture;
-    sprite.material.needsUpdate = true;
-    sprite.scale.set(texture.image.width / 80, texture.image.height / 80, 1);
-    sprite.center.set(.5,0);
-  }
+  const {label} = player;
+  label.material.map?.dispose();
+  label.material.map = texture;
+  label.material.needsUpdate = true;
+  label.scale.set(texture.image.width / 80, texture.image.height / 80, 1);
+  label.center.set(.5,0);
   player.labelName = player.nickname;
   player.labelTyping = player.typing;
 }
@@ -67,6 +66,8 @@ function setPose(player, pose) {
   player.lookYaw = pose.lookYaw ?? pose.yaw;
   player.pitch = pose.pitch;
   player.motion = pose.motion;
+  player.stance = pose.stance ?? 'stand';
+  player.boost = pose.boost === true;
   player.spectator = pose.spectator === true;
   player.typing = pose.typing === true;
   player.swing = pose.swing ?? 0;
@@ -91,7 +92,6 @@ export class RemotePlayers {
       player.avatar.dispose();
       player.label.material.map?.dispose();
       player.label.material.dispose();
-      player.labelBack.material.dispose();
       this.scene.remove(player.object);
       this.entries.delete(id);
     }
@@ -100,18 +100,13 @@ export class RemotePlayers {
         const avatar = createPonyAvatar(this.isAir);
         const object = new THREE.Group();
         const label = new THREE.Sprite(new THREE.SpriteMaterial({transparent:true, depthWrite:false, toneMapped:false}));
-        const labelBack = new THREE.Sprite(new THREE.SpriteMaterial({
-          transparent:true, opacity:.28, depthTest:false, depthWrite:false, toneMapped:false,
-        }));
-        labelBack.renderOrder = 1;
-        label.renderOrder = 2;
-        object.add(avatar.object, labelBack, label);
+        object.add(avatar.object, label);
         const {x, y, z} = profile.position;
         object.position.set(x, y, z);
         object.rotation.y = profile.yaw;
         object.visible = false;
         this.scene.add(object);
-        this.entries.set(profile.id, {avatar, object, label, labelBack, target:object.position.clone(), facing:createPonyFacing(),
+        this.entries.set(profile.id, {avatar, object, label, target:object.position.clone(), facing:createPonyFacing(),
           drawnPitch:profile.pitch, drawnLookYaw:profile.lookYaw ?? profile.yaw});
       }
       const player = this.entries.get(profile.id);
@@ -146,11 +141,10 @@ export class RemotePlayers {
       const speed = dt > 0 ? Math.min(FLIGHT_SPRINT_SPEED, Math.hypot(object.position.x - x, object.position.z - z) / dt) : 0;
       player.avatar.animate({time: now / 1000, dt, speed, pitch: player.drawnPitch,
         yawOffset:facing.yawOffset, strideDirection:facing.strideDirection,
-        motion:player.motion, position:object.position, swing:player.swing, held:player.held, itemAssets:this.itemAssets?.()});
-      for (const sprite of [player.label, player.labelBack]) {
-        sprite.visible = distance < maxNameplateDistance ** 2;
-        sprite.position.y = player.avatar.labelHeight - .12;
-      }
+        motion:player.motion, stance:player.stance, boost:player.boost, position:object.position,
+        swing:player.swing, held:player.held, itemAssets:this.itemAssets?.()});
+      player.label.visible = player.stance === 'stand' && distance < maxNameplateDistance ** 2;
+      player.label.position.y = player.avatar.labelHeight - .12;
       object.updateMatrixWorld(true);
     }
   }

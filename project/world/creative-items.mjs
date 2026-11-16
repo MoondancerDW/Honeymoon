@@ -4,6 +4,7 @@ import {isMicroPart, microblockPattern} from './microblocks.mjs';
 export const CREATIVE_MINECART_KEY = 'creative:328:0';
 export const CREATIVE_BOAT_KEY = 'creative:333:0';
 export const CREATIVE_FRAME_KEY = 'creative:389:0';
+export const CREATIVE_INVISIBLE_FRAME_KEY = 'creative:389:1';
 
 // CoverLib.damageToCoverData stores the kind in the upper byte, then
 // thickness/flags, internal shape and material. Type 0 also covers hollow panels.

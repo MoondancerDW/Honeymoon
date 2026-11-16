@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {decodeFarTile, farVisibilityMask, LOD_VERSION, WATER_HEIGHT_SCALE,
+import {decodeFarTile, farVisibilityMask, lodDistance, LOD_VERSION, RAIL_FACE, WATER_HEIGHT_SCALE,
   DETAILED_LOD_DISTANCES, DEFAULT_DETAILED_LOD_DISTANCE, validateDetailedLodDistance} from './far-tile-format.mjs';
 
 test('detailed LOD settings accept only the supported numeric distances', () => {
@@ -89,4 +89,18 @@ test('transition faces are reserved for vertical boundaries in version 3', () =>
   assert.deepEqual([...boundary.surface],[4096,168]);
   data.setUint8(80,11);
   assert.throws(() => decodeFarTile(buffer),/face/);
+});
+
+test('v4 rail records cannot be confused with old transition or water records', () => {
+  const buffer = sample();
+  const data = new DataView(buffer);
+  data.setUint16(4,3,true);
+  data.setUint8(80,RAIL_FACE);
+  data.setUint16(78,1,true);
+  assert.equal(lodDistance(3),32);
+  assert.throws(() => decodeFarTile(buffer),/face/);
+  data.setUint16(4,4,true);
+  assert.deepEqual([...decodeFarTile(buffer).layers[3].span],[4,1]);
+  data.setUint16(76,10,true);
+  assert.throws(() => decodeFarTile(buffer),/rail/);
 });

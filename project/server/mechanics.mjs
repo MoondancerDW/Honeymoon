@@ -170,8 +170,8 @@ function hatchCell(current, id, meta, open, playerOverlaps, playerPosition, yaw)
 }
 
 function plateOccupied(players, x, y, z) {
-  return players.some(player => player.x + PLAYER.halfWidth > x + .125 && player.x - PLAYER.halfWidth < x + .875
-    && player.z + PLAYER.halfWidth > z + .125 && player.z - PLAYER.halfWidth < z + .875 && player.y >= y && player.y < y + .25);
+  return players.some(({x:px,y:py,z:pz,body = PLAYER}) => px + body.halfWidth > x + .125 && px - body.halfWidth < x + .875
+    && pz + body.halfWidth > z + .125 && pz - body.halfWidth < z + .875 && py >= y && py < y + .25);
 }
 
 function applianceAction(cell, name) {
@@ -416,10 +416,11 @@ function makeControls(base, geometry) {
     },
     prepareEntry(context) {
       const {position, getCell, activePositions} = context;
+      const {halfWidth} = position.body ?? PLAYER;
       const plates = [];
       const y = Math.floor(position.y);
-      for (let x = Math.floor(position.x - PLAYER.halfWidth); x <= Math.floor(position.x + PLAYER.halfWidth); x++) {
-        for (let z = Math.floor(position.z - PLAYER.halfWidth); z <= Math.floor(position.z + PLAYER.halfWidth); z++) {
+      for (let x = Math.floor(position.x - halfWidth); x <= Math.floor(position.x + halfWidth); x++) {
+        for (let z = Math.floor(position.z - halfWidth); z <= Math.floor(position.z + halfWidth); z++) {
           const cell = getCell(x, y, z);
           const [id, meta] = blockState(cell);
           if (pressurePlate(id) && !meta && plateOccupied(activePositions, x, y, z)) plates.push([cell, id]);

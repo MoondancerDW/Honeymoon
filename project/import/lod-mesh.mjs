@@ -1,7 +1,8 @@
 import {shapeFor, FACES} from '../world/geometry.mjs';
 import {fullCoverMaterial} from '../world/cover-plane.mjs';
+import {railShape} from '../world/rail-models.mjs';
 import {FACE_SHADE} from '../client/lighting.mjs';
-import {LOD_VERSION, TRANSITION_FACE, WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
+import {LOD_VERSION, RAIL_FACE, TRANSITION_FACE, WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
 import {lampCoverOverrides} from './lod-lamps.mjs';
 
 export const TILE_CHUNKS = 4;
@@ -121,6 +122,14 @@ function shapedLights(chunk, sections, catalog) {
 
 export function sampleChunk(chunk, catalog, neighbors) {
   const entries = chunk.palette.map(key => catalog.get(key, chunk.compositions));
+  const railEntries = new Map();
+  for (const [index,key] of chunk.palette.entries()) {
+    const match = /^legacy:(27|28|66):(\d+)$/.exec(key);
+    if (!match) continue;
+    const id = Number(match[1]), meta = Number(match[2]);
+    const direction = id === 66 ? meta : meta & 7;
+    if (direction <= (id === 66 ? 9 : 5)) railEntries.set(index,{direction,tile:railShape(id,meta).faces[0]});
+  }
   const samplePlane = CHUNK_SIDE ** 2;
   const grid = new Uint16Array(samplePlane * 128);
   const occupancy = new Uint8Array(samplePlane * 128);
@@ -138,21 +147,31 @@ export function sampleChunk(chunk, catalog, neighbors) {
   }
   const water = new Map();
   const details = new Map();
+  const rails = [];
+  const covered = new Uint8Array(256);
 
-  for (const [sectionY, section] of sections) {
+  // Process top-down. Preserve exposed one-block steps while underground
+  // volumes and the outer ring can continue using coarser cells.
+  for (const [sectionY, section] of [...sections].sort(([a],[b]) => b-a)) {
     const source = section.indices;
-    for (let y=0; y<8; y++) for (let z=0; z<CHUNK_SIDE; z++) for (let x=0; x<CHUNK_SIDE; x++) {
+    for (let y=7; y>=0; y--) for (let z=0; z<CHUNK_SIDE; z++) for (let x=0; x<CHUNK_SIDE; x++) {
       const at = x * 2 + z * 32 + y * 512;
       const cy = sectionY * 8 + y;
       let distinct = 0, occupied = 0, architecture = 0, leaf = 0, wet = 0, fluidLight = 0, light = 0;
+      let naturalSurface = false;
       const index = x+CHUNK_SIDE*z+samplePlane*cy;
-      for (let dy=0; dy<2; dy++) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
+      for (let dy=1; dy>=0; dy--) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
         const raw = at+dx+dz*16+dy*256;
+        const column = raw & 255;
         const savedLight = lightAt(section,raw);
         light = brightest(light,savedLight);
+        const rail = railEntries.size && railEntries.get(source[raw]);
+        if (rail) rails.push({x:column&15,z:column>>4,y:cy*2+dy,light:savedLight,...rail});
         const value = lamps.get(sectionY * 4096 + raw) ?? entries[source[raw]];
         if (!value) continue;
         const {kind:material,shape} = kind[value];
+        if (material === NATURAL) naturalSurface ||= !covered[column];
+        if (material === NATURAL || material === CONSTRUCTION) covered[column] = 1;
         occupied++;
         if (material === CONSTRUCTION) architecture++;
         if (material === LEAVES) leaf++;
@@ -184,7 +203,8 @@ export function sampleChunk(chunk, catalog, neighbors) {
         upper[slot] += dy;
       }
       packedLight[index] = quantizeLight(light);
-      if (occupied < 4 && architecture < 1 && leaf < 2) continue;
+      const preserveSurface = naturalSurface && leaf === 0 && occupied < 8;
+      if (occupied < 4 && architecture < 1 && leaf < 2 && !preserveSurface) continue;
       let selected = 0, score = -1;
       const glazed = choices.subarray(0,distinct).some(value => kind[value].glass);
       const exteriorBuild = architecture > 0 && occupied < 8;
@@ -198,7 +218,7 @@ export function sampleChunk(chunk, catalog, neighbors) {
         }
       }
       grid[index] = selected;
-      if (wet > 0 ? wet < occupied : architecture > 0 && occupied < 8) {
+      if (preserveSurface || (wet > 0 ? wet < occupied : architecture > 0 && occupied < 8)) {
         const cubes = new Uint16Array(8);
         for (let dy=0; dy<2; dy++) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
           const raw = at+dx+dz*16+dy*256;
@@ -247,7 +267,7 @@ export function sampleChunk(chunk, catalog, neighbors) {
   }
 
   return {grid:grid.slice(0,highest*samplePlane), tops:tops?.slice(0,highest*samplePlane), highest,
-    details, water:[...water.values()], waterLight:waterLight?.slice(0,highest*samplePlane),
+    details, rails, water:[...water.values()], waterLight:waterLight?.slice(0,highest*samplePlane),
     light:packedLight.slice(0,(highest+1)*samplePlane)};
 }
 
@@ -276,7 +296,7 @@ export function outerChunk(chunk) {
     for (let index=1; index<used; index++) if (scores[index] > scores[winner]) winner = index;
     grid[at] = variants[winner];
   }
-  return {grid, light, highest, details:new Map(), water:chunk.water};
+  return {grid, light, highest, details:new Map(), water:chunk.water, rails:[]};
 }
 
 function floodExterior(grid, size, yCount, plane, transparent, shores) {
@@ -429,6 +449,12 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary, sampleStep) {
       // The top face's U axis follows Z and its V axis follows X.
       records.push(x,z,surfaceY,height,width,flags,tile,light,r,g,b);
     });
+  }
+  for (const {x,y,z,direction,tile,light} of chunk.rails) {
+    const index = begin+Math.floor(y/sampleStep)*plane+Math.floor(x/sampleStep)+Math.floor(z/sampleStep)*size;
+    if (visited[index] || visited[index+plane]) {
+      records.push(x,z,y,direction,1,RAIL_FACE,tile,light,255,255,255);
+    }
   }
   return records;
 }

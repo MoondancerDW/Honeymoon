@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {buildRegion,makeMaterials,outerChunk,sampleChunk,OUTER_STEP} from './lod-mesh.mjs';
-import {LOD_VERSION,TRANSITION_FACE,WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
+import {decodeFarTile,LOD_VERSION,TRANSITION_FACE,WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
 import {shapeFor, tiles} from '../world/geometry.mjs';
 import {fullCoverMaterial} from '../world/cover-plane.mjs';
 
@@ -128,6 +128,31 @@ test('keeps a one-block grass course above stone in the sampled terrain', () => 
   const {content} = pack([supplied(0,0,(_x,y) => y < 7 ? 1 : y === 7 ? 2 : 0,
     [air,rock,'legacy:2:0'])],0,0);
   assert.deepEqual(faces(content),[{x:0,z:0,y:8,w:16,h:16,face:3,water:false,tile:0}]);
+});
+
+test('exposed terrain keeps its original odd height at the exact chunk boundary', () => {
+  const soil = [air,rock,'legacy:2:0'];
+  const west = supplied(0,0,(_x,y) => y < 6 ? 1 : y === 6 ? 2 : 0,soil);
+  const east = supplied(1,0,(_x,y) => y < 6 ? 1 : y === 6 ? 2 : 0,soil);
+  const geometry = pack([west,east]).content;
+  for (const slot of [0,1]) {
+    const tops = faces(geometry,slot).filter(face => face.face===3);
+    assert.deepEqual(tops,[{x:0,z:0,y:7,w:16,h:16,face:3,water:false,tile:0}]);
+    assert.ok(faces(geometry,slot,true).every(face => face.y < 7));
+  }
+});
+
+test('inner terrain preserves straight, sloped, powered and curved tracks', () => {
+  const tracks = [air,rock,'legacy:66:1','legacy:66:2','legacy:27:9','legacy:66:9'];
+  const chunk = supplied(0,0,(x,y,z) => y < 7 ? 1 : y === 7 && z===5 && x<4 ? x+2 : 0,tracks);
+  const {content} = pack([chunk],0,0);
+  const rails = decodeFarTile(Uint8Array.from(content).buffer).layers[3];
+  assert.equal(rails.count,4);
+  assert.deepEqual([...rails.offset],[0,7,5,1,7,5,2,7,5,3,7,5]);
+  assert.deepEqual([...rails.span],[1,1,2,1,1,1,9,1]);
+  assert.deepEqual([...rails.surface],[128,0,128,0,179,0,112,0]);
+  assert.equal(rails.maxY,8+1/16);
+  assert.equal(decodeFarTile(Uint8Array.from(pack([chunk],0,0,0,0,true).content).buffer).layers[3].count,0);
 });
 
 test('marks water faces separately while preserving visible shallow underwater material', () => {

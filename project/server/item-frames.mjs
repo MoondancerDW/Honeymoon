@@ -20,7 +20,7 @@ export function createItemFrames({base,store,physical,getCurrent,faceSupports,pr
     return {worldRevision:revision,changes:[],effects:[],frames};
   }
 
-  function place(input,sight) {
+  function place(input,sight,invisible = false) {
     const {x,y,z,hit,yaw = 0} = input;
     const at = physical.targetAtHit(sight,x,y,z,hit);
     if (!at) throw new RequestError(403,'outside_reach');
@@ -40,7 +40,8 @@ export function createItemFrames({base,store,physical,getCurrent,faceSupports,pr
     })) throw new RequestError(409,'occupied');
     const key = 'frame:' + support.join(':') + ':' + side;
     const position = support.map((value,index) => value + .5 + at.face[index] * .54);
-    const data = {TileX:x,TileY:y,TileZ:z,MountSide:side,MountTurn:Math.round(yaw * 2 / Math.PI) & 3,ItemRotation:0};
+    const data = {TileX:x,TileY:y,TileZ:z,MountSide:side,MountTurn:Math.round(yaw * 2 / Math.PI) & 3,ItemRotation:0,
+      ...(invisible && {Invisible:true})};
     return write(entries,{type:'ItemFrame',key,position,data,placed:true},key);
   }
 

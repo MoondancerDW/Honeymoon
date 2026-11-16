@@ -6,6 +6,8 @@ const tails = new Map([[0x8a6b7f, 1], [0x534b76, 2], [0x468e88, 3], [0x425844, 4
 const sizes = new Map([[0xffbe53, 'small'], [0xce3254, 'large'], [0x2a3c78, 'tall']]);
 const manes = new Map([[0x280000, 1], [0x0a0000, 2], [0x140000, 3], [0x1e0000, 4]]);
 
+export const ponySizeMarker = rgb => sizes.get(rgb) ?? 'normal';
+
 export const skinSizes = ['64x32', '64x64', '128x64', '256x128', '512x256'];
 export const maxSkinBytes = 576 * 1024;
 
@@ -42,7 +44,7 @@ export function readPonySkin(pixels, width, height) {
     ponyType: breeds.get(rgb(0, 0)) ?? 'earth',
     tail: tails.get(rgb(1, 0)) ?? 0,
     male: rgb(2, 0) === 0xffffff,
-    size: sizes.get(rgb(3, 0)) ?? 'normal',
+    size: ponySizeMarker(rgb(3, 0)),
     mane: manes.get(rgb(1, 1)) ?? 0,
     glowColor: glowAlpha !== 0 && (glowAlpha !== 255 || glowColor !== 0) ? glowColor : 0x4444aa,
     advanced,

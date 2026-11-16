@@ -101,7 +101,7 @@ async function exerciseMicroblocks(page, origin) {
   };
   async function copy(degrees, pitch, cell, wanted) {
     await targeting(degrees, pitch, cell, wanted);
-    const result = await action('copy_part', () => page.keyboard.press('KeyQ'));
+    const result = await action('copy_part', () => page.keyboard.press('KeyO'));
     assert.equal(result.status, 200, JSON.stringify(result.body));
     assert.equal(result.body.part.slot, wanted);
     return result.body.part;
@@ -169,7 +169,7 @@ async function exerciseMicroblocks(page, origin) {
   assert.equal(secondPlate.bounds[0][1],first.bounds[0][4]);
   assert.equal(secondPlate.material,first.material);
   assert.ok(secondPlate.slot !== first.slot);
-  await page.keyboard.press('KeyV');
+  await page.keyboard.press('KeyZ');
   await page.waitForFunction(() => honeymoon.stats().chiseling);
   const fullBlock = {x:-9,y:64,z:-20};
   const [yaw,pitch] = await page.evaluate(({x,y,z}) => {
@@ -178,7 +178,7 @@ async function exerciseMicroblocks(page, origin) {
     return [Math.atan2(-dx,-dz),Math.atan2(dy,Math.hypot(dx,dz))].map(value => value * 180 / Math.PI);
   },fullBlock);
   await targeting(yaw,pitch,fullBlock);
-  const copyMaterial = await action('copy_voxel', () => page.keyboard.press('KeyQ'));
+  const copyMaterial = await action('copy_voxel', () => page.keyboard.press('KeyO'));
   assert.ok(copyMaterial.body.material);
   assert.ok(await targetPart(destination,secondPlate));
   await page.waitForFunction(({x,y,z}) => {
@@ -197,7 +197,7 @@ async function exerciseMicroblocks(page, origin) {
   await page.waitForFunction(() => !honeymoon.placement() && !honeymoon.stats().chiselMaterial);
   await page.mouse.click(640,360,{button:'right'});
   assert.equal(await page.evaluate(() => honeymoon.stats().revision),edited.revision);
-  await page.keyboard.press('KeyV');
+  await page.keyboard.press('KeyZ');
 
   const after = await snapshot(page);
   assert.equal(after.movementSync.corrections, 0);
@@ -258,7 +258,7 @@ try {
     await page.mouse.up({button:'left'});
     assert.equal(denied.status(), 403);
     assert.equal((await denied.json()).error, 'block_not_owned');
-    await page.keyboard.press('KeyQ');
+    await page.keyboard.press('KeyO');
     await page.waitForFunction(() => document.querySelector('#selected').textContent.includes('В руке'));
     const [placed] = await action(page, page.mouse.down({button:'right'}));
     await page.mouse.up({button:'right'});

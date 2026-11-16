@@ -43,6 +43,16 @@ test('framed sprites rotate in 90-degree steps and unsupported items leave an em
   assert.deepEqual(itemFrameModel({data: base}).item, []);
 });
 
+test('an invisible frame retains its item geometry and interaction bounds', () => {
+  const data = {TileX:2, TileY:4, TileZ:6, MountSide:1, Item:{id:1,Damage:0,Block:true}, ItemRotation:1};
+  const visible = {data};
+  const invisible = {data:{...data,Invisible:true}};
+  const model = itemFrameModel(invisible,{},90);
+  assert.deepEqual(model.frame,[]);
+  assert.deepEqual(model.item,itemFrameModel(visible,{},90).item);
+  assert.equal(itemFrameHit(invisible,[2.5,7,6.5],[0,-1,0]),itemFrameHit(visible,[2.5,7,6.5],[0,-1,0]));
+});
+
 test('framed solid block and RedPower covers use distinct depth', () => {
   const faces = Array(6).fill([0, 0, 1, 1]);
   const items = {'35:0': {faces}, '750:35': {faces, cover: true}};
