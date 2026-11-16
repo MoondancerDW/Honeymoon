@@ -500,6 +500,9 @@ def build(source, output, vanilla_jar=None):
         add_standing_sign(atlas)
         missing = add_creative_tiles(atlas, recipes)
         carpentry_model = add_carpentry_bench(atlas, recipes["carpentryTile"])
+        blood = atlas.resolve("gui/customnpcs/blocks.png", "customnpcs")
+        for offset in range(2):
+            atlas.legacy_crop(5758 + offset, blood, (offset + 2, 0, offset + 3, 1), (16, 16))
         if missing:
             print(f"Creative texture resources missing: {len(missing)}. See atlas.json.")
         output.mkdir(parents=True, exist_ok=True)

@@ -81,9 +81,9 @@ try {
   });
   await page.goto(url);
   await page.waitForFunction(() => globalThis.honeymoon?.stats().playable, undefined, {timeout:90000});
-  const initialDistance = Number(await page.locator('#distance').inputValue());
+  const initialDistance = (await page.evaluate(() => honeymoon.stats())).farTerrain?.radius;
   assert.ok(initialDistance === 24 || initialDistance === 32);
-  const supports32 = await page.locator('#distance option[value="32"]').isEnabled();
+  const supports32 = await page.locator('#detail-distance').isEnabled();
   await page.addStyleTag({content:'#game > :not(#scene) {display:none !important;}'});
   for (const {id,feet,yaw,pitch,surfaceY} of points) {
     if (selected && id !== selected) continue;

@@ -52,6 +52,7 @@ try {
 
   await press('Escape');
   await page.waitForFunction(() => !document.querySelector('#entry').hidden);
+  await page.waitForTimeout(200);
   await press('Escape');
   await page.waitForFunction(() => document.querySelector('#entry').hidden);
   await press('KeyY');

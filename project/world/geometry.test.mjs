@@ -66,6 +66,8 @@ test('RedPower hollow cover is physically open and retains multiple materials', 
   const glassCover = shapeFor({ key: 'cover:750:0:glass', parts: [{ slot: 5, material: 7, shape: 2 }] })[0];
   assert.equal(glassCover.mode, 'cutout');
   assert.deepEqual(aabb(glassCover), [0.5, 0, 0, 1, 1, 1]);
+  assert.equal(shapeFor('cover-material:7')[0].mode, 'cutout');
+  assert.deepEqual(shapeFor('cover-material:7')[0].faces, glassCover.faces);
   assert.equal(shapeFor('cover-material:28')[0].faces[0], 198);
 });
 
@@ -81,6 +83,20 @@ test('RedPower flat wires have no collision and center posts use the original ha
     assert.deepEqual(collisionFor({ key: `legacy:750:${meta}`, data: { cons: 63 } }), []);
     assert.deepEqual(collisionFor({ key: `legacy:750:${meta}`, data: { cons: 65 } }).map(aabb),
       [[.25, .25, .25, .75, .75, .75]]);
+  }
+});
+
+test('CustomNPC blood is a non-colliding source-textured decal on adjacent solid faces', () => {
+  assert.deepEqual(collisionFor('legacy:1527:0'),[]);
+  assert.deepEqual(shapeFor('legacy:1527:0')[0].faces,[-1,-1,-1,-1,-1,-1]);
+  const decal = shapeFor('legacy:1527:2',(x,y,z)=>z===-1 ? 'legacy:1:0' : 'air')[0];
+  assert.equal(decal.mode,'blend');
+  assert.deepEqual(aabb(decal),[.01,.01,.01,.99,.99,.99]);
+  assert.deepEqual(decal.faces,[-1,-1,-1,-1,5758,-1]);
+  assert.equal(shapeFor('legacy:1527:2',()=> 'legacy:20:0')[0].faces.every(tile=>tile===-1),true);
+  for (let meta=0; meta<4; meta++) {
+    assert.deepEqual(shapeFor(`legacy:1527:${meta}`,()=> 'legacy:1:0')[0].faces,
+      [4,5,0,1,2,3].map(side=>[4198,5758,5759][(meta+side)%3]));
   }
 });
 

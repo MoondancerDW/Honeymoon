@@ -111,6 +111,19 @@ test('both distance tiers retain saved block light and the inner tier keeps lit 
   assert.ok(inner.some(face => face.face === 3 && face.light === 256 && face.tile === tiles.redPowerLighting + 37));
 });
 
+test('a glass shell keeps its illuminated core in the simplified mesh', () => {
+  const shell = supplied(0,0,(x,y,z) => {
+    if (x===8 && y===8 && z===8) return 3;
+    return x>=6 && x<=10 && y>=6 && y<=10 && z>=6 && z<=10 ? 2 : 0;
+  }, [air,rock,'legacy:20:0','legacy:89:0']);
+  const catalog = makeMaterials();
+  assert.equal(catalog.materials[catalog.get('legacy:20:0')].glass,true);
+  assert.equal(catalog.materials[catalog.materialFor('cover-material:7')].glass,true);
+  const inner = faces(pack([shell],0,0).content);
+  assert.ok(inner.some(face=>face.tile===105 && face.light===256),'the glowstone core remains visible behind glass');
+  assert.ok(inner.some(face=>face.tile===49),'the shell retains its cutout texture');
+});
+
 test('keeps a one-block grass course above stone in the sampled terrain', () => {
   const {content} = pack([supplied(0,0,(_x,y) => y < 7 ? 1 : y === 7 ? 2 : 0,
     [air,rock,'legacy:2:0'])],0,0);

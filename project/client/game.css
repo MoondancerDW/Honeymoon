@@ -57,6 +57,12 @@ button:disabled { cursor: wait; opacity: .45; }
 .brand strong { font-size: 1.04rem; }
 .brand span { font-size: .73rem; color: var(--gold); }
 .tools { display: flex; align-items: center; gap: .55rem; pointer-events: auto; font-size: .83rem; }
+#game:not(.paused) .top .brand, #game:not(.paused) .tools > :not(#clock-toggle) { display: none; }
+.paused .top .brand { display: grid; }
+.paused .tools > :not([hidden]) { display: inline-flex; }
+.playing .tools { padding: 0; border: 0; background: none; box-shadow: none; }
+.paused .tools { flex-wrap: wrap; justify-content: flex-end; }
+#resume-help { margin-top: .5rem; line-height: 1.4; }
 .distance { display: flex; gap: .45rem; align-items: center; }
 .bottom { font-size: .77rem; }
 #coords { font-variant-numeric: tabular-nums; }

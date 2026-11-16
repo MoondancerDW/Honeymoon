@@ -4,14 +4,16 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { parseArgs } from 'node:util';
+import {fileURLToPath} from 'node:url';
 import { createHoneymoonServer } from './server/index.mjs';
 import * as geometry from './world/geometry.mjs';
+import {acquireInstance} from './single-instance.mjs';
 
 const { values } = parseArgs({ options: {
   port:{type:'string', default:'4173'}, lan:{type:'boolean'}, internet:{type:'boolean'}, 'no-browser':{type:'boolean'},
 } });
-const port = Number(values.port);
-if (!/^\d+$/.test(values.port) || !Number.isInteger(port) || port > 65535) throw new Error('Invalid --port');
+const requestedPort = Number(values.port);
+if (!/^\d+$/.test(values.port) || !Number.isInteger(requestedPort) || requestedPort > 65535) throw new Error('Invalid --port');
 if (values.lan && values.internet) throw new Error('Choose one option: --lan or --internet');
 
 function internetRoute() {
@@ -30,44 +32,79 @@ function internetRoute() {
   return {command, url:`https://${hostname}`};
 }
 
-const internet = values.internet ? internetRoute() : null;
-const app = createHoneymoonServer({geometry, secure:Boolean(internet), allowedOrigin:internet?.url});
-let closed;
-const close = () => closed ??= app.close();
-try {
-  app.server.listen(port, values.lan ? '0.0.0.0' : '127.0.0.1');
-  await once(app.server, 'listening');
-  const url = `http://127.0.0.1:${app.server.address().port}/`;
-  console.log('Keep this window open while playing. Press Ctrl+C to stop the server.');
-  if (internet) {
-    console.log('Tailscale may ask you to enable Funnel in your browser.');
-    console.log(`Honeymoon ${internet.url}/`);
-    const funnel = spawn(internet.command, ['funnel', '--https=443', url], {stdio:'inherit', windowsHide:true});
-    const stop = () => { if (funnel.exitCode === null) funnel.kill(); void close(); };
-    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, stop);
-    const [code] = await once(funnel, 'exit');
-    await close();
-    if (code) process.exitCode = code;
+function openBrowser(url) {
+  const command = process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const browser = spawn(command,[url],{stdio:'ignore',windowsHide:true});
+  browser.on('error',() => console.log(`Open ${url} in your browser.`));
+  browser.unref();
+}
+
+const mode = values.internet ? 'internet' : values.lan ? 'lan' : 'local';
+const instance = await acquireInstance(fileURLToPath(new URL('.',import.meta.url)));
+if (!instance.primary) {
+  const {info} = instance;
+  if (mode !== 'local' && mode !== info.mode) {
+    console.error(`Honeymoon is already running in ${info.mode} mode at ${info.url} Close that instance before starting ${mode} mode.`);
+    process.exitCode = 1;
   } else {
-    console.log(`Honeymoon ${url}`);
-    if (values.lan) {
-      for (const [name, addresses] of Object.entries(networkInterfaces())) {
-        for (const address of addresses.filter(item => !item.internal && item.family === 'IPv4')) {
-          console.log(`${name} http://${address.address}:${app.server.address().port}/`);
-        }
+    console.log(`Honeymoon is already running at ${info.url}`);
+    if (info.publicUrl) console.log(`Public address: ${info.publicUrl}`);
+    if (!values['no-browser']) openBrowser(info.url);
+  }
+} else {
+  let app;
+  let funnel;
+  let closed;
+  const close = () => closed ??= (async () => {
+    try {
+      if (funnel?.exitCode === null) funnel.kill();
+      await app?.close();
+    } finally { await instance.close(); }
+  })();
+  for (const signal of ['SIGINT','SIGTERM','SIGHUP','SIGBREAK']) process.once(signal,() => { void close(); });
+
+  async function listenAvailable() {
+    const host = values.lan ? '0.0.0.0' : '127.0.0.1';
+    for (let candidate = requestedPort; candidate <= 65535; candidate++) {
+      try {
+        app.server.listen(candidate, host);
+        await once(app.server, 'listening');
+        if (candidate !== requestedPort) console.log(`Port ${requestedPort} is busy. Using port ${app.server.address().port}.`);
+        return;
+      } catch (error) {
+        if (error.code !== 'EADDRINUSE') throw error;
       }
     }
-    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, close);
-    if (!values['no-browser']) {
-      const explorer = spawn('explorer.exe', [url], {stdio:'ignore', windowsHide:true});
-      explorer.on('error', () => console.log(`Open ${url} in your browser.`));
-      explorer.unref();
-    }
+    throw new Error('No available port. Close an unused server and try again.');
   }
-} catch (error) {
-  await close();
-  if (error.code === 'EADDRINUSE') {
-    console.error(`Port ${port} is busy. For another port run: Start-Honeymoon.cmd --port 4174`);
-    process.exitCode = 1;
-  } else throw error;
+
+  try {
+    const internet = values.internet ? internetRoute() : null;
+    app = createHoneymoonServer({geometry, secure:Boolean(internet), allowedOrigin:internet?.url});
+    await listenAvailable();
+    const url = `http://127.0.0.1:${app.server.address().port}/`;
+    instance.publish({mode,url,...(internet && {publicUrl:internet.url + '/'})});
+    console.log('Keep this window open while playing. Close it or press Ctrl+C to stop the server.');
+    if (internet) {
+      console.log('Tailscale may ask you to enable Funnel in your browser.');
+      console.log(`Honeymoon ${internet.url}/`);
+      funnel = spawn(internet.command, ['funnel', '--https=443', url], {stdio:'inherit', windowsHide:true});
+      const [code] = await once(funnel, 'exit');
+      await close();
+      if (code) process.exitCode = code;
+    } else {
+      console.log(`Honeymoon ${url}`);
+      if (values.lan) {
+        for (const [name, addresses] of Object.entries(networkInterfaces())) {
+          for (const address of addresses.filter(item => !item.internal && item.family === 'IPv4')) {
+            console.log(`${name} http://${address.address}:${app.server.address().port}/`);
+          }
+        }
+      }
+      if (!values['no-browser']) openBrowser(url);
+    }
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }

@@ -1,10 +1,9 @@
 import * as THREE from '/vendor/three/three.module.js';
-import {lodDistance,supportedLodVersion} from './far-tile-format.mjs';
+import {DEFAULT_DETAILED_LOD_DISTANCE,lodDistance,supportedLodVersion,validateDetailedLodDistance} from './far-tile-format.mjs';
 import {terrainFilterShader} from './terrain-filter.mjs';
 
 const PACK_CHUNKS = 4;
 const PACK_BLOCKS = PACK_CHUNKS * 16;
-const INNER_RADIUS = 20;
 const MAX_FETCH = 2;
 const MAX_PENDING_UPLOADS = 6;
 const RETAIN_MARGIN = 1;
@@ -91,7 +90,12 @@ function farMaterial(textures, lightmap, rows, {water = false, outer = false} = 
         vec2 cell = vec2(mod(tileIndex,64.0),terrainRows - 1.0 - floor(tileIndex / 64.0));
         ${outer ? 'vec4 color = texture2D(terrainAverage,(cell + .5) / vec2(64.0,terrainRows));' : `
           vec2 within = vec2(fract(localUv.x),1.0 - fract(localUv.y));
-          vec4 color = terrainSample(atlas,cell,within,terrainFootprint(localUv));`}`}
+          vec4 color = terrainSample(atlas,cell,within,terrainFootprint(localUv));`}
+        if (tileIndex == 49.0 || tileIndex >= 3328.0 && tileIndex < 3388.0) {
+          vec2 glassUv = vec2(fract(localUv.x),1.0 - fract(localUv.y));
+          color = texture2D(atlas,(cell + clamp(glassUv,vec2(.03125),vec2(.96875))) / vec2(64.0,terrainRows));
+          if (color.a < .47) discard;
+        }`}
         gl_FragColor = vec4(color.rgb * tint, ${water ? 'color.a' : '1.0'});
         #include <colorspace_fragment>
         #include <fog_fragment>
@@ -141,6 +145,7 @@ export class FarTerrain {
     this.ticket = 0;
     this.radius = 24;
     this.innerRadius = 24;
+    this.detailedDistance = DEFAULT_DETAILED_LOD_DISTANCE;
   }
 
   warmup() {
@@ -152,13 +157,20 @@ export class FarTerrain {
   setDistance(distance) {
     this.setActive(distance === 24 || distance === 32 && this.lod.maxDistance === 32);
     if (!this.active) return;
-    const innerRadius = this.lod.maxDistance === 32 ? INNER_RADIUS : distance;
+    const innerRadius = this.lod.maxDistance === 32 ? Math.min(distance,this.detailedDistance) : distance;
     if (this.radius === distance && this.innerRadius === innerRadius) return;
     const {cx,cz} = this;
     this.radius = distance;
     this.innerRadius = innerRadius;
     this.cx = this.cz = undefined;
     if (cx !== undefined) this.move(cx,cz);
+  }
+
+  setDetailedLodDistance(distance) {
+    validateDetailedLodDistance(distance);
+    if (this.lod.maxDistance !== 32) throw new RangeError('Detailed LOD settings require two terrain tiers');
+    this.detailedDistance = distance;
+    if (this.active) this.setDistance(this.radius);
   }
 
   get coverageRadius() {
@@ -380,7 +392,7 @@ export class FarTerrain {
       if (region.group.visible) for (let i=0; i<16; i++) if (region.mask & (1 << i)) chunks++;
     }
     const pending = this.pending.size + this.decoded.length + this.display.uploads.filter(job => job.far).length;
-    return {active:this.active,radius:this.active ? this.radius : 0,innerRadius:this.innerRadius,
+    return {active:this.active,radius:this.active ? this.radius : 0,innerRadius:this.innerRadius,detailedDistance:this.detailedDistance,
       coverageRadius:this.coverageRadius,packs,outerPacks,chunks,pending,
       ready:this.active && this.targets.size > 0 && !missing,bytes,triangles,missing,errors:this.errors};
   }

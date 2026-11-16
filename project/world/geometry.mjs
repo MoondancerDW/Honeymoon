@@ -81,7 +81,7 @@ const TERRAIN = {
   19: 48, 21: 160, 22: 144, 41: 23, 42: 22, 45: 7, 48: 36, 49: 37,
   52: 65, 56: 50, 57: 24, 73: 51, 74: 51, 80: 66, 82: 72, 87: 103,
   103: 136, 110: topSides(77, 78, 2), 112: 224, 121: 175, 129: 171,
-  133: 25, 1527: 164, 3217: 1, 3230: tiles.cloud + 17, 3903: 3792,
+  133: 25, 3217: 1, 3230: tiles.cloud + 17, 3903: 3792,
 };
 const plants = { 6: 15, 30: 11, 31: 39, 32: 55, 37: 13, 38: 12, 39: 29, 40: 28,
   59: 88, 83: 73, 104: 111, 105: 111, 115: 226, 141: 200, 142: 200 };
@@ -947,6 +947,17 @@ function pistonShape(id,meta) {
 }
 
 function vanillaShape(id, meta, neighbors) {
+  if (id === 1527) {
+    const sourceSides = [4,5,0,1,2,3];
+    const textures = [4198,5758,5759];
+    const faces = FACES.map((offset,face) => {
+      const neighbor = neighbors?.(...offset);
+      const solid = neighbor && shapeFor(neighbor).some(part => part.solid && part.mode === 'opaque' &&
+        part.x0===0 && part.y0===0 && part.z0===0 && part.x1===1 && part.y1===1 && part.z1===1);
+      return solid ? textures[(meta + sourceSides[face]) % 3] : -1;
+    });
+    return [box([.01,.01,.01,.99,.99,.99],faces,{mode:'blend',solid:false,uv:'box',decal:true})];
+  }
   if (isCandle(id)) return candleSprite(id, meta);
   if (stairTiles(id) !== undefined) return stairs(id, meta, neighbors);
   if (TERRAIN[id] !== undefined) return uniform(TERRAIN[id]);
@@ -1155,7 +1166,7 @@ function registryShape(id, meta) {
 }
 
 const simpleCache = new Map();
-const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 139, 750, 2802, 2803,
+const neighborDependent = new Set([8, 9, 54, 64, 71, 85, 101, 102, 107, 113, 139, 750, 1527, 2802, 2803,
   ...Array.from({length:24}, (_, i) => 2808 + i),
   ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
 const dynamic = new Set([...neighborDependent, 751, 765, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
@@ -1243,7 +1254,8 @@ export function shapeFor(cell, neighbors) {
   if (key === 'game:door') return [box([0, 0, 0.40625, 1, 1, 0.59375], 97, GLASS)];
   if (key === 'air') return AIR;
   if (key.startsWith('cover-material:')) {
-    return uniform(covers[Number(key.slice(15))] ?? cobble);
+    const material = Number(key.slice(15));
+    return uniform(covers[material] ?? cobble, material === 7 ? GLASS : undefined);
   }
   const [id, meta] = unpack(cell);
   if (id === 0) return AIR;

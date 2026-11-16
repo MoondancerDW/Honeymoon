@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {decodeFarTile, farVisibilityMask, LOD_VERSION, WATER_HEIGHT_SCALE} from './far-tile-format.mjs';
+import {decodeFarTile, farVisibilityMask, LOD_VERSION, WATER_HEIGHT_SCALE,
+  DETAILED_LOD_DISTANCES, DEFAULT_DETAILED_LOD_DISTANCE, validateDetailedLodDistance} from './far-tile-format.mjs';
+
+test('detailed LOD settings accept only the supported numeric distances', () => {
+  assert.deepEqual(DETAILED_LOD_DISTANCES,[8,12,16,20,24,28]);
+  assert.equal(DEFAULT_DETAILED_LOD_DISTANCE,20);
+  assert.ok(Object.isFrozen(DETAILED_LOD_DISTANCES));
+  for (const distance of DETAILED_LOD_DISTANCES) assert.equal(validateDetailedLodDistance(distance),distance);
+  for (const distance of [undefined,null,'20',4,8.5,18,32,NaN,Infinity]) {
+    assert.throws(() => validateDetailedLodDistance(distance),RangeError);
+  }
+});
 
 function sample() {
   const buffer = new ArrayBuffer(104);

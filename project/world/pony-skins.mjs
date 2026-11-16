@@ -18,17 +18,15 @@ export function ponySkinHeight(width, height) {
 export function readPonySkin(pixels, width, height) {
   const skinHeight = ponySkinHeight(width, height);
   if (!skinHeight || pixels.length < width * skinHeight * 4) throw new RangeError('Invalid pony skin atlas');
-  const scale = width / 64;
   const glowPixel = width * 4;
-  const glowColor = pixels[glowPixel + 3] && (pixels[glowPixel] << 16 | pixels[glowPixel + 1] << 8 | pixels[glowPixel + 2]);
+  const glowColor = pixels[glowPixel] << 16 | pixels[glowPixel + 1] << 8 | pixels[glowPixel + 2];
+  const glowAlpha = pixels[glowPixel + 3];
   function rgb(x, y) {
     const i = (y * width + x) * 4;
     return pixels[i + 3] === 255 ? pixels[i] * 65536 + pixels[i + 1] * 256 + pixels[i + 2] : -1;
   }
-  // The 1.4.7 markers are in raw pixel positions. Also accept block-scaled legacy skins.
-  function marker(x, y, map) {
-    return map.get(rgb(x, y)) ?? map.get(rgb(x * scale, y * scale));
-  }
+  // Mine Little Pony reads header markers at absolute pixels even on HD skins.
+  const scale = Math.floor(height / 32);
   let advanced = false;
   if (pixels[4 * scale * 4 + 3] !== 0) {
     for (let y = 0; y < 8 * scale && !advanced; y++) {
@@ -42,11 +40,11 @@ export function readPonySkin(pixels, width, height) {
   }
   return {
     ponyType: breeds.get(rgb(0, 0)) ?? 'earth',
-    tail: marker(1, 0, tails) ?? 0,
-    male: rgb(2, 0) === 0xffffff || rgb(2 * scale, 0) === 0xffffff,
-    size: marker(3, 0, sizes) ?? 'normal',
-    mane: marker(1, 1, manes) ?? 0,
-    glowColor: glowColor || 0x4444aa,
+    tail: tails.get(rgb(1, 0)) ?? 0,
+    male: rgb(2, 0) === 0xffffff,
+    size: sizes.get(rgb(3, 0)) ?? 'normal',
+    mane: manes.get(rgb(1, 1)) ?? 0,
+    glowColor: glowAlpha !== 0 && (glowAlpha !== 255 || glowColor !== 0) ? glowColor : 0x4444aa,
     advanced,
   };
 }

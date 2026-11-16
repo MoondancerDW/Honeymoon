@@ -73,21 +73,31 @@ let nearbyStream;
 let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
 let hoofSwing = 0;
+let repeatPlacement = false, nextPlacement = 0, resumeOnEscape = false, resuming = false;
+let pointerReleasedAt = -Infinity;
 let nextClockUpdate = 0;
 const audio = new WorldAudio();
 const profile = new PlayerProfile({nickname:element('nickname'), skin:element('pony-skin'), status:element('skin-status'),
   clear:element('clear-skin'), label:element('player-name')}, notice);
 const pause = () => {
+  repeatPlacement = false;
   keys.clear();
   jump = false;
   stick.x = stick.z = 0;
   if (document.pointerLockElement) document.exitPointerLock();
 };
-function resume(keepPlaying = false) {
+function resume() {
   if (touchMode || !view || !entered) return;
   const canvas = view.renderer.domElement;
-  if (document.pointerLockElement === canvas) return;
-  const rejected = () => { if (!keepPlaying) setPlaying(false); };
+  if (document.pointerLockElement === canvas || resuming) return;
+  resuming = true;
+  const rejected = () => {
+    resuming = false;
+    setPlaying(false);
+    element('resume-help').hidden = false;
+    element('resume-help').textContent = 'Нажмите Enter или «Продолжить», чтобы вернуть управление мышью';
+    button.focus({preventScroll:true});
+  };
   try { Promise.resolve(canvas.requestPointerLock()).catch(rejected); }
   catch { rejected(); }
 }
@@ -432,8 +442,10 @@ function setPlaying(active) {
   audio.setPlaying(active);
   game.classList.toggle('playing', active);
   game.classList.toggle('paused', !active && entered);
+  element('resume-help').hidden = active || !entered;
   entry.hidden = active;
   if (!active) {
+    repeatPlacement = false;
     keys.clear();
     jump = false;
     button.textContent = 'Продолжить';
@@ -1057,6 +1069,11 @@ function tick(now) {
   view.players.frame(now, dt);
   updateSelection();
   updatePlacement(selection);
+  if (repeatPlacement && now >= nextPlacement && !acting && !resetting && !menuOpen() && playing &&
+      !spectator && !orbitHeading && document.pointerLockElement === view.renderer.domElement) {
+    nextPlacement = now + 150;
+    if ((clipboard || heldPart || chiseling) && !frameTarget && !seatTarget) void action('place');
+  }
   const selected = frameTarget ? 'Рамка · ПКМ — вложить предмет · E — повернуть' :
     seatTarget ? (seatTarget.kind === 'boat' ? 'Лодка · E — сесть' : 'Вагонетка · E — сесть') :
     selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
@@ -1122,10 +1139,16 @@ function bindControls() {
     }
   });
   document.addEventListener('pointerlockchange', () => {
+    resuming = false;
+    if (!document.pointerLockElement) pointerReleasedAt = performance.now();
     if (!touchMode && !menuOpen()) setPlaying(document.pointerLockElement === canvas);
   });
   document.addEventListener('pointerlockerror', () => {
-    if (!playing) notice('Браузер заблокировал захват курсора');
+    resuming = false;
+    if (!playing) {
+      element('resume-help').hidden = false;
+      element('resume-help').textContent = 'Нажмите Enter или «Продолжить», чтобы вернуть управление мышью';
+    }
   });
   document.addEventListener('mousemove', event => {
     if (!touchMode && playing && !menuOpen() && (document.pointerLockElement === canvas || event.target === canvas)) {
@@ -1149,6 +1172,11 @@ function bindControls() {
     }
     if (creative.keydown(event) || creative.isOpen()) return;
     if (social.keydown(event, playing)) return;
+    if (event.code === 'Enter' && entered && !playing && !menuOpen()) {
+      event.preventDefault();
+      if (!event.repeat) button.click();
+      return;
+    }
     if (event.code === 'KeyP' && playing && !menuOpen()) {
       event.preventDefault();
       if (!event.repeat) toggleSpectator();
@@ -1160,9 +1188,8 @@ function bindControls() {
         if (playing) {
           pause();
           setPlaying(false);
-        } else {
-          setPlaying(true);
-          resume(true);
+        } else if (performance.now() - pointerReleasedAt > 150) {
+          resumeOnEscape = true;
         }
       }
       return;
@@ -1189,13 +1216,33 @@ function bindControls() {
       interact(event.shiftKey);
     }
   });
-  document.addEventListener('keyup', event => { keys.delete(event.code); social.keyup(event); });
-  window.addEventListener('blur', () => { keys.clear(); social.blur(); });
+  document.addEventListener('keyup', event => {
+    keys.delete(event.code);
+    social.keyup(event);
+    if (event.code === 'Escape' && resumeOnEscape) {
+      resumeOnEscape = false;
+      resume();
+    }
+  });
+  document.addEventListener('mouseup', event => { if (event.button === 2) repeatPlacement = false; });
+  window.addEventListener('blur', () => {
+    repeatPlacement = resumeOnEscape = resuming = false;
+    keys.clear();
+    social.blur();
+  });
   canvas.addEventListener('mousedown', event => {
-    if (!playing || touchMode || menuOpen()) return;
-    if (document.pointerLockElement !== canvas) { resume(true); return; }
+    if (touchMode || menuOpen()) return;
+    if (!playing) {
+      if (entered && event.button === 0) button.click();
+      return;
+    }
+    if (document.pointerLockElement !== canvas) { resume(); return; }
     if (orbitHeading) return;
-    if (event.button === 2) action('place');
+    if (event.button === 2) {
+      repeatPlacement = !spectator;
+      nextPlacement = performance.now() + 350;
+      action('place');
+    }
     if (event.button === 0) action('remove');
     if (event.button === 1) action('copy');
   });
@@ -1245,8 +1292,11 @@ function bindControls() {
   touchRotate.addEventListener('click', cyclePlacement);
   touchChisel.addEventListener('click', () => { if (!resetting && !acting) toggleChisel(); });
   element('jump').addEventListener('pointerdown', () => { jump = true; });
-  element('distance').addEventListener('change', event => {
-    view.setDistance(Number(event.target.value)).catch(error => notice(error.message));
+  element('detail-distance').addEventListener('change', event => {
+    const distance = Number(event.target.value);
+    view.setDetailedLodDistance(distance).then(() => {
+      localStorage.setItem('honeymoon-detail-distance', String(distance));
+    }).catch(error => notice(error.message));
   });
   const sound = element('audio-toggle');
   const showSound = muted => {
@@ -1424,17 +1474,11 @@ async function start() {
   if (session.body.time) view.setWorldTime(session.body.time);
   view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
   updateCamera();
-  const available = new Set([4, ...(manifest.terrain || []).map(ring => ring.radius)]);
-  if (manifest.chunkPalettes) available.add(8);
-  if (supportsFarTerrain(manifest)) {
-    available.add(24);
-    if (manifest.lod.maxDistance === 32) available.add(32);
-  }
-  const distance = element('distance');
-  for (const option of distance.options) option.disabled = !available.has(Number(option.value));
-  if (available.has(24)) distance.value = '24';
-  else if (manifest.visualRadius > 8 && available.has(16)) distance.value = '16';
-  if (!available.has(Number(distance.value))) distance.value = '4';
+  const farSupported = supportsFarTerrain(manifest) && manifest.lod.maxDistance === 32;
+  const distance = element('detail-distance');
+  const savedDetail = Number(localStorage.getItem('honeymoon-detail-distance'));
+  if ([...distance.options].some(option => Number(option.value) === savedDetail)) distance.value = String(savedDetail);
+  distance.disabled = !farSupported;
   await Promise.all([view.loadTextures(), refresh()]);
   await view.prepareGraphics();
   bindControls();
@@ -1452,10 +1496,8 @@ async function start() {
     setOcclusion: enabled => view.setOcclusion(enabled),
     target: () => selection && {...selection},
     placement: () => placement && {...placement},
-    setDistance: distance => {
-      element('distance').value = String(distance);
-      return view.setDistance(distance);
-    },
+    setDistance: distance => view.setDistance(distance),
+    setDetailedDistance: distance => view.setDetailedLodDistance(distance),
     getCell: (x, y, z) => world.cellAt(x, y, z),
     players: () => view.players.inspect(),
     online: social.names,
@@ -1473,7 +1515,8 @@ async function start() {
   metrics.playable = performance.now() - metrics.started;
   loading.textContent = 'Можно войти в мир';
   button.disabled = false;
-  view.setDistance(Number(distance.value)).catch(console.error);
+  const horizon = farSupported ? view.setDetailedLodDistance(Number(distance.value)) : view.setDistance(4);
+  horizon.catch(console.error);
   if (manifest.chunkPalettes) nearbyStream = streamNearby(manifest.chunks, manifest.visualChunks ?? []);
   const pending = nearbyStream?.done ?? streamChunks(manifest.chunks.filter(chunk => !buffered.includes(chunk)), manifest.visualChunks ?? []);
   pending.catch(console.error);

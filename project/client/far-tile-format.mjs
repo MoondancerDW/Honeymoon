@@ -2,10 +2,17 @@ const HEADER = 72;
 const RECORD = 16;
 const CHUNKS = 16;
 export const LOD_VERSION = 3;
+export const DETAILED_LOD_DISTANCES = Object.freeze([8,12,16,20,24,28]);
+export const DEFAULT_DETAILED_LOD_DISTANCE = 20;
 export const WATER_HEIGHT_SCALE = 9;
 export const TRANSITION_FACE = 8;
 export const supportedLodVersion = value => value === 1 || value === 2 || value === LOD_VERSION;
 export const lodDistance = version => version === LOD_VERSION ? 32 : 24;
+
+export function validateDetailedLodDistance(distance) {
+  if (!DETAILED_LOD_DISTANCES.includes(distance)) throw new RangeError('Unsupported detailed LOD distance');
+  return distance;
+}
 
 export function decodeFarTile(buffer) {
   const view = new DataView(buffer);

@@ -22,10 +22,11 @@
         <span id="player-name" hidden></span>
         <button id="clock-toggle" type="button" aria-label="Игровое время (K)" disabled>12:00</button>
         <button id="chat-toggle" type="button" title="Чат · T / Enter" disabled>Чат</button>
-        <label class="distance" for="distance">Горизонт
-          <select id="distance">
-            <option value="4">4 чанка</option><option value="8" selected>8 чанков</option>
-            <option value="16">16 чанков</option><option value="24">24 чанка</option><option value="32">32 чанка</option>
+        <label class="distance" for="detail-distance">Подробный дальний вид
+          <select id="detail-distance">
+            <option value="8">8 чанков</option><option value="12">12 чанков</option>
+            <option value="16">16 чанков</option><option value="20" selected>20 чанков</option>
+            <option value="24">24 чанка</option><option value="28">28 чанков</option>
           </select>
         </label>
         <button id="audio-toggle" type="button" aria-pressed="false" hidden>Звук</button>
@@ -50,6 +51,7 @@
           <span id="skin-status" class="skin-status" role="status"></span>
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
+        <small id="resume-help" hidden>Esc или Enter — продолжить с захватом мыши</small>
         <small id="entry-help">WASD — ходьба · Пробел — прыжок · Shift — ускорение · F — полёт · F5/Y — камера · U — обзор · P — наблюдатель · I — блоки · V — резец · G — телепорт · Esc — пауза</small>
       </div>
     </section>

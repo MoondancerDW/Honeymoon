@@ -52,7 +52,7 @@ async function loadSkin(url) {
   const context = canvas.getContext('2d', {willReadFrequently: true, colorSpace: 'srgb'});
   context.drawImage(image, 0, 0);
   const {data} = context.getImageData(0, 0, width, skinHeight);
-  return {skin: readPonySkin(data, width, skinHeight), texture: setupTexture(new THREE.CanvasTexture(canvas))};
+  return {skin: readPonySkin(data, width, height), texture: setupTexture(new THREE.CanvasTexture(canvas))};
 }
 
 function groupParts(parts, names) {
@@ -505,6 +505,7 @@ export function createPonyAvatar(isAir) {
 
   function inspect() {
     return {skinReady, ponyType: skin.ponyType, advanced: skin.advanced, size: skin.size, phase:limbSwing * .6662 % TAU,
+      tail:skin.tail, male:skin.male, mane:skin.mane,
       meshCount: rig.meshes, motion, legAngles: rig.legs.map(leg => leg.rotation.x),
       headYaw:-rig.head.rotation.y, headPitch:-rig.head.rotation.x, flightBoost:boost,
       held:activeProp, strike, magicGlow:hornGlow?.visible ? skin.glowColor : null,

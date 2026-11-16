@@ -68,7 +68,8 @@ export function makeMaterials() {
     }
     const slot = materials.length;
     byKey.set(cacheKey, slot);
-    materials.push({kind, sides:FACES.map((_,face) => styleFor(shape,face,fluid,240,true)), shape});
+    const glass = shape.mode === 'cutout' && shape.faces.every(tile => tile === 49);
+    materials.push({kind, glass, sides:FACES.map((_,face) => styleFor(shape,face,fluid,240,true)), shape});
     return slot;
   }
 
@@ -185,11 +186,12 @@ export function sampleChunk(chunk, catalog, neighbors) {
       packedLight[index] = quantizeLight(light);
       if (occupied < 4 && architecture < 1 && leaf < 2) continue;
       let selected = 0, score = -1;
+      const glazed = choices.subarray(0,distinct).some(value => kind[value].glass);
       const exteriorBuild = architecture > 0 && occupied < 8;
       for (let slot=0; slot<distinct; slot++) {
         const id = choices[slot];
         const priority = kind[id].kind === CONSTRUCTION && exteriorBuild ? 4 : 0;
-        const rank = counts[slot] + priority;
+        const rank = counts[slot] + priority + (glazed && kind[id].shape.emissive ? 8 : 0);
         if (rank > score || rank === score && id < selected) {
           score = rank;
           selected = id;
@@ -277,7 +279,7 @@ export function outerChunk(chunk) {
   return {grid, light, highest, details:new Map(), water:chunk.water};
 }
 
-function floodExterior(grid, size, yCount, plane, liquid, shores) {
+function floodExterior(grid, size, yCount, plane, transparent, shores) {
   const visited = new Uint8Array(grid.length);
   const queue = new Uint32Array(grid.length);
   const strides = [-1, 1, -plane, plane, -size, size];
@@ -296,7 +298,7 @@ function floodExterior(grid, size, yCount, plane, liquid, shores) {
       if (face===0 && x===0 || face===1 && x===size-1 || face===2 && y===0 ||
           face===3 && y===yCount-1 || face===4 && z===0 || face===5 && z===size-1) continue;
       const to = at + strides[face];
-      if (visited[to] || grid[to] && !liquid[grid[to]] && !shores.has(to)) continue;
+      if (visited[to] || grid[to] && !transparent[grid[to]] && !shores.has(to)) continue;
       visited[to] = 1;
       queue[write++] = to;
     }
@@ -341,14 +343,15 @@ function detailFaces(masks, skirt, width, start, catalog, terrain, face, at, adj
     const other = there ? there[back] : thereSolid;
     const slot = start + u + v*width;
     const packed = liquid[grid[adjacent]] ? waterLight[adjacent] : light[adjacent];
-    if (!cutoff && visited[adjacent] && facing && !other) masks[0][slot] = style(facing,packed);
+    const exposed = !other || materials[other].glass && !materials[facing]?.glass;
+    if (!cutoff && visited[adjacent] && facing && exposed) masks[0][slot] = style(facing,packed);
     else if (skirt && facing) skirt[slot] = style(facing,brightest(light[at],packed));
     if (here && visited[at] && here[back] && !facing) masks[1][slot] = style(here[back],light[at]);
   }
 }
 
 function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary, sampleStep) {
-  const {grid, tops, light, waterLight, visited, size, plane, liquid, details} = terrain;
+  const {grid, tops, light, waterLight, visited, size, plane, liquid, transparent, details} = terrain;
   const {materials, styles, styleFor} = catalog;
   const highest = chunk.highest;
   const begin = gx+gz*size;
@@ -394,7 +397,7 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary, sampleStep) {
           const material = materials[face === 3 && tops[at] ? tops[at] : value];
           const packed = liquid[neighbor] ? waterLight[at+offset] : light[at+offset];
           const slot = u+v*uSize;
-          if (visited[at+offset] && (!neighbor || liquid[neighbor])) {
+          if (visited[at+offset] && (!neighbor || transparent[neighbor] && !material.glass)) {
             mask[slot] = packed === 240 ? material.sides[face] : styleFor(material.shape,face,false,packed,true);
           } else if (transition) {
             skirt[slot] = styleFor(material.shape,face,false,brightest(light[at],packed),true);
@@ -469,7 +472,9 @@ export function buildRegion(rx,rz,loadChunk,catalog,minX,maxX,minZ,maxZ,sampleSt
     }
   }
   const liquid = catalog.materials.map(material => material?.kind === LIQUID);
-  const terrain = {grid, tops, light, waterLight, size, plane, liquid, details, visited:floodExterior(grid,size,yCount,plane,liquid,details)};
+  const transparent = catalog.materials.map((material,index) => liquid[index] || material?.glass);
+  const terrain = {grid, tops, light, waterLight, size, plane, liquid, transparent, details,
+    visited:floodExterior(grid,size,yCount,plane,transparent,details)};
   const records = [];
   for (let z=0; z<TILE_CHUNKS; z++) for (let x=0; x<TILE_CHUNKS; x++) {
     const cx = regionX+x, cz=regionZ+z;

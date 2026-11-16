@@ -26,8 +26,8 @@ test('legacy pony metadata selects the source renderer, species, proportions and
 test('HD layouts keep the native atlas coordinates and their header markers', () => {
   const pixels = new Uint8Array(128 * 128 * 4);
   set(pixels, 128, 0, 0, [136, 202, 240, 255]);
-  set(pixels, 128, 2, 0, [66, 88, 68, 255]);
-  set(pixels, 128, 2, 2, [30, 0, 0, 255]);
+  set(pixels, 128, 1, 0, [66, 88, 68, 255]);
+  set(pixels, 128, 1, 1, [30, 0, 0, 255]);
   assert.equal(ponySkinHeight(128, 128), 64);
   assert.equal(readPonySkin(pixels, 128, 128).ponyType, 'pegasus');
   assert.equal(readPonySkin(pixels, 128, 128).tail, 4);
@@ -35,6 +35,37 @@ test('HD layouts keep the native atlas coordinates and their header markers', ()
   assert.equal(ponySkinHeight(80, 40), 0);
   assert.equal(ponySkinHeight(128, 96), 0);
   assert.equal(readPonySkin(defaultPonyPixels(), 64, 32).advanced, false);
+});
+
+test('HD texture pixels cannot override header sex, size, tail, or mane', () => {
+  const pixels = new Uint8Array(256 * 128 * 4);
+  set(pixels, 256, 0, 0, [209,159,228,255]);
+  set(pixels, 256, 4, 0, [70,142,136,255]);
+  set(pixels, 256, 8, 0, [255,255,255,255]);
+  set(pixels, 256, 12, 0, [206,50,84,255]);
+  set(pixels, 256, 4, 4, [20,0,0,255]);
+  const skin = readPonySkin(pixels,256,128);
+  assert.equal(skin.ponyType,'unicorn');
+  assert.equal(skin.tail,0);
+  assert.equal(skin.male,false);
+  assert.equal(skin.size,'normal');
+  assert.equal(skin.mane,0);
+  assert.equal(skin.advanced,false);
+  set(pixels,256,16,0,[0,0,0,255]);
+  assert.equal(readPonySkin(pixels,256,128).advanced,true);
+});
+
+test('square legacy skin scans the original height-based advanced region and exact glow alpha', () => {
+  const pixels = new Uint8Array(64 * 64 * 4);
+  set(pixels,64,8,0,[40,40,40,255]);
+  assert.equal(readPonySkin(pixels,64,64).advanced,true);
+  assert.equal(readPonySkin(pixels,64,32).advanced,false);
+  set(pixels,64,0,1,[0,0,0,128]);
+  assert.equal(readPonySkin(pixels,64,64).glowColor,0);
+  set(pixels,64,0,1,[0,0,0,255]);
+  assert.equal(readPonySkin(pixels,64,64).glowColor,0x4444aa);
+  set(pixels,64,0,1,[23,41,83,0]);
+  assert.equal(readPonySkin(pixels,64,64).glowColor,0x4444aa);
 });
 
 test('both captured pony renderers have articulated parts and different advanced UVs', () => {

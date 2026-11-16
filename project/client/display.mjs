@@ -699,6 +699,17 @@ export class Display {
     }
   }
 
+  get detailedLodDistance() {
+    return this.farTerrain?.detailedDistance;
+  }
+
+  async setDetailedLodDistance(distance) {
+    if (!this.farTerrain) throw new RangeError('Detailed LOD settings require distant terrain');
+    this.farTerrain.setDetailedLodDistance(distance);
+    if (this.requestedDistance !== 32) await this.setDistance(32);
+    return this.detailedLodDistance;
+  }
+
   async setDistance(distance) {
     if ((distance === 24 || distance === 32) && !(this.farTerrain?.lod.maxDistance >= distance)) return;
     this.requestedDistance = distance;
