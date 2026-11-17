@@ -8,6 +8,7 @@ Honeymoon. Здесь можно ходить, летать, строить из
 вход по приглашениям и подключение через браузер с телефона.
 
 - [Подготовка и запуск](project/README.md)
+- [Перенос действующего сервера на другой Windows-ПК](project/portable/MIGRATION.md)
 - [Веб-альфа для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/tag/alpha-2026-11-16)
 - [Предыдущая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-inventory-weather/Honeymoon-Creative-Weather-Windows-x64.zip)
 - [Архив браузерного клиента и Node.js-сервера](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-inventory-weather/honeymoon-browser-client.zip)
