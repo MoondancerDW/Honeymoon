@@ -464,3 +464,43 @@ test('the single-player owner can use coordinate travel and manage warps without
   assert.deepEqual(code(await local('/api/teleport',{warpId:warp.id})).position,target);
   assert.deepEqual(code(await local('/api/warps/remove',{id:warp.id})).warps,[]);
 });
+
+test('flight preferences persist for an invited profile and ignore delayed updates',async t=>{
+  const {start}=fixture(t);
+  let urls=await start();
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const invite=code(await request(urls.owner,'/api/admin/invites',{body:{kind:'player'},cookie:owner.cookie}));
+  const player=await request(urls.public,'/api/session',{body:{invite:invite.code,profileName:'Flying Player'},origin:external});
+  const call=(path,body,cookie=player.cookie)=>request(urls.public,path,{body,cookie,origin:external});
+  assert.equal(code(player).flight,false);
+  assert.equal(code(await call('/api/flight',{enabled:true,sequence:1},null),401).error,'session_required');
+  assert.equal(code(await call('/api/flight',{enabled:true,sequence:1})).flight,true);
+  urls=await start();
+  assert.equal(code(await call('/api/session',{})).flight,true);
+  assert.equal(code(await call('/api/flight',{enabled:false,sequence:3})).flight,false);
+  assert.equal(code(await call('/api/flight',{enabled:true,sequence:2})).flight,false);
+  assert.equal(code(await call('/api/session',{})).flight,false);
+});
+
+test('single-player flight survives closing the game and clears on returning to spawn',async t=>{
+  const {start}=fixture(t);
+  const options={singlePlayer:true,secure:false,inviteRequired:false,ownerOnPrimary:true,
+    allowedOrigin:undefined,publicOrigin:undefined};
+  let {public:url}=await start(options);
+  const local=(path,body)=>request(url,path,{body});
+  assert.equal(code(await local('/api/session',{})).flight,false);
+  assert.equal(code(await local('/api/flight',{enabled:true,sequence:1})).flight,true);
+  ({public:url}=await start(options));
+  assert.equal(code(await local('/api/session',{})).flight,true);
+  await eventReader(t,url,'');
+  const pose={yaw:0,pitch:0,motion:'idle'};
+  code(await local('/api/presence',pose));
+  const sitting=code(await local('/api/seat',{...pose,ground:true}));
+  assert.equal(sitting.seat.kind,'ground');
+  assert.equal(code(await local('/api/flight',{enabled:true,sequence:2}),409).error,'flight_unavailable');
+  assert.equal(code(await local('/api/session',{})).flight,false);
+  code(await local('/api/seat',{...pose,ground:false}));
+  assert.equal(code(await local('/api/flight',{enabled:true,sequence:3})).flight,true);
+  code(await local('/api/respawn',{}));
+  assert.equal(code(await local('/api/session',{})).flight,false);
+});

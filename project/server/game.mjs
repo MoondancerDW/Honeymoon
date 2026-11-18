@@ -245,6 +245,7 @@ export function createGame(base, store, geometry, {
   survival, survivalChanged, persistPositions = false,
 } = {}) {
   const positions = new Map();
+  const flightPreferences = new Map();
   const movementChannel = createMovementChannel(player=>({
     position:playerAt(player), stance:stanceFor(player), seat:publicSeat(player),
   }));
@@ -396,6 +397,34 @@ export function createGame(base, store, geometry, {
   const bodyAtSeat = (player, anchor) => anchor.bed ? bodyFor(player,'crawl') :
     {halfWidth:.3, height:Math.min(bodyFor(player,'stand').height,SEATED_HEIGHT)};
 
+  function flightPreference(player) {
+    if (!flightPreferences.has(player)) {
+      flightPreferences.set(player,store.getState('movement',player,'flight')?.value ?? {enabled:false});
+    }
+    return flightPreferences.get(player);
+  }
+
+  function writeFlight(player, preference) {
+    store.putState('movement',player,'flight',1,preference);
+    flightPreferences.set(player,preference);
+  }
+
+  function forceFlight(player, enabled) {
+    const previous=flightPreference(player);
+    if (previous.enabled!==enabled) writeFlight(player,{...previous,enabled});
+  }
+
+  function setFlight(player,deviceId,{enabled,sequence}) {
+    if (typeof enabled!=='boolean' || !Number.isSafeInteger(sequence) || sequence<1) {
+      throw new RequestError(400,'invalid_flight');
+    }
+    const previous=flightPreference(player);
+    if (previous.deviceId===deviceId && sequence<=previous.sequence) return previous.enabled;
+    if (enabled && (publicSeat(player) || survival?.dead(player))) throw new RequestError(409,'flight_unavailable');
+    writeFlight(player,{enabled,deviceId,sequence});
+    return enabled;
+  }
+
   function playerSight(player,eye=eyes.get(player)) {
     const position = playerAt(player);
     if (eye) {
@@ -497,6 +526,7 @@ export function createGame(base, store, geometry, {
     const {x, y, z} = anchor;
     const position = {x, y, z};
     if (physical.collides(position, bodyAtSeat(player,anchor), blocks)) throw new RequestError(409, 'seat_blocked');
+    forceFlight(player,false);
     seats.set(player, {anchor, blocks, previous, entity});
     movePlayer(player, position);
     return {seat:anchor, position};
@@ -1368,6 +1398,7 @@ export function createGame(base, store, geometry, {
     const state=survival.damage(player,amount,point,floor);
     if (state) {
       if (state.death) {
+        forceFlight(player,false);
         releaseSeat(player);
         movementChannel.invalidate(player);
       }
@@ -1515,7 +1546,11 @@ export function createGame(base, store, geometry, {
       }
     }
     const air=flight.find(clear);
-    if (air) return {...teleport(player,air),flight:true};
+    if (air) {
+      const result=teleport(player,air);
+      if (!spectators.has(player)) forceFlight(player,true);
+      return {...result,flight:true};
+    }
     throw new RequestError(409,'teleport_blocked');
   }
 
@@ -1883,12 +1918,14 @@ export function createGame(base, store, geometry, {
     leaveSeat,
     poseFor,
     reconcileProfile,
+    setFlight,
     touch(player) {
       const entry = positions.get(player);
       if (entry) entry.seen = clock();
     },
     respawn(player) {
       releaseSeat(player);
+      forceFlight(player,false);
       movePlayer(player, spawn);
       survival?.clearFall(player);
       return { position:spawn, seat:null, stance:'stand', effects:[], worldRevision:store.worldRevision() };
@@ -1899,6 +1936,7 @@ export function createGame(base, store, geometry, {
       const position=bodyWithinMap(point,body)&&physical.supported(point,body)&&!physical.collides(point,body) ? point :
         physical.standAbove({...point,y:point.y-.05},Math.min(base.manifest.bounds.maxY,point.y+12),body)??spawn;
       releaseSeat(player);
+      forceFlight(player,false);
       movePlayer(player,position);
       survival.clearFall(player);
       return {...passivePosition(position),seat:null,stance:'stand'};
@@ -1914,6 +1952,7 @@ export function createGame(base, store, geometry, {
         playerId, spawn: base.manifest.spawn, position: playerAt(playerId), worldRevision: store.worldRevision(),
         catalogVersion: base.manifest.catalogVersion ?? 1, importVersion: base.manifest.importVersion, contentHash: base.hash,
         mechanics: descriptions(playerId), seat:publicSeat(playerId), spectator:spectators.has(playerId),
+        flight:flightPreference(playerId).enabled && !publicSeat(playerId) && !survival?.dead(playerId),
         stance:publicSeat(playerId)?.bed ? 'crawl' : stanceFor(playerId),
         inventory:inventory.read(playerId),
       };

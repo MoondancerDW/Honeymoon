@@ -851,6 +851,10 @@ export function createHoneymoonServer({
         return json(response, 200, result);
       }
       if (path === '/api/world' && method === 'GET') return json(response, 200, game.snapshot(player));
+      if (path === '/api/flight' && method === 'POST') {
+        const flight=game.setFlight(player,credential.deviceId,await readMovementInput());
+        return json(response,200,{flight});
+      }
       if (path === '/api/position-state' && method === 'POST') {
         const {page,start,restart}=await readMovementInput();
         const state=typeof restart==='string'

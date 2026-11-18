@@ -3,6 +3,14 @@ import map from './altitude-map-data.mjs';
 import {shapeFor} from '../world/geometry.mjs';
 
 const highOverlayDistance=2304;
+const detailFadeDistance=384;
+const softenCanopyShadows=`
+  // Lift baked forest shadows without changing the colors of lighter ground and roads.
+  vec3 altitudeSurface=diffuseColor.rgb;
+  float altitudeCanopy=smoothstep(0.0,0.007,altitudeSurface.g-max(altitudeSurface.r,altitudeSurface.b));
+  float altitudeShadow=1.0-smoothstep(0.016,0.092,altitudeSurface.g);
+  diffuseColor.rgb+=altitudeCanopy*altitudeShadow*vec3(0.016,0.025,0.013);
+`;
 
 export class AltitudeOverview {
   constructor(display) {
@@ -125,12 +133,19 @@ export class AltitudeOverview {
     geometry.setIndex(indices);
     geometry.computeBoundingSphere();
     const material=new THREE.MeshBasicMaterial({map:colors});
+    material.onBeforeCompile=shader=>{
+      shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`
+        #include <map_fragment>
+        ${softenCanopyShadows}
+      `);
+    };
     this.mesh=new THREE.Mesh(geometry,material);
     this.scene.add(this.mesh);
   }
 
   configureTexture(texture) {
     texture.colorSpace=THREE.SRGBColorSpace;
+    texture.magFilter=THREE.NearestFilter;
     texture.anisotropy=Math.min(8,this.display.renderer.capabilities.getMaxAnisotropy());
   }
 
@@ -138,10 +153,9 @@ export class AltitudeOverview {
     const {west,north,east,south,detail}=map;
     const width=east-west, length=south-north;
     this.configureTexture(texture);
-    texture.magFilter=THREE.NearestFilter;
     const origin=new THREE.Vector2((detail.west-west)/width,(south-detail.south)/length);
     const span=new THREE.Vector2((detail.east-detail.west)/width,(detail.south-detail.north)/length);
-    const feather=new THREE.Vector2(64/(detail.east-detail.west),64/(detail.south-detail.north));
+    const feather=new THREE.Vector2(detailFadeDistance/(detail.east-detail.west),detailFadeDistance/(detail.south-detail.north));
     const material=this.mesh.material;
     material.onBeforeCompile=shader=>{
       shader.uniforms.altitudeDetail={value:texture};
@@ -156,10 +170,13 @@ export class AltitudeOverview {
       `+shader.fragmentShader.replace('#include <map_fragment>',`
         #include <map_fragment>
         vec2 detailUv=(vMapUv-altitudeOrigin)/altitudeSpan;
+        // Derivatives must be evaluated before fragments diverge at the detail boundary.
+        vec2 detailDx=dFdx(detailUv),detailDy=dFdy(detailUv);
         vec2 weight=smoothstep(vec2(0.0),altitudeFeather,min(detailUv,1.0-detailUv));
         if (weight.x*weight.y>0.0) {
-          diffuseColor.rgb=mix(diffuseColor.rgb,texture2D(altitudeDetail,detailUv).rgb,weight.x*weight.y);
+          diffuseColor.rgb=mix(diffuseColor.rgb,textureGrad(altitudeDetail,detailUv,detailDx,detailDy).rgb,weight.x*weight.y);
         }
+        ${softenCanopyShadows}
       `);
     };
     material.needsUpdate=true;

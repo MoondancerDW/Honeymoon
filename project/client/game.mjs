@@ -110,6 +110,8 @@ let autoMovement=null;
 let previousFramePosition, framePosition, correctionOffset;
 let feedReopenAt=-Infinity;
 let flying = false;
+let flightStorageKey, pendingFlight, flightRequest;
+let flightSequence=0;
 let crawlRequested = false;
 let spectator = false, spectatorReturn = null;
 let seat = null, seatPending = false, seatEpoch = 0;
@@ -271,7 +273,7 @@ function updateGameMode(next) {
     keys.clear();
     jump=repeatPlacement=false;
     touchControls?.clear();
-    setFlight(false);
+    stopFlight();
     Object.assign(position,next.death.position);
     if (document.pointerLockElement) document.exitPointerLock();
     setPlaying(true);
@@ -475,12 +477,12 @@ const messages = {
   skin_too_large: skinTooLarge
 };
 
-async function post(path, payload, signal) {
+async function post(path, payload, signal, keepalive = false) {
   const trace=diagnostics.request(path,payload?.requestId);
   try {
     const response = await fetch('/api/' + path, {
       method: 'POST', headers: {'Content-Type': 'application/json',...(trace&&{'X-Honeymoon-Trace':trace.id})},
-      body: JSON.stringify(payload), signal
+      body: JSON.stringify(payload), signal, keepalive
     });
     trace?.headers(response);
     if ([502,503,504].includes(response.status)) {
@@ -598,7 +600,12 @@ function stream() {
     (page?'&diag='+page:''));
   source.addEventListener('movement-ack',event=>movementSync.received(JSON.parse(event.data).movement));
   if (page) source.addEventListener('diagnostics-heartbeat',event=>diagnostics.heartbeat(JSON.parse(event.data)));
-  feed.addEventListener('open', () => { connection.stream(true); presenceDirty = true; social.refreshWarps(); });
+  feed.addEventListener('open', () => {
+    connection.stream(true);
+    presenceDirty = true;
+    social.refreshWarps();
+    flushFlightPreference();
+  });
   feed.addEventListener('error',()=>{
     if (feed!==source) return;
     connection.stream(false,source.readyState===EventSource.CLOSED ? 'closed' : connectionFailure().why);
@@ -818,6 +825,63 @@ function setFlight(active) {
   element('flight-status').hidden = !active || spectator;
 }
 
+function finishFlightPreference(update) {
+  if (pendingFlight!==update) return;
+  pendingFlight=undefined;
+  try {
+    if (localStorage.getItem(flightStorageKey)===JSON.stringify(update)) localStorage.removeItem(flightStorageKey);
+  } catch {}
+}
+
+function flushFlightPreference() {
+  if (!pendingFlight || flightRequest) return;
+  const update=pendingFlight;
+  flightRequest=post('flight',update,AbortSignal.timeout(5000),true).then(({ok,body})=>{
+    if (ok && pendingFlight===update && typeof body.flight==='boolean' && body.flight!==update.enabled) {
+      if (spectator) spectatorReturn.flying=body.flight;
+      else if (!seat && !modeUi.death) setFlight(body.flight);
+    }
+    if (ok || body.error==='flight_unavailable') finishFlightPreference(update);
+  }).catch(()=>{}).finally(()=>{
+    flightRequest=undefined;
+    if (pendingFlight && pendingFlight!==update) flushFlightPreference();
+  });
+}
+
+function rememberFlight(enabled) {
+  if (!flightStorageKey) return;
+  flightSequence=Math.max(Date.now(),flightSequence+1);
+  pendingFlight={enabled,sequence:flightSequence};
+  try { localStorage.setItem(flightStorageKey,JSON.stringify(pendingFlight)); }
+  catch {}
+  flushFlightPreference();
+}
+
+function restoreFlight(session) {
+  flightStorageKey=`honeymoon.flight.pending:${session.soloWorld??'world'}:${session.access?.uid??session.playerId}`;
+  try {
+    const saved=JSON.parse(localStorage.getItem(flightStorageKey));
+    if (typeof saved?.enabled==='boolean' && Number.isSafeInteger(saved.sequence) && saved.sequence>0) {
+      pendingFlight=saved;
+      flightSequence=saved.sequence;
+    }
+  } catch {}
+  if (seat || modeUi.death) {
+    if (pendingFlight) finishFlightPreference(pendingFlight);
+  } else {
+    setFlight(pendingFlight?.enabled ?? session.flight===true);
+  }
+  if (session.spectator) setSpectator(true);
+  flushFlightPreference();
+}
+
+function stopFlight() {
+  const wasFlying=spectator ? spectatorReturn.flying : flying;
+  if (spectator) spectatorReturn.flying=false;
+  setFlight(spectator);
+  if (wasFlying || pendingFlight?.enabled) rememberFlight(false);
+}
+
 function setSpectator(active) {
   if (active === spectator) return;
   if (active) {
@@ -887,7 +951,7 @@ function setSeat(next, feet, stance) {
       'Вагонетка · W/S или ↑/↓ — движение · E — встать') : seat?.bed ? 'Лежите · E — встать' :
     seat?.kind === 'ground' ? 'Сидите · X — встать' : 'Сидите · E — встать';
   if (seat) {
-    setFlight(false);
+    stopFlight();
     heading.yaw = seat.yaw;
     heading.pitch = -.045;
   }
@@ -909,7 +973,10 @@ async function teleport(coordinates) {
 
 async function acceptTeleport(body) {
   const arriving=arriveAt(body.position,body.stance);
-  if (body.flight===true) setFlight(true);
+  if (body.flight===true) {
+    setFlight(true);
+    if (!spectator && pendingFlight?.enabled===false) rememberFlight(true);
+  }
   changes(body.changes,body.worldRevision,body.frames);
   effects(body);
   presenceDirty=true;
@@ -1753,7 +1820,11 @@ function bindControls() {
     if (event.repeat) return;
     if (event.code === 'Space') jump = true;
     if (spectator) return;
-    if (event.code === 'KeyF' && !resetting && !seat) setFlight(!flying);
+    if (event.code === 'KeyF' && !resetting && !seat) {
+      const previous=flying;
+      setFlight(!previous);
+      if (flying!==previous) rememberFlight(flying);
+    }
     if (event.code === 'KeyV' && !resetting && !acting && !flying && !seat) {
       if (crawlRequested) crawlRequested = false;
       else if (movement.setStance(position,'crawl') === 'crawl') {
@@ -1975,7 +2046,7 @@ function bindControls() {
       const {ok, body} = await post('respawn', {});
       if (ok) {
         await arriveAt(body.position,body.stance);
-        setFlight(spectator);
+        stopFlight();
         presenceDirty = true;
       }
       else notice(messages[body.error] || body.error);
@@ -2190,7 +2261,6 @@ async function start() {
   view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
   if (session.body.seat) setSeat(session.body.seat, p,session.body.stance);
-  if (session.body.spectator) setSpectator(true);
   if (session.body.time) view.setWorldTime(session.body.time);
   const weather=session.body.weatherSettings??session.body.weather;
   if (weather) updateWeather(weather);
@@ -2253,6 +2323,7 @@ async function start() {
   }));
   loading.textContent = 'Подготавливаем графику…';
   await view.whenReady(near,{position});
+  restoreFlight(session.body);
   metrics.playable = performance.now() - metrics.started;
   loading.textContent = 'Можно войти в мир';
   button.disabled = false;

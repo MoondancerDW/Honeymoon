@@ -133,6 +133,41 @@ try {
       if (await visible('#play')) await click('#play');
       result.checks.push({orientation:id,inventoryClose:dimensions});
     }
+  } else if (test==='flight-return') {
+    await start();
+    assert.equal((await stat()).flying,false);
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-8,300,-19);
+    const before=(await stat()).position;
+    await page.reload({waitUntil:'domcontentloaded'});
+    await ready();
+    const restored=await stat();
+    assert.equal(restored.flying,true);
+    assert.ok(Math.abs(restored.position.y-before.y)<1);
+    await click('#play');
+    await page.waitForFunction(()=>!document.getElementById('chat-toggle').disabled);
+    await page.waitForTimeout(700);
+    assert.ok(Math.abs((await stat()).position.y-before.y)<1);
+    await hop(-8,66,-19);
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>!honeymoon.stats().flying);
+    await page.reload({waitUntil:'domcontentloaded'});
+    await ready();
+    assert.equal((await stat()).flying,false);
+    result.checks.push({restoredFlight:true,heldHeight:before.y,restoredWalking:true});
+  } else if (test==='overview-boundary') {
+    await start();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-7.42,494.66,-2281.87);
+    await page.waitForFunction(()=>honeymoon.stats().overviewVisible,undefined,{timeout:25000});
+    await page.evaluate(async()=>{
+      honeymoon.look(Math.PI,-.55);
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    });
+    await shot('overview-boundary');
+    result.checks.push({overviewVisible:true,position:(await stat()).position});
   } else if (test==='altitude-registration') {
     await page.route('**/game.mjs',async route=>{
       const response=await route.fetch();
