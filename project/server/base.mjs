@@ -8,9 +8,11 @@ import { isRideableBoat } from '../world/boats.mjs';
 import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
 import { loadSnowCleanup } from './snow-cleanup.mjs';
 import { loadFullDetail } from './full-detail.mjs';
+import { soloRegionFile } from './solo-assets.mjs';
 
 const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
 const MAX_CACHED_CHUNKS = 160;
+const unavailableCell = Object.freeze({key:'legacy:1:0',object:null});
 const safeTileFields = new Set([
   'Text1', 'Text2', 'Text3', 'Text4', 'rotation', 'Rotation', 'direction', 'Direction',
   'orientation', 'Orientation', 'rot', 'Rot', 'facing', 'Facing', 'color', 'Color',
@@ -118,7 +120,8 @@ function publicWorld(manifest, hash) {
     chunks, legacyRegistry, terrain, palette:['air'], compositions:{}, contentHash:hash, chunkPalettes:true};
 }
 
-export function loadBase(directory, {cleanSnow = true} = {}) {
+export function loadBase(directory, {cleanSnow = true, partial} = {}) {
+  if (partial && typeof partial.has !== 'function') throw new TypeError('Partial world needs an installed-file lookup');
   const rawManifest = readFileSync(join(directory, 'world.json'), 'utf8');
   const manifest = JSON.parse(rawManifest);
   if (manifest.schemaVersion !== 1 || manifest.palette[0] !== 'air') {
@@ -130,6 +133,7 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
   const chunks = new Map();
   const originalHash = manifest.contentHash ?? createHash('sha256').update(rawManifest).digest('hex');
   const fullDetail = manifest.chunkPalettes ? loadFullDetail(join(directory,'..','full-world'),originalHash) : null;
+  if (partial && !fullDetail) throw new Error('Missing full detail manifest for partial world');
   const bounds = {...manifest.bounds,maxY:Math.max(manifest.bounds.maxY,511)};
   if (fullDetail) {
     const [west,north,east,south]=fullDetail.descriptor.bounds;
@@ -148,6 +152,10 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
   for (const key of corePalette) {
     for (const variant of relatedBlockStates(key)) catalog.add(variant);
   }
+  const detailCoverage = (x,z) => Boolean(fullDetail?.hasChunk(x,z));
+  const worldCoverage = (x,z) => playableCoordinates.has(`${x}.${z}`) || detailCoverage(x,z);
+  const installedDetail = (x,z) => detailCoverage(x,z) && (!partial || partial.has(soloRegionFile(x,z)));
+  const hasPlayableChunk = partial ? installedDetail : worldCoverage;
 
   function inBounds(x, y, z) {
     return x >= bounds.minX && x < bounds.maxX + 1 && y >= bounds.minY && y < bounds.maxY + 1
@@ -156,8 +164,8 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
 
   function getChunk(cx, cz) {
     const chunkKey = `${cx}.${cz}`;
-    const local=coordinates.has(chunkKey);
-    if (!local && !fullDetail?.hasChunk(cx,cz)) return null;
+    const local=!partial && coordinates.has(chunkKey);
+    if (!local && !installedDetail(cx,cz)) return null;
     const cached = chunks.get(chunkKey);
     if (cached) {
       chunks.delete(chunkKey);
@@ -183,6 +191,8 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
     const cy = Math.floor(y / 16);
     const cz = Math.floor(z / 16);
     const chunk = getChunk(cx, cz);
+    // Collision and edit checks run synchronously, including reads into neighboring columns.
+    if (!chunk && partial && worldCoverage(cx,cz)) return unavailableCell;
     let section = chunk?.sections.get(cy);
     if (!section) return { key: 'air', object: null };
     if (typeof section === 'string') {
@@ -211,6 +221,7 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
   }
 
   function publicChunk(cx, cz, highOnly=false) {
+    if (partial && !installedDetail(cx,cz)) return null;
     if (highOnly && manifest.bounds.maxY<256) {
       const key=`${cx}.${cz}`;
       if (!coordinates.has(key) && !fullDetail?.hasChunk(cx,cz)) return null;
@@ -227,7 +238,8 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
     const result={
       ...chunk.source,
       objects,
-      entities: chunk.source.entities.map(displayEntity),
+      entities: (partial && coordinates.has(`${cx}.${cz}`) ? chunk.source.entities.filter(entity=>
+        entity.type==='Painting' || entity.type==='ItemFrame' || isRideableMinecart(entity)) : chunk.source.entities).map(displayEntity),
     };
     if (highOnly) {
       result.sections=result.sections.filter(section=>section.y>=16);
@@ -244,6 +256,5 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
   }
 
   return { manifest:{...manifest,bounds}, publicManifest, hash, catalog, inBounds, getCell, getEntity, publicChunk,
-    hasPlayableChunk: (x, z) => playableCoordinates.has(`${x}.${z}`) || Boolean(fullDetail?.hasChunk(x,z)),
-  };
+    hasPlayableChunk, worldCoverage };
 }

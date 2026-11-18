@@ -252,7 +252,7 @@ export function createNpcInteraction({store,inventory,definitions,shared,actors,
     ctx.flags.progress=true;
   }
 
-  function act(player,body,position) {
+  function act(player,body,position,cancelled) {
     const npc=definitions.get(body.npcId);
     const current=actors.get(body.npcId);
     if (!npc || !current || current.health<=0) throw new RequestError(404,'npc_missing');
@@ -365,7 +365,14 @@ export function createNpcInteraction({store,inventory,definitions,shared,actors,
       const messages=[message,...tryInstant(ctx)].filter(Boolean);
       return output(npc,ctx,row,{...(messages.length&&{message:messages.join('\n')})});
     });
-    if (targetTravel) response.teleport=teleportPlayer(player,targetTravel);
+    if (targetTravel) {
+      const trip=teleportPlayer(player,targetTravel,cancelled);
+      if (trip instanceof Promise) return trip.then(teleport=>{
+        opened.delete(player);
+        return {...response,teleport};
+      });
+      response.teleport=trip;
+    }
     if (heal) healPlayer(player);
     if (follow!==undefined) {
       current.following=follow;

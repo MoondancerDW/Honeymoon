@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
-  <meta name="honeymoon-build" content="3">
+  <meta name="honeymoon-build" content="4">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -116,6 +116,7 @@
         <div class="pause-inventory">
           <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>
           <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="J" disabled>Инвентарь</button>
+          <button id="solo-download-toggle" type="button" aria-haspopup="dialog" aria-controls="solo-download" hidden>Загрузка карты</button>
           <button id="warp-toggle" type="button" aria-controls="warps-menu" aria-expanded="false" disabled>Варпы</button>
           <button id="craft-toggle" type="button" aria-controls="craft-menu" hidden>Изготовить</button>
           <button id="mode-toggle" type="button" aria-controls="mode-menu" hidden>Режимы игроков</button>
@@ -279,6 +280,20 @@
           <button id="item-document-close" type="button">Закрыть</button>
         </div>
       </form>
+    </dialog>
+    <dialog id="solo-download" aria-labelledby="solo-download-title">
+      <h2 id="solo-download-title">Загрузка карты</h2>
+      <progress id="solo-download-progress" aria-label="Готовность карты"></progress>
+      <p id="solo-download-size" hidden></p>
+      <p id="solo-download-status" role="status">Проверяем скачанные пакеты…</p>
+      <p id="solo-download-complete" hidden>Карта целиком доступна без интернета.</p>
+      <p id="solo-download-update" hidden></p>
+      <p id="solo-download-error" role="status" hidden></p>
+      <div class="solo-download-actions">
+        <button id="solo-download-all" type="button" disabled>Скачать всю карту</button>
+        <button id="solo-download-cancel" type="button" hidden>Остановить фоновую загрузку</button>
+        <button id="solo-download-close" type="button" autofocus>Готово</button>
+      </div>
     </dialog>
     <dialog id="audio-settings" aria-labelledby="audio-settings-title">
       <h2 id="audio-settings-title">Звук и окружение</h2>

@@ -3,6 +3,7 @@ import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickItemFrame, pi
 import {World, chunkKey, json} from './world-data.mjs';
 import {WorldAudio,audioDefaults} from './audio.mjs';
 import {bindAltitudeMusic} from './altitude-music-settings.mjs';
+import {createSoloDownloadUi} from './solo-download-ui.mjs';
 import {windAt} from './wind.mjs';
 import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
 import {createSocialHud} from './social-hud.mjs';
@@ -245,8 +246,10 @@ const creative = createCreativeMenu({load:loadCreative,
   editItem:itemDocuments.openItem,readBook:itemDocuments.openBook,
   canCopy:()=>modeUi.creative,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
+const soloDownloadUi=createSoloDownloadUi({element});
+let soloStreaming=false, unavailableSoloTerrainUntil=0;
 const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open || audioSettings?.open ||
-  itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen() || modeUi.isOpen() || adminUi.isOpen();
+  itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen() || modeUi.isOpen() || adminUi.isOpen() || soloDownloadUi.isOpen();
 
 function updateGameMode(next) {
   creativeToggle.disabled=spectator||!creativeAvailable||!modeUi.creative;
@@ -525,7 +528,8 @@ function npcCommand(npcId,action,parameters={}) {
   const request=npcActionQueue.then(async()=>{
     if (resetting || seatPending) return {ok:false,body:{error:'action_pending'}};
     if (!await flushPosition()) return {ok:false,body:{error:'movement_blocked'}};
-    const result=await post('npcs/action',{npcId,action,eye:view.eyeOffset(),...parameters},AbortSignal.timeout(8000));
+    const result=await post('npcs/action',{npcId,action,eye:view.eyeOffset(),...parameters},
+      AbortSignal.timeout(soloStreaming && action==='transport' ? 120000 : 8000));
     if (result.ok) applyInventory(result.body.inventory);
     return result;
   });
@@ -873,7 +877,7 @@ async function teleport(coordinates) {
   resetting = true;
   try {
     await movementSync.inFlight();
-    const result = await post('teleport', coordinates, AbortSignal.timeout(5000));
+    const result = await post('teleport', coordinates, AbortSignal.timeout(soloStreaming ? 120000 : 5000));
     if (result.ok) await acceptTeleport(result.body);
     return result;
   } finally {
@@ -1531,7 +1535,8 @@ function tick(now) {
   const intended=Boolean(forwardInput() || turnInput() || keys.has('Space') || flying &&
     (keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC')));
   const waiting=playing && !menuOpen() && !resetting && (intended || positionTrail.length) && !hasPredictionRoom;
-  connection.movementWaiting(Boolean(waiting),playing && intended && !menuOpen() && movement.waitingForTerrain);
+  const needsTerrain=playing && intended && !menuOpen() && movement.waitingForTerrain;
+  connection.movementWaiting(Boolean(waiting),needsTerrain && (now < unavailableSoloTerrainUntil ? 'solo-unavailable' : true));
   if (playing && !menuOpen() && !seat && !flying && movement.stance === 'stand') {
     view.viewBob.step(horizontalSpeed * dt, dt, movement.grounded && !movement.medium, movement.fall);
   } else {
@@ -1680,7 +1685,7 @@ function bindControls() {
   document.addEventListener('keydown', event => {
     if ((!teleportLoading.hidden && event.target !== element('teleport-reload'))||modeUi.death) return;
     if (signEditor.open || audioSettings?.open || itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen()||
-        modeUi.isOpen() || adminUi.isOpen()) return;
+        modeUi.isOpen() || adminUi.isOpen() || soloDownloadUi.isOpen()) return;
     if ((event.code === 'F5' || event.code === 'KeyY' || event.code === 'KeyU') && playing && !menuOpen()) {
       event.preventDefault();
       if (!spectator && !event.repeat) {
@@ -2076,8 +2081,10 @@ function streamNearby(scenery) {
       } catch (error) {
         if (view.workerFailure) throw error;
         if (!controller.signal.aborted) {
-          retryAt.set(next.key, performance.now() + 1500);
-          console.error(error);
+          const missingLocalArea=soloStreaming && error.status===503;
+          retryAt.set(next.key, performance.now() + (missingLocalArea ? 6000 : 1500));
+          if (missingLocalArea && next.distance<=2) unavailableSoloTerrainUntil=performance.now()+6500;
+          else if (!missingLocalArea) console.error(error);
         }
       } finally {
         inFlight.delete(next.key);
@@ -2090,6 +2097,9 @@ function streamNearby(scenery) {
 async function start() {
   const sessionBody = await accessUi.acquire();
   if (!sessionBody) return;
+  soloStreaming=Boolean(sessionBody.soloDownload);
+  soloDownloadUi.enable(soloStreaming);
+  connection.setLocal(Boolean(sessionBody.access?.singlePlayer));
   connectionReport.enable(sessionBody.access?.uid);
   diagnostics.enable(sessionBody.playerDiagnostics,sessionBody.access?.uid,()=>{
     const terrain=terrainNetwork.status(), chunks=nearbyStream?.status();

@@ -5,6 +5,7 @@ const teleportErrors = {
   invalid_coordinates:'Введите числовые координаты X, Y и Z',
   outside_playable_area:'Координаты за пределами карты',
   teleport_blocked:'В выбранной точке недостаточно места',
+  solo_asset_unavailable:'Район ещё не скачан. Проверьте интернет или загрузку карты.',
   not_online:'Сначала войдите в мир',
   action_pending:'Дождитесь завершения текущего действия',
 };

@@ -7,12 +7,13 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
   const fps=element('connection-fps'),ping=element('connection-ping');
   const alert=element('connection-alert'),message=element('connection-message'),retry=element('connection-retry');
   let reachable,live,wasLive=false,predictionPaused=false,terrainWaiting=false,startupStopped=false,autoReload=false,request,timer,warmed=false;
-  let lastFrameCount,lastFrameSample;
+  let lastFrameCount,lastFrameSample,local=false;
 
   function paint() {
     const text=startupStopped && !autoReload ? 'Сервер недоступен. Повторите подключение.' :
       startupStopped || (!wasLive && (reachable===false || live===false)) ? 'Сервер недоступен. Подключаемся повторно…' :
       predictionPaused ? 'Восстанавливаем связь…' :
+      terrainWaiting==='solo-unavailable' ? 'Район ещё не скачан. Подключите интернет для загрузки.' :
       terrainWaiting ? 'Загружаем ближайший участок…' :
       (live===false || reachable===false ? 'Нестабильная связь. Восстанавливаем соединение…' : '');
     if (message.textContent!==text) message.textContent=text;
@@ -36,7 +37,7 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
         const response=await fetch('/api/ping',{cache:'no-store',signal:AbortSignal.timeout(3500),
           ...(trace&&{headers:{'X-Honeymoon-Trace':trace.id}})});
         trace?.headers(response);
-        reachable=navigator.onLine!==false && response.status===204;
+        reachable=(local || navigator.onLine!==false) && response.status===204;
         if (!reachable) report?.fail('ping',connectionFailure({status:response.status}));
       } catch (error) {
         failure=error;
@@ -91,6 +92,7 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
   retry.addEventListener('click',onRecover);
   addEventListener('online',()=>void check());
   addEventListener('offline',()=>{
+    if (local) { void check(); return; }
     reachable=false;
     warmed=false;
     ping.textContent='Пинг —';
@@ -103,6 +105,7 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
   });
 
   return {check,frames,stream,streamReady:()=>live===true,canMove:()=>live!==false && reachable!==false,
+    setLocal(value) { local=value; void check(); },
     movementWaiting(waiting, terrain=false) {
       if (predictionPaused===waiting && terrainWaiting===terrain) return;
       predictionPaused=waiting;

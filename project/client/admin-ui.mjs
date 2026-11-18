@@ -46,6 +46,8 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
 
   function setAccess(value) {
     access=value;
+    if (access?.singlePlayer) tab='world';
+    for (const control of tabs) control.hidden=Boolean(access?.singlePlayer && control.dataset.adminTab!=='world');
     identity.classList.toggle('with-access',Boolean(access?.inviteRequired));
     toggle.hidden=access?.role!=='admin';
     if (toggle.hidden && dialog.open) dialog.close();
@@ -351,6 +353,7 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     dialog.showModal();
     pause();
     tell();
+    if (access.singlePlayer) { render(); return; }
     if (tab==='uids') {
       await refreshUids();
       return;

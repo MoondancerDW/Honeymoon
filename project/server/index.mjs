@@ -28,6 +28,8 @@ import {accessCookie,createAccess,legacyClearCookie,legacyCookieName,readAccessC
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
 import { readBuildNumber } from './build-version.mjs';
 import { openLocalJournal } from './local-journal.mjs';
+import { loadSoloDistribution } from './solo-distribution.mjs';
+import { soloRegionFile } from './solo-assets.mjs';
 import { isMovementPage } from './movement-channel.mjs';
 
 const PROJECT = fileURLToPath(new URL('..', import.meta.url));
@@ -220,8 +222,9 @@ export function createHoneymoonServer({
   project = PROJECT,
   generated = join(project, 'generated'),
   state = join(project, 'state', 'honeymoon.sqlite'),
+  soloCache,
   geometry,
-  base = loadBase(join(generated, 'world')),
+  base = loadBase(join(generated, 'world'),{partial:soloCache}),
   secure = false,
   allowedOrigin,
   publicOrigin = allowedOrigin,
@@ -235,7 +238,13 @@ export function createHoneymoonServer({
   initialMode,
 } = {}) {
   if (singlePlayer && (secure || inviteRequired)) throw new Error('Single-player requires a local server');
+  if (soloCache && !singlePlayer) throw new Error('A streamed solo cache requires single-player mode');
   const build = readBuildNumber(project);
+  let soloDistribution;
+  if (!singlePlayer) {
+    try { soloDistribution=loadSoloDistribution(generated); }
+    catch (error) { console.error('Honeymoon solo download index:',error.message); }
+  }
   const localJournal=singlePlayer ? openLocalJournal(state) : undefined;
   const models = {};
   const lod = base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
@@ -284,7 +293,7 @@ export function createHoneymoonServer({
     throw error;
   }
   const streams = new Set();
-  const playerDiagnostics=loadPlayerDiagnostics(state);
+  const playerDiagnostics=singlePlayer ? undefined : loadPlayerDiagnostics(state);
   const loadLog=singlePlayer || state===':memory:' ? undefined : createLoadLog({
     directory:join(dirname(state),'load-logs'),onlineStreams:()=>streams.size,studyUntil:playerDiagnostics?.until,
   });
@@ -326,11 +335,60 @@ export function createHoneymoonServer({
     catch (error) { console.error(error); }
   } });
   const npcs=createNpcs({generated,store,creativeBlocks:creative?.placeable,creativeItems:creative?.items,
-    editorAuth:access.npcEditor,base,game,worldTime,profile:profileFor,now:clock,teleportPlayer,
+    editorAuth:access.npcEditor,base,game,worldTime,profile:profileFor,now:clock,
+    teleportPlayer:soloCache ? async (player,target,cancelled)=>{
+      await ensureSoloArea(target);
+      if (cancelled?.()) throw new RequestError(499,'request_closed');
+      return teleportPlayer(player,target);
+    } : teleportPlayer,
     damagePlayer:(player,amount,npc)=>game.damageFromNpc?.(player,amount,npc),
     healPlayer:player=>game.healFromNpc?.(player)});
+  if (soloCache) {
+    for (const path of Object.keys(soloCache.manifest.files)) {
+      const match=/^npcs\/sound\/([^/]+\.ogg)$/i.exec(path);
+      if (match) npcs.sounds.add(match[1]);
+    }
+  }
   const worldEdit=createWorldEdit({game:game.worldEdit,isAdmin:npcs.isAdmin,isCreative:player=>!survival.isGame(player)});
   const serveWorld = serveWorldJson();
+  let soloPlayer, lastSavedSoloPosition, restoredSolo=false;
+
+  async function ensureSoloFile(path,priority=5) {
+    if (!soloCache || !path || !Object.hasOwn(soloCache.manifest.files,path)) return;
+    try { await soloCache.ensure(path,{priority}); }
+    catch { throw new RequestError(503,'solo_asset_unavailable'); }
+  }
+
+  async function ensureSoloArea(target) {
+    if (!soloCache || !Number.isFinite(target?.x) || !Number.isFinite(target?.z)) return;
+    const cx=Math.floor(target.x/16), cz=Math.floor(target.z/16);
+    const files=new Set();
+    for (let dz=-2;dz<=2;dz++) for (let dx=-2;dx<=2;dx++) {
+      if (base.worldCoverage?.(cx+dx,cz+dz)) files.add(soloRegionFile(cx+dx,cz+dz));
+    }
+    await Promise.all([...files].map(path=>ensureSoloFile(path,20)));
+  }
+
+  function saveSoloPosition() {
+    if (!soloPlayer || survival.dead(soloPlayer)) return;
+    const {position}=game.session(soloPlayer);
+    if (position && !['x','y','z'].every(axis=>position[axis]===lastSavedSoloPosition?.[axis]) &&
+        base.hasPlayableChunk(Math.floor(position.x/16),Math.floor(position.z/16))) {
+      store.putState('single-player',soloPlayer,'position',1,position);
+      lastSavedSoloPosition={...position};
+    }
+  }
+
+  function restoreSoloPosition(player) {
+    if (!soloCache || restoredSolo) return;
+    restoredSolo=true;
+    soloPlayer=player;
+    const saved=store.getState('single-player',player,'position')?.value;
+    if (!saved || ![saved.x,saved.y,saved.z].every(Number.isFinite) || survival.dead(player)) return;
+    lastSavedSoloPosition=saved;
+    try { game.teleport(player,saved); }
+    catch (error) { if (!(error instanceof RequestError)) throw error; }
+  }
   const activeElsewhere=credential=>inviteRequired && Boolean(credential?.deviceId) &&
     [...streams].some(stream=>stream.player===credential.uid && stream.presence &&
       stream.deviceId!==credential.deviceId && !stream.response.destroyed && !stream.response.writableEnded);
@@ -345,6 +403,7 @@ export function createHoneymoonServer({
     return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,
       weather:weatherSettings.mode,weatherSettings,creative:Boolean(creative),
       ...(survival.enabled&&{gameMode:playerMode(player)}),...(diagnostics&&{playerDiagnostics:diagnostics}),
+      ...(soloCache&&{soloDownload:true}),
       profile:profileFor(player),access:accessView(credential,owner) };
   };
 
@@ -485,6 +544,11 @@ export function createHoneymoonServer({
     const gameAsset=path.startsWith('/generated/') || path.startsWith('/skins/');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
+    if (soloCache) requireSameOrigin(request,false);
+    if (path.startsWith('/solo-download/')) {
+      if (soloDistribution && await soloDistribution.serve(request,response,path)) return;
+      throw new RequestError(404,'not_found');
+    }
     if (path==='/api/ping' && (method==='GET'||method==='HEAD')) {
       const trace=request.headers['x-honeymoon-trace'];
       if (playerDiagnostics && typeof trace==='string' && diagnosticTracePattern.test(trace)) {
@@ -503,6 +567,17 @@ export function createHoneymoonServer({
       if (method === 'POST' || method === 'DELETE') requireSameOrigin(request,requestSecure,requestOrigin);
       if (singlePlayer && (path.startsWith('/api/access/') || path==='/api/chat')) {
         throw new RequestError(404,'not_found');
+      }
+      if (soloCache && path==='/api/solo-cache' && method==='GET') {
+        return json(response,200,{...soloCache.status(),build});
+      }
+      if (soloCache && method==='POST' && path==='/api/solo-cache/download-all') {
+        void soloCache.downloadAll().catch(()=>{});
+        return json(response,202,{ok:true});
+      }
+      if (soloCache && method==='POST' && path==='/api/solo-cache/cancel') {
+        soloCache.cancelDownloadAll();
+        return json(response,200,{ok:true});
       }
       if (singlePlayer && path==='/api/local-diagnostics') {
         if (method==='GET') return json(response,200,localJournal?.read()??[],{
@@ -543,6 +618,7 @@ export function createHoneymoonServer({
         const input=await readInput();
         const {credential:joined,token}=access.signIn(input,{credential,ownerBootstrap:accessView(undefined,owner).ownerBootstrap,
           legacy:!inviteRequired?readAccessCookie(request,legacyCookieName):undefined});
+        restoreSoloPosition(joined.uid);
         return json(response,200,session(joined,owner),token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
       }
       if ((path==='/api/access/owner' || path==='/api/npcs/admin') && method==='POST') {
@@ -643,7 +719,9 @@ export function createHoneymoonServer({
       if (path==='/api/npcs/action' && method==='POST') {
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
         if (survival.dead(player)) throw new RequestError(409,'player_dead');
-        return json(response,200,npcs.action(player,await readInput()));
+        const result=await npcs.action(player,await readInput(),()=>response.destroyed);
+        if (!response.destroyed) return json(response,200,result);
+        return;
       }
       if (path==='/api/modes' && survival.enabled) {
         if (!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
@@ -818,6 +896,8 @@ export function createHoneymoonServer({
         const body = await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const target = body.warpId === undefined ? body : warps.get(body.warpId).position;
+        await ensureSoloArea(target);
+        if (response.destroyed) return;
         return json(response,200,teleportPlayer(player,target));
       }
       if (path === '/api/action' && method === 'POST') {
@@ -898,6 +978,18 @@ export function createHoneymoonServer({
       if (!credential) throw new RequestError(401,'session_required');
       access.requireUnbanned(credential.uid);
     }
+    if (soloCache && path.startsWith('/generated/')) {
+      if (path.startsWith('/generated/lod/') || path.startsWith('/generated/vista/')) {
+        const tile=/^\/generated\/(lod|vista)\/([a-f0-9]{64})\/(-?\d+\.-?\d+(?:\.outer)?\.bin)$/.exec(path);
+        if (tile && tile[2]===(tile[1]==='lod'?lod?.descriptor.contentHash:vista?.descriptor.hash)) {
+          await ensureSoloFile(`${tile[1]}/${tile[3]}`,1);
+        }
+      } else {
+        let relative;
+        try { relative=path.slice('/generated/'.length).split('/').map(decodeURIComponent).join('/'); } catch {}
+        if (relative && !relative.startsWith('world/chunks/')) await ensureSoloFile(relative);
+      }
+    }
     if (path.startsWith('/generated/npcs/sound/')) {
       let name;
       try { name=decodeURIComponent(path.slice('/generated/npcs/sound/'.length)); }
@@ -949,6 +1041,7 @@ export function createHoneymoonServer({
       if (version && version !== chunkCacheVersion) throw new RequestError(404, 'chunk_version_changed');
       const x = Number(chunk.groups.x);
       const z = Number(chunk.groups.z);
+      if (soloCache && base.worldCoverage?.(x,z)) await ensureSoloFile(soloRegionFile(x,z),15);
       const highOnly=url.searchParams.get('height')==='upper';
       return serveWorld(request, response, `chunk:${x}.${z}${highOnly?':upper':''}`, () => base.publicChunk(x, z, highOnly),
         version ? 'private, max-age=2592000, immutable' : undefined);
@@ -979,6 +1072,8 @@ export function createHoneymoonServer({
     return http;
   }
   const server=listener(false);
+  const soloPositionTimer=soloCache && setInterval(saveSoloPosition,5000);
+  soloPositionTimer?.unref();
   if (localJournal) server.once('listening',()=>localJournal.record({kind:'server-start',build}));
   server.once('listening',()=>loadLog?.start());
   const ownerServer=listener(true);
@@ -1038,6 +1133,10 @@ export function createHoneymoonServer({
     game,
     npcs,
     async close() {
+      if (soloPositionTimer) {
+        clearInterval(soloPositionTimer);
+        saveSoloPosition();
+      }
       clearInterval(heartbeat);
       clearInterval(presenceTicks);
       clearInterval(weatherTicks);

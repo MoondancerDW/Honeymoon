@@ -18,7 +18,7 @@ $partHashes = [ordered]@{
 $portableFiles = @(
     'Start-Honeymoon.cmd', 'Start-Server.cmd', 'Start-Tailscale.cmd', 'Start-Internet.cmd',
     'Launch-Honeymoon.mjs', 'single-instance.mjs', 'Transfer-Honeymoon.mjs', 'Install-Honeymoon.ps1',
-    'MIGRATION.md', 'ЧИТАЙ-МЕНЯ.txt', 'Review-PlayerNetwork.mjs', 'Watch-PlayerNetwork.mjs'
+    'MIGRATION.md', 'ЧИТАЙ-МЕНЯ.txt', 'Review-PlayerNetwork.mjs', 'Watch-PlayerNetwork.mjs', 'solo-cache.mjs'
 )
 
 function Get-CheckedPath([string]$Path) {
@@ -56,7 +56,8 @@ function Get-Download([string]$Name, [string]$Url, [string]$Hash) {
 function Get-RuntimePath([string]$Source) {
     if ($Source -cmatch '^project/(README\.md|package\.json)$') { return $Matches[1] }
     if ($SinglePlayer -and $Source -ceq 'project/portable/Launch-Singleplayer.mjs') { return 'Launch-Honeymoon.mjs' }
-    if ($SinglePlayer -and $Source -cmatch '^project/portable/(?:Launch-Honeymoon\.mjs|Start-(?:Server|Internet|Tailscale)\.cmd)$') { return }
+    if ($SinglePlayer -and $Source -ceq 'project/portable/SINGLEPLAYER.txt') { return 'ЧИТАЙ-МЕНЯ.txt' }
+    if ($SinglePlayer -and $Source -cmatch '^project/portable/(?:Launch-Honeymoon\.mjs|ЧИТАЙ-МЕНЯ\.txt|Start-(?:Server|Internet|Tailscale)\.cmd)$') { return }
     if ($Source -cmatch '^project/portable/([^/]+)$' -and $Matches[1] -cin $portableFiles) { return $Matches[1] }
     if ($Source -cmatch '^project/((?:client|server|world)/.+\.(?:mjs|html|css|json|webmanifest|png|svg|webp))$' -and
         !$Source.EndsWith('.test.mjs', [StringComparison]::Ordinal)) { return $Matches[1] }

@@ -13,6 +13,8 @@ export function createNpcs({generated,store,creativeBlocks,creativeItems,adminKe
   creativeItems ??= new Map();
   const auth=editorAuth??npcEditorAuth(adminKey,now);
   const inBounds=({x,y,z})=>base.inBounds(x,y,z) && (!base.hasPlayableChunk || base.hasPlayableChunk(x>>4,z>>4));
+  const travelBounds = base.worldCoverage ? ({x,y,z})=>base.inBounds(x,y,z) &&
+    base.worldCoverage(Math.floor(x/16),Math.floor(z/16)) : inBounds;
   const original=source??loadNpcSource(generated,{creativeBlocks,creativeItems});
   const editor=createNpcEditor({original,auth,store,inBounds,onChange:id=>actors.clear(id)});
   const {definitions,shared}=editor;
@@ -31,7 +33,7 @@ export function createNpcs({generated,store,creativeBlocks,creativeItems,adminKe
   const inventory=createInventory(store,creativeBlocks,creativeItems);
   const interactions=createNpcInteraction({
     store,inventory,definitions,shared,actors,profile,now,random,teleportPlayer,healPlayer,prepareLoot:game.prepareNpcLoot,
-    worldBounds:inBounds,worldTick:()=>worldTime.snapshot().tick,
+    worldBounds:travelBounds,worldTick:()=>worldTime.snapshot().tick,
     near:(player,point,npc)=>game.npcReach ? game.npcReach(player,point,clamp(npc.scale,.35,2.5)) : near(player,point),
   });
   const playerView = game.npcPlayerView ?? game.session;
@@ -53,10 +55,10 @@ export function createNpcs({generated,store,creativeBlocks,creativeItems,adminKe
     },
     editor:player=>editorResponse(editor.read(player)),
     edit:(player,body)=>editorResponse(editor.edit(player,body,location(player))),
-    action(player,body) {
+    action(player,body,cancelled) {
       const session=playerView(player);
       if (session.spectator) throw new RequestError(403,'spectator_action');
-      return interactions.act(player,body,session.position);
+      return interactions.act(player,body,session.position,cancelled);
     },
     tick:players=>{if (definitions.size) actors.tick(players);},
     leave:interactions.leave,

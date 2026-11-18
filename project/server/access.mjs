@@ -81,25 +81,27 @@ export function createAccess(store,{inviteRequired=false,singlePlayer=false,owne
   const useInvite=prepare(`UPDATE access_invites SET used_at=?
     WHERE id=? AND used_at IS NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)`);
   const disableInvite=prepare('UPDATE access_invites SET revoked_at=? WHERE id=? AND used_at IS NULL AND revoked_at IS NULL');
-  const expected=typeof ownerKey==='string' && ownerKey.length ? Buffer.from(hash(ownerKey),'hex') : undefined;
+  const expected=!singlePlayer && typeof ownerKey==='string' && ownerKey.length ? Buffer.from(hash(ownerKey),'hex') : undefined;
   const originalName=name=>hasLegacyPlayer(store,name);
   const failedOwner=new Map();
   const bans=new Map(prepare("SELECT owner,value FROM module_state WHERE module='access' AND key='ban' AND value<>'null'")
     .all().map(({owner,value})=>[owner,JSON.parse(value)]));
-  const owner=()=>store.getState('access','','owner')?.value ?? null;
-  const isAdmin=uid=>typeof uid==='string' && !bans.has(uid) && account.get(uid)?.role==='admin';
   const localPlayer=singlePlayer ? store.atomic(()=>{
     const saved=store.getState('single-player','','profile')?.value;
     const profile=typeof saved==='string' ? account.get(saved) : undefined;
-    if (profile) return {...profile,deviceId:'local'};
+    if (profile) return {...profile,role:'admin',deviceId:'local'};
     const {id}=store.createPlayer();
     updateAccount.run('Игрок','admin',id);
     initialNick(id,'Игрок');
     store.putState('single-player','','profile',1,id);
     return {...account.get(id),deviceId:'local'};
   }) : undefined;
+  const owner=()=>localPlayer?.uid ?? store.getState('access','','owner')?.value ?? null;
+  const isAdmin=uid=>localPlayer ? uid===localPlayer.uid :
+    typeof uid==='string' && !bans.has(uid) && account.get(uid)?.role==='admin';
 
   function requireUnbanned(uid) {
+    if (localPlayer && uid===localPlayer.uid) return;
     const ban=bans.get(uid);
     if (ban) throw new RequestError(403,'profile_banned',{reason:ban.reason});
   }
