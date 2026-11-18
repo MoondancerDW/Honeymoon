@@ -64,9 +64,9 @@ function show(url) {
   browser.unref();
 }
 
-async function listen(server) {
+async function listen(server, port=requestedPort) {
   try {
-    server.listen(requestedPort, '127.0.0.1');
+    server.listen(port, '127.0.0.1');
     await once(server, 'listening');
   } catch (error) {
     if (error.code !== 'EADDRINUSE') throw error;
@@ -81,16 +81,42 @@ if (!instance.primary) {
   show(instance.info.url);
 } else {
   let app;
+  let testRangeApp, openingTestRange;
   let cache, updateTimer, preparedBase;
   let closing;
   const close = () => closing ??= (async () => {
     clearInterval(updateTimer);
     try {
-      await cache?.close();
-      await app?.close();
+      await openingTestRange?.catch(()=>{});
+      const results=await Promise.allSettled([cache?.close(),app?.close(),testRangeApp?.close()]);
+      const failure=results.find(result=>result.status==='rejected');
+      if (failure) throw failure.reason;
     }
     finally { await instance.close(); }
   })();
+  function openTestRange() {
+    if (closing) throw new Error('Honeymoon is closing');
+    return openingTestRange ??= (async () => {
+      const candidate=createHoneymoonServer({
+        geometry,base:preparedBase,generated:cache?.directory,soloCache:cache,singlePlayer:true,
+        state:join(root,'state','test-range','honeymoon.sqlite'),initialMode:'creative',soloWorld:'test-range',
+        switchSoloWorld:()=>app.server.address()?.port,
+      });
+      try {
+        const mainPort=app.server.address()?.port;
+        const preferredPort=requestedPort>0 && requestedPort<65535 && mainPort===requestedPort ? requestedPort+1 : 0;
+        await listen(candidate.server,preferredPort);
+        testRangeApp=candidate;
+        return candidate.server.address().port;
+      } catch (error) {
+        await candidate.close();
+        throw error;
+      }
+    })().catch(error=>{
+      openingTestRange=undefined;
+      throw error;
+    });
+  }
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK']) {
     process.once(signal, () => { void close(); });
   }
@@ -120,8 +146,9 @@ if (!instance.primary) {
         updateTimer.unref();
       }
     }
-    app = createHoneymoonServer({ geometry, state, singlePlayer:true, soloCache:cache,
-      ...(cache&&{generated:cache.directory,base:preparedBase}),initialMode:cache?'creative':'game' });
+    preparedBase ??= loadBase(join(root,'generated','world'));
+    app = createHoneymoonServer({ geometry, state, singlePlayer:true, soloCache:cache,base:preparedBase,
+      generated:cache?.directory,initialMode:cache?'creative':'game',soloWorld:'equestria',switchSoloWorld:openTestRange });
     const url = await listen(app.server);
     instance.publish({ mode: 'single-player', url });
     show(url);

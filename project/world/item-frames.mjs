@@ -121,7 +121,8 @@ export function itemFrameModel(entity, items, atlasRows = 64, models) {
   const mount = itemFrameMount(entity);
   if (!mount) return null;
   const {Item:stack,ItemRotation} = mount;
-  const atlasItem = stack && items?.[stack.id + ':' + (stack.Damage ?? 0)];
+  const atlasItem = stack && (items?.[stack.id + ':' + (stack.Damage ?? 0)] ??
+    (stack.id===389 && stack.Damage===1 ? items?.['389:0'] : undefined));
   const part = stack?.id === 750 ? microblockPartFromDamage(stack.Damage ?? 0) : null;
   const block = stack && (part || stack.Block || atlasItem?.block || stack.id < 256);
   const model = block && models ? blockItemAppearance({part,key:stack.id === 768

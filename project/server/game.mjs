@@ -216,7 +216,7 @@ function signObject(position, lines, original) {
   return {type:'Sign', position, key:`tile:${position.join(':')}`, data:{...original?.data, ...text}};
 }
 
-function newCreativeObject(key, position, input, item) {
+export function newCreativeObject(key, position, input, item) {
   const [id, meta] = blockState(key);
   let type = jammyAppliance(id, meta) ? 'JammyAppliance' : id === 2255 ? 'WeaponCaseTile' : id === 23 ? 'Trap' : null;
   let data = {};

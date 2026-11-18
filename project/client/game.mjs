@@ -248,9 +248,10 @@ const creative = createCreativeMenu({load:loadCreative,
   canCopy:()=>modeUi.creative,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
 const soloDownloadUi=createSoloDownloadUi({element});
-let soloStreaming=false, unavailableSoloTerrainUntil=0;
+let soloStreaming=false, unavailableSoloTerrainUntil=0, switchingSoloWorld=false;
 const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open || audioSettings?.open ||
-  itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen() || modeUi.isOpen() || adminUi.isOpen() || soloDownloadUi.isOpen();
+  itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen() || modeUi.isOpen() || adminUi.isOpen() ||
+  soloDownloadUi.isOpen() || switchingSoloWorld;
 
 function updateGameMode(next) {
   creativeToggle.disabled=spectator||!creativeAvailable||!modeUi.creative;
@@ -2065,11 +2066,46 @@ function streamNearby(scenery) {
   return {status, update:updateArea, done:Promise.all([run(), run()])};
 }
 
+function bindSoloWorld(kind) {
+  if (kind!=='equestria' && kind!=='test-range') return;
+  const toggle=element('solo-world-switch'), status=element('solo-world-status');
+  if (kind==='test-range') {
+    toggle.textContent='Вернуться в Эквестрию';
+    loading.textContent='Загружаем тестовый полигон…';
+    document.title='Honeymoon — Тестовый полигон';
+    heading.yaw=Math.PI;
+  }
+  toggle.hidden=false;
+  toggle.addEventListener('click',async()=>{
+    if (switchingSoloWorld || resetting || acting) return;
+    switchingSoloWorld=toggle.disabled=true;
+    status.textContent='Сохраняем мир и готовим переход…';
+    status.hidden=false;
+    try {
+      if (!entered || await flushPosition()) {
+        const result=await post('solo-world/switch',{},AbortSignal.timeout(15000));
+        if (!result.ok) throw new Error('World switch rejected');
+        const destination=new URL(result.body.url);
+        if (destination.protocol!=='http:' || destination.hostname!=='127.0.0.1' || !destination.port ||
+            destination.origin===location.origin || destination.username || destination.password ||
+            destination.pathname!=='/' || destination.search || destination.hash) throw new Error('Invalid world switch URL');
+        location.replace(destination.href);
+        return;
+      }
+      status.textContent='Не удалось сохранить позицию. Попробуйте ещё раз.';
+    } catch {
+      status.textContent='Не удалось открыть другой мир. Попробуйте ещё раз.';
+    }
+    switchingSoloWorld=toggle.disabled=false;
+  });
+}
+
 async function start() {
   const sessionBody = await accessUi.acquire();
   if (!sessionBody) return;
   soloStreaming=Boolean(sessionBody.soloDownload);
   soloDownloadUi.enable(soloStreaming);
+  bindSoloWorld(sessionBody.soloWorld);
   connection.setLocal(Boolean(sessionBody.access?.singlePlayer));
   connectionReport.enable(sessionBody.access?.uid);
   diagnostics.enable(sessionBody.playerDiagnostics,sessionBody.access?.uid,()=>{

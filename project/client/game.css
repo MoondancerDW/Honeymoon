@@ -163,7 +163,10 @@ button:disabled { cursor: wait; opacity: .45; }
 .panel button { color: #212929; background: var(--gold); font-weight: 600; min-width: 10rem; }
 .panel .solo-entry-button:not([hidden]) { display: block; margin: .65rem auto 0; }
 #game.paused .panel .solo-entry-button { display: none; }
-.panel .solo-entry-button, #access-form .solo-entry-button { color: var(--gold); background: #193640; }
+.panel .solo-entry-button, #access-form .solo-entry-button, .panel #solo-world-switch { color: var(--gold); background: #193640; }
+#solo-world-switch:not([hidden]) { display: block; margin: .65rem auto 0; }
+#game.paused #solo-world-switch { min-width: 0; width: 100%; }
+.touch #solo-world-switch { min-height: 44px; }
 .panel small { display: block; margin-top: 1rem; color: #d7e4e3; }
 .panel small[hidden] { display: none; }
 .profile { display: grid; gap: .42rem; max-width: 20rem; margin: 0 auto 1rem; text-align: left; }
