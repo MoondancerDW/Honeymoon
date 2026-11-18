@@ -31,6 +31,8 @@ const nameOf=profile=>profile.profileName||profile.nickname||profile.uid;
 
 export function createAdminUi({element,load,loadUids,post,pause,worldSettings,teleport}) {
   const toggle=element('admin-toggle'),dialog=element('admin-menu'),body=element('admin-body'),status=element('admin-status');
+  const networkReport=element('admin-network-report');
+  networkReport.addEventListener('click',()=>window.open('/api/admin/network-diagnostics?hours=6','_blank','noopener'));
   const tabs=[...dialog.querySelectorAll('[data-admin-tab]')];
   const identity=element('game');
   let data,access,busy=false,tab='profiles',freshLink,searchText='',banTarget;
@@ -49,6 +51,7 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     if (access?.singlePlayer) tab='world';
     for (const control of tabs) control.hidden=Boolean(access?.singlePlayer && control.dataset.adminTab!=='world');
     identity.classList.toggle('with-access',Boolean(access?.inviteRequired));
+    networkReport.hidden=!(access?.ownerBootstrap && access?.owner);
     toggle.hidden=access?.role!=='admin';
     if (toggle.hidden && dialog.open) dialog.close();
   }

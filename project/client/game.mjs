@@ -599,8 +599,11 @@ function stream() {
   const source=feed=new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1&npcs=1&movement='+movementSync.page+
     (page?'&diag='+page:''));
   source.addEventListener('movement-ack',event=>movementSync.received(JSON.parse(event.data).movement));
-  if (page) source.addEventListener('diagnostics-heartbeat',event=>diagnostics.heartbeat(JSON.parse(event.data)));
+  if (page) source.addEventListener('diagnostics-heartbeat',event=>{
+    if (feed===source) diagnostics.heartbeat(JSON.parse(event.data));
+  });
   feed.addEventListener('open', () => {
+    if (feed!==source) return;
     connection.stream(true);
     presenceDirty = true;
     social.refreshWarps();

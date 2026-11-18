@@ -12,7 +12,8 @@ const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 2);
 const output=resolve(outputArg);
 await mkdir(output,{recursive:true});
 const solo=test==='solo';
-const state=solo ? join(await mkdtemp(join(output,'solo-')),'honeymoon.sqlite') : ':memory:';
+const networkQa=test==='network-diagnostics';
+const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
 const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
@@ -537,6 +538,50 @@ try {
     assert.ok(records.some(record=>record.kind==='heartbeat' && record.position.length===3));
     result.checks.push({records,stats:await stat()});
     await shot('solo-play');
+  } else if (networkQa) {
+    let simulatedFailures=0, delayed=0;
+    const events=[];
+    await page.route('**/api/ping',async route=>{
+      if (simulatedFailures>0) {
+        simulatedFailures--;
+        await route.abort('failed');
+      } else if (delayed>0) {
+        delayed--;
+        await new Promise(resolve=>setTimeout(resolve,400));
+        await route.continue();
+      } else await route.continue();
+    });
+    page.on('response',response=>{
+      if (new URL(response.url()).pathname!=='/api/player-diagnostics' || response.status()!==204) return;
+      const {samples}=response.request().postDataJSON();
+      for (const sample of samples) events.push(...(sample.network??[]));
+    });
+    await start();
+    assert.ok((await page.request.post(url+'api/session',{data:{}}).then(response=>response.json())).playerDiagnostics);
+    delayed=1;
+    await assertEvent('spike');
+    simulatedFailures=2;
+    await assertEvent('recovered');
+    const failures=events.filter(event=>event.kind==='ping' && event.state==='lost');
+    const recovery=events.find(event=>event.kind==='ping' && event.state==='recovered');
+    assert.ok(failures.length>=2);
+    assert.ok(recovery.missed>=2 && recovery.durationMs>0);
+    assert.equal(await page.locator('#admin-network-report').evaluate(button=>button.hidden),false);
+    const response=await page.request.get(url+'api/admin/network-diagnostics?hours=1');
+    assert.equal(response.status(),200);
+    const report=await response.json();
+    assert.equal(report.players.length,1);
+    assert.equal(report.players[0].nickname,'Проверка игры');
+    assert.ok(report.players[0].ping.spikes>=1 && report.players[0].ping.losses>=2);
+    result.checks.push({latencySpike:events.find(event=>event.kind==='ping'&&event.state==='spike'),failures,recovery,
+      uploaded:report.players[0].ping});
+    async function assertEvent(state) {
+      const deadline=Date.now()+25_000;
+      while (Date.now()<deadline && !events.some(event=>event.kind==='ping' && event.state===state)) {
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      assert.ok(events.some(event=>event.kind==='ping' && event.state===state),JSON.stringify(events));
+    }
   } else if (test==='altitude-audio' || test==='altitude-default' || test==='altitude-server') {
     let requestedAltitude=false;
     page.on('request',request=>{

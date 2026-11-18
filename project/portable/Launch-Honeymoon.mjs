@@ -114,6 +114,7 @@ if (!instance.primary) {
       allowedOrigin:remote?.url,
       publicOrigin:() => remote?.url ?? availableLanOrigin ?? localOrigin,
       inviteRequired:true,
+      monitorNetwork:values.internet,
       ownerOnPrimary:mode==='local',
       npcAdminKey:editorKey(),
       initialMode:'game',

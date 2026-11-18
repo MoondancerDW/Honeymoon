@@ -11,7 +11,8 @@ import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { createChat } from './chat.mjs';
-import { connectionReport, createLoadLog } from './load-log.mjs';
+import { connectionReport, createLoadLog, networkPlayerTag } from './load-log.mjs';
+import { startNetworkProbe } from './network-probe.mjs';
 import {diagnosticPagePattern,diagnosticTracePattern,loadPlayerDiagnostics,parsePlayerDiagnostics,
   playerDiagnosticsBodyLimit} from './player-diagnostics.mjs';
 import {loadLodAssets,loadVistaAssets,serveClimateMap,serveLodTile,serveVistaTile} from './lod-assets.mjs';
@@ -234,6 +235,7 @@ export function createHoneymoonServer({
   inviteRequired = secure,
   singlePlayer = false,
   altitudeMusic = process.env.HONEYMOON_ALTITUDE_TRACK,
+  monitorNetwork = false,
   soloWorld,
   switchSoloWorld,
   ownerOnPrimary = !inviteRequired && !secure,
@@ -584,16 +586,16 @@ export function createHoneymoonServer({
       const trace=request.headers['x-honeymoon-trace'];
       if (playerDiagnostics && typeof trace==='string' && diagnosticTracePattern.test(trace)) {
         const browser=access.authenticate(readAccessCookie(request));
-        if (browser && playerDiagnostics.active(browser.uid)) loadLog?.studyRequest(path,response,browser.deviceId,trace);
+        if (browser && playerDiagnostics.active(browser.uid)) loadLog?.studyRequest(path,response,browser.deviceId,trace,browser.uid);
       }
-      response.writeHead(204,{'Cache-Control':'no-store'});
+      response.writeHead(204,{'Cache-Control':'no-store','X-Honeymoon-Server-Time':String(Date.now())});
       response.end();
       return;
     }
     if (path==='/api/build' && (method==='GET'||method==='HEAD')) return json(response,200,{build});
     const credential=isApi||inviteRequired&&gameAsset ? access.authenticate(readAccessCookie(request)) : undefined;
     const studying=credential && playerDiagnostics?.active(credential.uid);
-    if (studying) loadLog?.studyRequest(path,response,credential.deviceId,request.headers['x-honeymoon-trace']);
+    if (studying) loadLog?.studyRequest(path,response,credential.deviceId,request.headers['x-honeymoon-trace'],credential.uid);
     if (isApi) {
       if (method === 'POST' || method === 'DELETE') requireSameOrigin(request,requestSecure,requestOrigin);
       if (singlePlayer && (path.startsWith('/api/access/') || path==='/api/chat')) {
@@ -682,17 +684,31 @@ export function createHoneymoonServer({
         if (!studying) throw new RequestError(403,'player_diagnostics_inactive');
         const samples=parsePlayerDiagnostics(await readInput(playerDiagnosticsBodyLimit));
         if (!playerDiagnostics.active(player)) throw new RequestError(403,'player_diagnostics_inactive');
-        loadLog?.studyClientReport(credential.deviceId,samples);
+        loadLog?.studyClientReport(credential.deviceId,samples,player);
         response.writeHead(204,{'Cache-Control':'no-store'});
         response.end();
         return;
       }
       if (path==='/api/connection-report' && method==='POST') {
         const events=connectionReport(await readInput());
-        loadLog?.clientReport(credential.deviceId,events,Boolean(studying));
+        loadLog?.clientReport(credential.deviceId,events,Boolean(studying),player);
         response.writeHead(204,{'Cache-Control':'no-store'});
         response.end();
         return;
+      }
+      if (path==='/api/admin/network-diagnostics' && method==='GET') {
+        if (!owner || !access.view(credential,owner).owner) throw new RequestError(403,'owner_required');
+        requireSameOrigin(request,requestSecure,requestOrigin);
+        if (!loadLog) throw new RequestError(404,'not_found');
+        const rawHours=url.searchParams.get('hours')??'6';
+        if (!/^(?:[1-9]|1\d|2[0-4])$/.test(rawHours)) throw new RequestError(400,'invalid_network_diagnostics_window');
+        const report=await loadLog.networkDiagnostics(Number(rawHours));
+        const nicknames=new Map(access.profiles().map(({uid,nickname,profileName})=>[networkPlayerTag(uid),nickname||profileName]));
+        for (const player of report.players) {
+          const nickname=nicknames.get(player.player);
+          if (nickname) player.nickname=nickname;
+        }
+        return json(response,200,report);
       }
       if (path==='/api/access/logout' && method==='POST') {
         await readInput();
@@ -994,12 +1010,9 @@ export function createHoneymoonServer({
           streams.delete(stream);
           presence.disconnect(stream);
         });
-        const study=studying && playerDiagnostics.session(player);
-        if (study) {
-          const page=url.searchParams.get('diag');
-          study.page=typeof page==='string' && diagnosticPagePattern.test(page) ? page : null;
-        }
-        const streamId=loadLog?.openStream(response,credential.deviceId,stream.presence,study);
+        const page=url.searchParams.get('diag');
+        const study=studying && page && diagnosticPagePattern.test(page) && {...playerDiagnostics.session(player),page};
+        const streamId=loadLog?.openStream(response,credential.deviceId,stream.presence,study,player);
         if (study) {
           stream.studyId=streamId;
           stream.studyPage=study.page;
@@ -1131,7 +1144,13 @@ export function createHoneymoonServer({
   const soloPositionTimer=persistSoloPosition ? setInterval(saveSoloPosition,5000) : undefined;
   soloPositionTimer?.unref();
   if (localJournal) server.once('listening',()=>localJournal.record({kind:'server-start',build}));
-  server.once('listening',()=>loadLog?.start());
+  let networkProbe;
+  server.once('listening',()=>{
+    loadLog?.start();
+    if (monitorNetwork && loadLog) {
+      networkProbe=startNetworkProbe({port:server.address().port,publicOrigin,record:sample=>loadLog.networkSample(sample)});
+    }
+  });
   const ownerServer=listener(true);
   const heartbeat = setInterval(() => {
     for (const stream of streams) {
@@ -1189,6 +1208,7 @@ export function createHoneymoonServer({
     game,
     npcs,
     async close() {
+      networkProbe?.close();
       if (soloPositionTimer) {
         clearInterval(soloPositionTimer);
         saveSoloPosition();

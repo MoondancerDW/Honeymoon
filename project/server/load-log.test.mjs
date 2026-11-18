@@ -8,6 +8,7 @@ import {test} from 'node:test';
 import {createHoneymoonServer} from './index.mjs';
 import {createLoadLog} from './load-log.mjs';
 import {loadPlayerDiagnostics} from './player-diagnostics.mjs';
+import {reviewNetworkDiagnostics} from './network-diagnostics-review.mjs';
 import * as geometry from '../world/geometry.mjs';
 
 async function directory(t) {
@@ -169,10 +170,11 @@ test('the HTTP server drains the private load journal after player activity',asy
   assert.deepEqual(requests.byKind,{access:1,streams:3,presence:2,static:1,connectionReports:8});
   assert.deepEqual(requests.streamHandshakes,{opened:2,rejected:1,aborted:0});
   assert.deepEqual(requests.errorsByKind,{streams:{401:1},static:{404:1},connectionReports:{400:1,401:1,403:1,429:1}});
-  assert.deepEqual(requests.socketErrors,{HPE_INVALID_METHOD:1});
+  // Cancelling the client stream can also reset its socket, depending on timing.
+  assert.equal(requests.socketErrors.HPE_INVALID_METHOD,1);
 });
 
-test('player diagnostics grants only the configured UID and joins client traces with private server receipts',async t=>{
+test('all player profiles send diagnostics, while only the local owner can review correlated incidents',async t=>{
   const path=await directory(t);
   const state=join(path,'honeymoon.sqlite');
   const bounds={minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15};
@@ -181,14 +183,16 @@ test('player diagnostics grants only the configured UID and joins client traces 
     inBounds:(x,y,z)=>[x,y,z].every(value=>value>=0&&value<16),
     getCell:(x,y)=>({key:y===0?stone:'air',object:null})};
   async function launch() {
-    const app=createHoneymoonServer({base,geometry,state,generated:join(path,'generated')});
+    const app=createHoneymoonServer({base,geometry,state,generated:join(path,'generated'),
+      npcAdminKey:'diagnostics-fixture-owner',ownerOnPrimary:false});
     let closing;
     const stop=()=>closing??=app.close();
     t.after(stop);
     app.server.listen(0,'127.0.0.1');
-    await once(app.server,'listening');
-    const address='http://127.0.0.1:'+app.server.address().port;
-    const request=(url,method='GET',body,headers)=>fetch(address+url,{method,headers:{
+    app.ownerServer.listen(0,'127.0.0.1');
+    await Promise.all([once(app.server,'listening'),once(app.ownerServer,'listening')]);
+    const request=(url,method='GET',body,headers,owner=false)=>fetch('http://127.0.0.1:'+
+      (owner?app.ownerServer:app.server).address().port+url,{method,headers:{
       ...(body&&{'Content-Type':'application/json'}),...headers,
     },body:body&&JSON.stringify(body)});
     return {stop,request};
@@ -196,28 +200,53 @@ test('player diagnostics grants only the configured UID and joins client traces 
   const initial=await launch();
   const enrolled=await initial.request('/api/session','POST',{});
   const cookie=enrolled.headers.get('set-cookie').split(';')[0];
-  const {access:{uid,deviceId}}=await enrolled.json();
+  const {access:{uid,deviceId},playerDiagnostics:originalScope}=await enrolled.json();
+  assert.ok(Number.isSafeInteger(originalScope.until));
   await initial.stop();
 
   const expiry=Date.now()+3_600_000;
   await writeFile(join(path,'player-diagnostics.json'),JSON.stringify({uid,until:new Date(expiry).toISOString()}));
-  assert.equal(loadPlayerDiagnostics(state,{now:()=>expiry}).active(uid),false);
+  assert.equal(loadPlayerDiagnostics(state,{now:()=>expiry}).active(uid),true);
   const {stop,request}=await launch();
   const role=await request('/api/session','POST',{},{Cookie:cookie});
-  assert.equal((await role.json()).playerDiagnostics.until,expiry);
-  const stranger=await request('/api/session','POST',{});
-  const strangerCookie=stranger.headers.get('set-cookie').split(';')[0];
-  assert.equal((await stranger.json()).playerDiagnostics,undefined);
+  assert.equal((await role.json()).playerDiagnostics.until,originalScope.until);
+  const second=await request('/api/session','POST',{});
+  const secondCookie=second.headers.get('set-cookie').split(';')[0];
+  const {access:{uid:secondUid},playerDiagnostics:secondScope}=await second.json();
+  assert.equal(secondScope.until,originalScope.until);
+  const ownerAccount=await request('/api/access/owner','POST',{key:'diagnostics-fixture-owner',profileName:'Network Owner'},undefined,true);
+  assert.equal(ownerAccount.status,200);
+  const ownerCookie=ownerAccount.headers.get('set-cookie').split(';')[0];
   const page='0123456789abcdef', trace=page+'.1';
-  const body={samples:[{at:Date.now(),page,reasons:{queue_full:1300},requests:[
-    {id:trace,kind:'ping',startedAt:Date.now(),durationMs:150,status:204},
-    {id:page+'.2',kind:'movement',startedAt:Date.now(),durationMs:3_000,error:'timeout'},
+  const now=Date.now(), outage=now-3500;
+  const body={samples:[{at:now,page,reasons:{queue_full:1300},network:[
+    {kind:'ping',state:'spike',at:outage,rttMs:350,baselineMs:25,status:204},
+    {kind:'ping',state:'lost',at:outage,durationMs:3200,error:'timeout',missed:1},
+  ],requests:[
+    {id:trace,kind:'ping',startedAt:outage,durationMs:150,status:204},
+    {id:page+'.2',kind:'movement',startedAt:outage,durationMs:3_000,error:'timeout'},
   ]}]};
-  assert.equal((await request('/api/player-diagnostics','POST',body,{Cookie:strangerCookie})).status,403);
-  assert.equal((await request('/api/ping','GET',undefined,{Cookie:cookie,'X-Honeymoon-Trace':trace})).status,204);
+  const ping=await request('/api/ping','GET',undefined,{Cookie:cookie,'X-Honeymoon-Trace':trace});
+  assert.equal(ping.status,204);
+  assert.ok(Math.abs(Number(ping.headers.get('x-honeymoon-server-time'))-Date.now())<1000);
   assert.equal((await request('/api/player-diagnostics','POST',{samples:[{...body.samples[0],ip:'192.0.2.1'}]},
     {Cookie:cookie})).status,400);
   assert.equal((await request('/api/player-diagnostics','POST',body,{Cookie:cookie})).status,204);
+  const secondBody={samples:[{at:now,page,reasons:{},requests:[],network:[
+    {kind:'sse',state:'lost',at:outage+120,error:'network'},
+  ]}]};
+  assert.equal((await request('/api/player-diagnostics','POST',secondBody,{Cookie:secondCookie})).status,204);
+  const reviewUrl='/api/admin/network-diagnostics?hours=1';
+  assert.equal((await request(reviewUrl,'GET',undefined,{Cookie:ownerCookie})).status,403);
+  assert.equal((await request(reviewUrl,'GET',undefined,{Cookie:secondCookie},true)).status,403);
+  const reportResponse=await request(reviewUrl,'GET',undefined,{Cookie:ownerCookie},true);
+  assert.equal(reportResponse.status,200);
+  const report=await reportResponse.json();
+  assert.equal(report.players.length,2);
+  assert.equal(report.sharedIncidents.length,1);
+  assert.equal(report.sharedIncidents[0].players.length,2);
+  assert.equal(report.incidents.find(row=>row.kinds.includes('ping')).evidence.clientErrorsWithoutRetainedServerReceipt,1);
+  assert.ok(![uid,secondUid,cookie,secondCookie].some(secret=>JSON.stringify(report).includes(secret)));
   const stream=await request('/api/events?presence=1&diag='+page,'GET',undefined,{Cookie:cookie});
   const reader=stream.body.getReader();
   const first=new TextDecoder().decode((await reader.read()).value);
@@ -229,7 +258,7 @@ test('player diagnostics grants only the configured UID and joins client traces 
   const filenames=(await readdir(logs)).filter(name=>name.startsWith('player-'));
   assert.equal(filenames.length,1);
   const text=await readFile(join(logs,filenames[0]),'utf8');
-  assert.ok(![uid,deviceId,cookie,strangerCookie,'192.0.2.1'].some(secret=>text.includes(secret)));
+  assert.ok(![uid,secondUid,deviceId,cookie,secondCookie,'192.0.2.1'].some(secret=>text.includes(secret)));
   const entries=rows(text);
   const client=entries.find(row=>row.event==='player_study_client');
   assert.equal(client.samples[0].requests[0].server.status,204);
@@ -240,4 +269,43 @@ test('player diagnostics grants only the configured UID and joins client traces 
   assert.equal(opened.page,page);
   assert.equal(heartbeat.streamId,opened.streamId);
   assert.equal(entries.find(row=>row.event==='player_study_requests').requests.ping.completed,1);
+});
+
+test('incident comparison separates distinct shared intervals and combines player and host evidence',async t=>{
+  const path=await directory(t);
+  const beginning=Date.parse('2026-11-18T20:30:00Z');
+  const [first,second,third]=['a','b','c'].map(c=>c.repeat(20));
+  const journal=[];
+  function add(at,event,fields) {
+    journal.push({timestamp:new Date(beginning+at).toISOString(),event,...fields});
+  }
+  const page='0123456789abcdef';
+  function report(player,device,at,network) {
+    add(at,'player_study_client',{player,device,samples:[{at:beginning+at,page,requests:[],network}]});
+  }
+  report(first,'first-connection',25_000,[
+    {kind:'sse',state:'lost',at:beginning},
+    {kind:'sse',state:'recovered',at:beginning+24_000,durationMs:24_000},
+  ]);
+  report(first,'same-person-another-device',6_000,[{kind:'ping',state:'lost',at:beginning+4_000,durationMs:1000}]);
+  report(second,'second-connection',6000,[{kind:'ping',state:'spike',at:beginning+4000,rttMs:600}]);
+  report(second,'second-connection-retry',6000,[{kind:'ping',state:'spike',at:beginning+4000,rttMs:600}]);
+  report(third,'third-connection',21_000,[{kind:'ping',state:'lost',at:beginning+20_000,durationMs:800}]);
+  add(4000,'server_network_probe',{at:beginning+4000,local:{ok:true,ms:1},public:{ok:false,error:'timeout'},
+    internet:{ok:true,ms:70},dns:{at:beginning+4000,error:'timeout'}});
+  add(4100,'player_study_sse_close',{player:first,device:'first-connection',reason:'transport_closed'});
+  add(30_000,'sample',{windowMs:30_000,eventLoopDelayMs:{max:240},
+    requests:{serverErrors:1,socketErrors:{ECONNRESET:2}},missedLogEntries:5});
+  await writeFile(join(path,'2026-11-18.jsonl'),journal.map(row=>JSON.stringify(row)).join('\n'));
+  const reportResult=await reviewNetworkDiagnostics(path,{now:beginning+40_000,hours:1});
+  assert.deepEqual(reportResult.sharedIncidents.map(group=>group.players),[[first,second],[first,third]]);
+  assert.equal(reportResult.players.find(player=>player.player===second).ping.probes,1);
+  const firstIncident=reportResult.incidents.find(row=>row.player===first);
+  assert.equal(firstIncident.evidence.publicFailuresWithOriginUp,1);
+  assert.equal(firstIncident.evidence.dnsFailures,1);
+  assert.equal(firstIncident.evidence.largestServerLoopDelayMs,240);
+  assert.equal(firstIncident.evidence.serverSocketErrors,2);
+  assert.equal(firstIncident.evidence.serverStreamCloses[0].reason,'transport_closed');
+  assert.equal(reportResult.limits.missedLogEntries,5);
+  assert.equal(reportResult.limits.observationsTruncated,true);
 });

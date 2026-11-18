@@ -32,19 +32,22 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
     request=(async()=>{
       const start=performance.now();
       const trace=diagnostics?.request('ping');
-      let failure;
+      let failure,status,serverAt;
       try {
         const response=await fetch('/api/ping',{cache:'no-store',signal:AbortSignal.timeout(3500),
           ...(trace&&{headers:{'X-Honeymoon-Trace':trace.id}})});
         trace?.headers(response);
-        reachable=(local || navigator.onLine!==false) && response.status===204;
-        if (!reachable) report?.fail('ping',connectionFailure({status:response.status}));
+        status=response.status;
+        serverAt=Number(response.headers.get('X-Honeymoon-Server-Time'));
+        reachable=(local || navigator.onLine!==false) && status===204;
+        if (!reachable) report?.fail('ping',connectionFailure({status}));
       } catch (error) {
         failure=error;
         reachable=false;
         report?.fail('ping',connectionFailure(error));
       } finally {
         trace?.finish(failure);
+        diagnostics?.ping({started:start,status,error:failure,reachable,serverAt});
       }
       if (reachable) {
         report?.recover('ping');
@@ -70,6 +73,7 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
   function stream(online,why) {
     live=online;
     wasLive||=online;
+    diagnostics?.stream(online,why);
     if (online) report?.recover('sse');
     else report?.fail('sse',{why});
     paint();
