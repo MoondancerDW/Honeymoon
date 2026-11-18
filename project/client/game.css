@@ -477,11 +477,14 @@ button:disabled { cursor: wait; opacity: .45; }
   border: 1px solid var(--line); padding: 1rem 1.15rem; border-radius: .65rem;
 }
 #audio-settings h2 { margin: 0 0 .75rem; font-size: 1.15rem; }
+#audio-settings[open] { display: flex; flex-direction: column; overflow: hidden; }
 .audio-options { display: grid; gap: .45rem; }
+#audio-settings .audio-options { overflow: auto; min-height: 0; }
 .audio-options label { display: grid; grid-template-columns: 1fr minmax(7rem,1.5fr); gap: .55rem; align-items: center; }
 .audio-options fieldset { display: grid; gap: .32rem; border: 1px solid var(--line); border-radius: .3rem; }
 .audio-options input[type="range"] { width: 100%; accent-color: var(--gold); }
-#audio-settings-close { margin-top: .75rem; }
+.altitude-music-settings span { overflow-wrap: anywhere; }
+#audio-settings-close { margin-top: .75rem; align-self: flex-start; flex-shrink: 0; }
 @media (max-width: 575px) {
   #creative-prev-page { left: 0; top: 0; }
   #creative-next-page { right: 0; top: 0; }

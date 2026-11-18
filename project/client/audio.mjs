@@ -6,6 +6,7 @@ const ASSETS = '/generated/sounds/';
 const STEP_DISTANCE = 1 / .6;
 const SFX_VOLUME = .12676056;
 const MUSIC_INTERVAL = 600;
+const MUSIC_RETRY_MS = 1800;
 const CAVE_MOOD = 'ambient.cave.cave';
 const TICK_SECONDS = .05;
 const SOUND_FILE = /^[a-f0-9]{24}\.(?:ogg|wav)$/;
@@ -178,6 +179,11 @@ export class WorldAudio {
   #airborne = 0;
   #music;
   #nextMusic = 0;
+  #overview = false;
+  #altitudeSource;
+  #altitudeMusic;
+  #altitudeAttempt;
+  #nextAltitudeAttempt = 0;
   #records = new Map();
   #bard;
   #bardRetryAt = 0;
@@ -197,7 +203,7 @@ export class WorldAudio {
 
   enable() {
     const AudioContextType = globalThis.AudioContext ?? globalThis.webkitAudioContext;
-    if (!AudioContextType || !this.#loadPromise) return;
+    if (!AudioContextType || (!this.#loadPromise && !this.#altitudeSource)) return;
     try {
       if (!this.#context) {
         this.#context = new AudioContextType();
@@ -206,6 +212,10 @@ export class WorldAudio {
         this.#updateGain();
       }
       this.#context.resume().catch(() => {});
+      if (this.#altitudeActive) {
+        this.#nextAltitudeAttempt = 0;
+        this.#playAltitudeMusic();
+      }
     } catch {
       this.#context = undefined;
     }
@@ -216,13 +226,13 @@ export class WorldAudio {
     this.#previous = undefined;
     this.#moved = 0;
     this.#airborne = 0;
-    if (!active) this.#music?.pause();
-    if (!active) this.#bard?.player.pause();
-    if (active && this.#music && this.#musicVolume) this.#music.play().catch(() => {});
-    for (const {player} of this.#records.values()) {
-      if (active) player.play().catch(() => {});
-      else player.pause();
-    }
+    if (!this.#playing) {
+      this.#pauseGroundMusic();
+      this.#pauseAltitudeMusic();
+    } else if (this.#altitudeActive) {
+      this.#nextAltitudeAttempt = 0;
+      this.#playAltitudeMusic();
+    } else this.#resumeGroundMusic();
     this.#updateGain();
   }
 
@@ -230,12 +240,19 @@ export class WorldAudio {
     this.#muted = Boolean(muted);
     this.#updateGain();
     if (this.#music) this.#music.muted = this.#muted;
+    if (this.#altitudeActive) {
+      if (this.#muted) this.#pauseAltitudeMusic();
+      else {
+        this.#nextAltitudeAttempt = 0;
+        this.#playAltitudeMusic();
+      }
+    } else if (!this.#muted) this.#resumeGroundMusic();
     if (this.#bard) this.#bard.player.muted = this.#muted;
     for (const {player} of this.#records.values()) player.muted = this.#muted;
   }
 
   npcMusic(npcs,position,now) {
-    if (!this.#playing || this.#muted || !globalThis.Audio || !this.#environment.otherVolume) {
+    if (!this.#playing || this.#altitudeActive || this.#muted || !globalThis.Audio || !this.#environment.otherVolume) {
       this.#bard?.player.pause();
       return;
     }
@@ -283,10 +300,112 @@ export class WorldAudio {
     const enabled = this.#musicVolume > 0;
     this.#musicVolume = clamp(volume, 0, 1);
     if (!enabled && this.#musicVolume) this.#nextMusic = -1;
-    if (!this.#music) return;
-    this.#music.volume = this.#musicVolume;
-    if (!this.#musicVolume) this.#music.pause();
-    else if (this.#playing) this.#music.play().catch(() => {});
+    if (this.#music) {
+      this.#music.volume = this.#musicVolume;
+      if (!this.#musicVolume) this.#music.pause();
+    }
+    if (this.#altitudeMusic) {
+      const {player,gain} = this.#altitudeMusic;
+      if (gain) gain.gain.value = this.#musicVolume;
+      else player.volume = this.#musicVolume;
+      if (!this.#musicVolume) this.#pauseAltitudeMusic();
+    }
+    if (this.#altitudeActive) {
+      if (!enabled) this.#nextAltitudeAttempt = 0;
+      this.#playAltitudeMusic();
+    } else this.#resumeGroundMusic();
+  }
+
+  setAltitudeMusic(source) {
+    const next = typeof source === 'string' && source.startsWith('blob:') ? source : undefined;
+    if (next === this.#altitudeSource) return;
+    const previous = this.#altitudeActive;
+    this.#releaseAltitudeMusic();
+    this.#altitudeSource = next;
+    this.#updateMusicMix(previous);
+  }
+
+  get #altitudeActive() {
+    return this.#overview && Boolean(this.#altitudeSource);
+  }
+
+  #setOverview(active) {
+    if (this.#overview === active) return;
+    const previous = this.#altitudeActive;
+    this.#overview = active;
+    this.#updateMusicMix(previous);
+  }
+
+  #updateMusicMix(previous) {
+    if (this.#altitudeActive) {
+      if (!previous) this.#pauseGroundMusic();
+      this.#playAltitudeMusic();
+    } else if (previous) {
+      this.#releaseAltitudeMusic();
+      this.#bardRetryAt = 0;
+      this.#resumeGroundMusic();
+    }
+  }
+
+  #pauseGroundMusic() {
+    this.#music?.pause();
+    this.#bard?.player.pause();
+    for (const {player} of this.#records.values()) player.pause();
+  }
+
+  #resumeGroundMusic() {
+    if (!this.#playing || this.#muted || this.#altitudeActive) return;
+    for (const {player} of this.#records.values()) {
+      if (player.paused && !player.ended) player.play().catch(() => {});
+    }
+    if (!this.#records.size && this.#musicVolume && this.#music?.paused) this.#music.play().catch(() => {});
+  }
+
+  #playAltitudeMusic() {
+    if (!this.#playing || !this.#altitudeActive || !this.#musicVolume || this.#muted ||
+        !this.#context || !globalThis.Audio || this.#altitudeAttempt) return;
+    const now = performance.now();
+    if (now < this.#nextAltitudeAttempt) return;
+    if (!this.#altitudeMusic) {
+      const player = new Audio();
+      player.preload = 'none';
+      player.loop = true;
+      player.src = this.#altitudeSource;
+      let output, gain;
+      if (this.#context.createMediaElementSource) {
+        output = this.#context.createMediaElementSource(player);
+        gain = this.#context.createGain();
+        gain.gain.value = this.#musicVolume;
+        output.connect(gain);
+        gain.connect(this.#context.destination);
+      } else player.volume = this.#musicVolume;
+      this.#altitudeMusic = {player,output,gain};
+    }
+    const {player} = this.#altitudeMusic;
+    if (!player.paused || player.error) return;
+    this.#nextAltitudeAttempt = now + MUSIC_RETRY_MS;
+    const attempt = player.play().catch(() => {});
+    this.#altitudeAttempt = attempt;
+    void attempt.finally(() => {
+      if (this.#altitudeAttempt === attempt) this.#altitudeAttempt = undefined;
+    });
+  }
+
+  #pauseAltitudeMusic() {
+    this.#altitudeAttempt = undefined;
+    this.#nextAltitudeAttempt = 0;
+    this.#altitudeMusic?.player.pause();
+  }
+
+  #releaseAltitudeMusic() {
+    const track = this.#altitudeMusic;
+    this.#pauseAltitudeMusic();
+    this.#altitudeMusic = undefined;
+    if (!track) return;
+    track.output?.disconnect();
+    track.gain?.disconnect();
+    track.player.removeAttribute('src');
+    track.player.load();
   }
 
   setEnvironment(settings) {
@@ -401,8 +520,12 @@ export class WorldAudio {
   }
 
   frame(world, position, {grounded = false, swimming = false, climbing = false, yaw = 0, body = PLAYER,
-    precipitation = null, sheltered = false, weatherAudio, biome, night = false, windStrength = .3} = {}) {
-    if (!this.#playing || !this.#catalog) return;
+    precipitation = null, sheltered = false, weatherAudio, biome, night = false, windStrength = .3,
+    altitudeOverview = false} = {}) {
+    this.#setOverview(Boolean(altitudeOverview));
+    if (!this.#playing) return;
+    if (this.#altitudeActive) this.#playAltitudeMusic();
+    if (!this.#catalog) return;
     this.#listener = {x: position.x, y: position.y + 1.62, z: position.z};
     this.#right = [Math.cos(yaw), -Math.sin(yaw)];
     if (this.#context?.state === 'running') {
@@ -565,7 +688,7 @@ export class WorldAudio {
   }
 
   #playMusic() {
-    if (!this.#musicVolume || this.#muted || this.#music || !globalThis.Audio) return;
+    if (this.#altitudeActive || !this.#musicVolume || this.#muted || this.#music || !globalThis.Audio) return;
     const now = this.#context?.currentTime ?? 0;
     this.#nextMusic ||= now + Math.random() * MUSIC_INTERVAL;
     if (now < this.#nextMusic || [...this.#records.values()].some(({player}) => !player.ended)) return;
@@ -575,11 +698,12 @@ export class WorldAudio {
     this.#music = player;
     player.volume = this.#musicVolume;
     const finish = () => {
+      if (this.#music !== player) return;
       this.#music = undefined;
       this.#nextMusic = this.#context.currentTime + (1 + Math.random()) * MUSIC_INTERVAL;
     };
     player.onended = finish;
-    player.play().catch(finish);
+    player.play().catch(error=>{ if (error?.name!=='AbortError') finish(); });
   }
 
   #record(event, position) {
@@ -593,17 +717,27 @@ export class WorldAudio {
     this.#records.set(key, {player, position});
     player.muted = this.#muted;
     player.volume = this.#volume * Math.max(0, 1 - this.#distance(position) / 64);
-    const finish = () => { if (this.#records.get(key)?.player === player) this.#records.delete(key); };
+    const finish = () => {
+      if (this.#records.get(key)?.player !== player) return;
+      this.#records.delete(key);
+      if (!this.#records.size) this.#resumeGroundMusic();
+    };
     player.onended = finish;
+    if (this.#altitudeActive) return;
     this.#music?.pause();
     this.#music = undefined;
     this.#nextMusic = (this.#context?.currentTime ?? 0) + MUSIC_INTERVAL;
-    player.play().catch(finish);
+    player.play().catch(error=>{ if (error?.name!=='AbortError') finish(); });
   }
 
   stats() {
+    const music = this.#altitudeActive ? this.#altitudeMusic?.player : this.#music;
     return {loaded: Boolean(this.#catalog), state: this.#context?.state ?? 'disabled', muted: this.#muted,
       requested: this.#requested, played: this.#played, rain:this.#weatherGains,
-      musicPlaying: Boolean(this.#music && !this.#music.paused && !this.#music.ended)};
+      musicMode: this.#altitudeActive ? 'altitude' : 'overworld', musicTime: music?.currentTime,
+      altitudeMusicConfigured: Boolean(this.#altitudeSource), musicVolume: this.#musicVolume,
+      altitudeMusicError: this.#altitudeMusic?.player.error?.code,
+      musicPlaying: Boolean(music && !music.paused && !music.ended &&
+        (!this.#altitudeMusic?.gain || this.#context?.state === 'running'))};
   }
 }

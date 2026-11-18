@@ -8,6 +8,7 @@ import * as geometry from '../world/geometry.mjs';
 import {stackRevision} from '../world/item-text.mjs';
 
 const [outputArg='work/build-2-qa', test='mobile']=process.argv.slice(2);
+const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 2);
 const output=resolve(outputArg);
 await mkdir(output,{recursive:true});
 const solo=test==='solo';
@@ -36,7 +37,7 @@ const ready=()=>page.waitForFunction(()=>globalThis.honeymoon?.stats().playable>
 async function start() {
   await page.goto(url,{waitUntil:'domcontentloaded'});
   await ready();
-  assert.equal((await page.request.get(url+'api/build').then(response=>response.json())).build,2);
+  assert.equal((await page.request.get(url+'api/build').then(response=>response.json())).build,expectedBuild);
   await click('#play');
   await page.waitForFunction(()=>!document.getElementById('teleport-toggle').disabled);
   result.checks.push({start:(await stat()).playable});
@@ -135,10 +136,45 @@ try {
     const journal=await page.request.get(url+'api/local-diagnostics');
     assert.match(journal.headers()['content-disposition'],/attachment/);
     const records=await journal.json();
-    assert.ok(records.some(record=>record.kind==='server-start' && record.build===2));
+    assert.ok(records.some(record=>record.kind==='server-start' && record.build===expectedBuild));
     assert.ok(records.some(record=>record.kind==='heartbeat' && record.position.length===3));
     result.checks.push({records,stats:await stat()});
     await shot('solo-play');
+  } else if (test==='altitude-audio') {
+    await start();
+    await page.evaluate(()=>document.exitPointerLock());
+    await page.waitForFunction(()=>!document.pointerLockElement && document.getElementById('game').classList.contains('paused'));
+    await click('#audio-settings-toggle');
+    await page.locator('#music-volume').fill('35');
+    await page.locator('#altitude-music-file').setInputFiles(process.env.HONEYMOON_QA_AUDIO);
+    await page.waitForFunction(()=>honeymoon.stats().audio.altitudeMusicConfigured);
+    await click('#audio-settings-close');
+    if (await visible('#play')) await click('#play');
+    const before=await stat();
+    async function hop(x,y,z) {
+      await page.locator('#teleport-toggle').evaluate(button=>button.click());
+      await page.locator('#teleport-x').fill(String(x));
+      await page.locator('#teleport-y').fill(String(y));
+      await page.locator('#teleport-z').fill(String(z));
+      await click('#teleport-send');
+      await page.waitForFunction(level=>Math.abs(honeymoon.stats().position.y-level)<1 &&
+        document.getElementById('teleport-loading').hidden,y,{timeout:35_000});
+      await click('#teleport-close');
+      if (await visible('#play')) await click('#play');
+    }
+    await hop(-8,275,-19);
+    await page.waitForFunction(()=>{
+      const audio=honeymoon.stats().audio;
+      return audio.musicMode==='altitude' && audio.musicPlaying && audio.musicTime>0.2;
+    },undefined,{timeout:16000});
+    const above=await stat();
+    await hop(38,90,34);
+    await page.waitForFunction(()=>honeymoon.stats().audio.musicMode==='overworld');
+    const below=await stat();
+    await page.reload();
+    await ready();
+    await page.waitForFunction(()=>honeymoon.stats().audio.altitudeMusicConfigured);
+    result.checks.push({before:before.audio,above:above.audio,below:below.audio,persists:true});
   } else if (test==='outage') {
     await start();
     await page.keyboard.press('KeyF');

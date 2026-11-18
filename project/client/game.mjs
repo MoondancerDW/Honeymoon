@@ -2,6 +2,7 @@ import {Display} from './display.mjs';
 import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickItemFrame, pickVehicle} from './movement.mjs';
 import {World, chunkKey, json} from './world-data.mjs';
 import {WorldAudio,audioDefaults} from './audio.mjs';
+import {bindAltitudeMusic} from './altitude-music-settings.mjs';
 import {windAt} from './wind.mjs';
 import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
 import {createSocialHud} from './social-hud.mjs';
@@ -1519,6 +1520,7 @@ function tick(now) {
       nextBardCheck=now+200;
     }
     audio.frame(world,position,{grounded:movement.grounded && !seat && !flying,
+      altitudeOverview:view.overviewMode==='high',
       yaw:heading.yaw,body:movement.body,climbing:movement.medium === 'ladder',swimming:movement.medium === 'water',
       precipitation:view.precipitationKind,sheltered:view.rain?.listenerSheltered,weatherAudio:view.weatherAudio,
       biome:view.climate?.biomeAt(position.x,position.z),night:hour > 13000 && hour < 23000,
@@ -1908,6 +1910,9 @@ function bindControls() {
   const persist=()=>localStorage.setItem(settingsKey,JSON.stringify(settings));
   element('audio-settings-toggle').addEventListener('click',()=>audioSettings.showModal());
   element('audio-settings-close').addEventListener('click',()=>audioSettings.close());
+  element('altitude-music-choose').addEventListener('click',()=>element('altitude-music-file').click());
+  bindAltitudeMusic({input:element('altitude-music-file'),clear:element('altitude-music-clear'),
+    status:element('altitude-music-status'),setSource:source=>audio.setAltitudeMusic(source)});
   environmentProfileSelect.addEventListener('change',()=>{
     settings.profile=environmentProfileSelect.value;
     audio.setEnvironment(settings);
