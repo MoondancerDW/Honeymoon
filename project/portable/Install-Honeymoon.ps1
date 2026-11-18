@@ -2,7 +2,10 @@
 param(
     [Parameter(Mandatory)][string]$Destination,
     [string]$DownloadDirectory = (Join-Path ([IO.Path]::GetTempPath()) 'honeymoon-downloads'),
-    [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$Revision
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$Revision,
+    [string]$LodArchive,
+    [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$LodSha256,
+    [switch]$SinglePlayer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +18,7 @@ $partHashes = [ordered]@{
 $portableFiles = @(
     'Start-Honeymoon.cmd', 'Start-Server.cmd', 'Start-Tailscale.cmd', 'Start-Internet.cmd',
     'Launch-Honeymoon.mjs', 'single-instance.mjs', 'Transfer-Honeymoon.mjs', 'Install-Honeymoon.ps1',
-    'MIGRATION.md', 'ЧИТАЙ-МЕНЯ.txt'
+    'MIGRATION.md', 'ЧИТАЙ-МЕНЯ.txt', 'Review-PlayerNetwork.mjs', 'Watch-PlayerNetwork.mjs'
 )
 
 function Get-CheckedPath([string]$Path) {
@@ -52,8 +55,10 @@ function Get-Download([string]$Name, [string]$Url, [string]$Hash) {
 
 function Get-RuntimePath([string]$Source) {
     if ($Source -cmatch '^project/(README\.md|package\.json)$') { return $Matches[1] }
+    if ($SinglePlayer -and $Source -ceq 'project/portable/Launch-Singleplayer.mjs') { return 'Launch-Honeymoon.mjs' }
+    if ($SinglePlayer -and $Source -cmatch '^project/portable/(?:Launch-Honeymoon\.mjs|Start-(?:Server|Internet|Tailscale)\.cmd)$') { return }
     if ($Source -cmatch '^project/portable/([^/]+)$' -and $Matches[1] -cin $portableFiles) { return $Matches[1] }
-    if ($Source -cmatch '^project/((?:client|server|world)/.+\.(?:mjs|html|css|json))$' -and
+    if ($Source -cmatch '^project/((?:client|server|world)/.+\.(?:mjs|html|css|json|webmanifest|png|svg|webp))$' -and
         !$Source.EndsWith('.test.mjs', [StringComparison]::Ordinal)) { return $Matches[1] }
 }
 
@@ -73,6 +78,11 @@ function Expand-Entry($Entry, [string]$Name) {
 
 $Destination = Get-CheckedPath $Destination
 $DownloadDirectory = Get-CheckedPath $DownloadDirectory
+if ([bool]$LodArchive -ne [bool]$LodSha256) { throw 'Supply both -LodArchive and -LodSha256.' }
+if ($LodArchive) {
+    $LodArchive = Get-CheckedPath $LodArchive
+    if ((Get-FileHash -LiteralPath $LodArchive -Algorithm SHA256).Hash -ine $LodSha256) { throw 'LOD archive checksum mismatch.' }
+}
 $destinationParent = [IO.Path]::GetDirectoryName($Destination)
 if (!$destinationParent -or (Test-Path -LiteralPath $Destination)) { throw 'Choose a new destination directory.' }
 if ($DownloadDirectory -ieq $Destination -or $DownloadDirectory.StartsWith(
@@ -105,10 +115,35 @@ try {
     try {
         foreach ($entry in $base.Entries) {
             if ($entry.Name -and $entry.FullName -cmatch '^(generated|runtime|node_modules)/') {
+                if ($LodArchive -and $entry.FullName -cmatch '^generated/lod/') { continue }
                 Expand-Entry $entry $entry.FullName
             }
         }
     } finally { $base.Dispose() }
+    if ($LodArchive) {
+        $rebuilt = [IO.Compression.ZipFile]::OpenRead($LodArchive)
+        try {
+            foreach ($entry in $rebuilt.Entries) {
+                if (!$entry.Name) { continue }
+                if ($entry.FullName -cnotmatch '^generated/lod/(?:manifest\.json|-?\d+\.-?\d+(?:\.outer)?\.bin(?:\.gz)?)$') {
+                    throw 'Unexpected file in the LOD archive.'
+                }
+                Expand-Entry $entry $entry.FullName
+            }
+            foreach ($file in Get-ChildItem -LiteralPath (Join-Path $staging 'generated/lod') -Filter '*.bin.gz' -File) {
+                $rawPath = $file.FullName.Substring(0, $file.FullName.Length - 3)
+                if ([IO.File]::Exists($rawPath)) { continue }
+                $compressed = $file.OpenRead()
+                try {
+                    $decoder = New-Object IO.Compression.GZipStream($compressed, [IO.Compression.CompressionMode]::Decompress)
+                    try {
+                        $raw = [IO.File]::Open($rawPath, [IO.FileMode]::CreateNew)
+                        try { $decoder.CopyTo($raw) } finally { $raw.Dispose() }
+                    } finally { $decoder.Dispose() }
+                } finally { $compressed.Dispose() }
+            }
+        } finally { $rebuilt.Dispose() }
+    }
 
     Write-Host "Installing committed runtime $revision"
     $sourceZip = [IO.Compression.ZipFile]::OpenRead($sources)

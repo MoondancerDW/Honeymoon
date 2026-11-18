@@ -48,6 +48,8 @@ test('full detail extends playable coverage without changing original chunks or 
     assert.equal(base.getCell(x*16,64,z*16).key,'legacy:1:0');
     assert.deepEqual(base.publicChunk(x,z),source);
     assert.equal(base.publicChunk(x+1,z),null);
+    assert.deepEqual(base.publicChunk(x,z,true),{x,z,sections:[],palette:['air'],objects:[],entities:[],highOnly:true});
+    assert.equal(base.publicChunk(x+1,z,true),null);
 
     descriptor.sourceHash='c'.repeat(64);
     writeFileSync(join(detail,'manifest.json'),JSON.stringify(descriptor));

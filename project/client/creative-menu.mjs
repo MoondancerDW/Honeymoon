@@ -1,7 +1,8 @@
 import {arrangeCreativeCatalog} from './creative-layout.mjs';
 import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
 import {itemStackLimit} from '../world/item-stack.mjs';
-import {bookType,itemLore,itemName,plainMinecraftText,stackType} from '../world/item-text.mjs';
+import {bookType,itemTooltip,stackType,writtenBookInfo} from '../world/item-text.mjs';
+import {iconSignature,inventoryItemEntry,pendingItemIcon} from './creative-icons.mjs';
 
 const columns = 9;
 const visibleRows = 5;
@@ -28,7 +29,6 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   const editingTarget=byId('inventory-edit');
   const hotbar = byId('hotbar'), equipmentPanel = byId('inventory-equipment');
   const slotsPanel = byId('inventory-slots'), previewCanvas = byId('inventory-preview');
-  const cache = new Map();
   const storageMode = () => active === 'inventory';
   let catalog, allCards, pending, active = 'buildingBlocks', tabPage = 0;
   let matches = [], firstRow = -1, dragging, picked, requestedSlot, underCursor, openedFromPause;
@@ -46,42 +46,16 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
     return operation;
   }
 
-  function draw(entry) {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 32;
-    canvas.setAttribute('aria-hidden','true');
-    if (!entry) return canvas;
-    const id = entry.part ? JSON.stringify(entry.part) : entry.key;
-    if (!cache.has(id)) {
-      cache.set(id,Promise.resolve().then(async()=> {
-        const result = await icon?.(entry,canvas);
-        return result === false ? null : canvas;
-      }).catch(()=>null));
-    }
-    cache.get(id).then(image=>{
-      if (image && image !== canvas) canvas.getContext('2d').drawImage(image,0,0);
-    });
-    return canvas;
-  }
+  const draw = entry => pendingItemIcon(entry,icon);
 
   function stackAt(slot) { return slot < inventorySize ? state.slots[slot] : state.equipment[slot-inventorySize]; }
 
-  function entryFor(stack) {
-    if (!stack) return null;
-    const entry = catalog?.byKey.get(stack.key);
-    const custom=plainMinecraftText(itemName(stack)||stack.nbt?.title);
-    if (entry && !stack.copied) return custom ? {...entry,name:custom} : entry;
-    const id = Number(/^legacy:(\d+):/.exec(stack.cell ?? stack.key)?.[1]);
-    if (stack.part) return {key:stack.key,kind:'microblock',part:stack.part,name:stack.name || 'Микроблок'};
-    return entry ?? {key:stack.cell ?? stack.key,id,name:custom || stack.name || (id ? `Блок ${id}` : stack.key),data:stack.object?.data};
-  }
-
-  function iconFor(entry) { return catalog?.icons.get(entry?.key) ?? entry; }
+  const entryFor = stack => inventoryItemEntry(stack,catalog?.byKey.get(stack?.key));
 
   function paintStack(target,entry,quantity) {
     target.replaceChildren();
     if (!entry) return;
-    target.append(draw(iconFor(entry)));
+    target.append(draw(entry));
     if (quantity > 1) {
       const counter = document.createElement('span');
       counter.className = 'stack-count';
@@ -170,6 +144,7 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   function endDrag() {
     dragging = null;
     dialog.querySelectorAll('.drop-target').forEach(target=>target.classList.remove('drop-target'));
+    updateEditingTarget();
   }
 
   function acceptDrop(target,callback,allowed = () => true) {
@@ -281,9 +256,9 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
         button.draggable = Boolean(stack) && !world;
         const title = slot < inventorySize ? `Ячейка ${slot+1}` : equipmentLabels[slot-inventorySize];
         const label = `${title} · ${entry?.name ?? 'Пусто'}${count > 1 ? ' ×'+count : ''}`;
-        button.title = [label,...itemLore(stack).map(plainMinecraftText)].join('\n');
+        button.title = itemTooltip(stack,label,{withLore:true});
         button.setAttribute('aria-label',label);
-        const signature = count && entry ? `${entry.key}:${count}:${entry.part?.material ?? ''}:${entry.part?.shape ?? ''}` : '';
+        const signature = count && entry ? `${iconSignature(entry)}:${count}` : '';
         if (button.dataset.image === signature) continue;
         button.dataset.image = signature;
         paintStack(button,count ? entry : null,count);
@@ -294,7 +269,13 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
         }
       }
     }
+    updateEditingTarget();
     if (storageMode() && dialog.open) preview?.(previewCanvas,state.equipment);
+  }
+
+  function updateEditingTarget() {
+    const slot = dragging?.slot ?? picked?.slot ?? state.selected;
+    editingTarget.hidden = !storageMode() || !stackAt(slot);
   }
 
   function setInventory(next) {
@@ -426,7 +407,6 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
     const entries = Array.isArray(data) ? data : data?.entries;
     if (!Array.isArray(entries)) throw new Error('Неверный формат каталога');
     catalog = arrangeCreativeCatalog(entries);
-    catalog.icons = new Map(catalog.cards.filter(card=>card.entry !== card.icon).map(card=>[card.entry.key,card.icon]));
     allCards = catalog.cards.map(cardData);
     const buttons = catalog.tabs.map(({id,label,index,iconEntry}) => {
       const tab = document.createElement('button');

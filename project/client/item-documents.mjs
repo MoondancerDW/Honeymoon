@@ -1,5 +1,5 @@
 import {bookPageLimit,bookPages,bookPagesLimit,bookTitleLimit,bookType,formatColors,itemLore,itemName,itemNameLimit,
-  loreLimit,minecraftTextRuns,plainMinecraftText,stackRevision} from '../world/item-text.mjs';
+  loreLimit,minecraftTextRuns,plainMinecraftText,stackRevision,writtenBookInfo} from '../world/item-text.mjs';
 
 function drawText(target,text) {
   const spans=minecraftTextRuns(text).map(run=>{
@@ -90,14 +90,15 @@ export function createItemDocuments({stackAt,act,pause,resume}) {
     const mode=bookType(stackAt(slot));
     if (!mode || !reset(slot,mode,world)) return false;
     const stack=stackAt(slot);
+    const bookInfo=writtenBookInfo(stack);
     editor.pages=bookPages(stack).map(value=>typeof value==='string'?value:String(value??''));
-    heading.textContent=mode==='draft'?'Книга и перо':plainMinecraftText(stack.nbt?.title)||'Написанная книга';
+    heading.textContent=bookInfo?.title ?? 'Книга и перо';
     body.readOnly=mode==='signed';
     if (mode==='draft') body.maxLength=bookPageLimit;
     else body.removeAttribute('maxlength');
     signing.hidden=mode==='signed';
     title.value='';
-    author.textContent=mode==='signed' ? plainMinecraftText(stack.nbt?.author) : '';
+    author.textContent=bookInfo?.author ?? '';
     author.hidden=!author.textContent;
     renderPage();
     dialog.showModal();

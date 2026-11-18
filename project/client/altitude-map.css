@@ -1,0 +1,11 @@
+#game.altitude-map-open > :not(#scene, #altitude-map-back, #build-outdated) {
+  visibility: hidden !important;
+}
+
+#altitude-map-back {
+  position: absolute;
+  z-index: 24;
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  min-height: 44px;
+}

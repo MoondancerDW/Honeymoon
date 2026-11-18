@@ -91,6 +91,30 @@ export function createInventory(store, creativeBlocks, creativeItems) {
     return {key:clipboard.cell, cell:clipboard.cell, count:1, copied:true, ...(clipboard.object && {object:clipboard.object})};
   }
 
+  function copyToFreeSlot(player, preferred) {
+    const state = read(player);
+    const stack = copiedStack(player);
+    const identity = stackType(stack);
+    const same = state.slots.findIndex(item => item && stackType(item) === identity);
+    const emptyHotbar = state.slots.slice(0, hotbarSize).findIndex(item => !item);
+    const hotbar = !state.slots[preferred] && preferred < hotbarSize ? preferred : emptyHotbar;
+    if (same >= 0 && same < hotbarSize) {
+      state.selected = same;
+      return {inventory:write(player,state)};
+    }
+    if (hotbar >= 0) {
+      state.slots[hotbar] = same >= 0 ? state.slots[same] : stack;
+      if (same >= 0) state.slots[same] = null;
+      state.selected = hotbar;
+      return {inventory:write(player,state)};
+    }
+    if (same >= 0) return {inventory:state, copiedToBackpack:true};
+    const backpack = state.slots.findIndex(item => !item);
+    if (backpack < 0) throw new RequestError(409,'inventory_full');
+    state.slots[backpack] = stack;
+    return {inventory:write(player,state), copiedToBackpack:true};
+  }
+
   const stackAt = (state, slot) => itemSlot(slot) ? state.slots[slot] : state.equipment[slot-inventorySize];
   function setStack(state, slot, stack) {
     if (itemSlot(slot)) state.slots[slot] = stack;
@@ -160,16 +184,16 @@ export function createInventory(store, creativeBlocks, creativeItems) {
   function edit(player, input) {
     const state = read(player);
     const {type, slot, key, count} = input;
+    if (type === 'inventory_copy') return copyToFreeSlot(player,slot).inventory;
     if (type === 'inventory_select') state.selected = slot;
     else if (type === 'inventory_move') move(state, input);
     else if (type === 'inventory_clone') cloneStack(state,input);
     else if (documentActions.has(type)) updateDocument(player,state,input);
     else if (type === 'inventory_trash') setStack(state,slot,null);
     else {
-      const stack = type === 'inventory_copy' ? copiedStack(player) : creativeStack(key, count);
+      const stack = creativeStack(key, count);
       if (!accepts(slot,stack)) throw new RequestError(409,'invalid_equipment');
       setStack(state,slot,stack);
-      if (type === 'inventory_copy' && slot < hotbarSize) state.selected = slot;
     }
     return write(player, state);
   }
@@ -231,5 +255,5 @@ export function createInventory(store, creativeBlocks, creativeItems) {
     const state = read(player);
     return state.slots[state.selected];
   }
-  return {read, edit, take, put, selected, replaceSelectedOne,replace:write,stackAt,setStack,accepts,insert};
+  return {read, edit, take, put, selected, copyToFreeSlot, replaceSelectedOne,replace:write,stackAt,setStack,accepts,insert};
 }

@@ -44,6 +44,31 @@ function pack(chunks,minX=0,maxX=1,minZ=0,maxZ=0,outer=false) {
   return buildRegion(0,0,(x,z) => sampled.get(`${x},${z}`),catalog,minX,maxX,minZ,maxZ,outer ? OUTER_STEP : undefined);
 }
 
+test('keeps sign boards and represents both halves of open and closed doors in both terrain tiers', () => {
+  const palette=[air,rock,'legacy:63:4','legacy:68:2','legacy:64:0','legacy:64:4','legacy:64:8'];
+  function scene(open) {
+    return supplied(0,0,(x,y,z)=>{
+      if (y<6) return 1;
+      if (x===4 && y===6 && z===4) return 2;
+      if (x===7 && y===6 && z===4) return 3;
+      if (x!==9 || z!==4) return 0;
+      if (y===6) return open ? 5 : 4;
+      return y===7 ? 6 : 0;
+    },palette);
+  }
+  for (const outer of [false,true]) {
+    const closed=faces(pack([scene(false)],0,0,0,0,outer).content);
+    const opened=faces(pack([scene(true)],0,0,0,0,outer).content);
+    for (const geometry of [closed,opened]) {
+      assert.ok(geometry.some(face=>face.tile>=3303 && face.tile<=3308));
+      assert.ok(geometry.some(face=>face.tile===tiles.sign));
+      assert.ok(geometry.some(face=>face.tile===97 && face.face!==3));
+      assert.ok(geometry.some(face=>face.tile===81 && face.face!==3));
+    }
+    assert.notDeepEqual(closed.filter(face=>[81,97].includes(face.tile)),opened.filter(face=>[81,97].includes(face.tile)));
+  }
+});
+
 test('prebuilds solid tops as one face and excludes cutoff walls and internal boundaries', () => {
   const {content,quads} = pack([supplied(0,0,(_x,y) => Number(y < 8)), supplied(1,0,(_x,y) => Number(y < 8))]);
   assert.equal(content.toString('ascii',0,4),'HLOD');

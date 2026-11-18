@@ -1,4 +1,4 @@
-import {coverBoxes, shapeFor, FACES} from '../world/geometry.mjs';
+import {coverBoxes, shapeFor, standingSignMesh, FACES} from '../world/geometry.mjs';
 import {railShape} from '../world/rail-models.mjs';
 import {FACE_SHADE} from '../client/lighting.mjs';
 import {CUTOUT_FACE, LOD_VERSION, MICRO_FACE, MICRO_SCALE, RAIL_FACE, TRANSITION_FACE, WATER_HEIGHT_SCALE} from '../client/far-tile-format.mjs';
@@ -125,6 +125,7 @@ export function sampleChunk(chunk, catalog, neighbors) {
   const entries = chunk.palette.map(key => catalog.get(key));
   const railEntries = new Map();
   const microEntries = new Map();
+  const fixtureEntries = new Map();
   for (const [index,key] of chunk.palette.entries()) {
     const parts = chunk.compositions?.[key]?.parts;
     if (parts?.length) {
@@ -139,6 +140,12 @@ export function sampleChunk(chunk, catalog, neighbors) {
         microEntries.set(index,boxes);
         entries[index] = 0;
       }
+    }
+    const fixture=/^legacy:(63|64|68|71):(\d+)$/.exec(key);
+    if (fixture) {
+      const id=Number(fixture[1]),meta=Number(fixture[2]);
+      fixtureEntries.set(index,{id,meta,key});
+      entries[index]=0;
     }
     const match = /^legacy:(27|28|66):(\d+)$/.exec(key);
     if (!match) continue;
@@ -157,6 +164,27 @@ export function sampleChunk(chunk, catalog, neighbors) {
   const counts = new Uint8Array(8);
   const upper = new Uint8Array(8);
   const sections = new Map(chunk.sections.map(section => [section.y, sectionData(section)]));
+  const fixtureBoxes=new Map();
+  function fixtureAt(fixture,x,y,z) {
+    let peer;
+    if (fixture.id===64 || fixture.id===71) {
+      const yy=y+(fixture.meta&8?-1:1);
+      peer=chunk.palette[sections.get(yy>>4)?.indices[x+z*16+(yy&15)*256]];
+    }
+    const key=`${fixture.key}:${peer ?? ''}`;
+    if (!fixtureBoxes.has(key)) {
+      // The packed face format is axis aligned. Snap standing signs to their
+      // nearest cardinal direction while preserving the board and its post.
+      const boxes=fixture.id===63
+        ? standingSignMesh('legacy:63:0').map(box=>{
+          if (Math.round(fixture.meta/4)%2===0) return box;
+          return {...box,x0:box.z0,x1:box.z1,z0:1-box.x1,z1:1-box.x0};
+        })
+        : shapeFor(fixture.key,(_x,dy,_z)=>dy ? peer : undefined);
+      fixtureBoxes.set(key,boxes.filter(box=>!box.kind && box.y1>box.y0));
+    }
+    return fixtureBoxes.get(key);
+  }
   const lamps = shapedLights(chunk, sections, catalog);
   const lampPosts = new Set();
   const postBoxes = new Map();
@@ -192,7 +220,9 @@ export function sampleChunk(chunk, catalog, neighbors) {
           const parts = chunk.compositions[chunk.palette[paletteIndex]].parts;
           postBoxes.set(paletteIndex,coverBoxes(parts.filter(part => part.slot >= 26)));
         }
-        const boxes = lampPosts.has(position) ? postBoxes.get(paletteIndex) :
+        const fixture=fixtureEntries.get(paletteIndex);
+        const boxes = fixture ? fixtureAt(fixture,column&15,cy*2+dy,column>>4) :
+          lampPosts.has(position) ? postBoxes.get(paletteIndex) :
           !lamps.has(position) && microEntries.get(paletteIndex);
         if (boxes?.length) {
           micros.push({x:column&15,y:cy*2+dy,z:column>>4,boxes,light:savedLight});

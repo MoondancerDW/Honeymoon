@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {RequestError} from './errors.mjs';
 import {containerSpec,containerVisualState} from '../world/containers.mjs';
 import {blockKey,blockState} from '../world/block-interactions.mjs';
@@ -22,6 +23,13 @@ function endpoint(input) {
 }
 
 export function containerInput(body, input) {
+  const {containerView} = body;
+  if (containerView !== undefined) {
+    const valid = containerView === 'summary' && ['container_open','container_read','container_close'].includes(body.type) ||
+      containerView === 'details' && ['container_read','container_move'].includes(body.type);
+    if (!valid) throw new RequestError(400,'invalid_container_view');
+    input = {...input,containerView};
+  }
   if (body.type !== 'container_move') return input;
   const {version,count} = body;
   if (typeof version !== 'string' || !/^[0-9:,-]{1,160}$/.test(version)) throw new RequestError(400,'invalid_container_version');
@@ -65,8 +73,7 @@ function withData(cell, spec, data) {
 
 export function stackFromRaw(item,creativeBlocks,creativeItems) {
   const {id,Damage:damage=0,Count:count=1,Slot:_,tag,[STACK_EXTENSION]:extension,...legacyNbt} = item ?? {};
-  if (!Number.isInteger(id) || id < 1 || id > 32767 || !Number.isInteger(damage) || damage < 0 ||
-      damage > 32767 || !Number.isInteger(count) || count < 1 || count > 127) return null;
+  if (!validStack(id,damage,count)) return null;
   const creativeKey = `creative:${id}:${damage}`;
   const variant = creativeItems.get(creativeKey);
   const legacy = id < 4096 && damage < 16 ? blockKey(id,damage) : undefined;
@@ -83,6 +90,14 @@ export function stackFromRaw(item,creativeBlocks,creativeItems) {
     {key,...(cell && {cell}),...(variant?.part && {part:variant.part,pattern:variant.part.pattern})};
   return {...stack,count,
     ...(tag !== undefined && {nbt:tag}),...(Object.keys(legacyNbt).length && {legacyNbt})};
+}
+
+const validStack = (id,damage,count) => Number.isInteger(id) && id>=1 && id<=32767 &&
+  Number.isInteger(damage) && damage>=0 && damage<=32767 && Number.isInteger(count) && count>=1 && count<=127;
+
+function rawCount(item) {
+  const {id,Damage:damage=0,Count:count=1} = item ?? {};
+  return validStack(id,damage,count) ? count : null;
 }
 
 export function createContainers({store, inventory, getCell, getOriginalCell, creativeBlocks, creativeItems}) {
@@ -107,7 +122,7 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
     })};
   }
 
-  function materials(player, current) {
+  function materials(player, current, mode='details') {
     const spec = containerSpec(current);
     if (!spec) throw new RequestError(409,'not_a_container');
     const cells = [current];
@@ -123,10 +138,12 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
       const original = spec.personal ? personal?.items :
         spec.single ? data[spec.field] && [data[spec.field]] : data[spec.field];
       const raw = Array.isArray(original) ? original : [];
-      const slots = Array(spec.size).fill(null);
+      const slots = mode==='data' ? [] : Array(spec.size).fill(null);
       for (const item of raw) {
         const slot = rawSlot(item,spec.single);
-        if (inSlot(slot,slots.length) && !slots[slot]) slots[slot] = stackFromRaw(item,creativeBlocks,creativeItems);
+        if (inSlot(slot,slots.length) && !slots[slot]) {
+          slots[slot] = mode==='summary' ? rawCount(item) : stackFromRaw(item,creativeBlocks,creativeItems);
+        }
       }
       return {cell,data,raw,slots};
     });
@@ -138,13 +155,15 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
     };
   }
 
-  function info(current, view) {
+  function info(current, view, mode) {
     const {spec,groups,slots,version} = view;
     const custom = groups.map(({data})=>data.CustomName).find(name => typeof name === 'string' && name.trim());
-    return {
-      x:current.x,y:current.y,z:current.z,version,slots,title:custom ??
-        (groups.length === 2 ? 'Двойной сундук' : spec.title),
-    };
+    const title = custom ?? (groups.length === 2 ? 'Двойной сундук' : spec.title);
+    const description = {x:current.x,y:current.y,z:current.z,version,title};
+    if (!mode) return {...description,slots};
+    // The shape and full contents identify cached details independently of the lid animation.
+    const contentVersion = createHash('sha256').update(JSON.stringify([spec.size,groups.map(({raw})=>raw)])).digest('hex');
+    return {...description,contentVersion,...(mode==='summary' ? {counts:slots} : {slots})};
   }
 
   function lid(current, spec, groups, open) {
@@ -161,7 +180,7 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
   }
 
   function transfer(player, input, current, view) {
-    if (input.version !== view.version) throw new RequestError(409,'stale_container',{container:info(current,view)});
+    if (input.version !== view.version) throw new RequestError(409,'stale_container',{container:info(current,view,input.containerView)});
     const state = inventory.read(player);
     const slots = {inventory:state.slots,storage:view.slots};
     const {from,to,count} = input;
@@ -220,15 +239,17 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
       return materials(player,current).groups.find(group=>group.cell.x===current.x && group.cell.z===current.z).slots.filter(Boolean);
     },
     prepare(player,current,input) {
-      const view = materials(player,current);
-      if (input.type === 'container_move') return transfer(player,input,current,view);
       if (input.type === 'container_read') return {cells:[],effects:[]};
+      if (input.type === 'container_move') return transfer(player,input,current,materials(player,current));
+      const view = materials(player,current,'data');
       return lid(current,view.spec,view.groups,input.type === 'container_open');
     },
     response(player,input) {
-      if (input.type === 'container_close') return {};
+      if (input.type === 'container_close' && !input.containerView) return {};
       const current = getCell(input.x,input.y,input.z);
-      return {container:info(current,materials(player,current)),inventory:inventory.read(player)};
+      const mode = input.containerView;
+      return {container:info(current,materials(player,current,mode),mode),
+        ...((!mode || input.type==='container_move') && {inventory:inventory.read(player)})};
     },
   };
 }

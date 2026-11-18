@@ -551,7 +551,7 @@ self.onmessage = ({data}) => {
       visibilityClassified: data.collectVisibility === true,
       elapsed: performance.now() - start}, transfers);
   } catch (error) {
-    self.postMessage({id: data.id, version: data.version, error: error.stack || String(error)});
+    self.postMessage({id: data.id, version: data.version, reduced:data.reduced,error: error.stack || String(error)});
   }
 };
 

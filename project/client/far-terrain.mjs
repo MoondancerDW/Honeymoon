@@ -13,6 +13,7 @@ const MAX_FETCH = 2;
 const MAX_PENDING_UPLOADS = 6;
 const RETAIN_MARGIN = 1;
 const VISTA_MASK_SIDE=80;
+const VISTA_FADE_MS=260;
 const paletteModes=new Set([0,1,2]);
 const keyOf = (x,z,outer = false) => `${x}.${z}${outer ? '.outer' : ''}`;
 const vistaKey = (x,z) => `vista:${x}.${z}`;
@@ -35,6 +36,7 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
     lightmap:{value:lightmap}, terrainRows:{value:rows}, visibilityMask:{value:65535}, heightScale:{value:1},
     coordinateScale:{value:1},
     vistaMask:{value:null}, vistaMaskOrigin:{value:new THREE.Vector2()},
+    vistaCoverage:{value:1},
     paletteMode:{value:1},
     seamMasks:{value:new THREE.Vector4()},
   };
@@ -119,13 +121,15 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
       varying vec3 tint;
       varying vec2 surfaceXZ;
       uniform float paletteMode;
-      ${vista ? 'uniform sampler2D vistaMask; uniform vec2 vistaMaskOrigin;' : ''}
+      ${vista ? 'uniform sampler2D vistaMask; uniform vec2 vistaMaskOrigin; uniform float vistaCoverage;' : ''}
       #include <fog_pars_fragment>
       void main() {
         ${vista ? `
           vec2 maskUv = (floor(surfaceXZ / 16.0) - vistaMaskOrigin + .5) / ${VISTA_MASK_SIDE}.0;
           if (all(greaterThan(maskUv,vec2(0.0))) && all(lessThan(maskUv,vec2(1.0))) &&
               texture2D(vistaMask,maskUv).r > .5) discard;
+          float dither=fract(52.9829189*fract(dot(floor(gl_FragCoord.xy),vec2(.06711056,.00583715))));
+          if (dither>=vistaCoverage) discard;
         ` : ''}
         float coverage = 1.0;
         ${water ? 'vec4 color = texture2D(terrainWater,vec2(localUv.x,-localUv.y));' : `
@@ -200,6 +204,7 @@ function meshFor(layer, material, region, extent = PACK_BLOCKS) {
     material.uniforms.heightScale.value = heightScale;
     material.uniforms.coordinateScale.value = coordinateScale;
     material.uniforms.seamMasks.value.copy(region.seams);
+    material.uniforms.vistaCoverage.value=region.vistaCoverage ?? 1;
     material.uniformsNeedUpdate = true;
   };
   return mesh;
@@ -259,13 +264,14 @@ export class FarTerrain {
     const exact=this.display.exactChunks;
     for (let z=0;z<VISTA_MASK_SIDE;z++) for (let x=0;x<VISTA_MASK_SIDE;x++) {
       const xx=minX+x,zz=minZ+z;
-      this.coveragePixels[x+z*VISTA_MASK_SIDE]=exact.has(`${xx},${zz}`) || this.regionAt(xx,zz) ? 255 : 0;
+      this.coveragePixels[x+z*VISTA_MASK_SIDE]=!this.altitude && (exact.has(`${xx},${zz}`) || this.regionAt(xx,zz)) ? 255 : 0;
     }
     this.coverageTexture.needsUpdate=true;
   }
 
   setDistance(distance) {
-    this.setActive(distance === 24 || distance === 32 && this.lod.maxDistance === 32);
+    this.groundDistance=distance;
+    this.setActive(this.altitude || distance === 24 || distance === 32 && this.lod.maxDistance === 32);
     if (!this.active) return;
     const innerRadius = this.lod.maxDistance === 32 ? Math.min(distance,this.detailedDistance) : distance;
     if (this.radius === distance && this.innerRadius === innerRadius) return;
@@ -274,6 +280,23 @@ export class FarTerrain {
     this.innerRadius = innerRadius;
     this.cx = this.cz = undefined;
     if (cx !== undefined) this.move(cx,cz);
+  }
+
+  setAltitude(enabled) {
+    if (enabled===Boolean(this.altitude)) return;
+    this.altitude=enabled;
+    const {cx,cz}=this;
+    this.setDistance(this.groundDistance ?? 8);
+    if (!this.active) return;
+    this.cx=this.cz=undefined;
+    this.coverageDirty=true;
+    if (cx!==undefined) this.move(cx,cz);
+    for (const region of this.packs.values()) {
+      if (!region.vista || !region.installed) continue;
+      region.vistaCoverage=1;
+      region.vistaFadeAt=undefined;
+      this.display.altitudeOverview?.setRefinement(region.rx,region.rz,Number(enabled));
+    }
   }
 
   setDetailedLodDistance(distance) {
@@ -322,7 +345,7 @@ export class FarTerrain {
     const {minX,maxX,minZ,maxZ} = this.bounds;
     const radius = this.coverageRadius, {innerRadius} = this;
     const radius2 = radius ** 2, innerRadius2 = innerRadius ** 2;
-    for (let rz = Math.max(minZ,packAt(cz-radius)); rz <= Math.min(maxZ,packAt(cz+radius)); rz++) {
+    if (!this.altitude) for (let rz = Math.max(minZ,packAt(cz-radius)); rz <= Math.min(maxZ,packAt(cz+radius)); rz++) {
       for (let rx = Math.max(minX,packAt(cx-radius)); rx <= Math.min(maxX,packAt(cx+radius)); rx++) {
         if (this.definedPacks && !this.definedPacks.has(keyOf(rx,rz))) continue;
         const x0 = rx * PACK_CHUNKS - cx, z0 = rz * PACK_CHUNKS - cz;
@@ -335,8 +358,8 @@ export class FarTerrain {
         }
       }
     }
-    if (this.vista && (this.radius===32 || this.fullWorldPlayable)) {
-      const vistaRange=this.radius===32?VISTA_RADIUS:54;
+    if (this.vista && (this.altitude || this.radius===32 || this.fullWorldPlayable)) {
+      const vistaRange=this.altitude ? (this.display.lowDevice ? 48 : 70) : this.radius===32?VISTA_RADIUS:54;
       for (let rz=Math.floor((cz-vistaRange)/VISTA_CHUNKS); rz<=Math.floor((cz+vistaRange)/VISTA_CHUNKS); rz++) {
         for (let rx=Math.floor((cx-vistaRange)/VISTA_CHUNKS); rx<=Math.floor((cx+vistaRange)/VISTA_CHUNKS); rx++) {
           const key = vistaKey(rx,rz);
@@ -344,7 +367,7 @@ export class FarTerrain {
           const dx = Math.max(rx*VISTA_CHUNKS-cx,cx-(rx+1)*VISTA_CHUNKS+1,0);
           const dz = Math.max(rz*VISTA_CHUNKS-cz,cz-(rz+1)*VISTA_CHUNKS+1,0);
           const distance = distanceSquared(dx,dz);
-          if (distance <= vistaRange**2) this.targets.set(key,{rx,rz,vista:true,coarse:distance > VISTA_COARSE_AFTER**2});
+          if (distance <= vistaRange**2) this.targets.set(key,{rx,rz,vista:true,coarse:distance > (this.altitude ? 39 : VISTA_COARSE_AFTER)**2});
         }
       }
     }
@@ -356,7 +379,7 @@ export class FarTerrain {
     }
     for (const [key,region] of this.packs) {
       if (this.targets.has(key)) continue;
-      if (region.vista) { this.evict(key); continue; }
+      if (region.vista || this.altitude) { this.evict(key); continue; }
       const excess = Math.hypot(region.rx * PACK_CHUNKS + 1.5 - cx, region.rz * PACK_CHUNKS + 1.5 - cz);
       const limit = region.outer ? radius : innerRadius;
       if (!region.installed || excess > limit + PACK_CHUNKS + RETAIN_MARGIN) this.evict(key);
@@ -431,7 +454,7 @@ export class FarTerrain {
   }
 
   regionAt(x,z,distance = distanceSquared(x-this.cx,z-this.cz)) {
-    if (!(distance <= this.coverageRadius ** 2)) return;
+    if (this.altitude || !(distance <= this.coverageRadius ** 2)) return;
     const rx = packAt(x), rz = packAt(z);
     const index = x - rx * PACK_CHUNKS + 4 * (z - rz * PACK_CHUNKS);
     const outer = distance > this.innerRadius ** 2;
@@ -473,7 +496,8 @@ export class FarTerrain {
   evict(key) {
     const region = this.packs.get(key);
     this.packs.delete(key);
-    if (!region.vista) this.coverageDirty=true;
+    if (region.vista) this.display.altitudeOverview?.setRefinement(region.rx,region.rz,0);
+    else this.coverageDirty=true;
     if (region.previous) this.display.discardGroup(region.previous.group);
     this.display.discardGroup(region.group);
     if (!region.installed) this.display.uploads = this.display.uploads.filter(job => job.far !== region);
@@ -486,9 +510,17 @@ export class FarTerrain {
   install(region) {
     region.installed = true;
     if (region.vista) {
-      if (region.previous) this.display.discardGroup(region.previous.group);
+      if (region.previous) {
+        region.vistaCoverage=region.previous.vistaCoverage;
+        region.vistaFadeAt=region.previous.vistaFadeAt;
+        this.display.discardGroup(region.previous.group);
+      } else if (this.altitude) {
+        region.vistaCoverage=0;
+        region.vistaFadeAt=performance.now();
+      }
       region.previous = null;
       region.group.visible = true;
+      if (this.altitude) this.display.altitudeOverview?.setRefinement(region.rx,region.rz,region.vistaCoverage ?? 1);
       return;
     }
     this.coverageDirty=true;
@@ -500,6 +532,14 @@ export class FarTerrain {
 
   step(now, stream) {
     if (!this.active || this.cx === undefined) return;
+    if (this.altitude) for (const current of this.packs.values()) {
+      const region=current.previous ?? current;
+      if (region.vistaFadeAt===undefined) continue;
+      const alpha=Math.max(0,Math.min(1,(now-region.vistaFadeAt)/VISTA_FADE_MS));
+      region.vistaCoverage=alpha;
+      this.display.altitudeOverview?.setRefinement(region.rx,region.rz,alpha);
+      if (alpha===1) region.vistaFadeAt=undefined;
+    }
     this.updateVistaCoverage();
     const uploads = this.display.uploads.filter(job => job.far).length;
     if (stream && uploads < MAX_PENDING_UPLOADS && this.decoded.length) this.add(this.decoded.shift());

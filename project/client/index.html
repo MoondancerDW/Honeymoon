@@ -4,18 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
-  <link rel="icon" href="data:,">
+  <meta name="honeymoon-build" content="2">
+  <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
+  <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
+  <link rel="manifest" href="/honeymoon.webmanifest">
   <title>Honeymoon — Equestria</title>
   <link rel="stylesheet" href="/game.css">
   <link rel="stylesheet" href="/npc-menu.css">
   <link rel="stylesheet" href="/access-menu.css">
+  <link rel="stylesheet" href="/build-version.css">
+  <link rel="stylesheet" href="/mobile-ui.css">
+  <link rel="stylesheet" href="/altitude-map.css">
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.mjs',{type:'module'}).catch(()=>{});
   </script>
 </head>
 <body>
   <main id="game" aria-label="Игровой мир Honeymoon">
+    <div id="build-outdated" role="alert" hidden>Ваша версия игры устарела, пожалуйста обновите страницу</div>
     <div id="scene"></div>
+    <button id="altitude-map-back" type="button" hidden>Вернуться</button>
+    <button id="fullscreen-toggle" class="icon-button fullscreen-toggle" type="button" aria-label="На весь экран" title="На весь экран" aria-pressed="false" hidden><i aria-hidden="true"></i></button>
     <section id="access-gate" aria-labelledby="access-title" hidden>
       <form id="access-form">
         <h1 id="access-title">Вход в Honeymoon</h1>
@@ -46,7 +55,7 @@
     </section>
     <div id="aim" aria-hidden="true"></div>
     <header class="top">
-      <div class="brand"><strong>Honeymoon</strong><span>Equestria</span></div>
+      <div class="brand"><strong>Honeymoon</strong><span id="build-caption">Equestria</span></div>
       <div class="tools">
         <span id="player-name" hidden></span>
         <button id="clock-toggle" type="button" aria-label="Игровое время (L)" disabled>12:00</button>
@@ -58,6 +67,7 @@
             <option value="24">24 чанка</option><option value="28">28 чанков</option>
           </select>
         </label>
+        <button id="altitude-map" type="button" hidden>Вся карта</button>
         <button id="audio-settings-toggle" type="button" aria-haspopup="dialog" aria-controls="audio-settings">Громкость и окружение</button>
         <button id="night-vision" type="button" aria-pressed="false">Ночное зрение выкл.</button>
         <button id="low-device" type="button" aria-pressed="false">Слабое устройство: выкл.</button>
@@ -93,6 +103,16 @@
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
         <small id="resume-help" hidden>Esc или Enter — продолжить с захватом мыши</small>
+        <div id="mobile-pause-sections" hidden>
+          <button type="button" data-pause-section="profile" aria-controls="mobile-profile" aria-expanded="false">Профиль</button>
+          <button type="button" data-pause-section="settings" aria-controls="mobile-settings" aria-expanded="false">Настройки</button>
+        </div>
+        <section id="mobile-profile" class="mobile-pause-section" aria-label="Профиль" hidden></section>
+        <section id="mobile-settings" class="mobile-pause-section" aria-label="Настройки" hidden>
+          <label><input id="show-coordinates" type="checkbox"> Координаты</label>
+          <label><input id="show-metrics" type="checkbox"> FPS и пинг</label>
+          <p id="fullscreen-help" hidden>В меню браузера выберите «Добавить на главный экран» и откройте игру с новой иконки.</p>
+        </section>
         <div class="pause-inventory">
           <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>
           <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="J" disabled>Инвентарь</button>
@@ -137,12 +157,15 @@
       <ul id="online-names"></ul>
     </aside>
     <section id="chat" aria-label="Чат">
+      <header id="chat-header" hidden>
+        <strong>Чат</strong>
+        <button id="chat-close" type="button" aria-label="Закрыть чат" title="Закрыть чат">×</button>
+      </header>
       <ul id="chat-log" class="chat-log" role="log" aria-label="История чата" aria-live="polite" tabindex="0"></ul>
       <form id="chat-form" hidden>
-        <button id="chat-channel" type="button" aria-pressed="false" title="Кому отправлять сообщения">Всем</button>
-        <input id="chat-input" autocomplete="off" aria-label="Сообщение" placeholder="Сообщение…" maxlength="480">
-        <button id="chat-send" type="submit">Отправить</button>
-        <button id="chat-close" type="button">Закрыть</button>
+        <button id="chat-channel" type="button" aria-pressed="false"><i aria-hidden="true"></i><span>Мир</span></button>
+        <input id="chat-input" autocomplete="off" aria-label="Сообщение" placeholder="Сообщение…" maxlength="480" enterkeyhint="send">
+        <button id="chat-send" type="submit" aria-label="Отправить" title="Отправить">➤</button>
       </form>
     </section>
     <form id="clock-form" class="social-panel" hidden>
@@ -202,11 +225,11 @@
         <div id="inventory-equipment" role="group" aria-label="Броня"></div>
         <div id="inventory-slots" class="inventory-grid" role="group" aria-label="Основной инвентарь"></div>
         <div id="inventory-hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа"></div>
-        <button id="inventory-trash" type="button" aria-label="Корзина" title="Перетащить сюда, чтобы удалить"></button>
-        <button id="inventory-edit" type="button" aria-label="Редактор предмета" title="Перетащите предмет сюда, чтобы изменить название и описание">✎</button>
+        <button id="inventory-trash" type="button" aria-label="Корзина" title="Перетащить сюда, чтобы удалить"><span aria-hidden="true"></span></button>
+        <button id="inventory-edit" type="button" title="Перетащите предмет сюда, чтобы изменить название и описание" hidden>Изменить название и описание</button>
       </section>
       <div id="inventory-carried" aria-hidden="true" hidden></div>
-      <button id="creative-close" type="button" aria-label="Закрыть" title="Закрыть · Esc">×</button>
+      <button id="creative-close" type="button" aria-label="Закрыть" title="Закрыть · Esc">× Закрыть</button>
     </dialog>
     <dialog id="mode-menu" class="inventory-document" aria-labelledby="mode-title">
       <h2 id="mode-title">Режимы игроков</h2>
@@ -323,19 +346,22 @@
     </dialog>
     <div id="touch" aria-label="Сенсорное управление">
       <div id="stick"><i></i></div>
+      <button id="touch-chat" type="button" class="icon-button" aria-label="Открыть чат" title="Чат"><i aria-hidden="true"></i><span id="chat-unread" aria-hidden="true" hidden></span></button>
       <div class="touch-actions">
         <button id="jump" type="button">Прыжок</button>
         <button id="touch-lower" type="button">Пригнуться</button>
         <button id="touch-use" type="button">Действие</button>
-        <button id="touch-place" type="button">Поставить</button>
-        <button id="touch-remove" type="button">Сломать</button>
-        <button id="touch-copy" type="button">Копия</button>
+      </div>
+      <div id="touch-build-panel" class="touch-build-panel" aria-label="Строительство" hidden>
+        <button id="touch-place" type="button" title="Поставить">Поставить</button>
+        <button id="touch-remove" type="button" title="Сломать">Сломать</button>
+        <button id="touch-copy" type="button" title="Копировать">Копия</button>
       </div>
       <div class="touch-quick" aria-label="Меню и движение">
         <button id="touch-sprint" type="button" aria-pressed="false">Разгон</button>
-        <button id="touch-inventory" type="button">Инвентарь</button>
+        <button id="touch-build" type="button" aria-pressed="false" aria-controls="touch-build-panel" aria-label="Инструменты строительства" title="Строительство">▦</button>
         <button id="touch-more" type="button" aria-expanded="false" aria-controls="touch-more-panel">Ещё</button>
-        <button id="touch-pause" type="button">Пауза</button>
+        <button id="touch-pause" type="button" aria-label="Пауза" title="Пауза">☰</button>
       </div>
       <div id="touch-more-panel" aria-label="Дополнительные действия" hidden>
         <button id="touch-flight" type="button" aria-pressed="false">Полёт</button>
@@ -344,8 +370,8 @@
         <button id="touch-camera" type="button">Вид</button>
         <button id="touch-orbit" type="button" aria-pressed="false">Обзор</button>
         <button id="touch-spectator" type="button" aria-pressed="false">Наблюдатель</button>
+        <button id="touch-inventory" type="button">Инвентарь</button>
         <button id="touch-catalog" type="button">Предметы</button>
-        <button id="touch-chat" type="button">Чат</button>
         <button id="touch-teleport" type="button">Телепорт</button>
         <button id="touch-clock" type="button">Часы</button>
         <button id="touch-drop" type="button">Выбросить</button>
@@ -359,11 +385,14 @@
     </div>
     <footer class="bottom">
       <div class="hud-hotbar-row">
+        <button id="touch-hotbar" type="button" aria-label="Показать панель предметов" aria-expanded="false" aria-controls="hotbar"><span aria-hidden="true"></span></button>
         <div id="hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа" hidden></div>
       </div>
       <span id="coords" aria-label="Координаты"></span>
     </footer>
   </main>
   <script type="module" src="/game.mjs"></script>
+  <script type="module" src="/build-version.mjs"></script>
+  <script type="module" src="/mobile-ui.mjs"></script>
 </body>
 </html>

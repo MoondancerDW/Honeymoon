@@ -210,7 +210,12 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
     return { key, object };
   }
 
-  function publicChunk(cx, cz) {
+  function publicChunk(cx, cz, highOnly=false) {
+    if (highOnly && manifest.bounds.maxY<256) {
+      const key=`${cx}.${cz}`;
+      if (!coordinates.has(key) && !fullDetail?.hasChunk(cx,cz)) return null;
+      return {x:cx,z:cz,sections:[],palette:['air'],objects:[],entities:[],highOnly:true};
+    }
     const chunk = getChunk(cx, cz);
     if (!chunk) return null;
     const objects = chunk.source.objects.map(displayObject);
@@ -219,11 +224,18 @@ export function loadBase(directory, {cleanSnow = true} = {}) {
       const fixture = getCell(x, y, z).object;
       if (fixture?.type === 'WestCellarHatch') objects.push(displayObject(fixture));
     }
-    return {
+    const result={
       ...chunk.source,
       objects,
       entities: chunk.source.entities.map(displayEntity),
     };
+    if (highOnly) {
+      result.sections=result.sections.filter(section=>section.y>=16);
+      result.objects=result.objects.filter(object=>object.position[1]>=256);
+      result.entities=result.entities.filter(entity=>entity.position[1]>=256);
+      result.highOnly=true;
+    }
+    return result;
   }
 
   function getEntity(x, z, key) {

@@ -13,6 +13,7 @@ import {cameraClearance} from './movement.mjs';
 import {clockTick} from '../world/world-time.mjs';
 import {SectionVisibility} from './section-visibility.mjs';
 import {FarTerrain, supportsFarTerrain, VISTA_FOG_END} from './far-terrain.mjs';
+import {AltitudeOverview} from './altitude-overview.mjs';
 import {FIRE_FRAMES, FIRE_SIZE, FIRE_STEP_MS, fireSpriteSheet} from '../world/fire-animation.mjs';
 import {addTerrainFilter, terrainFilter} from './terrain-filter.mjs';
 import {ViewBobbing} from './view-bobbing.mjs';
@@ -275,6 +276,7 @@ export class Display {
     }));
     this.materials = {...materialsFor(map), ...Object.fromEntries(additional.flat())};
     const textures = terrainFilter(map,this.atlasRows,this.foliageEnabled);
+    this.terrainTextures=textures;
     this.useLightmap(this.materials.opaque,textures);
     this.useLightmap(this.materials.cutout,textures);
     if (this.foliageEnabled) {
@@ -290,6 +292,7 @@ export class Display {
     this.materials.water = this.materials.blend.clone();
     this.useLightmap(this.materials.water,textures,true);
     if (supportsFarTerrain(this.world.manifest)) this.farTerrain = new FarTerrain(this,textures);
+    if (this.farTerrain?.vista) this.altitudeOverview=new AltitudeOverview(this);
     this.fireTexture = new THREE.DataTexture(fireSpriteSheet(),FIRE_SIZE*2,FIRE_SIZE*FIRE_FRAMES);
     this.fireTexture.colorSpace = THREE.SRGBColorSpace;
     this.fireTexture.repeat.y = 1 / FIRE_FRAMES;
@@ -391,20 +394,32 @@ export class Display {
     this.onError?.(error);
   }
 
-  async whenReady(chunks) {
-    this.startupChunks = chunks && new Set(chunks.map(([cx, cz]) => chunkKey(cx, cz)));
+  async whenReady(chunks,{position,isCurrent=()=>true}={}) {
+    const startup=chunks && new Set(chunks.map(([cx, cz]) => chunkKey(cx, cz)));
+    this.startupChunks=startup;
+    const deadline=performance.now()+30_000;
     try {
-      while (!this.workerFailure && (chunks ? !this.chunksReady(chunks) : this.pendingWork > 0)) {
+      while (isCurrent() && !this.workerFailure && (chunks ? !this.chunksReady(chunks,position) : this.pendingWork > 0)) {
+        if (performance.now()>deadline) throw new Error('World graphics did not become ready');
         await new Promise(resolve => requestAnimationFrame(resolve));
       }
       if (this.workerFailure) throw this.workerFailure;
-    } finally { this.startupChunks = null; }
+    } finally { if (this.startupChunks===startup) this.startupChunks=null; }
   }
 
-  chunksReady(chunks) {
+  usesOverview(position) {
+    return Boolean(position?.y>=256 && this.altitudeOverview?.supported);
+  }
+
+  chunksReady(chunks,position) {
+    const high=this.usesOverview(position);
+    if (high && !this.altitudeOverview.mesh && !this.altitudeOverview.retryAt) return false;
     return chunks.every(([cx, cz]) => {
       const chunk = this.world.chunks.get(chunkKey(cx, cz));
-      return chunk && [...chunk.sections.keys()].every(cy => {
+      if (!chunk || chunk.highOnly && (!high || position.y<272)) return false;
+      const levels=this.preciseLevels.get(chunkKey(cx,cz)) ?? chunk.sections.keys();
+      return [...levels].every(cy => {
+        if (high && cy<16 && this.altitudeOverview.mesh) return true;
         const id = sectionKey(cx, cy, cz);
         return this.installedVersions.has(id) && this.installedVersions.get(id) === this.versions.get(id);
       });
@@ -600,6 +615,7 @@ export class Display {
     const {clientWidth: width, clientHeight: height} = this.container;
     if (!width || !height) return;
     this.camera.aspect = width / height;
+    this.camera.fov=this.mobile && width<height ? 90 : 70;
     this.camera.updateProjectionMatrix();
     const pixels=this.lowDevice?960*540:this.mobile?1280*720:Infinity;
     this.renderer.setPixelRatio(Math.min(devicePixelRatio,this.mobile||this.lowDevice?Infinity:1.65,Math.sqrt(pixels/(width*height))));
@@ -612,6 +628,7 @@ export class Display {
     const id = sectionKey(cx, cy, cz);
     const chunk = this.world.chunks.get(chunkKey(cx, cz));
     if (!chunk) return;
+    if (cy<16 && (this.overviewMode==='high' || chunk.highOnly)) return;
     const hasData = chunk?.sections.has(cy);
     if (!hasData && !edit && !this.groups.has(id)) return;
     const version = ++this.nextSectionVersion;
@@ -633,12 +650,25 @@ export class Display {
         this.remeshAdjacentSections(change.x, change.y, change.z);
       }
     }
-    this.preciseLevels.set(chunkKey(chunk.x,chunk.z),levels);
+    const key=chunkKey(chunk.x,chunk.z);
+    this.preciseLevels.set(key,levels);
+    this.completedChunks.delete(key);
+    const oldEntities=this.chunkEntities.get(key);
+    if (oldEntities) {
+      this.chunkEntities.delete(key);
+      for (const object of oldEntities.children) {
+        this.importedVehicles.delete(object.userData.vehicleKey);
+        this.importedFrames.delete(object.userData.frameKey);
+      }
+      this.uploads=this.uploads.filter(job=>job.object!==oldEntities);
+      this.discardGroup(oldEntities);
+    }
     for (const cy of levels) {
       this.schedule(chunk.x, cy, chunk.z, !chunk.sections.has(cy));
       for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
         if (dx || dz) this.schedule(chunk.x + dx, cy, chunk.z + dz);
       }
+      if (cy<16 && this.overviewMode==='high') continue;
       const indices = chunk.sections.get(cy)?.indices;
       if (!indices || fantasy === undefined || fantasy < 0) continue;
       for (let index = indices.indexOf(fantasy); index >= 0; index = indices.indexOf(fantasy, index + 1)) {
@@ -731,6 +761,75 @@ export class Display {
     }
   }
 
+  updateAltitude(position, now) {
+    const overview=this.altitudeOverview;
+    if (!overview) return;
+    if (position.y>=224 || this.mapOpen) overview.prepare(now);
+    if (this.world.upperOverrides.size || overview.highBlocks.children.length) overview.updateHighBlocks(position,now);
+    if (!overview.mesh) return;
+    const previous=this.overviewMode;
+    if (position.y>=256) {
+      if (previous!=='high') {
+        this.overviewMode='high';
+        this.lastHigh=now;
+        this.altitudeReleaseAt=now+500;
+      }
+    } else if (previous==='high' && (position.y<=252 || now-this.lastHigh>=550)) {
+      this.overviewMode='landing';
+      const area=this.streamArea;
+      if (area) for (const chunk of this.world.chunks.values()) {
+        if (Math.max(Math.abs(chunk.x-area.x),Math.abs(chunk.z-area.z))>area.radius) continue;
+        for (const y of this.preciseLevels.get(chunkKey(chunk.x,chunk.z)) ?? []) {
+          const id=sectionKey(chunk.x,y,chunk.z);
+          if (y<16 && !this.groups.has(id)) this.schedule(chunk.x,y,chunk.z,true);
+        }
+      }
+    } else if (previous==='landing' && this.nearGroundReady(position)) {
+      this.overviewMode=undefined;
+    }
+    if (this.overviewMode!==previous) {
+      this.farTerrain.setAltitude(Boolean(this.overviewMode));
+      overview.scene.visible=Boolean(this.overviewMode);
+      this.applyTerrainFog();
+      if (this.streamArea) this.farTerrain.move(this.streamArea.x,this.streamArea.z);
+      for (const chunk of this.world.chunks.values()) this.updateChunkVisibility(chunk.x,chunk.z);
+      for (const [id,group] of this.groups) if (id.startsWith('lod:')) {
+        group.visible=!this.overviewMode && Number(id.split(':')[1])<=this.requestedDistance;
+      }
+    }
+    if (this.overviewMode==='high' && this.altitudeReleaseAt && now>=this.altitudeReleaseAt) {
+      this.altitudeReleaseAt=undefined;
+      this.releaseGroundMeshes();
+    }
+  }
+
+  nearGroundReady(position) {
+    const x=Math.floor(position.x/16), z=Math.floor(position.z/16);
+    for (let dz=-1;dz<=1;dz++) for (let dx=-1;dx<=1;dx++) {
+      if (!this.world.isPlayableChunk(x+dx,z+dz)) continue;
+      const key=chunkKey(x+dx,z+dz);
+      const chunk=this.world.chunks.get(key);
+      if (!chunk || chunk.highOnly) return false;
+      if ([...this.preciseLevels.get(key) ?? []].some(y=>y<16 && !this.installedVersions.has(sectionKey(x+dx,y,z+dz)))) return false;
+    }
+    return true;
+  }
+
+  releaseGroundMeshes() {
+    const lower=id=>id.startsWith('lod:') || Number(id.split(',')[1])<16;
+    for (const [id,group] of this.groups) {
+      if (!lower(id)) continue;
+      this.discardGroup(group);
+      this.groups.delete(id);
+      this.installedVersions.delete(id);
+      this.sectionVisibility.invalidate(id);
+    }
+    for (const id of this.versions.keys()) if (lower(id)) this.versions.delete(id);
+    for (const id of this.pending.keys()) if (lower(id)) this.pending.delete(id);
+    this.completedChunks.clear();
+    this.exactChunks.clear();
+  }
+
   get detailedDistance() {
     return this.requestedDistance === 24 || this.requestedDistance === 32 ? (this.mobile ? 3 : 4) : Math.min(this.requestedDistance,8);
   }
@@ -752,7 +851,8 @@ export class Display {
       if (!this.completedChunks.has(key) && [...levels].every(y => this.installedVersions.has(sectionKey(x,y,z)))) {
         this.completedChunks.add(key);
       }
-      const exact = Math.max(Math.abs(x-this.streamArea.x),Math.abs(z-this.streamArea.z)) <= this.detailedDistance &&
+      const edited=this.world.overridesByChunk.has(key);
+      const exact = !this.overviewMode && Math.max(Math.abs(x-this.streamArea.x),Math.abs(z-this.streamArea.z)) <= this.detailedDistance+Number(edited) &&
         this.completedChunks.has(key);
       if (exact !== this.exactChunks.has(key)) {
         if (exact) this.exactChunks.add(key);
@@ -765,12 +865,12 @@ export class Display {
     for (let y = Math.floor(minY / 16); y <= Math.floor(maxY / 16); y++) {
       const group = this.groups.get(sectionKey(x,y,z));
       if (!group) continue;
-      group.userData.preciseVisible = visible;
-      group.visible = visible;
+      group.userData.preciseVisible = visible && (!this.overviewMode || y>=16);
+      group.visible = group.userData.preciseVisible;
       if (this.sectionVisibility.enabled) this.sectionVisibility.dirty = true;
     }
     const entities = this.chunkEntities.get(key);
-    if (entities) entities.visible = visible;
+    if (entities) entities.visible = visible && !this.overviewMode;
     if (changed) this.farTerrain?.chunkChanged(x,z);
   }
 
@@ -853,23 +953,13 @@ export class Display {
     if (this.farTerrain?.active && this.streamArea) this.farTerrain.move(this.streamArea.x,this.streamArea.z);
     this.visualEntities.visible = distance > 4;
     for (const [id, group] of this.groups) {
-      if (id.startsWith('lod:')) group.visible = Number(id.split(':')[1]) <= distance;
+      if (id.startsWith('lod:')) group.visible = !this.overviewMode && Number(id.split(':')[1]) <= distance;
     }
     for (const chunk of this.world.chunks.values()) this.updateChunkVisibility(chunk.x,chunk.z);
     for (const [id] of this.pending) {
       if (id.startsWith('lod:') && Number(id.split(':')[1]) > distance) this.pending.delete(id);
     }
-    if (this.world.manifest.chunkPalettes) {
-      const layered = distance >= 24 && this.farTerrain?.lod.maxDistance === 32;
-      const vista = distance === 32 && this.farTerrain?.vista;
-      this.scene.fog.near = vista ? 500 : distance === 32 ? 448 : distance === 4 ? 56 : layered ? 128 : distance * 14;
-      this.scene.fog.far = vista ? VISTA_FOG_END : this.lowDevice?44:distance * 16;
-      this.camera.far = vista ? VISTA_FOG_END + 280 : this.lowDevice?150:850;
-      this.camera.updateProjectionMatrix();
-    } else {
-      this.scene.fog.near = distance === 4 ? 60 : distance * 8;
-      this.scene.fog.far = Math.max(115, distance * 22);
-    }
+    this.applyTerrainFog();
     for (const {radius} of this.world.manifest.terrain ?? []) {
       if (radius > distance || this.requestedDistance < radius) break;
       if (!this.rings.has(radius)) {
@@ -893,6 +983,26 @@ export class Display {
         this.pending.set(id, {id, type: 'coarse', version: 1, radius, stride: step, cx: gx * 4, cy: 0, cz: gz * 4});
       }
     }
+  }
+
+  applyTerrainFog() {
+    const distance=this.requestedDistance;
+    if (this.overviewMode) {
+      this.scene.fog.near=1500;
+      this.scene.fog.far=8500;
+      this.camera.far=10500;
+    } else if (this.world.manifest.chunkPalettes) {
+      const layered = distance >= 24 && this.farTerrain?.lod.maxDistance === 32;
+      const vista = distance === 32 && this.farTerrain?.vista;
+      this.scene.fog.near = vista ? 500 : distance === 32 ? 448 : distance === 4 ? 56 : layered ? 128 : distance * 14;
+      this.scene.fog.far = vista ? VISTA_FOG_END : this.lowDevice?44:distance * 16;
+      this.camera.far = vista ? VISTA_FOG_END + 280 : this.lowDevice?150:850;
+    } else {
+      this.scene.fog.near = distance === 4 ? 60 : distance * 8;
+      this.scene.fog.far = Math.max(115, distance * 22);
+      this.camera.far = 850;
+    }
+    this.camera.updateProjectionMatrix();
   }
 
   setOcclusion(enabled) {
@@ -1145,8 +1255,22 @@ export class Display {
   }
 
   accept(result) {
-    if (result.error) { this.fail(new Error(result.error)); return; }
     if (this.versions.get(result.id) !== result.version) return;
+    if (result.error) {
+      if (!this.streamArea && !this.installedVersions.has(result.id)) {
+        this.fail(new Error(result.error));
+        return;
+      }
+      const id=result.id;
+      this.lastSectionError={id,message:result.error};
+      console.warn('Terrain section could not be built',id,result.error);
+      if (!result.reduced && !id.startsWith('lod:')) {
+        this.schedule(...id.split(',').map(Number),true);
+        const job=this.pending.get(id);
+        if (job) job.reduced=true;
+      }
+      return;
+    }
     const lod = result.id.startsWith('lod:');
     const coords = lod ? result.id.split(':')[2].split(',').map(Number) : result.id.split(',').map(Number);
     const group = new THREE.Group();
@@ -1217,14 +1341,15 @@ export class Display {
     const {id, elapsed} = result;
     const previous = this.groups.get(id);
     if (previous) this.discardGroup(previous);
-    object.visible = id.startsWith('lod:') ? Number(id.split(':')[1]) <= this.requestedDistance
+    object.visible = id.startsWith('lod:') ? !this.overviewMode && Number(id.split(':')[1]) <= this.requestedDistance
       : !object.userData.visualOnly || this.requestedDistance > 4;
     this.groups.set(id, object);
     this.installedVersions.set(id, result.version);
     if (!id.startsWith('lod:')) {
       if (result.visibilityClassified) this.sectionVisibility.install(id,result.visibility);
       if (this.sectionVisibility.enabled) this.sectionVisibility.dirty = true;
-      const [x,,z] = id.split(',').map(Number);
+      const [x,y,z] = id.split(',').map(Number);
+      if (y>=16) this.altitudeOverview?.invalidateHighBlocks();
       this.updateChunkVisibility(x,z);
     }
     const edit = this.visibleEdits.get(id);
@@ -1346,7 +1471,7 @@ export class Display {
       let job, priority = Infinity;
       for (const candidate of this.pending.values()) {
         const next = score(candidate);
-        if (next < priority && (candidate.type !== 'precise' || this.neighborsLoaded(candidate))) {
+        if (next < priority && (candidate.type !== 'precise' || this.allowProvisional(candidate) || this.neighborsLoaded(candidate))) {
           job = candidate;
           priority = next;
         }
@@ -1356,15 +1481,21 @@ export class Display {
       this.active.set(worker, job.id);
       if (job.type === 'precise') {
         const halo = this.world.halo(job.cx, job.cy, job.cz);
+        if (job.reduced) {
+          halo.objects=[];
+          halo.microblocks=[];
+          halo.sculpted=[];
+          halo.logged=undefined;
+        }
         const known = this.workerCatalogs.get(worker);
         let paletteAppend;
         if (!halo.palette && this.world.palette.length > known) {
           paletteAppend = this.world.palette.slice(known);
           this.workerCatalogs.set(worker, this.world.palette.length);
         }
-        worker.postMessage({id: job.id, type: job.type, version: job.version, paletteAppend,
+        worker.postMessage({id: job.id, type: job.type, version: job.version, paletteAppend,reduced:job.reduced,
           collectVisibility:this.sectionVisibility.enabled,
-          foliage:this.foliageEnabled && !this.lowDevice && !job.visualOnly ? [job.cx*16,job.cy*16,job.cz*16] : null,
+          foliage:this.foliageEnabled && !job.reduced && !this.lowDevice && !job.visualOnly ? [job.cx*16,job.cy*16,job.cz*16] : null,
           biomeTints:this.climate.columnTints(job.cx,job.cz),
           atlasRows: this.atlasRows, connectedTextures: this.connectedTextures,
           chiselConnectedTextures: this.chiselConnectedTextures, carpentryModel: this.carpentryModel, ...halo},
@@ -1389,6 +1520,11 @@ export class Display {
     }
   }
 
+  allowProvisional({cx, cz}) {
+    const area=this.streamArea;
+    return area && Math.max(Math.abs(cx-area.x),Math.abs(cz-area.z))<=1;
+  }
+
   render(now, selection, playing = false, placement = null, foreground = true, listener = this.camera.position) {
     this.updateFrames();
     this.updateDispensers(now);
@@ -1407,6 +1543,14 @@ export class Display {
     this.frameTimes.push(interval);
     if (this.frameTimes.length > 10000) this.frameTimes.shift();
     this.lastFrame = now;
+    if (this.mapPosition && this.altitudeOverview?.mesh) {
+      if (now>=(this.nextMapRender ?? 0)) {
+        this.altitudeOverview.renderMap(this.mapPosition);
+        this.renderedFrames++;
+        this.nextMapRender=now+100;
+      }
+      return;
+    }
     this.camera.getWorldDirection(this.viewDirection);
     const turning = playing && this.lastViewDirection.dot(this.viewDirection) < .82;
     if (turning) this.nextBackgroundUpload = now + 80;
@@ -1553,6 +1697,9 @@ export class Display {
     return {calls: render.calls, triangles: render.triangles, geometries: memory.geometries, textures: memory.textures,
       renderedFrames:this.renderedFrames,framebuffer:[this.renderer.domElement.width,this.renderer.domElement.height],
       lowDevice:this.lowDevice,detailedDistance:this.detailedDistance,
+      altitude:this.overviewMode ?? 'ground',overviewReady:Boolean(this.altitudeOverview?.mesh),
+      altitudeLandmarks:this.altitudeOverview?.landmarks?.children.length ?? 0,
+      lastSectionError:this.lastSectionError,
       occlusion:this.sectionVisibility.statistics(), heldLights:this.heldLights.statistics(),
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles, farTerrain:this.farTerrain?.stats(),
       foliageQuads, fallingLeaves:this.visibleLeaves ?? 0,

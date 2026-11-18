@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { errorMonitor } from 'node:events';
 import { createReadStream, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -10,7 +11,9 @@ import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { createChat } from './chat.mjs';
-import { createLoadLog } from './load-log.mjs';
+import { connectionReport, createLoadLog } from './load-log.mjs';
+import {diagnosticPagePattern,diagnosticTracePattern,loadPlayerDiagnostics,parsePlayerDiagnostics,
+  playerDiagnosticsBodyLimit} from './player-diagnostics.mjs';
 import {loadLodAssets,loadVistaAssets,serveClimateMap,serveLodTile,serveVistaTile} from './lod-assets.mjs';
 import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
@@ -23,6 +26,9 @@ import { createWorldEdit } from './world-edit.mjs';
 import { createSurvival } from './survival.mjs';
 import {accessCookie,createAccess,legacyClearCookie,legacyCookieName,readAccessCookie} from './access.mjs';
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
+import { readBuildNumber } from './build-version.mjs';
+import { openLocalJournal } from './local-journal.mjs';
+import { isMovementPage } from './movement-channel.mjs';
 
 const PROJECT = fileURLToPath(new URL('..', import.meta.url));
 const MAX_BODY = 4096;
@@ -44,6 +50,7 @@ const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.png': 'image/png',
   '.webp': 'image/webp',
@@ -192,6 +199,7 @@ async function serveFile(request, response, path) {
 
 function staticPath(path, project, generated) {
   if (path === '/') return join(project, 'client', 'index.html');
+  if (path === '/honeymoon.webmanifest') return join(project, 'client', 'honeymoon.webmanifest');
   if (path === '/generated/weather/biomes.json') return join(generated, 'weather', 'biomes.json');
   const vendor = path.match(/^\/vendor\/(?:three\/)?(three\.(?:module|core)\.js)$/);
   if (vendor) return join(project, 'node_modules', 'three', 'build', vendor[1]);
@@ -218,6 +226,7 @@ export function createHoneymoonServer({
   allowedOrigin,
   publicOrigin = allowedOrigin,
   inviteRequired = secure,
+  singlePlayer = false,
   ownerOnPrimary = !inviteRequired && !secure,
   npcAdminKey,
   clock,
@@ -225,6 +234,9 @@ export function createHoneymoonServer({
   allowRemoval = true,
   initialMode,
 } = {}) {
+  if (singlePlayer && (secure || inviteRequired)) throw new Error('Single-player requires a local server');
+  const build = readBuildNumber(project);
+  const localJournal=singlePlayer ? openLocalJournal(state) : undefined;
   const models = {};
   const lod = base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
   const vista = lod ? loadVistaAssets(generated) : null;
@@ -272,17 +284,20 @@ export function createHoneymoonServer({
     throw error;
   }
   const streams = new Set();
-  const loadLog=state===':memory:' ? undefined : createLoadLog({
-    directory:join(dirname(state),'load-logs'),onlineStreams:()=>streams.size,
+  const playerDiagnostics=loadPlayerDiagnostics(state);
+  const loadLog=singlePlayer || state===':memory:' ? undefined : createLoadLog({
+    directory:join(dirname(state),'load-logs'),onlineStreams:()=>streams.size,studyUntil:playerDiagnostics?.until,
   });
-  const access=createAccess(store,{inviteRequired,ownerKey:npcAdminKey,publicOrigin,now:clock,
+  const access=createAccess(store,{inviteRequired,singlePlayer,ownerKey:npcAdminKey,publicOrigin,now:clock,
     revokeStream:device=>{
       for (const stream of streams) if (stream.deviceId===device) {
+        loadLog?.endStream(stream.response,'access_revoked');
         writeEvent(stream.response,'access-revoked',{});
         stream.response.end();
       }
     },disconnectProfile:(player,ban)=>{
       for (const stream of streams) if (stream.player===player&&!stream.response.writableEnded) {
+        loadLog?.endStream(stream.response,'profile_banned');
         writeEvent(stream.response,'access-revoked',{banned:true,reason:ban.reason});
         stream.response.end();
       }
@@ -324,12 +339,21 @@ export function createHoneymoonServer({
   }
   const session = (credential, owner) => {
     const player=credential.uid;
+    const diagnostics=playerDiagnostics?.session(player);
     const time = worldTime.snapshot();
     const weatherSettings=worldTime.weatherSettings();
     return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,
       weather:weatherSettings.mode,weatherSettings,creative:Boolean(creative),
-      ...(survival.enabled&&{gameMode:playerMode(player)}),profile:profileFor(player),access:accessView(credential,owner) };
+      ...(survival.enabled&&{gameMode:playerMode(player)}),...(diagnostics&&{playerDiagnostics:diagnostics}),
+      profile:profileFor(player),access:accessView(credential,owner) };
   };
+
+  function sendStudyHeartbeat(stream) {
+    if (!stream.studyId || !playerDiagnostics?.active(stream.player)) return;
+    const at=Date.now();
+    writeEvent(stream.response,'diagnostics-heartbeat',{at,streamId:stream.studyId});
+    loadLog?.studyHeartbeat(stream.deviceId,stream.studyId,stream.studyPage,at);
+  }
 
   function playerMode(player) {
     return {...survival.status(player),admin:npcs.isAdmin(player)};
@@ -367,7 +391,7 @@ export function createHoneymoonServer({
       if (response.destroyed || response.write(packet)) return;
       bulkWrites.set(response,bytes);
       response.once('drain',()=>bulkWrites.delete(response));
-      if (response.writableLength>MAX_STREAM_BACKLOG+bytes) response.destroy();
+      if (response.writableLength>MAX_STREAM_BACKLOG+bytes) destroyStream(response,'backpressure');
       return;
     }
     writeStream(response,packet);
@@ -375,7 +399,12 @@ export function createHoneymoonServer({
 
   function writeStream(response,packet) {
     if (!response.writableEnded && !response.destroyed && !response.write(packet) &&
-        response.writableLength>MAX_STREAM_BACKLOG+(bulkWrites.get(response)??0)) response.destroy();
+        response.writableLength>MAX_STREAM_BACKLOG+(bulkWrites.get(response)??0)) destroyStream(response,'backpressure');
+  }
+
+  function destroyStream(response,reason) {
+    loadLog?.endStream(response,reason);
+    response.destroy();
   }
 
   function sendSocial(name, data, receives = () => true) {
@@ -457,13 +486,43 @@ export function createHoneymoonServer({
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     if (path==='/api/ping' && (method==='GET'||method==='HEAD')) {
+      const trace=request.headers['x-honeymoon-trace'];
+      if (playerDiagnostics && typeof trace==='string' && diagnosticTracePattern.test(trace)) {
+        const browser=access.authenticate(readAccessCookie(request));
+        if (browser && playerDiagnostics.active(browser.uid)) loadLog?.studyRequest(path,response,browser.deviceId,trace);
+      }
       response.writeHead(204,{'Cache-Control':'no-store'});
       response.end();
       return;
     }
+    if (path==='/api/build' && (method==='GET'||method==='HEAD')) return json(response,200,{build});
     const credential=isApi||inviteRequired&&gameAsset ? access.authenticate(readAccessCookie(request)) : undefined;
+    const studying=credential && playerDiagnostics?.active(credential.uid);
+    if (studying) loadLog?.studyRequest(path,response,credential.deviceId,request.headers['x-honeymoon-trace']);
     if (isApi) {
       if (method === 'POST' || method === 'DELETE') requireSameOrigin(request,requestSecure,requestOrigin);
+      if (singlePlayer && (path.startsWith('/api/access/') || path==='/api/chat')) {
+        throw new RequestError(404,'not_found');
+      }
+      if (singlePlayer && path==='/api/local-diagnostics') {
+        if (method==='GET') return json(response,200,localJournal?.read()??[],{
+          'Content-Disposition':'attachment; filename="Honeymoon-diagnostics.json"',
+        });
+        if (method==='POST') {
+          const {kind,position,mesh,chunks,lastChunk,message}=await readBody(request);
+          if (!['heartbeat','exit','browser-error','worker-error','webgl-lost','webgl-restored'].includes(kind)) {
+            throw new RequestError(400,'invalid_diagnostic');
+          }
+          const validPosition=Array.isArray(position) && position.length===3 && position.every(Number.isFinite);
+          const validChunk=Array.isArray(lastChunk) && lastChunk.length===3 &&
+            lastChunk.slice(0,2).every(Number.isSafeInteger) && typeof lastChunk[2]==='boolean';
+          localJournal?.record({kind,build,...(validPosition&&{position}),
+            ...(Number.isSafeInteger(mesh)&&{mesh}),...(Number.isSafeInteger(chunks)&&{chunks}),
+            ...(validChunk&&{lastChunk}),
+            ...(typeof message==='string'&&{message:message.slice(0,260)})});
+          return json(response,200,{ok:true});
+        }
+      }
       const player=credential?.uid;
       const ownerBootstrap=method==='POST'&&owner&&(path==='/api/access/owner'||path==='/api/npcs/admin');
       if (!ownerBootstrap) access.requireUnbanned(player);
@@ -471,6 +530,13 @@ export function createHoneymoonServer({
         const result=await readBody(request,limit);
         if (!ownerBootstrap) access.requireUnbanned(player);
         return result;
+      }
+      async function readMovementInput() {
+        const input=await readInput();
+        const current=access.authenticate(readAccessCookie(request));
+        if (current?.uid!==player || current?.deviceId!==credential.deviceId) throw new RequestError(401,'session_required');
+        if (activeElsewhere(current)) throw new RequestError(409,'profile_active_elsewhere');
+        return input;
       }
       if (path==='/api/access' && method==='GET') return json(response,200,accessView(credential,owner));
       if (path === '/api/session' && method === 'POST') {
@@ -489,6 +555,22 @@ export function createHoneymoonServer({
         return json(response,200,legacyRoute?{...body,editor:true}:body,token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
       }
       if (!player) throw new RequestError(401, 'session_required');
+      if (path==='/api/player-diagnostics' && method==='POST') {
+        if (!studying) throw new RequestError(403,'player_diagnostics_inactive');
+        const samples=parsePlayerDiagnostics(await readInput(playerDiagnosticsBodyLimit));
+        if (!playerDiagnostics.active(player)) throw new RequestError(403,'player_diagnostics_inactive');
+        loadLog?.studyClientReport(credential.deviceId,samples);
+        response.writeHead(204,{'Cache-Control':'no-store'});
+        response.end();
+        return;
+      }
+      if (path==='/api/connection-report' && method==='POST') {
+        const events=connectionReport(await readInput());
+        loadLog?.clientReport(credential.deviceId,events,Boolean(studying));
+        response.writeHead(204,{'Cache-Control':'no-store'});
+        response.end();
+        return;
+      }
       if (path==='/api/access/logout' && method==='POST') {
         await readInput();
         const result=access.revokeDevice(credential);
@@ -668,8 +750,39 @@ export function createHoneymoonServer({
         return json(response, 200, result);
       }
       if (path === '/api/world' && method === 'GET') return json(response, 200, game.snapshot(player));
+      if (path === '/api/position-state' && method === 'POST') {
+        const {page,start,restart}=await readMovementInput();
+        const state=typeof restart==='string'
+          ? game.movementChannel.restart(player,credential.deviceId,page,restart)
+          : {movement:game.movementChannel.open(player,credential.deviceId,page,start===true)};
+        return json(response,200,state);
+      }
       if (path === '/api/position' && method === 'POST') {
-        const body = await readInput();
+        const body = await readMovementInput();
+        if (body.page !== undefined) {
+          // Parse the pose before storing a packet that arrived out of order.
+          if (body.pose !== undefined) body.pose=readPose(body.pose);
+          const movement = game.movementChannel.receive(player,credential.deviceId,body,packet=>{
+            const {effects,changes,...result} = game.position(player,packet);
+            presence.update(player,result.position,game.poseFor(player,packet.pose));
+            if (changes.length || effects.length) broadcast(player,{...result,changes,effects});
+            return {...((effects.length || changes.length) && {commit:{effects,changes,worldRevision:result.worldRevision}}),deliver(state) {
+              for (const stream of streams) {
+                if (stream.player===player && stream.deviceId===credential.deviceId && stream.movementPage===packet.page) {
+                  writeEvent(stream.response,'movement-ack',{movement:state});
+                }
+              }
+            }};
+          });
+          return json(response,200,{movement});
+        }
+        for (const stream of streams) {
+          if (stream.player!==player || !stream.movementPage || stream.response.destroyed || stream.response.writableEnded) continue;
+          const current=game.movementChannel.state(player,stream.deviceId,stream.movementPage);
+          if (current) throw new RequestError(409,'movement_page_replaced',{
+            position:current.position, stance:current.stance, ...(current.seat && {seat:current.seat}),
+          });
+        }
         const pose = body.pose === undefined ? undefined : readPose(body.pose);
         const result = game.position(player, body);
         presence.update(player, result.position, game.poseFor(player, pose));
@@ -737,16 +850,33 @@ export function createHoneymoonServer({
           minecarts: url.searchParams.get('minecarts') === '1',
           droppedItems: url.searchParams.get('droppedItems') === '1',
           npcs: url.searchParams.get('npcs') === '1' };
+        const movementPage=url.searchParams.get('movement');
+        if (isMovementPage(movementPage)) stream.movementPage=movementPage;
         streams.add(stream);
         game.touch(player);
         response.on('close', () => {
           streams.delete(stream);
           presence.disconnect(stream);
         });
+        const study=studying && playerDiagnostics.session(player);
+        if (study) {
+          const page=url.searchParams.get('diag');
+          study.page=typeof page==='string' && diagnosticPagePattern.test(page) ? page : null;
+        }
+        const streamId=loadLog?.openStream(response,credential.deviceId,stream.presence,study);
+        if (study) {
+          stream.studyId=streamId;
+          stream.studyPage=study.page;
+          sendStudyHeartbeat(stream);
+        }
         const cursor = request.headers['last-event-id'] ?? url.searchParams.get('since');
         const revision = game.worldRevision();
         const kind = cursor !== null && Number(cursor) !== revision ? 'reset' : 'ready';
         writeEvent(response, kind, { worldRevision: revision, contentHash: game.contentHash }, revision);
+        if (stream.movementPage) {
+          const movement=game.movementChannel.state(player,credential.deviceId,stream.movementPage);
+          if (movement) writeEvent(response,'movement-ack',{movement});
+        }
         if (presenceEntry) presence.connect(stream, presenceEntry);
         if (stream.social) {
           writeEvent(response, 'chat-history', {entries:chat.history(player)});
@@ -819,7 +949,8 @@ export function createHoneymoonServer({
       if (version && version !== chunkCacheVersion) throw new RequestError(404, 'chunk_version_changed');
       const x = Number(chunk.groups.x);
       const z = Number(chunk.groups.z);
-      return serveWorld(request, response, `chunk:${x}.${z}`, () => base.publicChunk(x, z),
+      const highOnly=url.searchParams.get('height')==='upper';
+      return serveWorld(request, response, `chunk:${x}.${z}${highOnly?':upper':''}`, () => base.publicChunk(x, z, highOnly),
         version ? 'private, max-age=2592000, immutable' : undefined);
     }
     const terrain = path.match(/^\/generated\/world\/(terrain-(?:8|16|32)\.json)$/);
@@ -834,24 +965,30 @@ export function createHoneymoonServer({
   function listener(privatePort) {
     const http=createServer({requestTimeout:15000},(request,response)=>{
       const owner=(privatePort || ownerOnPrimary&&!secure) && ownerRequest(request,http.address());
+      if (singlePlayer&&!owner) return json(response,403,{error:'local_only'});
       if (privatePort&&!owner) return json(response,403,{error:'owner_only'});
       dispatch(request,response,owner,!privatePort&&secure,privatePort?undefined:allowedOrigin).catch(error=>{
         if (response.destroyed) return;
-        if (response.headersSent) return response.destroy();
+        if (response.headersSent) return destroyStream(response,'handler_error');
         if (error instanceof RequestError) return json(response,error.status,{error:error.code,...error.details});
         console.error(error);
         return json(response,500,{error:'internal_error'});
       });
     });
+    if (loadLog) http.on('connection',socket=>socket.on(errorMonitor,error=>loadLog.socketError(error.code)));
     return http;
   }
   const server=listener(false);
+  if (localJournal) server.once('listening',()=>localJournal.record({kind:'server-start',build}));
   server.once('listening',()=>loadLog?.start());
   const ownerServer=listener(true);
   const heartbeat = setInterval(() => {
-    for (const { player, response } of streams) {
+    for (const stream of streams) {
+      const {player,response}=stream;
       game.touch(player);
       writeStream(response,': heartbeat\n\n');
+      loadLog?.heartbeat(response);
+      sendStudyHeartbeat(stream);
     }
   }, 15000);
   heartbeat.unref();
@@ -906,7 +1043,10 @@ export function createHoneymoonServer({
       clearInterval(weatherTicks);
       clearInterval(npcTicks);
       clearInterval(blockTicks);
-      for (const { response } of streams) response.end();
+      for (const { response } of streams) {
+        loadLog?.endStream(response,'server_shutdown');
+        response.end();
+      }
       await Promise.all([server,ownerServer].map(listener=>new Promise((success,fail)=>{
         listener.close(error=>{
           if (error&&error.code!=='ERR_SERVER_NOT_RUNNING') fail(error);
@@ -917,6 +1057,7 @@ export function createHoneymoonServer({
       game.flushMinecarts();
       game.clearDroppedItems();
       await Promise.all([chat.close(),loadLog?.close()]);
+      localJournal?.record({kind:'server-stop',build});
       store.close();
     },
   };

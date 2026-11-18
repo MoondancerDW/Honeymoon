@@ -1,0 +1,16 @@
+#build-outdated:not([hidden]) {
+  position: fixed;
+  z-index: 50;
+  top: max(.5rem, env(safe-area-inset-top));
+  left: max(.5rem, env(safe-area-inset-left));
+  right: max(.5rem, env(safe-area-inset-right));
+  padding: .85rem 1.15rem;
+  background: #f0d297;
+  color: #212019;
+  border-radius: .55rem;
+  box-shadow: 0 .2rem .8rem #09181bb3;
+  font-size: clamp(.98rem, 2.4vw, 1.3rem);
+  font-weight: 700;
+  text-align: center;
+  pointer-events: none;
+}

@@ -5,6 +5,8 @@ export const CREATIVE_MINECART_KEY = 'creative:328:0';
 export const CREATIVE_BOAT_KEY = 'creative:333:0';
 export const CREATIVE_FRAME_KEY = 'creative:389:0';
 export const CREATIVE_INVISIBLE_FRAME_KEY = 'creative:389:1';
+export const signItemKey = 'creative:323:0';
+export const signPlacementCell = 'legacy:63:0';
 
 // RedPower's legacy item damage stores its material in the low byte and
 // selects a cover, corner, strip or post using the high byte.

@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { displayObject, cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
+import { createMovementChannel } from './movement-channel.mjs';
 import {readEye} from './presence.mjs';
 import { registerMechanics } from './mechanics.mjs';
 import { PLAYER, physics } from './physics.mjs';
@@ -17,14 +18,15 @@ import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, mi
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
 import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT,
-  isPlayerStance, playerBody, positionCost } from '../world/player-body.mjs';
+  flightPositionCost, isPlayerStance, playerBody } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
 import { isRideableBoat,boatHeading,boatHit,boatSeat } from '../world/boats.mjs';
 import { pistonHead } from './pistons.mjs';
 import { orientedRail, railFor } from '../world/rails.mjs';
 import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
-import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData } from '../world/creative-items.mjs';
+import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData,
+  signItemKey,signPlacementCell } from '../world/creative-items.mjs';
 import { fluidAt, fluidCurrent, liquidLevel, movementMedium } from '../world/block-movement.mjs';
 import { canLogLiquid, liquidCell, liquidKind } from '../world/logged-fluid.mjs';
 import { FAKE_WATER, bucketKeys, fluidState, plantBlock } from '../world/fluid-state.mjs';
@@ -95,8 +97,9 @@ function normalizeAction(body) {
       input.cell = body.cell;
     }
   } else if (body.creativeItem !== undefined) {
-    if (!['place','place_part'].includes(body.type) || typeof body.creativeItem !== 'string' ||
-        !/^creative:(?:750|753|768):\d{1,5}$/.test(body.creativeItem)) throw new RequestError(400, 'unknown_cell_type');
+    const sign = body.type === 'place' && body.creativeItem === signItemKey;
+    if (!sign && (!['place','place_part'].includes(body.type) || typeof body.creativeItem !== 'string' ||
+        !/^creative:(?:750|753|768):\d{1,5}$/.test(body.creativeItem))) throw new RequestError(400, 'unknown_cell_type');
     input.creativeItem = body.creativeItem;
   }
   if (body.hit !== undefined) input.hit = point(body.hit);
@@ -241,6 +244,9 @@ export function createGame(base, store, geometry, {
   survival, survivalChanged,
 } = {}) {
   const positions = new Map();
+  const movementChannel = createMovementChannel(player=>({
+    position:playerAt(player), stance:stanceFor(player), seat:publicSeat(player),
+  }));
   const eyes = new Map();
   const spectators = new Set();
   const seats = new Map();
@@ -386,6 +392,7 @@ export function createGame(base, store, geometry, {
   function movePlayer(player, position, stance = 'stand') {
     const now = clock();
     positions.set(player, {position, stance, updated:now, seen:now, budget:1});
+    movementChannel.invalidate(player);
   }
 
   function seatsAt(x, y, z) {
@@ -736,13 +743,15 @@ export function createGame(base, store, geometry, {
   function placeSign(player, current, input) {
     const {x, y, z, against, hit} = input;
     const face = against ? signalSides.findIndex(offset => axes.every((axis, index) => input[axis] - against[axis] === offset[index])) : undefined;
-    const orient = input.creative || input.yaw !== undefined;
-    if (orient && face === 0) throw new RequestError(409, 'invalid_sign_face');
+    const fromItem = input.creativeItem === signItemKey;
+    const orient = fromItem || input.creative || input.yaw !== undefined;
+    if (orient && face === 0 || fromItem && face === undefined) throw new RequestError(409, 'invalid_sign_face');
     if (face === -1 || (!against && hit)) throw new RequestError(403, 'outside_reach');
+    if (fromItem && !faceSupports(against.x,against.y,against.z,face,.35)) throw new RequestError(409,'missing_support');
     const standing = input.yaw === undefined ? blockState(input.cell)[1] : -Math.round(input.yaw * 8 / Math.PI) & 15;
     const cell = !orient ? input.cell : face === 1 ? blockKey(63, standing) : face >= 2 ? blockKey(68, face) : input.cell;
     const position = [x, y, z];
-    const copied = input.creative ? null : clipboardFor(player, input.cell);
+    const copied = input.creative || fromItem ? null : clipboardFor(player, input.cell);
     const original = copied?.cell === input.cell ? copied.object : null;
     const object = original ? (geometry.placementObject ? geometry.placementObject(cell, original, position) :
       {...original, position, key:`tile:${position.join(':')}`}) : signObject(position, ['', '', '', '']);
@@ -1156,8 +1165,9 @@ export function createGame(base, store, geometry, {
     if (type === 'place') {
       if (reserved(x, y, z) || spawnProtected(x, y, z)) throw new RequestError(403, 'protected_cell');
       const item = input.creativeItem && creativeItems.get(input.creativeItem);
-      const allowed = input.creativeItem ? item && !item.part && item.blockKey === input.cell :
-        input.creative ? creativeBlocks.has(input.cell) : catalog.has(input.cell);
+      const signItem = input.creativeItem === signItemKey && input.cell === signPlacementCell;
+      const allowed = signItem || (input.creativeItem ? item && !item.part && item.blockKey === input.cell :
+        input.creative ? creativeBlocks.has(input.cell) : catalog.has(input.cell));
       if (!allowed || input.cell === 'air' || input.cell === voxelKey) {
         throw new RequestError(400, 'unknown_cell_type');
       }
@@ -1261,7 +1271,11 @@ export function createGame(base, store, geometry, {
   }
 
   function survivalAction(player,input,transport) {
-    if (!survival?.enabled || !survival.isGame(player)) return execute(player,input,transport);
+    if (!survival?.enabled || !survival.isGame(player)) {
+      const output = execute(player,input,transport);
+      if (input.type !== 'copy' && input.type !== 'copy_part' && input.type !== 'copy_liquid') return output;
+      return {...output,...inventory.copyToFreeSlot(player,inventory.read(player).selected)};
+    }
     const {type,x,y,z}=input;
     if (unlimitedActions.has(type)||type==='drop_item'&&(input.key!==undefined||input.clone)) {
       throw new RequestError(403,'creative_only');
@@ -1332,7 +1346,10 @@ export function createGame(base, store, geometry, {
     }
     const state=survival.damage(player,amount,point,floor);
     if (state) {
-      if (state.death) releaseSeat(player);
+      if (state.death) {
+        releaseSeat(player);
+        movementChannel.invalidate(player);
+      }
       survivalChanged?.(player,state);
     }
     return state;
@@ -1538,9 +1555,13 @@ export function createGame(base, store, geometry, {
     }
     const now = clock();
     const old = positions.get(player);
-    const elapsed = Math.min(0.65, (now - (old?.updated ?? now - 100)) / 1000);
-    const budget = groundSeat ? Math.min(.65 * CRAWL_SPEED + .14,Math.min(.14,old?.budget ?? 0) + elapsed * CRAWL_SPEED) :
-      Math.min(POSITION_BATCH_LIMIT + .4, (old?.budget ?? 1) + elapsed * RUN_SPEED);
+    const sequenced = body.page !== undefined;
+    const flight = body.pose?.motion === 'fly' && stanceFor(player) === 'stand';
+    const elapsed = Math.min(sequenced && !groundSeat ? 1.5 : .65, (now - (old?.updated ?? now - 100)) / 1000);
+    const limit = sequenced ? RUN_SPEED * 1.5 : POSITION_BATCH_LIMIT + .4;
+    const seatedLimit = .65 * CRAWL_SPEED + .14;
+    const budget = groundSeat ? Math.min(seatedLimit,Math.min(sequenced ? seatedLimit : .14,old?.budget ?? 0) + elapsed * CRAWL_SPEED) :
+      Math.min(limit, (old?.budget ?? 1) + elapsed * RUN_SPEED);
     const hasTrail = body.trail !== undefined || body.from !== undefined;
     const reject = () => {
       throw new RequestError(409, 'movement_blocked', {position:previous, stance:stanceFor(player), ...(groundSeat && {seat})});
@@ -1596,7 +1617,7 @@ export function createGame(base, store, geometry, {
       if (!bodyWithinMap(step,dimensions) || hasTrail && (planar > POSITION_STEP_LIMIT || Math.abs(vertical) > .55)) reject();
       if (stance === 'crouch' && planar > 0 && vertical <= .02 && physical.supported(from,dimensions) &&
           !physical.supported({...step,y:from.y},dimensions,.5)) reject();
-      distance += positionCost(planar,vertical);
+      distance += flightPositionCost(planar,from.y,step.y,flight && nextStance === 'stand');
       drop += Math.max(-vertical, 0);
       if (distance > budget + (groundSeat ? .035 : MOVEMENT_GRACE) || drop > 6) reject();
       segment.push(step);
@@ -1606,11 +1627,13 @@ export function createGame(base, store, geometry, {
 
     if (groundSeat) {
       Object.assign(seat,target);
-      positions.set(player,{position:target,stance,updated:now,budget:budget-distance,requestId});
+      positions.set(player,{position:target,stance,updated:now,seen:now,budget:budget-distance,requestId});
+      if (!sequenced) movementChannel.invalidate(player);
       return {...passivePosition(target),seat,stance};
     }
     const entry = observing ? passivePosition(target) : enterPosition(player, target, previous,stance);
-    positions.set(player, {position:target, stance, updated:now, budget:budget-distance, requestId});
+    positions.set(player, {position:target, stance, updated:now, seen:now, budget:budget-distance, requestId});
+    if (!sequenced) movementChannel.invalidate(player);
     if (survival?.enabled&&survival.isGame(player)) {
       const medium=movementMedium(cellAt,target.x,target.y,target.z,models);
       const fall=survival.observe(player,previous,target,{grounded:physical.supported(target,dimensions,.08),
@@ -1739,6 +1762,7 @@ export function createGame(base, store, geometry, {
       if (survival.canStrike(attacker)) return damagePlayer(defender,1);
     },
     position,
+    movementChannel,
     teleport,
     teleportNear,
     setSpectator,

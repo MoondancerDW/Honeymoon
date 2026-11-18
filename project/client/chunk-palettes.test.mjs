@@ -11,6 +11,24 @@ const ranked = (...values) => {
 const newWorld = () => new World({chunkPalettes:true, palette:['air'], compositions:{}});
 const offset = (x, y, z) => x + 1 + (z + 1) * 18 + (y + 1) * 18 ** 2;
 
+test('compact upper columns retain high edits and keep lower terrain unknown until upgraded',()=>{
+  const world=newWorld();
+  const chunk={x:-1,z:0,palette:['air'],highOnly:true,sections:[]};
+  world.addChunk(chunk);
+  world.setOverride({x:-1,y:268,z:2,cell:'legacy:1:0',revision:1});
+  world.setOverride({x:-1,y:65,z:2,cell:'legacy:1:0',revision:2});
+  assert.equal(world.hasChunk(-1,2,268),true);
+  assert.equal(world.hasChunk(-1,2,65),false);
+  assert.equal(world.cellAt(-1,268,2),'legacy:1:0');
+  assert.equal(world.cellAt(-1,65,2),null);
+  assert.equal(world.upperOverrides.size,1);
+  world.addChunk({...chunk,highOnly:false});
+  assert.equal(world.cellAt(-1,65,2),'legacy:1:0');
+  world.setOverride({x:-1,y:268,z:2,cell:'air',revision:3});
+  assert.equal(world.upperOverrides.size,0);
+  assert.equal(world.cellAt(-1,268,2),null);
+});
+
 test('adjacent chunks can use the same index for different materials and their covers', () => {
   const world = newWorld();
   const cover = 'cover:750:0:packed';

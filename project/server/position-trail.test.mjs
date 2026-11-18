@@ -72,6 +72,23 @@ test('position packets follow the client around the spawn cover corner, with ret
   assert.deepEqual(await post('position', {...end, from: tuple(end), trail: [throughCover, tuple(end)], requestId: 'blocked-piece'}),
     {status: 409, body: {error: 'movement_blocked', position: end, stance:'stand'}});
   assert.equal((await post('position', {...next, from: tuple(end), trail: [tuple(next)], requestId: 'after-reject'})).status, 200);
+
+  const page=crypto.randomUUID();
+  const {body:{movement:ownership}}=await post('position-state',{page,start:true});
+  const stream=await fetch(`${origin}/api/events?movement=${page}&presence=1`,{headers:{Cookie:cookie}});
+  t.after(()=>stream.body.cancel().catch(()=>{}));
+  assert.equal(stream.status,200);
+  const after={...next,z:next.z+.04};
+  const legacy={...after,from:tuple(next),trail:[tuple(after)],requestId:'another-legacy-tab'};
+  assert.deepEqual(await post('position',legacy),
+    {status:409,body:{error:'movement_page_replaced',position:next,stance:'stand'}});
+  const modern=await post('position',{...legacy,requestId:'sequenced-packet',page,epoch:ownership.epoch,first:1});
+  assert.equal(modern.body.movement.accepted,1);
+  assert.deepEqual(modern.body.movement.position,after);
+  // Another current page can claim control. The obsolete open stream no longer owns motion.
+  await post('position-state',{page:crypto.randomUUID(),start:true});
+  const again={...after,z:after.z+.04};
+  assert.equal((await post('position',{...again,from:tuple(after),trail:[tuple(again)],requestId:'legacy-after-v2'})).status,200);
 });
 
 test('positions validate body changes at their own step and do not stand through a solid roof', t => {

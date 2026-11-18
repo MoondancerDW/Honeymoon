@@ -15,7 +15,7 @@ def add_tree(archive, directory, relative_to, include=lambda _path: True):
             archive.write(path, f"{relative_to}/{path.relative_to(directory).as_posix()}", compress_type=mode)
 
 
-def build(output, node, node_license, generated, state=None):
+def build(output, node, node_license, generated, state=None, single_player=False):
     for asset in ("world/world.json", "full-world/manifest.json", "vista/manifest.json", "weather/biomes.bin",
                   "textures/atlas.png", "models/redpower.json", "sounds/sounds.json", "npcs/original.json", "npcs/models.json"):
         if not (generated / asset).is_file():
@@ -25,12 +25,17 @@ def build(output, node, node_license, generated, state=None):
     temporary = output.with_suffix(".zip.part")
     try:
         with ZipFile(temporary, "w", compression=ZIP_DEFLATED, compresslevel=3) as archive:
-            for name in ("Start-Honeymoon.cmd", "Start-Server.cmd", "Start-Tailscale.cmd", "Start-Internet.cmd", "Launch-Honeymoon.mjs", "single-instance.mjs", "ЧИТАЙ-МЕНЯ.txt"):
+            for name in ("Start-Honeymoon.cmd", "single-instance.mjs", "ЧИТАЙ-МЕНЯ.txt"):
                 archive.write(PROJECT / "portable" / name, name)
+            launch = "Launch-Singleplayer.mjs" if single_player else "Launch-Honeymoon.mjs"
+            archive.write(PROJECT / "portable" / launch, "Launch-Honeymoon.mjs")
+            if not single_player:
+                for name in ("Start-Server.cmd", "Start-Tailscale.cmd", "Start-Internet.cmd"):
+                    archive.write(PROJECT / "portable" / name, name)
             for name in ("package.json", "README.md"):
                 archive.write(PROJECT / name, name)
             for source in ("client", "server", "world"):
-                add_tree(archive, PROJECT / source, source, lambda path: path.suffix in {".mjs", ".html", ".css", ".json"}
+                add_tree(archive, PROJECT / source, source, lambda path: path.suffix in {".mjs", ".html", ".css", ".json", ".webmanifest", ".webp", ".png", ".svg"}
                          and not path.name.endswith(".test.mjs"))
             for family in ("world", "full-world", "textures", "models", "sounds", "lod", "vista", "weather", "npcs"):
                 add_tree(archive, generated / family, f"generated/{family}")
@@ -60,5 +65,6 @@ if __name__ == "__main__":
     parser.add_argument("node_license", type=Path, help="LICENSE from the matching Node.js release")
     parser.add_argument("--generated", type=Path, default=PROJECT / "generated")
     parser.add_argument("--state", type=Path, help="Optional SQLite snapshot prepared while the old server was running")
+    parser.add_argument("--single-player", action="store_true", help="Start with a local-only profile")
     args = parser.parse_args()
-    build(args.output, args.node, args.node_license, args.generated, args.state)
+    build(args.output, args.node, args.node_license, args.generated, args.state, args.single_player)

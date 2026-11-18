@@ -45,7 +45,7 @@ function inviteStatus(row,now) {
   return 'active';
 }
 
-export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,now=Date.now,revokeStream=()=>{},
+export function createAccess(store,{inviteRequired=false,singlePlayer=false,ownerKey,publicOrigin,now=Date.now,revokeStream=()=>{},
   disconnectProfile=()=>{}}={}) {
   const prepare=sql=>store.db.prepare(sql);
   const findDevice=prepare(`SELECT devices.id AS deviceId,devices.player AS uid,devices.last_seen AS lastSeen,
@@ -88,6 +88,16 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
     .all().map(({owner,value})=>[owner,JSON.parse(value)]));
   const owner=()=>store.getState('access','','owner')?.value ?? null;
   const isAdmin=uid=>typeof uid==='string' && !bans.has(uid) && account.get(uid)?.role==='admin';
+  const localPlayer=singlePlayer ? store.atomic(()=>{
+    const saved=store.getState('single-player','','profile')?.value;
+    const profile=typeof saved==='string' ? account.get(saved) : undefined;
+    if (profile) return {...profile,deviceId:'local'};
+    const {id}=store.createPlayer();
+    updateAccount.run('Игрок','admin',id);
+    initialNick(id,'Игрок');
+    store.putState('single-player','','profile',1,id);
+    return {...account.get(id),deviceId:'local'};
+  }) : undefined;
 
   function requireUnbanned(uid) {
     const ban=bans.get(uid);
@@ -132,6 +142,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
   }
 
   function authenticate(token) {
+    if (localPlayer) return localPlayer;
     if (typeof token!=='string' || !devicePattern.test(token)) return undefined;
     const credential=findDevice.get(hash(token));
     if (credential && !bans.has(credential.uid) && now()-credential.lastSeen>=60_000) touchDevice.run(Math.trunc(now()),credential.deviceId);
@@ -177,6 +188,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
   }
 
   function signIn(body,{credential,legacy,ownerBootstrap}={}) {
+    if (localPlayer) return {credential:localPlayer};
     requireUnbanned(credential?.uid);
     if (credential && body.invite===undefined) return {credential};
     if (credential) throw new RequestError(409,'already_authenticated');
@@ -235,6 +247,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
 
   function view(credential,ownerListener) {
     return {authenticated:Boolean(credential),inviteRequired,ownerBootstrap:Boolean(ownerListener&&expected),
+      ...(singlePlayer&&{singlePlayer:true}),
       ...(credential&&{uid:credential.uid,deviceId:credential.deviceId,role:credential.role,profileName:credential.profileName,
         ...(credential.uid===owner()&&{owner:true})})};
   }
@@ -324,7 +337,7 @@ export function createAccess(store,{inviteRequired=false,ownerKey,publicOrigin,n
 
   return {authenticate,signIn,bootstrap,view,isAdmin,requireUnbanned,adminTarget,setBan,listAdmin,listUids,issue,revokeInvite,revokeDevice,profiles:()=>profileList.all(),account:uid=>
     typeof uid==='string'&&uidPattern.test(uid)?account.get(uid):undefined,
-  npcEditor:{available:Boolean(expected),isAdmin,require(uid) {
+  npcEditor:{available:singlePlayer||Boolean(expected),isAdmin,require(uid) {
     if (!isAdmin(uid)) throw new RequestError(403,'npc_editor_required');
   }}};
 }

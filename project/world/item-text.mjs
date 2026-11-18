@@ -37,6 +37,21 @@ export function stackRevision(stack) {
 }
 
 export const plainMinecraftText=text=>String(text??'').replace(/§[0-9a-fk-or]/gi,'');
+
+export function writtenBookInfo(stack) {
+  if (bookType(stack)!=='signed') return null;
+  const text=value=>typeof value==='string' ? plainMinecraftText(value).trim() : '';
+  return {title:text(stack.nbt?.title)||'Написанная книга',author:text(stack.nbt?.author)};
+}
+
+export function itemTooltip(stack,label,{withLore=false}={}) {
+  const lines=[label];
+  const author=writtenBookInfo(stack)?.author;
+  if (author) lines.push(`Автор: ${author}`);
+  if (withLore) lines.push(...itemLore(stack).map(plainMinecraftText));
+  return lines.join('\n');
+}
+
 export const formatColors=['#000000','#0000aa','#00aa00','#00aaaa','#aa0000','#aa00aa','#ffaa00','#aaaaaa',
   '#555555','#5555ff','#55ff55','#55ffff','#ff5555','#ff55ff','#ffff55','#ffffff'];
 

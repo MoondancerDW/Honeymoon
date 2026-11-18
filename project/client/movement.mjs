@@ -1,7 +1,8 @@
 import * as geometry from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {fluidAt,fluidCurrent,movementMedium} from '../world/block-movement.mjs';
-import {CRAWL_SPEED, FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, PLAYER, WALK_SPEED, isPlayerStance, playerBody} from '../world/player-body.mjs';
+import {CRAWL_SPEED, FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, HIGH_FLIGHT_Y, HIGH_FLIGHT_SPEED,
+  HIGH_FLIGHT_SPRINT_SPEED, PLAYER, POSITION_STEP_LIMIT, WALK_SPEED, isPlayerStance, playerBody} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
 import {withLoggedFluid} from '../world/logged-fluid.mjs';
 import {isRideableMinecart, minecartHit} from '../world/minecarts.mjs';
@@ -19,8 +20,13 @@ const CAMERA_RADIUS = .1;
 const cartsByChunk = new WeakMap();
 const framesByChunk = new WeakMap();
 
-export function movementSpeed({flying = false, sprint = false, stance = 'stand'} = {}) {
-  if (flying) return sprint ? FLIGHT_SPRINT_SPEED : FLIGHT_SPEED;
+export function movementSpeed({flying = false, sprint = false, stance = 'stand', y = -Infinity} = {}) {
+  if (flying) {
+    const speed = sprint ? FLIGHT_SPRINT_SPEED : FLIGHT_SPEED;
+    const highSpeed = sprint ? HIGH_FLIGHT_SPRINT_SPEED : HIGH_FLIGHT_SPEED;
+    const blend = Math.max(0,Math.min(1,(y-HIGH_FLIGHT_Y)/1.5));
+    return speed + (highSpeed-speed)*blend;
+  }
   if (stance === 'swim') return WALK_SPEED;
   if (stance !== 'stand') return stance === 'crawl' ? CRAWL_SPEED : WALK_SPEED * .3;
   return sprint ? GROUND_SPRINT_SPEED : WALK_SPEED;
@@ -163,8 +169,11 @@ export class Movement {
     for (let yy = Math.floor(y) - 1; yy <= Math.floor(y + height); yy++) {
       for (let zz = Math.floor(z - half - .0625); zz <= Math.floor(z + half + .0625); zz++) {
         for (let xx = Math.floor(x - half - .0625); xx <= Math.floor(x + half + .0625); xx++) {
-          if (!this.world.hasChunk(xx, zz) && xx >= Math.floor(x - half + EPSILON) && xx <= Math.floor(x + half - EPSILON) &&
-              zz >= Math.floor(z - half + EPSILON) && zz <= Math.floor(z + half - EPSILON)) return true;
+          if (!this.world.hasChunk(xx, zz, y) && xx >= Math.floor(x - half + EPSILON) && xx <= Math.floor(x + half - EPSILON) &&
+              zz >= Math.floor(z - half + EPSILON) && zz <= Math.floor(z + half - EPSILON)) {
+            this.waitingForTerrain = true;
+            return true;
+          }
           const cell = this.world.cellAt(xx, yy, zz);
           if (!cell) continue;
           const neighbors = (dx, dy, dz) => this.world.cellAt(xx + dx, yy + dy, zz + dz);
@@ -306,7 +315,8 @@ export class Movement {
     this.grounded = false;
     this.medium = null;
     if (!dx && !dy && !dz) return;
-    const steps = Math.max(1, Math.ceil(dt / .016));
+    const steps = Math.max(1, Math.ceil(dt / .016),Math.ceil(Math.hypot(dx,dz)*dt/(POSITION_STEP_LIMIT-.001)),
+      Math.ceil(Math.abs(dy)*dt/.54));
     const time = dt / steps;
     for (let i = 0; i < steps; i++) {
       if (spectator) {

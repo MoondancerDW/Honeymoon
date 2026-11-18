@@ -421,6 +421,14 @@ button:disabled { cursor: wait; opacity: .45; }
 .container-grid .inventory-slot canvas,#container-carried canvas {
   width:100%; height:100%; image-rendering:pixelated; pointer-events:none;
 }
+.container-spinner {
+  display:block; width:65%; max-width:24px; aspect-ratio:1; margin:auto;
+  background:repeating-conic-gradient(#263b48 0deg 12deg,transparent 12deg 45deg);
+  mask:radial-gradient(farthest-side,transparent 48%,#000 51%);
+  animation:container-loading .8s steps(8) infinite; pointer-events:none;
+}
+@keyframes container-loading { to { transform:rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .container-spinner { animation:none; } }
 #container-carried { position:fixed; transform:translate(-50%,-50%); width:36px; height:36px; pointer-events:none; z-index:3; }
 #hotbar {
   --gui-px: clamp(1.4px, calc(100vw / 184), 2.5px);

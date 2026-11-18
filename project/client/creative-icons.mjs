@@ -1,9 +1,76 @@
-import {TILE_SIZE} from '../world/geometry.mjs';
+import {ATLAS_GRID,TILE_SIZE,tiles} from '../world/geometry.mjs';
 import {creativeMicroblock} from '../world/creative-items.mjs';
 import {blockItemAppearance} from '../world/item-appearance.mjs';
+import {itemName,plainMinecraftText,writtenBookInfo} from '../world/item-text.mjs';
+import {createContainerCache} from './container-cache.mjs';
 
 const images=new Map();
+const icons=createContainerCache({limit:512,ttl:15*60_000});
 const texturePath=family=>family==='terrain'?'/generated/textures/atlas.png':`/generated/models/${family}.png`;
+
+export function inventoryItemEntry(stack, known, labelFor = key => key) {
+  if (!stack) return null;
+  const [,id,variant] = /^(?:creative|legacy):(\d+):(\d+)$/.exec(stack.key) ?? [];
+  const name = writtenBookInfo(stack)?.title || plainMinecraftText(itemName(stack)) ||
+    stack.name || known?.name || (stack.cell ? labelFor(stack.cell) : id === undefined ? stack.key : `Предмет ${id}`);
+  return {
+    ...known,
+    key:stack.key,
+    ...(id!==undefined && {id:Number(id),damage:Number(variant)}),
+    name,
+    ...(stack.cell && {blockKey:stack.cell}),
+    ...(stack.part && {kind:'microblock',part:stack.part}),
+    ...(stack.object?.data && {object:{data:stack.object.data}}),
+  };
+}
+
+export function iconSignature(entry) {
+  return JSON.stringify([entry.key,entry.blockKey,entry.id,entry.damage??entry.meta,entry.invisible,
+    entry.kind,entry.part,entry.object?.data]);
+}
+
+function makeIcon(entry, draw) {
+  const key = iconSignature(entry);
+  let task = icons.get(key);
+  if (!task) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 32;
+    task = Promise.resolve().then(()=>draw?.(entry,canvas)).then(ready=>{
+      if (ready) return canvas;
+      if (icons.get(key)===task) icons.remove(key);
+      return null;
+    },()=>{
+      if (icons.get(key)===task) icons.remove(key);
+      return null;
+    });
+    icons.set(key,task);
+  }
+  return task;
+}
+
+export function pendingItemIcon(entry, draw) {
+  const placeholder = document.createElement('span');
+  placeholder.className = 'slot-icon-pending';
+  placeholder.setAttribute('aria-hidden','true');
+  placeholder.title = entry.name ?? entry.key;
+  placeholder.textContent = '…';
+  const tries = [350,1000,2200];
+  async function paint() {
+    const source = await makeIcon(entry,draw);
+    if (source) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 32;
+      canvas.setAttribute('aria-hidden','true');
+      canvas.getContext('2d').drawImage(source,0,0);
+      placeholder.replaceWith(canvas);
+    } else if (placeholder.isConnected) {
+      if (tries.length) setTimeout(()=>{if(placeholder.isConnected) void paint();},tries.shift());
+      else placeholder.textContent = '?';
+    }
+  }
+  queueMicrotask(paint);
+  return placeholder;
+}
 
 function loadAtlas(family) {
   if (!images.has(family)) {
@@ -70,20 +137,24 @@ function renderModel(output,model,atlas) {
 
 export async function renderCreativeIcon(entry,canvas,models) {
   const context=canvas.getContext('2d');
-  if (!context) return false;
+  if (!context || !models) return false;
   context.imageSmoothingEnabled=false;
   context.clearRect(0,0,canvas.width,canvas.height);
-  const sprite=models?.biblio?.items?.[entry.id+':'+(entry.invisible?0:entry.damage??entry.meta??0)];
+  const items=models?.biblio?.items;
+  const sprite=items?.[entry.id+':'+(entry.invisible?0:entry.damage??entry.meta??0)] ?? items?.[entry.id+':0'];
   if (sprite?.uv&&!sprite.block) {
     const {image,width,height}=await loadAtlas('biblio');
     const [u0,v0,u1,v1]=sprite.uv;
     context.drawImage(image,u0*width,v0*height,(u1-u0)*width,(v1-v0)*height,0,0,canvas.width,canvas.height);
-    return true;
+    return hasPixels(context,canvas);
   }
   const terrain=await loadAtlas('terrain');
   const part=entry.part??(entry.kind==='microblock'?creativeMicroblock(entry):undefined);
   const model=blockItemAppearance({key:entry.kind==='shaped-lamp'?entry.key:entry.blockKey??entry.key,
     ...(part&&{part}),...(entry.object&&{object:entry.object})},models,terrain.height/TILE_SIZE);
+  if (!model.quads.length) return false;
+  if (model.family==='terrain' && model.quads.every(quad=>quad.uv.every(([u,v])=>
+    Math.floor(u * ATLAS_GRID) + Math.floor(v * terrain.height / TILE_SIZE) * ATLAS_GRID === tiles.unknown))) return false;
   const atlas=model.family==='terrain'?terrain:await loadAtlas(model.family);
   if (model.sprite && model.quads.length) {
     const {uv,tint}=model.quads[0];
@@ -102,5 +173,11 @@ export async function renderCreativeIcon(entry,canvas,models) {
     renderModel(image,model,atlas);
     context.putImageData(image,0,0);
   }
-  return true;
+  return hasPixels(context,canvas);
+}
+
+function hasPixels(context,canvas) {
+  const {data}=context.getImageData(0,0,canvas.width,canvas.height);
+  for (let i=3;i<data.length;i+=4) if(data[i]) return true;
+  return false;
 }

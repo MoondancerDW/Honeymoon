@@ -57,6 +57,8 @@ export class World {
     this.minecartSnapshotTime = undefined;
     this.overrides = new Map();
     this.overridesByChunk = new Map();
+    this.upperOverrides = new Map();
+    this.upperRevision = 0;
     this.blockLightOverrides = new Map();
     this.pendingLights = new Map();
     this.skyLightOverrides = new Map();
@@ -126,7 +128,7 @@ export class World {
       indices: decodeIndices(indices), sky: decodeBytes(skyLight), block: decodeBytes(blockLight)
     }]));
     const stored = {x: chunk.x, z: chunk.z, sections, visualOnly, entities: chunk.entities || [],
-      palette: chunk.palette, compositions: chunk.compositions};
+      palette: chunk.palette, compositions: chunk.compositions, highOnly:chunk.highOnly===true};
     stored.hasSky = [...sections.values()].some(section=>section.sky);
     stored.skyTop = (Math.max(-1,...sections.keys())<<4)+15;
     for (const edit of this.editsInChunk(chunk.x,chunk.z)) stored.skyTop=Math.max(stored.skyTop,edit.y);
@@ -172,6 +174,11 @@ export class World {
     if (!entries) this.overridesByChunk.set(coordinates, entries = new Map());
     entries.set(position, override);
     this.overrides.set(position, override);
+    if (y>=256) {
+      if (key==='air') this.upperOverrides.delete(position);
+      else this.upperOverrides.set(position,override);
+      this.upperRevision++;
+    }
     return true;
   }
 
@@ -193,9 +200,9 @@ export class World {
     }
   }
 
-  hasChunk(x, z) {
+  hasChunk(x, z, y = 256) {
     const chunk = this.chunks.get(chunkKey(Math.floor(x / 16), Math.floor(z / 16)));
-    return Boolean(chunk && !chunk.visualOnly);
+    return Boolean(chunk && !chunk.visualOnly && (!chunk.highOnly || y>=256));
   }
 
   section(x, y, z) {
@@ -204,7 +211,7 @@ export class World {
 
   cellAt(x, y, z) {
     const chunk = this.chunks.get(chunkKey(x >> 4, z >> 4));
-    if (!chunk || chunk.visualOnly) return null;
+    if (!chunk || chunk.visualOnly || chunk.highOnly && y<256) return null;
     const {key, object, parts, voxels, fluid} = this.lightCell(x, y, z, false, chunk);
     if (key === 'air') return null;
     if (voxels) return {key, voxels, ...(parts && {parts}), ...(fluid && {fluid})};

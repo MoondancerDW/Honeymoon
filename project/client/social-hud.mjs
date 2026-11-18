@@ -14,6 +14,8 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   const byId = id => document.getElementById(id);
   const chat = byId('chat');
   const log = byId('chat-log');
+  const touchChat = byId('touch-chat'), unreadBadge = byId('chat-unread');
+  const chatHeader = byId('chat-header');
   const seen = new Set();
   const channelButton = byId('chat-channel');
   const chatForm = byId('chat-form');
@@ -35,8 +37,26 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   let panel, onlineVisible = false, connected = false, players = [], clockText, writingTime = false;
   let peers = [];
   let channel = 'global';
+  let unread = 0;
   let canSetTime=false;
   let dynamicWeather=false;
+
+  function updateUnread(value) {
+    unread=value;
+    unreadBadge.hidden=!unread;
+    unreadBadge.textContent=unread>99?'99+':String(unread);
+    touchChat.setAttribute('aria-label',unread ? `Открыть чат. Непрочитанных: ${unread}` : 'Открыть чат');
+  }
+
+  function updateChannel() {
+    const local = channel === 'local';
+    channelButton.querySelector('span').textContent = local ? 'Рядом' : 'Мир';
+    channelButton.setAttribute('aria-pressed',String(local));
+    channelButton.title = local ? 'Локальный чат · 18 блоков. Нажмите для глобального чата' :
+      'Глобальный чат. Нажмите для локального чата';
+    channelButton.setAttribute('aria-label',channelButton.title);
+  }
+  updateChannel();
 
   function entry({id, kind, nickname, newNickname, text, channel:target = 'global'}, recent) {
     if (seen.has(id)) return;
@@ -62,6 +82,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     }
     if (recent) {
       row.classList.add('recent');
+      if (kind==='message' && panel!=='chat') updateUnread(unread+1);
       setTimeout(() => row.classList.add('fading'), 6500);
       setTimeout(() => row.classList.remove('recent', 'fading'), 8500);
     }
@@ -81,6 +102,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     const wasWarpMenu = panel === 'warps';
     panel = null;
     chat.classList.remove('expanded');
+    chatHeader.hidden = true;
     chatForm.hidden = clockForm.hidden = teleportForm.hidden = true;
     if (wasWarpMenu) {
       warpMenu.show(false);
@@ -96,6 +118,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     pause();
     panel = next;
     chat.classList.toggle('expanded', panel === 'chat');
+    chatHeader.hidden = panel !== 'chat';
     chatForm.hidden = panel !== 'chat';
     clockForm.hidden = panel !== 'clock';
     teleportForm.hidden = panel !== 'teleport';
@@ -103,9 +126,15 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     warpMenu.show(panel === 'warps');
     if (panel === 'warps') return;
     if (panel === 'clock') clockInput.value = clockText;
-    const input = panel === 'chat' ? chatInput : panel === 'clock' ? clockInput : coordinateInputs[0][1];
-    input.focus();
-    if (panel === 'chat') log.scrollTop = log.scrollHeight;
+    if (panel === 'chat') {
+      updateUnread(0);
+      if (byId('game').classList.contains('touch')) log.focus({preventScroll:true});
+      else chatInput.focus();
+      log.scrollTop = log.scrollHeight;
+    } else {
+      const input = panel === 'clock' ? clockInput : coordinateInputs[0][1];
+      input.focus();
+    }
   }
 
   function showOnline(active) {
@@ -160,11 +189,12 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     }
   });
   byId('chat-toggle').addEventListener('click', () => open('chat'));
+  channelButton.addEventListener('pointerdown',event=>{
+    if (document.activeElement===chatInput) event.preventDefault();
+  });
   channelButton.addEventListener('click', () => {
     channel = channel === 'global' ? 'local' : 'global';
-    channelButton.textContent = channel === 'global' ? 'Всем' : 'Рядом · 18 блоков';
-    channelButton.setAttribute('aria-pressed', String(channel === 'local'));
-    chatInput.focus();
+    updateChannel();
   });
   clockButton.addEventListener('click', () => open('clock'));
   teleportButton.addEventListener('click', () => open('teleport'));

@@ -12,13 +12,14 @@ import {createAccessUi} from './access-ui.mjs';
 import {createAdminUi} from './admin-ui.mjs';
 import {createNpcUi} from './npc-ui.mjs';
 import {createWorldEdit,isWoodAxe} from './world-edit.mjs';
-import {renderCreativeIcon} from './creative-icons.mjs';
+import {renderCreativeIcon,inventoryItemEntry} from './creative-icons.mjs';
 import {renderInventoryPreview} from './inventory-preview.mjs';
+import {recordLocalDiagnostics} from './local-diagnostics.mjs';
 import {blockState, jammyUseSound} from '../world/block-interactions.mjs';
 import {seatFor, SEATED_EYE, SEATED_HEIGHT} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
-import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,POSITION_TRAIL_LIMIT,playerBody} from '../world/player-body.mjs';
+import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,playerBody} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox, publicMicroPart} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
@@ -28,20 +29,24 @@ import {detailCoverage} from '../world/full-detail.mjs';
 import {bookType,plainMinecraftText,stackRevision} from '../world/item-text.mjs';
 import {containerSpec} from '../world/containers.mjs';
 import {chiselMaterialShape, coverBoxes, signFor} from '../world/geometry.mjs';
-import {creativeMicroblock} from '../world/creative-items.mjs';
+import {creativeMicroblock,signItemKey,signPlacementCell} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselPlacementAtHit, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
-import {positionBatch} from './position-packet.mjs';
+import {createMovementSync} from './movement-sync.mjs';
 import {supportsFarTerrain} from './far-terrain.mjs';
 import {bindTouchControls} from './touch-controls.mjs';
 import {createPlayerModeUi} from './player-mode-ui.mjs';
 import {createConnectionStatus} from './connection-status.mjs';
+import {connectionFailure,createConnectionReport} from './connection-report.mjs';
+import {createPlayerDiagnostics} from './player-diagnostics.mjs';
 import {createTerrainNetwork} from './terrain-network.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
 const terrainNetwork = createTerrainNetwork();
-const connection=createConnectionStatus({element,onRecover:()=>location.reload(),
+const connectionReport=createConnectionReport();
+const diagnostics=createPlayerDiagnostics();
+const connection=createConnectionStatus({element,report:connectionReport,diagnostics,onRecover:()=>{if (!metrics.playable) location.reload();},
   onLatency:ms=>terrainNetwork.sample(ms),active:()=>Boolean(view) && !document.hidden});
 const entry = element('entry');
 const loading = element('loading');
@@ -92,18 +97,20 @@ const npcBards=new Map();
 let nextBardCheck=0;
 let npcActionQueue=Promise.resolve();
 const positionInterval = 130;
+const physicsStep=.016;
 const mobileFrameMs = 1000/32;
 let nextMobileFrame;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
-const positionTrail = [];
-let playing = false, jump = false, lastFrame = 0, nextPositionSync = 0, timer;
+let playing = false, jump = false, lastFrame = 0, physicsTime = 0, timer;
+let previousFramePosition, framePosition, correctionOffset;
+let feedReopenAt=-Infinity;
 let flying = false;
-let crawlRequested = false, confirmedStance = 'stand';
+let crawlRequested = false;
 let spectator = false, spectatorReturn = null;
 let seat = null, seatPending = false, seatEpoch = 0;
 let seatedMoveSince;
 let signTarget;
-let sync = null, pendingPosition = null, confirmedPosition, retryCount = 0, acting = false, resetting = false;
+let acting = false, resetting = false;
 let arrivalVersion = 0;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed,feedRetry;
@@ -111,6 +118,41 @@ let nearbyStream;
 let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
 let nextSprintDust = 0;
+const movementSync=createMovementSync({
+  post,
+  pose(wasFlying) {
+    if (!entered && !wasFlying) return;
+    const pose=playerPose();
+    if (wasFlying) pose.motion='fly';
+    else if (pose.motion==='fly') pose.motion='idle';
+    return pose;
+  },
+  correct(state) {
+    const dx=position.x-state.position.x, dy=position.y-state.position.y, dz=position.z-state.position.z;
+    if (state.seat || seat) setSeat(state.seat,state.position,state.stance);
+    else {
+      setAuthoritativePosition(state.position,state.stance);
+      if (Math.hypot(dx,dy,dz)<.7) correctionOffset={x:dx,y:dy,z:dz,started:performance.now()};
+    }
+  },
+  commit(data) {
+    if (data.changes?.length) changes(data.changes,data.worldRevision);
+    effects(data);
+  },
+  reopen() {
+    const now=performance.now();
+    if (now-feedReopenAt>=15000) {
+      feedReopenAt=now;
+      stream();
+    }
+  },
+  onAck(pose) {
+    diagnostics.positionAck();
+    if (pose && (!lastSentPose || pose.seq>=lastSentPose.seq)) lastSentPose=pose;
+  },
+  report:connectionReport, metrics:positionMetrics,
+});
+const positionTrail=movementSync.queued;
 let crouchUntil = 0;
 let hoofSwing = 0;
 let repeatPlacement = false, nextPlacement = 0, resumeOnEscape = false, resuming = false;
@@ -239,7 +281,7 @@ async function revivePlayer() {
   resetting=true;
   if (!touchMode) resume();
   try {
-    await sync;
+    await movementSync.inFlight();
     const {ok,body}=await post('respawn',{},AbortSignal.timeout(5000));
     if (!ok) throw new Error(body.error);
     await arriveAt(body.position,body.stance);
@@ -253,13 +295,7 @@ function npcItemEntry(stack) {
 }
 
 function entryForInventoryStack(stack) {
-  if (!stack) return null;
-  const known=creativeEntries.get(stack.key);
-  const [,id,meta]=stack.key.split(':');
-  const identity=Number(id);
-  return known ?? {key:stack.key,id:identity,damage:Number(meta),name:stack.name??(stack.cell?
-    labelFor(stack.cell):Number.isFinite(identity)?`Предмет ${identity}`:stack.key),part:stack.part,
-    ...(stack.part&&{kind:'microblock'}),...(stack.cell&&{blockKey:stack.cell})};
+  return inventoryItemEntry(stack,creativeEntries.get(stack?.key),labelFor);
 }
 
 async function loadCreative() {
@@ -290,18 +326,41 @@ function inventoryAction(type,fields = {}) {
 }
 
 async function containerAction(type,target,fields={}) {
-  if (type==='container_open'&&!await flushPosition()) return {ok:false,body:{error:'movement_blocked'}};
+  const opening = type==='container_open';
+  if (opening) {
+    let synced;
+    try { synced=await flushPosition(); }
+    catch (error) {
+      connectionReport.fail('storage',{why:'position_pending'});
+      throw error;
+    }
+    if (!synced) {
+      connectionReport.fail('storage',{why:'position_pending'});
+      return {ok:false,body:{error:'movement_blocked'}};
+    }
+  }
   const {x,y,z,hit}=target;
-  const result=await postAction({type,requestId:requestId(),x,y,z,hit,eye:view.eyeOffset(),
-    expectedRevision:world.revisionAt(x,y,z),...fields});
+  let result;
+  try {
+    result=await postAction({type,requestId:requestId(),x,y,z,hit,eye:view.eyeOffset(),
+      expectedRevision:world.revisionAt(x,y,z),...fields});
+  } catch (error) {
+    if (opening) connectionReport.fail('storage',connectionFailure(error));
+    throw error;
+  }
   const body=result.body;
   if (result.ok) {
+    if (opening) connectionReport.recover('storage');
+    if (type==='container_read' && fields.containerView) return result;
     changes(body.changes,body.worldRevision,body.frames);
     applyInventory(body.inventory);
     effects(body);
   } else {
     body.message=messages[body.error]??body.error;
-    if (type==='container_open') notice(body.message);
+    if (opening) {
+      connectionReport.fail('storage',{why:'http',status:result.status});
+      notice(body.message);
+    }
   }
   return result;
 }
@@ -319,7 +378,7 @@ function applyInventory(value) {
   heldVersion++;
   fromCreative = Boolean(stack && !stack.copied);
   heldCreativeItem = entry?.kind && !stack.copied ? entry : null;
-  clipboard = stack?.part ? null : stack?.cell ?? bucketCell(stack?.key);
+  clipboard = stack?.part ? null : stack?.key === signItemKey ? signPlacementCell : stack?.cell ?? bucketCell(stack?.key);
   heldSofa = isJammyConnectableSeat(world.models?.jammy,clipboard) ? {object:stack.object} : null;
   sofaTurns = 0;
   chiselMaterial = isChiselMaterial(clipboard) ? chiselMaterialKey(clipboard) : null;
@@ -409,16 +468,25 @@ const messages = {
 };
 
 async function post(path, payload, signal) {
-  const response = await fetch('/api/' + path, {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload), signal
-  });
-  if ([502,503,504].includes(response.status)) {
-    const error=new Error('Сервер недоступен');
-    error.status=response.status;
+  const trace=diagnostics.request(path,payload?.requestId);
+  try {
+    const response = await fetch('/api/' + path, {
+      method: 'POST', headers: {'Content-Type': 'application/json',...(trace&&{'X-Honeymoon-Trace':trace.id})},
+      body: JSON.stringify(payload), signal
+    });
+    trace?.headers(response);
+    if ([502,503,504].includes(response.status)) {
+      const error=new Error('Сервер недоступен');
+      error.status=response.status;
+      throw error;
+    }
+    const body = await response.json();
+    trace?.finish();
+    return {ok: response.ok, status:response.status, body};
+  } catch (error) {
+    trace?.finish(error);
     throw error;
   }
-  const body = await response.json();
-  return {ok: response.ok, body};
 }
 
 async function getNpc(path) {
@@ -470,8 +538,9 @@ function requestId() {
 
 async function postAction(request) {
   let result;
-  try { result=await post('action',request); }
-  catch { result=await post('action',request); }
+  const send=()=>post('action',request,AbortSignal.timeout(5000));
+  try { result=await send(); }
+  catch { result=await send(); }
   if (result.body.error==='action_result_expired') await refresh();
   return result;
 }
@@ -515,10 +584,15 @@ async function refresh() {
 function stream() {
   clearTimeout(feedRetry);
   feed?.close();
-  const source=feed=new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1&npcs=1');
+  const page=diagnostics.page();
+  const source=feed=new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1&npcs=1&movement='+movementSync.page+
+    (page?'&diag='+page:''));
+  source.addEventListener('movement-ack',event=>movementSync.received(JSON.parse(event.data).movement));
+  if (page) source.addEventListener('diagnostics-heartbeat',event=>diagnostics.heartbeat(JSON.parse(event.data)));
   feed.addEventListener('open', () => { connection.stream(true); presenceDirty = true; social.refreshWarps(); });
   feed.addEventListener('error',()=>{
-    connection.stream(false);
+    if (feed!==source) return;
+    connection.stream(false,source.readyState===EventSource.CLOSED ? 'closed' : connectionFailure().why);
     if (source.readyState===EventSource.CLOSED) feedRetry=setTimeout(stream,2500);
   });
   feed.addEventListener('presence', event => {
@@ -534,8 +608,7 @@ function stream() {
     const {entities,boats,seat:reportedSeat,position:feet} = JSON.parse(event.data);
     world.setMinecarts(entities,performance.now(),boats);
     if (seat?.entity && !seatPending && !resetting && feet) {
-      if (reportedSeat?.entity === seat.entity) confirmedPosition = positionTuple(feet);
-      else setSeat(reportedSeat, feet);
+      if (reportedSeat?.entity !== seat.entity) setSeat(reportedSeat, feet);
     }
   });
   feed.addEventListener('chat-history', event => social.history(JSON.parse(event.data).entries));
@@ -622,7 +695,7 @@ function sendPresence(now) {
 function updateCamera() {
   const stance = seat?.bed ? 'crawl' : movement.stance;
   const lowCeiling = !spectator && stance !== 'stand' ? playerBody(movement.size,stance).height : undefined;
-  const focus=modeUi.death ? {...position,y:position.y-(view.localAvatar?.ragdollDrop??0)} : position;
+  const focus=modeUi.death ? {...position,y:position.y-(view.localAvatar?.ragdollDrop??0)} : framePosition??position;
   view.updateCamera(focus,orbitHeading ?? heading,modeUi.death?.position ? .55 : seat ? SEATED_EYE : EYE,lowCeiling);
 }
 
@@ -758,22 +831,19 @@ async function toggleSpectator() {
   }
 }
 
-const positionTuple = ({x, y, z}) => [x, y, z];
-
 function recordPosition(feet) {
-  const sample = [...positionTuple(feet),movement.stance];
-  const previous = positionTrail.at(-1) ?? [...confirmedPosition,confirmedStance];
-  if (sample.some((value, axis) => value !== previous[axis])) positionTrail.push(sample);
+  movementSync.record(feet,movement.stance,flying && !seat);
 }
 
 function setAuthoritativePosition(feet, stance = 'stand') {
   Object.assign(position, feet);
   view?.viewBob.reset();
-  confirmedPosition = positionTuple(feet);
-  confirmedStance = movement.stance = stance;
+  movementSync.reset(feet,stance);
+  previousFramePosition=framePosition={...position};
+  correctionOffset=undefined;
+  physicsTime=0;
+  movement.stance = stance;
   crawlRequested = stance === 'crawl' && !seat;
-  positionTrail.length = 0;
-  pendingPosition = null;
   movement.fall = 0;
   movement.grounded = false;
 }
@@ -801,7 +871,7 @@ async function teleport(coordinates) {
   if (resetting || acting || seatPending) return {ok:false, body:{error:'action_pending'}};
   resetting = true;
   try {
-    await sync;
+    await movementSync.inFlight();
     const result = await post('teleport', coordinates, AbortSignal.timeout(5000));
     if (result.ok) await acceptTeleport(result.body);
     return result;
@@ -846,8 +916,10 @@ async function placeWarp(title) {
 async function arriveAt(feet, stance) {
   const version=++arrivalVersion;
   const cx = Math.floor(feet.x / 16), cz = Math.floor(feet.z / 16);
-  const visible = world.playableAround(cx,cz,view.detailedDistance);
-  const covered = !view.chunksReady(visible);
+  const high=view.usesOverview(feet);
+  const visible = world.playableAround(cx,cz,high ? 1 : Math.min(view.detailedDistance,2));
+  if (high) void view.altitudeOverview.prepare(performance.now());
+  const covered = !view.chunksReady(visible,feet);
   teleportLoading.hidden = !covered;
   if (covered) {
     element('teleport-loading-text').textContent = 'Загрузка, подождите...';
@@ -857,7 +929,7 @@ async function arriveAt(feet, stance) {
   nearbyStream?.update();
   if (!covered) return;
   try {
-    await view.whenReady(visible);
+    await view.whenReady(visible,{position:feet,isCurrent:()=>version===arrivalVersion});
     await new Promise(resolve => requestAnimationFrame(resolve));
     if (version===arrivalVersion) teleportLoading.hidden = true;
   } catch (error) {
@@ -903,9 +975,13 @@ function interact(sneaking = false) {
   const sign = signFor(cell);
   if (!sign) return action('interact', sneaking);
   const {x, y, z, hit} = selection;
+  showSignEditor({x,y,z,hit},sign.lines);
+}
+
+function showSignEditor({x,y,z,hit},lines) {
   const expectedRevision = world.revisionAt(x, y, z);
   signTarget = {x, y, z, hit, expectedRevision};
-  signFields.forEach((field, index) => { field.value = sign.lines[index]; });
+  signFields.forEach((field, index) => { field.value = lines[index]; });
   signStatus.textContent = '';
   signEditor.showModal();
   pause();
@@ -947,57 +1023,7 @@ async function saveSign(event) {
   closeSign();
 }
 
-function positionPacket(lastStep) {
-  const {target:[x, y, z], trail} = positionBatch(confirmedPosition, positionTrail, lastStep);
-  return {x, y, z, from: confirmedPosition, trail, ...(entered && {pose:playerPose()}),
-    requestId: [...crypto.getRandomValues(new Uint32Array(4))].map(value => value.toString(16).padStart(8, '0')).join('')};
-}
-
-function syncPosition(lastStep) {
-  if (sync || !positionTrail.length || performance.now() < nextPositionSync) return sync;
-  const payload = pendingPosition ??= positionPacket(lastStep);
-  nextPositionSync = performance.now() + positionInterval;
-  positionMetrics.requests++;
-  sync = post('position', payload, AbortSignal.timeout(3000)).then(({ok, body}) => {
-    // An external teleport can arrive while the preceding position request is still in flight.
-    if (pendingPosition !== payload) return;
-    if (ok) {
-      confirmedPosition = positionTuple(body.position);
-      confirmedStance = body.stance ?? payload.trail.at(-1)[3];
-      positionTrail.splice(0, payload.trail.length);
-      pendingPosition = null;
-      if (payload.pose && (!lastSentPose || payload.pose.seq >= lastSentPose.seq)) lastSentPose = payload.pose;
-    } else if (body.position) {
-      positionMetrics.corrections++;
-      if (body.seat) setSeat(body.seat, body.position,body.stance);
-      else setAuthoritativePosition(body.position,body.stance);
-    } else {
-      throw new Error(body.error || 'Position sync failed');
-    }
-    retryCount = 0;
-    effects(body);
-  }).catch(() => {
-    if (pendingPosition !== payload) return;
-    positionMetrics.errors++;
-    retryCount++;
-    nextPositionSync = performance.now() + Math.min(2000, positionInterval * retryCount);
-  }).finally(() => { sync = null; });
-  return sync;
-}
-
-async function flushPosition() {
-  const lastStep = positionTrail.at(-1);
-  const corrections = positionMetrics.corrections;
-  while (lastStep && positionTrail.includes(lastStep)) {
-    const before = positionMetrics.errors;
-    if (!sync && performance.now() < nextPositionSync) {
-      await new Promise(resolve => setTimeout(resolve, nextPositionSync - performance.now()));
-    }
-    await syncPosition(lastStep);
-    if (positionMetrics.errors !== before) throw new Error('Position sync failed');
-  }
-  return positionMetrics.corrections === corrections;
-}
+const flushPosition = () => movementSync.flush();
 
 const getKey = cell => typeof cell === 'string' ? cell : cell?.key;
 const labelFor = key => {
@@ -1294,7 +1320,9 @@ async function action(type, sneaking = false, tapTool = false) {
     }
   }
   if (type === 'place') {
-    if (heldCreativeItem?.kind === 'flat-item' && !bucket) { notice('Наведите прицел на рамку'); return; }
+    if (heldCreativeItem?.kind === 'flat-item' && heldCreativeItem.key !== signItemKey && !bucket) {
+      notice('Наведите прицел на рамку'); return;
+    }
     if (!clipboard) { notice(messages.nothing_to_copy); return; }
     request.against = {x: target.x, y: target.y, z: target.z};
     const embedsInLiquid = getKey(target.cell) !== FAKE_WATER && liquidKind(target.cell) &&
@@ -1354,33 +1382,18 @@ async function action(type, sneaking = false, tapTool = false) {
       hoofSwing = (hoofSwing + 1) & 0x7fffffff;
       presenceDirty = true;
     }
-    if ((type === 'copy' || type === 'copy_liquid') && selectedVersion === heldVersion) {
-      fromCreative = false;
-      heldCreativeItem = null;
-      clipboard = result.body.cell || cell;
-      heldSofa = isJammyConnectableSeat(world.models?.jammy, clipboard) ? {object: target.cell?.object} : null;
-      sofaTurns = 0;
-      setHeldPart(null);
-      notice('Скопировано · ' + labelFor(clipboard));
-    }
-    if (type === 'copy_part' && selectedVersion === heldVersion) {
-      fromCreative = false;
-      heldCreativeItem = null;
-      clipboard = null;
-      heldSofa = null;
-      setHeldPart({...result.body.part, pattern:result.body.pattern});
-      notice('Скопировано · ' + partLabel(heldPart));
-    }
     if (type === 'copy_voxel' && selectedVersion === heldVersion) {
       chiselMaterial = result.body.material;
       placementKey = '';
       notice('Материал резца · ' + labelFor(chiselMaterial));
     }
     if ((type === 'copy' || type === 'copy_part' || type === 'copy_liquid') && selectedVersion === heldVersion) {
-      await inventoryAction('inventory_copy',{slot:inventory.selected});
+      const name = type === 'copy_part' ? partLabel(result.body.part) : labelFor(result.body.cell || cell);
+      notice((result.body.copiedToBackpack ? 'Скопировано в рюкзак · ' : 'Скопировано · ') + name);
     }
     changes(result.body.changes, result.body.worldRevision, result.body.frames);
     effects(result.body);
+    if (type === 'place' && request.creativeItem === signItemKey) showSignEditor(request,['','','','']);
     metrics.lastEdit = performance.now() - started;
   } catch (error) {
     notice('Связь с сервером прервалась');
@@ -1402,7 +1415,10 @@ function tick(now) {
     nextMobileFrame=Math.max(deadline+mobileFrameMs,now+mobileFrameMs/2);
   }
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
-  const canMove=connection.canMove();
+  const hasPredictionRoom=movementSync.canPredict(now);
+  movement.waitingForTerrain=false;
+  physicsTime=playing && !menuOpen() && !orbitHeading && !resetting && hasPredictionRoom ? Math.min(physicsTime+dt,.064) : 0;
+  const liveActionsReady=connection.canMove();
   let seatedSpeed = 0;
   if (emote && (flying || seat || jump || forwardInput() || turnInput() || movement.stance!=='stand' ||
       emote.id==='wave'&&Date.now()-emote.started>2200)) {
@@ -1412,31 +1428,35 @@ function tick(now) {
   lastFrame = now;
   world.stepMinecarts(now);
   const vehicle = seat?.entity && (seat.kind === 'boat' ? world.boats : world.minecarts).get(seat.entity)?.entity;
-  if (vehicle && !resetting && canMove) {
+  if (vehicle && !resetting && connection.streamReady()) {
     const anchor = seat.kind === 'boat' ? boatSeat(vehicle) : minecartSeat(vehicle,seat.yaw);
     const turn = anchor.yaw - seat.yaw;
     heading.yaw += Math.atan2(Math.sin(turn), Math.cos(turn));
     Object.assign(position, {x:anchor.x, y:anchor.y, z:anchor.z});
     Object.assign(seat, anchor);
   }
-  if (seat?.kind === 'ground' && playing && canMove && !menuOpen() && !orbitHeading && (forwardInput() || turnInput())) {
+  if (seat?.kind === 'ground' && playing && liveActionsReady && !menuOpen() && !orbitHeading && (forwardInput() || turnInput())) {
     seatedMoveSince ??= now;
     if (!acting && !seatPending && !resetting) {
       if (now-seatedMoveSince >= 1000) {
         seatedMoveSince = now;
         void toggleSeat(false);
-      } else if (positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
+      } else if (hasPredictionRoom) {
         const forward = forwardInput(), strafe = turnInput();
         const speed = CRAWL_SPEED / Math.max(1,Math.hypot(forward,strafe));
         const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
         const startX=position.x, startZ=position.z;
         const body = {...movement.body,height:Math.min(movement.body.height,SEATED_HEIGHT)};
-        movement.slideSeated(position,(-sin*forward+cos*strafe)*speed,(-cos*forward-sin*strafe)*speed,dt,body,recordPosition);
+        while (physicsTime>=physicsStep && movementSync.canPredict(now)) {
+          previousFramePosition={...position};
+          physicsTime-=physicsStep;
+          movement.slideSeated(position,(-sin*forward+cos*strafe)*speed,(-cos*forward-sin*strafe)*speed,physicsStep,body,recordPosition);
+        }
         if (dt) seatedSpeed=Math.hypot(position.x-startX,position.z-startZ)/dt;
       }
     }
   } else seatedMoveSince = undefined;
-  if (playing && canMove && !menuOpen() && !orbitHeading && !seat && !seatPending && teleportLoading.hidden) {
+  if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending && teleportLoading.hidden) {
     const startX = position.x, startZ = position.z;
     const fallSpeed = movement.fall;
     const forward = forwardInput();
@@ -1444,20 +1464,26 @@ function tick(now) {
     const descending = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
     const vertical = flying ? Number(keys.has('Space')) - Number(descending) : 0;
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
-    if (!resetting && positionTrail.length < POSITION_TRAIL_LIMIT * 4) {
+    if (!resetting && hasPredictionRoom) {
       if (!flying) {
         const previous = movement.stance;
         const stance = movement.wantsSwim(position,sprinting()) ? 'swim' :
           crawlRequested ? 'crawl' : keys.has('KeyC') || now < crouchUntil ? 'crouch' : 'stand';
         if (movement.setStance(position,stance) !== previous) recordPosition(position);
       }
-      const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance}) / Math.max(1,Math.hypot(forward,strafe,vertical));
-      const dx = (-sin * forward + cos * strafe) * speed;
-      const dz = (-cos * forward - sin * strafe) * speed;
-      if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, dt, recordPosition, spectator);
-      else movement.update(position, dx, dz, jump, dt,
-        {rise: jump || keys.has('Space'), descend: descending || movement.medium === 'ladder' && sprinting(),
-          swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition});
+      const inputSize=Math.max(1,Math.hypot(forward,strafe,vertical));
+      while (physicsTime>=physicsStep && movementSync.canPredict(now)) {
+        previousFramePosition={...position};
+        physicsTime-=physicsStep;
+        const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance,y:position.y}) / inputSize;
+        const dx = (-sin * forward + cos * strafe) * speed;
+        const dz = (-cos * forward - sin * strafe) * speed;
+        if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, physicsStep, recordPosition, spectator);
+        else movement.update(position, dx, dz, jump, physicsStep,
+          {rise: jump || keys.has('Space'), descend: descending || movement.medium === 'ladder' && sprinting(),
+            swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition});
+        jump=false;
+      }
     }
     horizontalSpeed = dt > 0 ? Math.hypot(position.x - startX, position.z - startZ) / dt : 0;
     if (!resetting && !flying && movement.grounded && !movement.medium) {
@@ -1467,8 +1493,25 @@ function tick(now) {
         view.groundDust(position,movement.body,[(position.x-startX)/dt,(position.z-startZ)/dt],0,now);
       }
     }
-    jump = false;
-  } else horizontalSpeed = seatedSpeed;
+  } else {
+    if (!seat || seat.kind!=='ground' || !liveActionsReady || (!forwardInput() && !turnInput())) physicsTime=0;
+    jump=false;
+    horizontalSpeed = seatedSpeed;
+  }
+  if (!hasPredictionRoom || resetting || menuOpen() || seat?.entity || !playing || orbitHeading) {
+    previousFramePosition={...position};
+    physicsTime=0;
+    if (!hasPredictionRoom) jump=false;
+  }
+  const blend=Math.min(1,physicsTime/physicsStep);
+  const previous=previousFramePosition??position;
+  const fade=correctionOffset ? Math.max(0,1-(now-correctionOffset.started)/150) : 0;
+  framePosition={
+    x:previous.x+(position.x-previous.x)*blend+(correctionOffset?.x??0)*fade,
+    y:previous.y+(position.y-previous.y)*blend+(correctionOffset?.y??0)*fade,
+    z:previous.z+(position.z-previous.z)*blend+(correctionOffset?.z??0)*fade,
+  };
+  if (!fade) correctionOffset=undefined;
   if (playing && !menuOpen()) {
     const hour = view.dayTick(now);
     if (now>=nextBardCheck) {
@@ -1481,21 +1524,25 @@ function tick(now) {
       biome:view.climate?.biomeAt(position.x,position.z),night:hour > 13000 && hour < 23000,
       windStrength:windAt(now,view.weather).strength});
   }
-  if (!resetting && canMove && teleportLoading.hidden && now >= nextPositionSync && !acting) syncPosition();
-  if (canMove && (!sync || presenceDirty)) sendPresence(now);
+  if (!resetting && teleportLoading.hidden && !acting) movementSync.pump();
+  if (!movementSync.busy() || presenceDirty) sendPresence(now);
+  const intended=Boolean(forwardInput() || turnInput() || keys.has('Space') || flying &&
+    (keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC')));
+  const waiting=playing && !menuOpen() && !resetting && (intended || positionTrail.length) && !hasPredictionRoom;
+  connection.movementWaiting(Boolean(waiting),playing && intended && !menuOpen() && movement.waitingForTerrain);
   if (playing && !menuOpen() && !seat && !flying && movement.stance === 'stand') {
     view.viewBob.step(horizontalSpeed * dt, dt, movement.grounded && !movement.medium, movement.fall);
   } else {
     view.viewBob.step(0, dt, true, 0);
   }
   view.updateVehicles();
-  view.updateLocalAvatar(now, dt, position, playerPose(), horizontalSpeed, seat, spectator,modeUi.death);
+  view.updateLocalAvatar(now, dt, framePosition, playerPose(), horizontalSpeed, seat, spectator,modeUi.death);
   updateCamera();
   view.players.frame(now, dt);
   updateSelection();
   worldEdit.frame();
   updatePlacement(npcTarget||hitPlayer?null:selection);
-  if (repeatPlacement && canMove && now >= nextPlacement && !acting && !resetting && !menuOpen() && playing &&
+  if (repeatPlacement && liveActionsReady && now >= nextPlacement && !acting && !resetting && !menuOpen() && playing &&
       !spectator && !orbitHeading && (touchMode || document.pointerLockElement === view.renderer.domElement)) {
     nextPlacement = now + 150;
     if ((clipboard || heldPart || chiseling) && !frameTarget && !seatTarget && !npcTarget) void action('place');
@@ -1520,14 +1567,57 @@ function tick(now) {
   nearbyStream?.update();
   const eye=view.sightOrigin(position,movement.body.eye);
   touchControls?.update({flying,spectator,stance:movement.stance,crawlRequested,seated:seat?.kind==='ground',
-    orbit:Boolean(orbitHeading),chisel:chiseling});
+    orbit:Boolean(orbitHeading),chisel:chiseling,actionLabel:seat?'Встать':npcTarget?'Диалог':
+      containerSpec(selection?.cell)?'Открыть':targetSeat?(targetSeat.bed?'Лечь':'Сесть'):undefined});
   view.render(now, npcTarget||hitPlayer?null:selection, playing && !menuOpen(), placement, document.hasFocus(),{x:eye[0],y:eye[1],z:eye[2]});
   connection.frames(view.renderedFrames,now);
+  if (diagnostics.active(now)) {
+    const reason=!playing?'paused':menuOpen()?'menu':resetting || !teleportLoading.hidden?'teleport':
+      orbitHeading?'camera':seat || seatPending?'seated':!hasPredictionRoom?'queue_full':movement.waitingForTerrain?'terrain':undefined;
+    diagnostics.frame(now,intended,reason,positionTrail.length,position);
+  }
   requestAnimationFrame(tick);
 }
 
 function bindControls() {
   const canvas = view.renderer.domElement;
+  const wholeMap=element('altitude-map'), mapBack=element('altitude-map-back');
+  const gameSurface=element('game');
+  wholeMap.hidden=!view.altitudeOverview?.supported;
+  const closeMap=()=>{
+    view.mapPosition=null;
+    view.nextIdleRender=0;
+    gameSurface.classList.remove('altitude-map-open');
+    mapBack.hidden=true;
+    wholeMap.focus();
+  };
+  wholeMap.addEventListener('click',async ()=>{
+    wholeMap.disabled=true;
+    const title=wholeMap.textContent;
+    wholeMap.textContent='Готовим карту…';
+    await view.altitudeOverview.prepare(performance.now());
+    wholeMap.disabled=false;
+    wholeMap.textContent=title;
+    if (!view.altitudeOverview.mesh) {
+      notice('Карта пока недоступна');
+      return;
+    }
+    if (playing) setPlaying(false);
+    view.mapPosition={x:position.x,z:position.z,yaw:heading.yaw};
+    view.nextMapRender=0;
+    gameSurface.classList.add('altitude-map-open');
+    mapBack.hidden=false;
+    mapBack.focus();
+  });
+  mapBack.addEventListener('click',closeMap);
+  document.addEventListener('keydown',event=>{
+    if (!view.mapPosition) return;
+    event.stopImmediatePropagation();
+    if (event.code==='Escape') {
+      event.preventDefault();
+      closeMap();
+    }
+  },true);
   button.addEventListener('click', () => {
     let pending;
     try {
@@ -1854,7 +1944,7 @@ function bindControls() {
     if (resetting || acting) return;
     resetting = true;
     try {
-      await sync;
+      await movementSync.inFlight();
       const {ok, body} = await post('respawn', {});
       if (ok) {
         await arriveAt(body.position,body.stance);
@@ -1874,11 +1964,13 @@ function distanceToChunk([x, z]) {
   return Math.max(Math.abs(x - Math.floor(position.x / 16)), Math.abs(z - Math.floor(position.z / 16)));
 }
 
-async function addChunk([x, z], visualOnly = false, isNeeded, signal) {
+async function addChunk([x, z], visualOnly = false, isNeeded, signal, highOnly=false, urgent=false) {
   const version = world.manifest.chunkCacheVersion;
   const directory = version ? `/generated/world/chunks/${version}` : '/generated/world/chunks';
-  const chunk = await json(`${directory}/${x}.${z}.json`, {signal});
+  metrics.lastChunk=[x,z,highOnly];
+  const chunk = await json(`${directory}/${x}.${z}.json${highOnly ? '?height=upper' : ''}`, {signal,priority:urgent?'high':'low'});
   if (isNeeded && !isNeeded()) return;
+  if (highOnly && world.chunks.has(chunkKey(x,z))) return;
   view.addChunk(world.addChunk(chunk, visualOnly));
   if (visualOnly) metrics.visualChunksLoaded++;
   else metrics.chunksLoaded++;
@@ -1911,22 +2003,28 @@ function streamNearby(scenery) {
   const inFlight = new Map();
   const retryAt = new Map();
   let area, planned = [], lastBackgroundRequest = -Infinity;
+  const ready=key=>{
+    const chunk=world.chunks.get(key);
+    return chunk && (!chunk.highOnly || area.highOnly);
+  };
 
   function status() {
-    const missing = planned.filter(({key}) => !world.chunks.has(key)).length;
+    const missing = planned.filter(({key}) => !ready(key)).length;
     return {...area, loading:inFlight.size, missing, ready:!missing && view.streamSettled()};
   }
 
   function updateArea() {
     const x = Math.floor(position.x / 16), z = Math.floor(position.z / 16);
-    const radius = view.detailedDistance + 1;
-    if (area?.x === x && area.z === z && area.radius === radius) return;
+    view.updateAltitude(position,performance.now());
+    const highOnly=Boolean(view.altitudeOverview?.supported && position.y >= (area?.highOnly ? 291 : 308));
+    const radius = highOnly ? (view.lowDevice?3:5) : view.detailedDistance + 1;
+    if (area?.x === x && area.z === z && area.radius === radius && area.highOnly===highOnly) return;
     const forwardX = area ? Math.sign(x - area.x) : 0;
     const forwardZ = area ? Math.sign(z - area.z) : 0;
-    area = {x, z, radius};
+    area = {x, z, radius, highOnly};
     view.streamAround(x, z, radius);
-    for (const {coordinate, controller} of inFlight.values()) {
-      if (!needed(coordinate)) controller.abort();
+    for (const {coordinate, controller, highOnly:requestedHigh} of inFlight.values()) {
+      if (!needed(coordinate) || requestedHigh && !highOnly) controller.abort();
     }
     const expired = [...world.chunks.values()].filter(chunk => distanceToChunk([chunk.x, chunk.z]) > radius + 1);
     world.removeChunks(expired);
@@ -1936,9 +2034,9 @@ function streamNearby(scenery) {
       const coordinate = [x + dx, z + dz];
       const key = chunkKey(...coordinate);
       const visualOnly = !world.isPlayableChunk(...coordinate);
-      if (visualOnly && !visual.has(key) && !inFullWorld(...coordinate) || world.chunks.has(key)) continue;
+      if (visualOnly && !visual.has(key) && !inFullWorld(...coordinate) || ready(key)) continue;
       planned.push({coordinate, key, visualOnly, distance:Math.max(Math.abs(dx), Math.abs(dz)),
-        order:dx * dx + dz * dz - (dx * forwardX + dz * forwardZ)});
+        order:dx * dx + dz * dz - (dx * forwardX + dz * forwardZ)*2});
     }
     planned.sort((a, b) => a.distance - b.distance || Number(a.visualOnly) - Number(b.visualOnly) || a.order - b.order);
     const wanted = new Set(planned.map(entry => entry.key));
@@ -1950,7 +2048,7 @@ function streamNearby(scenery) {
     while (!view.workerFailure) {
       updateArea();
       const now = performance.now();
-      const available = ({key}) => !world.chunks.has(key) && (retryAt.get(key) ?? 0) <= now;
+      const available = ({key}) => !ready(key) && (retryAt.get(key) ?? 0) <= now;
       const next = planned.find(entry => !inFlight.has(entry.key) && available(entry));
       terrainNetwork.urgent = planned.some(entry => entry.distance <= 2 && available(entry));
       if (!next || terrainNetwork.constrained(now) &&
@@ -1959,14 +2057,15 @@ function streamNearby(scenery) {
         continue;
       }
       const controller = new AbortController();
-      inFlight.set(next.key, {coordinate:next.coordinate, controller});
+      const requestHigh=area.highOnly;
+      inFlight.set(next.key, {coordinate:next.coordinate, controller,highOnly:requestHigh});
       try {
         await view.waitForStreamSlot(!next.visualOnly && needed(next.coordinate) && next.distance <= 2);
         updateArea();
         if (!controller.signal.aborted) {
           if (distanceToChunk(next.coordinate) > 2) lastBackgroundRequest = performance.now();
-          await addChunk(next.coordinate, next.visualOnly, () => needed(next.coordinate),
-            AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]));
+          await addChunk(next.coordinate, next.visualOnly, () => !controller.signal.aborted && needed(next.coordinate),
+            AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),requestHigh,next.distance<=2);
         }
         retryAt.delete(next.key);
       } catch (error) {
@@ -1986,6 +2085,17 @@ function streamNearby(scenery) {
 async function start() {
   const sessionBody = await accessUi.acquire();
   if (!sessionBody) return;
+  connectionReport.enable(sessionBody.access?.uid);
+  diagnostics.enable(sessionBody.playerDiagnostics,sessionBody.access?.uid,()=>{
+    const terrain=terrainNetwork.status(), chunks=nearbyStream?.status();
+    const acknowledgement=movementSync.inspect();
+    return {queued:positionTrail.length,pending:acknowledgement.pending,sse:connection.streamReady(),queueAgeMs:acknowledgement.queueAgeMs,
+      sseMovementAcks:acknowledgement.acks.sse,httpMovementAcks:acknowledgement.acks.http,stateMovementAcks:acknowledgement.acks.state,
+      positionRequests:positionMetrics.requests,positionErrors:positionMetrics.errors,positionCorrections:positionMetrics.corrections,
+      ...(Number.isFinite(terrain.rtt)&&{rttMs:terrain.rtt}),...(Number.isFinite(terrain.baseline)&&{baselineMs:terrain.baseline}),
+      terrainUrgent:terrain.urgent,terrainConstrained:terrain.constrained,
+      ...(chunks&&{chunksMissing:chunks.missing,chunksLoading:chunks.loading})};
+  });
   const session = {body:sessionBody};
   adminUi.setAccess(sessionBody.access);
   modeUi.setSelf(sessionBody.access?.uid??sessionBody.profile?.id);
@@ -2002,10 +2112,10 @@ async function start() {
   const p = session.body.position;
   const [x, y, z] = session.body.spawn || manifest.spawn;
   position = p ? {...p} : {x, y, z};
-  confirmedPosition = positionTuple(position);
   movement = new Movement(world);
   movement.size = profile.confirmed.size ?? 'normal';
-  movement.stance = confirmedStance = session.body.stance ?? 'stand';
+  movement.stance = session.body.stance ?? 'stand';
+  movementSync.reset(position,movement.stance);
   crawlRequested = movement.stance === 'crawl';
   view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
     lowDevice:localStorage.getItem(lowDevicePreference)==='1',terrainNetwork});
@@ -2017,7 +2127,15 @@ async function start() {
   if (session.body.time) view.setWorldTime(session.body.time);
   const weather=session.body.weatherSettings??session.body.weather;
   if (weather) updateWeather(weather);
-  view.onError = error => { notice('Ошибка построения участка карты'); console.error(error); };
+  const reportLocalError = sessionBody.access?.singlePlayer && recordLocalDiagnostics(view.renderer.domElement,()=>({
+    position:[position.x,position.y,position.z],mesh:view.renderer.info.render.triangles,chunks:world.chunks.size,
+    lastChunk:metrics.lastChunk,
+  }));
+  view.onError = error => {
+    if (reportLocalError) reportLocalError(error);
+    notice('Ошибка построения участка карты');
+    console.error(error);
+  };
   updateCamera();
   const farSupported = supportsFarTerrain(manifest) && manifest.lod.maxDistance === 32;
   const distance = element('detail-distance');
@@ -2032,13 +2150,14 @@ async function start() {
   await view.prepareGraphics();
   bindControls();
   stream();
+  movementSync.pump();
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
       revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
       terrainNetwork:terrainNetwork.status(),
       flying, spectator, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
-      movementSync: {...positionMetrics, queued: positionTrail.length, confirmed: [...confirmedPosition]},
+      movementSync: {...positionMetrics,...movementSync.inspect(),queued:positionTrail.length,confirmed:movementSync.inspect().pos},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
     perspective: cameraMode,
@@ -2057,14 +2176,16 @@ async function start() {
       sun:view.sky.material.uniforms.sunDirection.value.toArray()}),
   });
   const spawnChunk=[Math.floor(position.x/16),Math.floor(position.z/16)];
+  const upperStart=view.usesOverview(position);
+  if (upperStart) void view.altitudeOverview.prepare(performance.now());
   const near = world.playableAround(...spawnChunk,1);
   const buffered = world.playableAround(...spawnChunk,2);
   const startup = [...buffered].sort((a, b) => distanceToChunk(a) - distanceToChunk(b));
   await Promise.all(Array.from({length: 4}, async () => {
-    while (startup.length) await addChunk(startup.shift());
+    while (startup.length) await addChunk(startup.shift(),false,undefined,undefined,upperStart && position.y>=308,true);
   }));
   loading.textContent = 'Подготавливаем графику…';
-  await view.whenReady(near);
+  await view.whenReady(near,{position});
   metrics.playable = performance.now() - metrics.started;
   loading.textContent = 'Можно войти в мир';
   button.disabled = false;

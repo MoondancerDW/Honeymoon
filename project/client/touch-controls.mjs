@@ -8,11 +8,16 @@ const keyActions = {
 export function bindTouchControls({element,stick,enabled,sendKey,use,block,repeat,pause}) {
   const panel = element('touch-more-panel');
   const toggle = element('touch-more');
+  const build = element('touch-build');
+  const buildPanel = element('touch-build-panel');
+  const useButton = element('touch-use');
   const pad = element('stick'), nub = pad.querySelector('i');
   const captured = new Map();
   let joystick;
   let sprint = false;
   let previous;
+  let removeTimer;
+  let previousAction;
   const sprintButton=element('touch-sprint');
 
   function extra(open) {
@@ -79,6 +84,17 @@ export function bindTouchControls({element,stick,enabled,sendKey,use,block,repea
     repeat(pressed);
     if (pressed) block('place');
   });
+  hold('touch-remove',pressed=>{
+    clearTimeout(removeTimer);
+    if (!pressed) return;
+    block('remove');
+    const remove = () => {
+      if (!enabled()) return;
+      block('remove');
+      removeTimer=setTimeout(remove,175);
+    };
+    removeTimer=setTimeout(remove,350);
+  });
 
   for (const [id,code] of Object.entries(keyActions)) element(id).addEventListener('click',()=>{
     if (!enabled()) return;
@@ -86,12 +102,18 @@ export function bindTouchControls({element,stick,enabled,sendKey,use,block,repea
     sendKey(code,true,{shiftKey:id==='touch-chisel-size'});
     sendKey(code,false);
   });
-  for (const [id,type] of [['touch-remove','remove'],['touch-copy','copy'],['touch-rotate','rotate']]) {
+  for (const [id,type] of [['touch-copy','copy'],['touch-rotate','rotate']]) {
     element(id).addEventListener('click',()=>{if(enabled()) block(type);});
   }
-  element('touch-use').addEventListener('click',()=>{if (enabled()) use(false);});
+  useButton.addEventListener('click',()=>{if (enabled()) use(false);});
   element('touch-alternative').addEventListener('click',()=>{if (enabled()) {extra(false);use(true);}});
   toggle.addEventListener('click',()=>{if (enabled()) extra(panel.hidden);});
+  build.addEventListener('click',()=>{
+    if (!enabled()) return;
+    buildPanel.hidden=!buildPanel.hidden;
+    build.setAttribute('aria-pressed',String(!buildPanel.hidden));
+    extra(false);
+  });
   element('touch-pause').addEventListener('click',()=>{if (enabled()) pause();});
   sprintButton.addEventListener('click',()=>{
     if (!enabled()) return;
@@ -101,6 +123,7 @@ export function bindTouchControls({element,stick,enabled,sendKey,use,block,repea
   });
 
   function clear() {
+    clearTimeout(removeTimer);
     if (joystick!==undefined && pad.hasPointerCapture(joystick)) pad.releasePointerCapture(joystick);
     joystick=undefined;
     stick.x=stick.z=0;
@@ -115,7 +138,8 @@ export function bindTouchControls({element,stick,enabled,sendKey,use,block,repea
     sprintButton.setAttribute('aria-pressed','false');
     extra(false);
   }
-  return {clear,update({flying,spectator,stance,crawlRequested,seated,orbit,chisel}) {
+  return {clear,update({flying,spectator,stance,crawlRequested,seated,orbit,chisel,actionLabel='Действие'}) {
+    if (actionLabel!==previousAction) useButton.textContent=previousAction=actionLabel;
     const state=Number(flying)+2*Number(spectator)+4*Number(crawlRequested || stance==='crawl')+
       8*Number(seated)+16*Number(orbit)+32*Number(chisel);
     if (state===previous) return;

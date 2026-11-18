@@ -91,6 +91,33 @@ test('double chest preserves original slots, NBT, optimistic transfers and persi
   assert.deepEqual(second('container_read',a).output.container.slots[31].nbt,originalTag);
 });
 
+test('staged chest responses send counts first and keep a content version across lid changes',t=>{
+  const {add}=clients(t);
+  const first=add();
+  const open=first('container_open',a,{containerView:'summary'}).output;
+  assert.equal(open.container.counts.length,54);
+  assert.equal(open.container.counts[7],1);
+  assert.equal(open.container.counts[40],20);
+  assert.equal(open.container.counts[0],null);
+  assert.equal(open.container.slots,undefined);
+  assert.equal(open.inventory,undefined);
+  assert.doesNotMatch(JSON.stringify(open),/Оригинальная страница/);
+
+  const close=first('container_close',a,{containerView:'summary'}).output.container;
+  assert.notEqual(open.container.version,close.version);
+  assert.equal(open.container.contentVersion,close.contentVersion);
+  const details=first('container_read',a,{containerView:'details'}).output;
+  assert.equal(details.container.contentVersion,close.contentVersion);
+  assert.deepEqual(details.container.slots[7].nbt,originalTag);
+  assert.equal(details.inventory,undefined);
+
+  const moved=first('container_move',a,{containerView:'details',version:close.version,
+    from:slot('storage',7),to:slot('inventory',9)}).output;
+  assert.notEqual(moved.container.contentVersion,close.contentVersion);
+  assert.deepEqual(moved.inventory.slots[9].nbt,originalTag);
+  assert.equal(first('container_read',a,{containerView:'summary'}).output.container.counts[7],null);
+});
+
 test('independent ender inventories and original modded shelf write back their exact fields',t=>{
   const {add,store}=clients(t);
   const first=add(),second=add();
