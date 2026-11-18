@@ -294,7 +294,10 @@ try {
       status:403,json:{error:'invite_required'},
     }));
     await page.goto(url.replace('127.0.0.1','honeymoon-qa.localhost'),{waitUntil:'domcontentloaded'});
-    await click('#access-form .solo-entry-button');
+    await page.locator('#access-gate').waitFor();
+    const soloEntry=page.getByRole('button',{name:'Одиночная игра'});
+    assert.equal(await soloEntry.count(),1);
+    await soloEntry.click();
     const dialog=page.getByRole('dialog',{name:'Одиночная игра'});
     assert.equal(await dialog.isVisible(),true);
     assert.match(await dialog.getByRole('link',{name:'Скачать для Windows'}).getAttribute('href'),

@@ -2,6 +2,7 @@
   position: fixed; inset: 0; z-index: 14; display: grid; place-items: center; overflow: auto;
   padding: 1rem; background: #102631;
 }
+#access-gate:not([hidden]) ~ .entry { visibility: hidden; }
 #access-form {
   display: grid; gap: .85rem; width: min(25rem, 100%); color: #fbf7ed; padding: 1.2rem;
   border: 1px solid var(--line); background: #1a3541; border-radius: .75rem;
