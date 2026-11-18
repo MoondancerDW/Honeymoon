@@ -6,6 +6,7 @@ import {chromium} from 'playwright-core';
 import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
 import {stackRevision} from '../world/item-text.mjs';
+import {playerBody} from '../world/player-body.mjs';
 
 const [outputArg='work/build-2-qa', test='mobile']=process.argv.slice(2);
 const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 2);
@@ -69,7 +70,50 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (test==='mobile') {
+  if (test==='copy-corner') {
+    await start();
+    await hop(3360.5,72,1467.51);
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+    const selected=page.locator('#hotbar [aria-pressed="true"]');
+    const slot=await selected.getAttribute('data-slot');
+    assert.match(await selected.getAttribute('aria-label'),/Пусто/);
+    const eye=playerBody('normal','stand').eye;
+    async function aim(x,y,z) {
+      await page.evaluate(([x,y,z,eye])=>{
+        const from=honeymoon.stats().position;
+        const dx=x-from.x, dy=y-from.y-eye, dz=z-from.z;
+        honeymoon.look(Math.atan2(-dx,-dz),Math.atan2(dy,Math.hypot(dx,dz)));
+      },[x,y,z,eye]);
+    }
+    async function edit(type,input) {
+      const response=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/action' &&
+        response.request().postDataJSON()?.type===type, {timeout:10000});
+      await input();
+      const reply=await response;
+      assert.equal(reply.status(),200,await reply.text());
+      return reply.json();
+    }
+    const target=[3362,72,1467];
+    await aim(3362.5,72.25,1467.75);
+    await page.waitForFunction(()=>honeymoon.target()?.partSlot===9);
+    const copied=await edit('copy_part',()=>page.keyboard.press('KeyO'));
+    assert.deepEqual(copied.part,{slot:9,shape:2,material:3});
+    assert.equal(String(copied.inventory.selected),slot);
+    await page.waitForFunction(()=>document.querySelector('#hotbar [aria-pressed="true"] canvas'));
+    await shot('copy-corner-selected');
+    await edit('remove_part',()=>page.mouse.click(500,320));
+    await page.waitForFunction(([x,y,z])=>!honeymoon.getCell(x,y,z)?.parts.some(part=>part.slot===9),target);
+    await aim(3363,72.25,1467.75);
+    await page.waitForFunction(([x,y,z])=>{
+      const next=honeymoon.placement();
+      return next?.x===x && next.y===y && next.z===z && !next.blocked;
+    },target);
+    const placed=await edit('place_part',()=>page.mouse.click(500,320,{button:'right'}));
+    await page.waitForFunction(([x,y,z])=>honeymoon.getCell(x,y,z)?.parts.length===2,target);
+    assert.ok(placed.changes.some(change=>change.parts?.some(part=>part.sourceSlot===9 && part.material===3)));
+    result.checks.push({target,slot:Number(slot),part:copied.part});
+    await shot('copy-corner-placed');
+  } else if (test==='mobile') {
     let seeded=false;
     await page.route('**/api/session',async route=>{
       const response=await route.fetch();

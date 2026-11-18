@@ -1489,6 +1489,7 @@ async function action(type, sneaking = false, tapTool = false) {
       notice((result.body.copiedToBackpack ? 'Скопировано в рюкзак · ' : 'Скопировано · ') + name);
     }
     changes(result.body.changes, result.body.worldRevision, result.body.frames);
+    applyInventory(result.body.inventory);
     effects(result.body);
     if (type === 'place' && request.creativeItem === signItemKey) showSignEditor(request,['','','','']);
     metrics.lastEdit = performance.now() - started;
