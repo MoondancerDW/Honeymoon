@@ -136,6 +136,10 @@ export class RemotePlayers {
     }
   }
 
+  mapMarkers() {
+    return Array.from(this.entries.values(),({nickname,target})=>({name:nickname,x:target.x,z:target.z}));
+  }
+
   pick(origin,direction,limit) {
     let selected;
     for (const [id,player] of this.entries) {

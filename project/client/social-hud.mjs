@@ -5,6 +5,7 @@ const teleportErrors = {
   invalid_coordinates:'Введите числовые координаты X, Y и Z',
   outside_playable_area:'Координаты за пределами карты',
   teleport_blocked:'В выбранной точке недостаточно места',
+  admin_required:'Телепорт и варпы доступны администраторам.',
   solo_asset_unavailable:'Район ещё не скачан. Проверьте интернет или загрузку карты.',
   not_online:'Сначала войдите в мир',
   action_pending:'Дождитесь завершения текущего действия',
@@ -39,7 +40,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   let peers = [];
   let channel = 'global';
   let unread = 0;
-  let canSetTime=false;
+  let admin=false;
   let dynamicWeather=false;
 
   function updateUnread(value) {
@@ -113,7 +114,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   }
 
   function open(next) {
-    if (next==='clock'&&!canSetTime) return;
+    if (next!=='chat'&&!admin) return;
     if (!connected) return;
     if (panel === next) return close();
     pause();
@@ -154,8 +155,8 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       item.textContent = nick;
       return item;
     }));
-    byId('chat-toggle').disabled = teleportButton.disabled = warpButton.disabled = !connected;
-    clockButton.disabled=!connected||!canSetTime;
+    byId('chat-toggle').disabled = !connected;
+    clockButton.disabled=teleportButton.disabled=warpButton.disabled=!connected||!admin;
   }
 
   async function submit(path, payload, fallback) {
@@ -204,7 +205,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   byId('clock-close').addEventListener('click', () => close());
   byId('teleport-close').addEventListener('click', () => close());
   dynamic.addEventListener('change',async()=>{
-    if (!canSetTime || dynamic.disabled) return;
+    if (!admin || dynamic.disabled) return;
     dynamic.disabled=true;
     try {
       const result=await submit('weather',{dynamic:dynamic.checked},'Не удалось изменить динамическую погоду');
@@ -241,9 +242,11 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
 
   return {
     setAdmin(allowed) {
-      canSetTime=allowed;
-      clockButton.disabled=!connected||!allowed;
-      if (!allowed&&panel==='clock') close(false);
+      admin=Boolean(allowed);
+      if (!admin&&panel&&panel!=='chat') close(false);
+      clockButton.disabled=teleportButton.disabled=warpButton.disabled=!connected||!admin;
+      teleportButton.hidden=warpButton.hidden=byId('touch-teleport').hidden=!admin;
+      for (const hint of document.querySelectorAll('[data-teleport-hint]')) hint.hidden=!admin;
     },
     isOpen: () => !!panel,
     isChatOpen: () => panel === 'chat',
@@ -260,7 +263,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
         return true;
       }
       const next = {KeyT:'chat', Enter:'chat', NumpadEnter:'chat', KeyL:'clock', KeyG:'teleport'}[event.code];
-      if (!event.repeat && next) {
+      if (!event.repeat && next && (next==='chat'||admin)) {
         event.preventDefault();
         open(next);
         return true;

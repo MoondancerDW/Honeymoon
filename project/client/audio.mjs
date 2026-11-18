@@ -229,10 +229,17 @@ export class WorldAudio {
     if (!this.#playing) {
       this.#pauseGroundMusic();
       this.#pauseAltitudeMusic();
-    } else if (this.#altitudeActive) {
-      this.#nextAltitudeAttempt = 0;
-      this.#playAltitudeMusic();
-    } else this.#resumeGroundMusic();
+      if (this.#bard) {
+        this.#bard.attempt=undefined;
+        this.#bard.player.pause();
+      }
+    } else {
+      this.#bardRetryAt=0;
+      if (this.#altitudeActive) {
+        this.#nextAltitudeAttempt = 0;
+        this.#playAltitudeMusic();
+      } else this.#resumeGroundMusic();
+    }
     this.#updateGain();
   }
 
@@ -252,8 +259,9 @@ export class WorldAudio {
   }
 
   npcMusic(npcs,position,now) {
-    if (!this.#playing || this.#altitudeActive || this.#muted || !globalThis.Audio || !this.#environment.otherVolume) {
-      this.#bard?.player.pause();
+    if (!this.#playing) return;
+    if (this.#muted || !globalThis.Audio || !this.#environment.otherVolume || !this.#volume) {
+      this.#stopBard();
       return;
     }
     let speaker, nearest=Infinity;
@@ -267,26 +275,48 @@ export class WorldAudio {
       }
     }
     if (!speaker) {
-      this.#bard?.player.pause();
-      this.#bard=undefined;
+      this.#stopBard(true);
       return;
     }
     const {sound,minRange,maxRange}=speaker.bard;
     if (this.#bard?.sound!==sound) {
-      this.#bard?.player.pause();
+      this.#stopBard(true);
       const player=new Audio(sound);
       player.loop=true;
       player.preload='none';
-      this.#bard={sound,player};
+      const bard=this.#bard={sound,player,audible:false};
+      player.onerror=()=>{if (this.#bard===bard) this.#stopBard();};
       this.#bardRetryAt=0;
     }
-    const {player}=this.#bard;
+    const bard=this.#bard;
+    const {player}=bard;
     player.muted=false;
     player.volume=.68*this.#volume*this.#environment.otherVolume*clamp((maxRange-nearest)/Math.max(1,maxRange-minRange),0,1);
-    if (player.paused && now>=this.#bardRetryAt) {
+    if (player.paused && !player.error && !bard.attempt && now>=this.#bardRetryAt) {
       this.#bardRetryAt=now+2000;
-      player.play().catch(()=>{});
+      const attempt=bard.attempt=player.play();
+      void attempt.then(()=>{
+        if (this.#bard!==bard || bard.attempt!==attempt || !this.#playing || this.#muted || player.paused) return;
+        bard.audible=true;
+        this.#pauseGroundMusic();
+        this.#pauseAltitudeMusic();
+      },()=>{
+        if (this.#bard===bard && bard.attempt===attempt) this.#stopBard();
+      }).finally(()=>{ if (bard.attempt===attempt) bard.attempt=undefined; });
     }
+  }
+
+  #stopBard(clear=false) {
+    const bard=this.#bard;
+    if (!bard) return;
+    const wasAudible=bard.audible;
+    bard.audible=false;
+    bard.attempt=undefined;
+    bard.player.pause();
+    if (clear) this.#bard=undefined;
+    if (!wasAudible) return;
+    if (this.#altitudeActive) this.#playAltitudeMusic();
+    else this.#resumeGroundMusic();
   }
 
   setVolume(volume) {
@@ -349,12 +379,11 @@ export class WorldAudio {
 
   #pauseGroundMusic() {
     this.#music?.pause();
-    this.#bard?.player.pause();
     for (const {player} of this.#records.values()) player.pause();
   }
 
   #resumeGroundMusic() {
-    if (!this.#playing || this.#muted || this.#altitudeActive) return;
+    if (!this.#playing || this.#muted || this.#altitudeActive || this.#bard?.audible) return;
     for (const {player} of this.#records.values()) {
       if (player.paused && !player.ended) player.play().catch(() => {});
     }
@@ -362,7 +391,7 @@ export class WorldAudio {
   }
 
   #playAltitudeMusic() {
-    if (!this.#playing || !this.#altitudeActive || !this.#musicVolume || this.#muted ||
+    if (!this.#playing || !this.#altitudeActive || this.#bard?.audible || !this.#musicVolume || this.#muted ||
         !this.#context || !globalThis.Audio || this.#altitudeAttempt) return;
     const now = performance.now();
     if (now < this.#nextAltitudeAttempt) return;
@@ -688,7 +717,7 @@ export class WorldAudio {
   }
 
   #playMusic() {
-    if (this.#altitudeActive || !this.#musicVolume || this.#muted || this.#music || !globalThis.Audio) return;
+    if (this.#altitudeActive || this.#bard?.audible || !this.#musicVolume || this.#muted || this.#music || !globalThis.Audio) return;
     const now = this.#context?.currentTime ?? 0;
     this.#nextMusic ||= now + Math.random() * MUSIC_INTERVAL;
     if (now < this.#nextMusic || [...this.#records.values()].some(({player}) => !player.ended)) return;
@@ -723,7 +752,7 @@ export class WorldAudio {
       if (!this.#records.size) this.#resumeGroundMusic();
     };
     player.onended = finish;
-    if (this.#altitudeActive) return;
+    if (this.#altitudeActive || this.#bard?.audible) return;
     this.#music?.pause();
     this.#music = undefined;
     this.#nextMusic = (this.#context?.currentTime ?? 0) + MUSIC_INTERVAL;
@@ -731,13 +760,14 @@ export class WorldAudio {
   }
 
   stats() {
-    const music = this.#altitudeActive ? this.#altitudeMusic?.player : this.#music;
+    const musicMode=this.#bard?.audible ? 'npc' : this.#altitudeActive ? 'altitude' : 'overworld';
+    const music = musicMode==='npc' ? this.#bard.player : this.#altitudeActive ? this.#altitudeMusic?.player : this.#music;
     return {loaded: Boolean(this.#catalog), state: this.#context?.state ?? 'disabled', muted: this.#muted,
       requested: this.#requested, played: this.#played, rain:this.#weatherGains,
-      musicMode: this.#altitudeActive ? 'altitude' : 'overworld', musicTime: music?.currentTime,
+      musicMode, musicTime: music?.currentTime,
       altitudeMusicConfigured: Boolean(this.#altitudeSource), musicVolume: this.#musicVolume,
       altitudeMusicError: this.#altitudeMusic?.player.error?.code,
       musicPlaying: Boolean(music && !music.paused && !music.ended &&
-        (!this.#altitudeMusic?.gain || this.#context?.state === 'running'))};
+        (musicMode!=='altitude' || !this.#altitudeMusic?.gain || this.#context?.state === 'running'))};
   }
 }

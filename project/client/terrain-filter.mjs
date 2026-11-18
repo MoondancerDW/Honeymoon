@@ -94,18 +94,13 @@ const sampling = `
     vec2 uv = (cell + clamp(within, vec2(.03125), vec2(.96875))) / grid;
     vec2 midUv = (cell + (1.0 + within * 4.0) / 6.0) / grid;
     vec2 meanUv = (cell + .5) / grid;
-    vec4 result = vec4(0.0);
-    if (footprint >= .66) {
-      result = texture2D(terrainAverage, meanUv);
-    } else {
-      result = texture2D(source, uv);
-      if (footprint > .065) {
-        vec4 mid = texture2D(terrainMid, midUv);
-        vec4 low = mix(mid, texture2D(terrainAverage, meanUv), smoothstep(.24, .66, footprint));
-        result = mix(result, low, smoothstep(.065, .21, footprint));
-      }
-    }
-    return result;
+    if (footprint >= .66) return texture2D(terrainAverage, meanUv);
+    if (footprint <= .04) return texture2D(source, uv);
+    vec4 mid = texture2D(terrainMid, midUv);
+    vec4 low = mix(mid, texture2D(terrainAverage, meanUv), smoothstep(.24, .66, footprint));
+    // Retire the 16x16 atlas level before a pixel spans several source texels.
+    if (footprint >= .10) return low;
+    return mix(texture2D(source, uv), low, smoothstep(.04, .10, footprint));
   }
 
   float terrainFootprint(vec2 uv) {
@@ -126,7 +121,14 @@ export function addTerrainFilter(shader, textures, rows, water = false) {
   }
   shader.uniforms.terrainMid = {value:textures.mid};
   shader.uniforms.terrainAverage = {value:textures.average};
-  shader.fragmentShader = terrainFilterShader + shader.fragmentShader.replace('#include <map_fragment>', `
+  // MSAA may shade a partly covered pixel at a point outside a block face.
+  // Keep the chosen atlas cell constant so an extrapolated UV cannot change it.
+  shader.vertexShader = 'uniform float terrainRows;\nflat varying vec2 terrainCell;\n' +
+    shader.vertexShader.replace('#include <uv_vertex>', `
+    #include <uv_vertex>
+    terrainCell = floor(vMapUv * vec2(64.0, terrainRows));`);
+  shader.fragmentShader = 'flat varying vec2 terrainCell;\n' + terrainFilterShader + shader.fragmentShader.replace('#include <map_fragment>', `
     vec2 atlasPosition = vMapUv * vec2(64.0, terrainRows);
-    diffuseColor *= terrainSample(map, floor(atlasPosition), fract(atlasPosition), terrainFootprint(atlasPosition));`);
+    vec2 within = clamp(atlasPosition - terrainCell, vec2(0.0), vec2(1.0));
+    diffuseColor *= terrainSample(map, terrainCell, within, terrainFootprint(atlasPosition));`);
 }

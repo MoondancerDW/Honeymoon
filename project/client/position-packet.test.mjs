@@ -10,9 +10,10 @@ test('batches a long fall in steps allowed by the server', () => {
   const start = [0,220,0];
   const falling = Array.from({length:32}, (_, index) => [0,220 - (index + 1) * .5,0]);
   const sent = positionBatch(start, falling);
-  assert.equal(sent.trail.length, 12);
-  assert.deepEqual(sent.target, [0,214,0]);
-  assert.equal(positionBatch(sent.target, falling.slice(sent.trail.length)).target[1], 208);
+  assert.equal(sent.trail.length, 32);
+  assert.deepEqual(sent.target, [0,204,0]);
+  const flying = positionBatch(start, falling, undefined, true);
+  assert.deepEqual(flying.target, [0,214,0]);
 });
 
 test('retains predicted walk steps through the requested final step', () => {

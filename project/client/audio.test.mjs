@@ -47,7 +47,11 @@ async function audioFixture(t) {
       this.currentTime=0;
       players.push(this);
     }
-    play() { this.paused=false; return Promise.resolve(); }
+    play() {
+      if (this.src.endsWith('/unavailable.ogg')) return Promise.reject(new Error('Audio cannot play'));
+      this.paused=false;
+      return Promise.resolve();
+    }
     pause() { this.paused=true; }
     removeAttribute(name) { delete this[name]; }
     load() { this.currentTime=0; }
@@ -128,22 +132,37 @@ test('overview replaces ordinary music and resumes its prior playback position',
   assert.equal(audio.stats().musicMode,'overworld');
 });
 
-test('modes suspend spatial music and replacing the local track drops the old audio element',async t=>{
+test('the NPC track takes priority and departing resumes the applicable music',async t=>{
   const {audio,players}=await audioFixture(t);
   audio.frame(world,ground);
   const bard={health:1,position:ground,bard:{sound:'/generated/npcs/sound/bard.ogg',minRange:2,maxRange:64}};
+  const [normal]=players;
+  normal.currentTime=23;
   audio.npcMusic([bard],ground,0);
+  await Promise.resolve();
+  assert.equal(normal.paused,true);
+  audio.npcMusic([],ground,100);
+  assert.equal(normal.paused,false);
+  assert.equal(normal.currentTime,23);
   audio.effects([{sound:'record.disc',position:[0,254,0]}],world);
-  const [,npc,record]=players;
+  audio.npcMusic([bard],ground,200);
+  await Promise.resolve();
+  const [,,,npc]=players;
+  const record=players[2];
   assert.equal(npc.paused,false);
-  assert.equal(record.paused,false);
+  assert.equal(record.paused,true);
+  assert.equal(normal.paused,true);
+  assert.equal(audio.stats().musicMode,'npc');
   audio.setAltitudeMusic('blob:one');
   audio.frame(world,high,{altitudeOverview:true});
+  assert.equal(npc.paused,false);
+  assert.equal(audio.stats().musicMode,'npc');
+  audio.npcMusic([bard],{...high,x:128},2100);
   const first=players.at(-1);
   assert.equal(npc.paused,true);
   assert.equal(record.paused,true);
-  audio.npcMusic([bard],high,2100);
-  assert.equal(npc.paused,true);
+  assert.equal(first.paused,false);
+  assert.equal(audio.stats().musicMode,'altitude');
   audio.setAltitudeMusic('blob:two');
   assert.equal(first.src,undefined);
   assert.equal(first.paused,true);
@@ -152,5 +171,18 @@ test('modes suspend spatial music and replacing the local track drops the old au
   assert.equal(audio.stats().altitudeMusicConfigured,false);
   assert.equal(record.paused,false);
   audio.npcMusic([bard],ground,2300);
-  assert.equal(npc.paused,false);
+  await Promise.resolve();
+  assert.equal(audio.stats().musicMode,'npc');
+  audio.npcMusic([],ground,2400);
+  assert.equal(record.paused,false);
+});
+
+test('entering an unavailable NPC music zone keeps the background track playing',async t=>{
+  const {audio,players}=await audioFixture(t);
+  audio.frame(world,ground);
+  const bard={health:1,position:ground,bard:{sound:'/generated/npcs/sound/unavailable.ogg',minRange:2,maxRange:64}};
+  audio.npcMusic([bard],ground,0);
+  await Promise.resolve();
+  assert.equal(audio.stats().musicMode,'overworld');
+  assert.equal(players[0].paused,false);
 });

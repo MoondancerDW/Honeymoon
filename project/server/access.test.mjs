@@ -376,6 +376,10 @@ test('administrators teleport online players privately and bans persist without 
   const teleport='/api/admin/teleport',ban='/api/admin/profiles/ban',unban='/api/admin/profiles/unban';
   assert.equal(code(await host(teleport,{target:guestUid,direction:'bring'}),409).error,'not_online');
   assert.equal(code(await visitor(teleport,{target:hostUid,direction:'to'}),403).error,'admin_required');
+  for (const [path,body] of [
+    ['/api/teleport',{x:7.5,y:8,z:7.5}], ['/api/teleport',{warpId:'warp-1'}], ['/api/warps',undefined],
+    ['/api/warps',{title:'Test warp'}], ['/api/warps/remove',{id:'warp-1'}],
+  ]) assert.equal(code(await visitor(path,body),403).error,'admin_required');
   assert.equal(code(await visitor(ban,{uid:hostUid}),403).error,'admin_required');
   assert.equal(code(await moderator(teleport,{target:hostUid,direction:'bring'}),403).error,'owner_required');
   assert.equal(code(await moderator(ban,{uid:hostUid}),403).error,'owner_protected');
@@ -403,10 +407,13 @@ test('administrators teleport online players privately and bans persist without 
   const oldTrail=code(await visitor('/api/position',{...initial,requestId:'before-admin-teleport',from:stale,trail:[stale]}),409);
   assert.equal(oldTrail.error,'movement_blocked');
   assert.deepEqual(oldTrail.position,movedVisitor.teleport.position);
+  assert.deepEqual(code(await visitor('/api/respawn',{})).position,initial);
 
   code(await host('/api/modes',{mode:'game',target:hostUid}));
-  code(await visitor('/api/teleport',{x:7.5,y:8,z:7.5}));
-  const flight=code(await host(teleport,{target:guestUid,direction:'to'}));
+  await eventReader(t,urls.public,admin.cookie);
+  code(await moderator('/api/presence',{yaw:0,pitch:0,motion:'idle'}));
+  code(await moderator('/api/teleport',{x:7.5,y:8,z:7.5}));
+  const flight=code(await host(teleport,{target:adminUid,direction:'to'}));
   assert.equal(flight.teleport.position.y,8);
   assert.equal(flight.teleport.flight,true);
   assert.deepEqual(await hostEvent('admin-teleport'),flight.teleport);
@@ -437,4 +444,23 @@ test('administrators teleport online players privately and bans persist without 
   assert.equal(restored.inventory.slots[0].count,19);
   assert.equal(code(await redeem(reservation.code)).access.uid,guestUid);
   assert.equal((await listed()).ban,null);
+});
+
+test('the single-player owner can use coordinate travel and manage warps without an online account',async t=>{
+  const {start}=fixture(t);
+  const {public:url}=await start({singlePlayer:true,secure:false,inviteRequired:false,ownerOnPrimary:true,
+    allowedOrigin:undefined,publicOrigin:undefined});
+  const local=(path,body)=>request(url,path,{body});
+  const session=code(await local('/api/session',{}));
+  assert.equal(session.access.role,'admin');
+  assert.equal(session.access.singlePlayer,true);
+  await eventReader(t,url,'');
+  code(await local('/api/presence',{yaw:0,pitch:0,motion:'idle'}));
+  const target={x:7.5,y:8,z:7.5};
+  assert.deepEqual(code(await local('/api/teleport',target)).position,target);
+  const {warps:[warp]}=code(await local('/api/warps',{title:'Local warp'}));
+  assert.deepEqual(code(await local('/api/warps')).warps,[warp]);
+  assert.deepEqual(code(await local('/api/respawn',{})).position,session.position);
+  assert.deepEqual(code(await local('/api/teleport',{warpId:warp.id})).position,target);
+  assert.deepEqual(code(await local('/api/warps/remove',{id:warp.id})).warps,[]);
 });

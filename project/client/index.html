@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
-  <meta name="honeymoon-build" content="4">
+  <meta name="honeymoon-build" content="5">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -38,6 +38,7 @@
         </label>
         <small id="access-error" role="status" aria-live="polite"></small>
         <button id="access-submit" type="submit" hidden>Войти</button>
+        <button class="solo-entry-button" type="button" aria-haspopup="dialog" aria-controls="solo-entry" hidden>Одиночная игра</button>
       </form>
     </section>
     <div id="health" role="meter" aria-label="Здоровье" aria-valuemin="0" aria-valuemax="10" hidden></div>
@@ -78,7 +79,7 @@
             <option value="snow">Снег</option>
           </select>
         </label>
-        <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled>Телепорт</button>
+        <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled hidden>Телепорт</button>
         <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
       </div>
       <aside id="connection-metrics" aria-label="Производительность и задержка">
@@ -102,6 +103,7 @@
           <span id="skin-status" class="skin-status" role="status"></span>
         </div>
         <button id="play" type="button" disabled>Войти в мир</button>
+        <button class="solo-entry-button" type="button" aria-haspopup="dialog" aria-controls="solo-entry" hidden>Одиночная игра</button>
         <small id="resume-help" hidden>Esc или Enter — продолжить с захватом мыши</small>
         <div id="mobile-pause-sections" hidden>
           <button type="button" data-pause-section="profile" aria-controls="mobile-profile" aria-expanded="false">Профиль</button>
@@ -117,7 +119,7 @@
           <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>
           <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="J" disabled>Инвентарь</button>
           <button id="solo-download-toggle" type="button" aria-haspopup="dialog" aria-controls="solo-download" hidden>Загрузка карты</button>
-          <button id="warp-toggle" type="button" aria-controls="warps-menu" aria-expanded="false" disabled>Варпы</button>
+          <button id="warp-toggle" type="button" aria-controls="warps-menu" aria-expanded="false" disabled hidden>Варпы</button>
           <button id="craft-toggle" type="button" aria-controls="craft-menu" hidden>Изготовить</button>
           <button id="mode-toggle" type="button" aria-controls="mode-menu" hidden>Режимы игроков</button>
           <button id="npc-editor-toggle" type="button" aria-haspopup="dialog" aria-controls="npc-menu" disabled>Редактор NPC</button>
@@ -140,7 +142,7 @@
         <dt>P</dt><dd>Наблюдатель</dd><dt>K</dt><dd>Резец</dd>
         <dt>Shift+K</dt><dd>Размер резца</dd>
         <dt>B</dt><dd>Помахать копытом</dd><dt>Z</dt><dd>Танец</dd>
-        <dt>G</dt><dd>Телепорт</dd><dt>T / Enter</dt><dd>Чат</dd>
+        <dt data-teleport-hint hidden>G</dt><dd data-teleport-hint hidden>Телепорт</dd><dt>T / Enter</dt><dd>Чат</dd>
         <dt>Esc</dt><dd>Пауза</dd>
       </dl>
       <div class="context-keys">
@@ -281,6 +283,17 @@
         </div>
       </form>
     </dialog>
+    <dialog id="solo-entry" aria-labelledby="solo-entry-title">
+      <h2 id="solo-entry-title">Одиночная игра</h2>
+      <p>Скачайте архив для Windows, распакуйте его и запустите <strong>Start-Honeymoon.cmd</strong>. При первом запуске нужен интернет. Карта будет сохраняться на вашем компьютере по мере игры.</p>
+      <div class="solo-download-actions">
+        <a id="solo-entry-download">Скачать для Windows</a>
+        <a href="http://127.0.0.1:4180/" target="_blank" rel="noopener noreferrer">Открыть запущенную игру</a>
+      </div>
+      <form method="dialog" class="solo-download-actions">
+        <button type="submit" autofocus>Закрыть</button>
+      </form>
+    </dialog>
     <dialog id="solo-download" aria-labelledby="solo-download-title">
       <h2 id="solo-download-title">Загрузка карты</h2>
       <progress id="solo-download-progress" aria-label="Готовность карты"></progress>
@@ -305,7 +318,7 @@
           <legend>Музыка высотного обзора</legend>
           <button id="altitude-music-choose" type="button" aria-describedby="altitude-music-status">Выбрать аудиофайл</button>
           <input id="altitude-music-file" type="file" accept="audio/*" hidden>
-          <span id="altitude-music-status" role="status">Обычная музыка</span>
+          <span id="altitude-music-status" role="status">Выберите файл для замены обычной музыки на высоте.</span>
           <button id="altitude-music-clear" type="button" hidden>Вернуть обычную музыку</button>
         </fieldset>
         <label>Режим окружения
@@ -394,7 +407,7 @@
         <button id="touch-spectator" type="button" aria-pressed="false">Наблюдатель</button>
         <button id="touch-inventory" type="button">Инвентарь</button>
         <button id="touch-catalog" type="button">Предметы</button>
-        <button id="touch-teleport" type="button">Телепорт</button>
+        <button id="touch-teleport" type="button" hidden>Телепорт</button>
         <button id="touch-clock" type="button">Часы</button>
         <button id="touch-drop" type="button">Выбросить</button>
         <button id="touch-alternative" type="button">Другое действие</button>
@@ -416,5 +429,6 @@
   <script type="module" src="/game.mjs"></script>
   <script type="module" src="/build-version.mjs"></script>
   <script type="module" src="/mobile-ui.mjs"></script>
+  <script type="module" src="/solo-entry.mjs"></script>
 </body>
 </html>

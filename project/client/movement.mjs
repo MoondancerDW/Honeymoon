@@ -2,7 +2,8 @@ import * as geometry from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {fluidAt,fluidCurrent,movementMedium} from '../world/block-movement.mjs';
 import {CRAWL_SPEED, FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, HIGH_FLIGHT_Y, HIGH_FLIGHT_SPEED,
-  HIGH_FLIGHT_SPRINT_SPEED, PLAYER, POSITION_STEP_LIMIT, WALK_SPEED, isPlayerStance, playerBody} from '../world/player-body.mjs';
+  HIGH_FLIGHT_SPRINT_SPEED, PLAYER, POSITION_STEP_LIMIT, POSITION_VERTICAL_STEP_LIMIT, WALK_SPEED, WORLD_GRAVITY,
+  isPlayerStance, playerBody} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
 import {withLoggedFluid} from '../world/logged-fluid.mjs';
 import {isRideableMinecart, minecartHit} from '../world/minecarts.mjs';
@@ -17,6 +18,8 @@ export {HEIGHT, EYE};
 const EPSILON = .00001;
 const CAMERA_OFFSET = 4;
 const CAMERA_RADIUS = .1;
+const JUMP_ASCENT_GRAVITY = 20;
+const VERTICAL_STEP = POSITION_VERTICAL_STEP_LIMIT - .01;
 const cartsByChunk = new WeakMap();
 const framesByChunk = new WeakMap();
 
@@ -196,14 +199,16 @@ export class Movement {
     position[axis] = start + amount;
     if (!this.blocked(position.x, position.y, position.z)) return false;
     let safe = 0, hit = 1;
-    for (let i = 0; i < 7; i++) {
+    const iterations = axis === 'y' && Math.abs(amount) > .02 ? 16 : 7;
+    for (let i = 0; i < iterations; i++) {
       const fraction = (safe + hit) / 2;
       position[axis] = start + amount * fraction;
       const blocked = this.blocked(position.x, position.y, position.z);
       if (blocked) hit = fraction;
       else safe = fraction;
     }
-    position[axis] = start + amount * safe;
+    const change = amount * safe;
+    position[axis] = Math.abs(change) <= EPSILON ? start : start + change;
     return true;
   }
 
@@ -265,10 +270,11 @@ export class Movement {
   update(position, dx, dz, jump, dt, {descend = false, rise = jump, swimPitch = 0, recordStep} = {}) {
     this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
     if (!this.medium && jump && this.grounded) {
-      this.fall = Math.sqrt(40 * this.body.jumpHeight);
+      this.fall = Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
       this.grounded = false;
     }
-    const n = Math.max(1, Math.ceil(dt / .016));
+    const fastestDrop = (Math.max(0,-this.fall) + WORLD_GRAVITY * dt) * dt;
+    const n = Math.max(1, Math.ceil(dt / .016), Math.ceil(fastestDrop / VERTICAL_STEP));
     const step = dt / n;
     for (let i = 0; i < n; i++) {
       const startMedium = this.medium;
@@ -284,10 +290,11 @@ export class Movement {
         this.fall = descend ? -1.04 : rise ? 1.15 : Math.max(-.63,this.fall-3.5*step);
       } else {
         const initial = this.fall;
-        this.fall = Math.max(-16, initial - 20 * step);
+        // Keep the jump ascent responsive, then accelerate normally without a low speed cap.
+        this.fall = initial - (initial > 0 ? JUMP_ASCENT_GRAVITY : WORLD_GRAVITY) * step;
         if (initial > 0 && this.fall < 0) {
           // Resolve the top of a one-block jump exactly so it can land on a full block.
-          deltaY = initial * initial / 40;
+          deltaY = initial * initial / (2 * JUMP_ASCENT_GRAVITY);
           this.fall = 0;
         } else {
           deltaY = (initial + this.fall) * .5 * step;
@@ -316,7 +323,7 @@ export class Movement {
     this.medium = null;
     if (!dx && !dy && !dz) return;
     const steps = Math.max(1, Math.ceil(dt / .016),Math.ceil(Math.hypot(dx,dz)*dt/(POSITION_STEP_LIMIT-.001)),
-      Math.ceil(Math.abs(dy)*dt/.54));
+      Math.ceil(Math.abs(dy)*dt/VERTICAL_STEP));
     const time = dt / steps;
     for (let i = 0; i < steps; i++) {
       if (spectator) {
@@ -335,7 +342,10 @@ export class Movement {
   }
 
   vertical(position, amount) {
-    const hit = this.axis(position, 'y', amount);
+    // While dropping fast, endpoint-only checks could skip a thin surface with a short body.
+    const segments = Math.max(1, Math.ceil(-amount / this.body.height));
+    let hit = false;
+    for (let i = 0; i < segments && !hit; i++) hit = this.axis(position, 'y', amount / segments);
     this.grounded = hit && amount < 0;
     if (hit) this.fall = 0;
   }

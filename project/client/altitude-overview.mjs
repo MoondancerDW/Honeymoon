@@ -2,10 +2,7 @@ import * as THREE from '/vendor/three/three.module.js';
 import map from './altitude-map-data.mjs';
 import {shapeFor} from '../world/geometry.mjs';
 
-const regionSize=512;
 const highOverlayDistance=2304;
-const bakedWest=Math.floor(map.west/regionSize), bakedNorth=Math.floor(map.north/regionSize);
-const bakedWidth=Math.ceil(map.east/regionSize)-bakedWest, bakedHeight=Math.ceil(map.south/regionSize)-bakedNorth;
 
 export class AltitudeOverview {
   constructor(display) {
@@ -14,10 +11,6 @@ export class AltitudeOverview {
     this.scene=new THREE.Group();
     this.scene.visible=false;
     display.scene.add(this.scene);
-    this.refinements=new Uint8Array(bakedWidth*bakedHeight);
-    this.mask=new THREE.DataTexture(this.refinements,bakedWidth,bakedHeight,THREE.RedFormat);
-    this.mask.minFilter=this.mask.magFilter=THREE.NearestFilter;
-    this.mask.needsUpdate=true;
     this.highBlocks=new THREE.Group();
     display.scene.add(this.highBlocks);
     this.upperRevision=-1;
@@ -117,31 +110,9 @@ export class AltitudeOverview {
     geometry.setIndex(indices);
     geometry.computeBoundingSphere();
     const material=new THREE.MeshBasicMaterial({map:colors});
-    material.onBeforeCompile=shader=>{
-      shader.uniforms.altitudeMask={value:this.mask};
-      shader.uniforms.altitudeMaskOrigin={value:new THREE.Vector2(bakedWest,bakedNorth)};
-      shader.uniforms.altitudeMaskSize={value:new THREE.Vector2(bakedWidth,bakedHeight)};
-      shader.vertexShader='varying vec2 altitudeXZ;\n'+shader.vertexShader
-        .replace('#include <begin_vertex>','#include <begin_vertex>\n altitudeXZ=(modelMatrix*vec4(position,1.)).xz;');
-      shader.fragmentShader='uniform sampler2D altitudeMask;\nuniform vec2 altitudeMaskOrigin, altitudeMaskSize;\nvarying vec2 altitudeXZ;\n'+
-        shader.fragmentShader.replace('#include <alphatest_fragment>',`#include <alphatest_fragment>
-          vec2 tile=floor(altitudeXZ/512.)-altitudeMaskOrigin;
-          float ready=texture2D(altitudeMask,(tile+.5)/altitudeMaskSize).r;
-          float dither=fract(52.9829189*fract(dot(floor(gl_FragCoord.xy),vec2(.06711056,.00583715))));
-          if (dither<ready) discard;`);
-    };
     this.mesh=new THREE.Mesh(geometry,material);
     this.mesh.position.set((west+east)/2,0,(north+south)/2);
     this.scene.add(this.mesh);
-  }
-
-  setRefinement(rx,rz,coverage) {
-    const x=rx-bakedWest,z=rz-bakedNorth;
-    if (x<0 || z<0 || x>=bakedWidth || z>=bakedHeight) return;
-    const index=x+z*bakedWidth,value=Math.round(255*coverage);
-    if (value===this.refinements[index]) return;
-    this.refinements[index]=value;
-    this.mask.needsUpdate=true;
   }
 
   updateHighBlocks(position, now) {
@@ -194,33 +165,5 @@ export class AltitudeOverview {
 
   invalidateHighBlocks() {
     this.upperRevision=-1;
-  }
-
-  renderMap({x,z,yaw}) {
-    if (!this.mapScene) {
-      this.mapScene=new THREE.Scene();
-      this.mapScene.background=new THREE.Color(0x182b32);
-      const terrain=new THREE.Mesh(this.mesh.geometry,new THREE.MeshBasicMaterial({map:this.mesh.material.map}));
-      terrain.position.copy(this.mesh.position);
-      this.mapScene.add(terrain);
-      const marker=new THREE.BufferGeometry();
-      marker.setAttribute('position',new THREE.Float32BufferAttribute([0,0,-1,.55,0,.6,-.55,0,.6],3));
-      this.mapMarker=new THREE.Mesh(marker,new THREE.MeshBasicMaterial({color:0xf8d078,side:THREE.DoubleSide}));
-      this.mapScene.add(this.mapMarker);
-      this.mapCamera=new THREE.OrthographicCamera(-1,1,1,-1,.1,2200);
-      this.mapCamera.up.set(0,0,-1);
-      this.mapCamera.position.set((map.west+map.east)/2,1400,(map.north+map.south)/2);
-      this.mapCamera.lookAt(this.mapCamera.position.x,0,this.mapCamera.position.z);
-    }
-    const {renderer,camera:{aspect}}=this.display;
-    const halfHeight=Math.max(map.south-map.north,(map.east-map.west)/aspect)*.54;
-    const camera=this.mapCamera;
-    camera.left=-halfHeight*aspect; camera.right=halfHeight*aspect;
-    camera.top=halfHeight; camera.bottom=-halfHeight;
-    camera.updateProjectionMatrix();
-    this.mapMarker.position.set(x,260,z);
-    this.mapMarker.rotation.y=yaw;
-    this.mapMarker.scale.setScalar(halfHeight*.032);
-    renderer.render(this.mapScene,camera);
   }
 }

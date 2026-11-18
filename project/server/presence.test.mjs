@@ -257,7 +257,8 @@ test('independent cookies share profiles and only confirmed movement, and retain
 
 test('teleport validates body and playable chunks, and local chat uses confirmed three-dimensional distance', {timeout:12000}, async t => {
   const solid = {key:'legacy:1:0', object:null};
-  const app = createHoneymoonServer({state:':memory:', base:{
+  const key = 'presence-test-owner-key';
+  const app = createHoneymoonServer({state:':memory:', npcAdminKey:key, base:{
     ...base,
     getCell: (x,y,z) => x === 13 && y === 1 && z === 8 ? solid : air,
     hasPlayableChunk:(x,z) => !(x === 1 && z === 1),
@@ -272,13 +273,16 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
   const signal = AbortSignal.timeout(9000);
   async function post(method, body, cookie, forwarded = '192.0.2.1') {
     const response = await fetch(`${url}/api/${method}`, {method:'POST', headers:{
-      'Content-Type':'application/json', 'X-Forwarded-For':forwarded, ...(cookie && {Cookie:cookie}),
+      'Content-Type':'application/json', ...(forwarded && {'X-Forwarded-For':forwarded}), ...(cookie && {Cookie:cookie}),
     }, body:JSON.stringify(body), signal});
     return {status:response.status, data:await response.json(), cookie:response.headers.get('Set-Cookie')?.split(';')[0]};
   }
+  const owner = await post('access/owner',{key,profileName:'Администратор'},undefined,null);
+  assert.equal(owner.status,200);
   async function player(nickname) {
-    const {cookie} = await post('session',{});
-    assert.equal((await post('profile',{nickname},cookie)).data.nickname,nickname);
+    const {data:{code:invite}} = await post('admin/invites',{kind:'admin'},owner.cookie);
+    const {cookie,data} = await post('session',{invite,profileName:nickname});
+    assert.equal(data.profile.nickname,nickname);
     const feed = await eventFeed(url,cookie,signal,true);
     assert.equal((await post('presence',{yaw:0,pitch:0},cookie)).status,200);
     await feed.next('presence', event => event.selfOnline);

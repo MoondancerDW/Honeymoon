@@ -17,8 +17,9 @@ import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
-import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_STEP_LIMIT, POSITION_TRAIL_LIMIT,
-  flightPositionCost, isPlayerStance, playerBody } from '../world/player-body.mjs';
+import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_FLIGHT_DROP_LIMIT, POSITION_STEP_LIMIT,
+  POSITION_TRAIL_LIMIT, POSITION_VERTICAL_STEP_LIMIT, WORLD_GRAVITY, flightPositionCost, isPlayerStance,
+  playerBody } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
 import { isRideableMinecart, minecartHit, minecartSeat } from '../world/minecarts.mjs';
 import { isRideableBoat,boatHeading,boatHit,boatSeat } from '../world/boats.mjs';
@@ -241,7 +242,7 @@ function newCreativeObject(key, position, input, item) {
 export function createGame(base, store, geometry, {
   clock = () => performance.timeOrigin + performance.now(), modules, allowRemoval = false, models, creativeBlocks = new Set(),
   creativeItems = new Map(), playerSize = () => 'normal',
-  survival, survivalChanged,
+  survival, survivalChanged, persistPositions = false,
 } = {}) {
   const positions = new Map();
   const movementChannel = createMovementChannel(player=>({
@@ -257,6 +258,8 @@ export function createGame(base, store, geometry, {
   const mechanics = modules ?? registerMechanics(base, store, geometry);
   const [sx, sy, sz] = base.manifest.spawn;
   const spawn = Object.freeze({ x: sx, y: sy, z: sz });
+  const {minY,maxY} = base.manifest.bounds;
+  const maximumFallSpeed = Math.sqrt(2 * WORLD_GRAVITY * (maxY + 1 - minY));
   const diagnostic = mechanics.find(module => module.id === 'diagnostic');
   const catalog = new Set([...(base.catalog ?? []), ...creativeBlocks]);
   catalog.add('legacy:9:0');
@@ -366,7 +369,25 @@ export function createGame(base, store, geometry, {
     });
   }});
 
+  function initializePosition(player) {
+    if (positions.has(player)) return;
+    let position = spawn;
+    let stance = 'stand';
+    const saved = persistPositions && store.getState('movement',player,'pos');
+    if (saved?.version === 1 && saved.value?.world === base.hash && isPlayerStance(saved.value.stance)) {
+      const candidate = saved.value.position;
+      const body = bodyFor(player,saved.value.stance);
+      if (candidate && [candidate.x,candidate.y,candidate.z].every(Number.isFinite) &&
+          bodyWithinMap(candidate,body) && !physical.collides(candidate,body)) {
+        position = candidate;
+        stance = saved.value.stance;
+      }
+    }
+    positions.set(player,{position,stance,updated:clock(),budget:1});
+  }
+
   function playerAt(player) {
+    if (persistPositions) initializePosition(player);
     return positions.get(player)?.position ?? spawn;
   }
 
@@ -1559,6 +1580,9 @@ export function createGame(base, store, geometry, {
     const flight = body.pose?.motion === 'fly' && stanceFor(player) === 'stand';
     const elapsed = Math.min(sequenced && !groundSeat ? 1.5 : .65, (now - (old?.updated ?? now - 100)) / 1000);
     const limit = sequenced ? RUN_SPEED * 1.5 : POSITION_BATCH_LIMIT + .4;
+    const gravityDrop = sequenced && !flight && !groundSeat;
+    const dropBudget = gravityDrop ? Math.min(POSITION_FLIGHT_DROP_LIMIT + maximumFallSpeed * 1.5,
+      (old?.fallBudget ?? POSITION_FLIGHT_DROP_LIMIT) + elapsed * maximumFallSpeed) : POSITION_FLIGHT_DROP_LIMIT;
     const seatedLimit = .65 * CRAWL_SPEED + .14;
     const budget = groundSeat ? Math.min(seatedLimit,Math.min(sequenced ? seatedLimit : .14,old?.budget ?? 0) + elapsed * CRAWL_SPEED) :
       Math.min(limit, (old?.budget ?? 1) + elapsed * RUN_SPEED);
@@ -1614,12 +1638,14 @@ export function createGame(base, store, geometry, {
       }
       const planar = Math.hypot(step.x - from.x, step.z - from.z);
       const vertical = step.y - from.y;
-      if (!bodyWithinMap(step,dimensions) || hasTrail && (planar > POSITION_STEP_LIMIT || Math.abs(vertical) > .55)) reject();
+      if (!bodyWithinMap(step,dimensions) || hasTrail && (planar > POSITION_STEP_LIMIT ||
+          Math.abs(vertical) > POSITION_VERTICAL_STEP_LIMIT)) reject();
       if (stance === 'crouch' && planar > 0 && vertical <= .02 && physical.supported(from,dimensions) &&
           !physical.supported({...step,y:from.y},dimensions,.5)) reject();
       distance += flightPositionCost(planar,from.y,step.y,flight && nextStance === 'stand');
       drop += Math.max(-vertical, 0);
-      if (distance > budget + (groundSeat ? .035 : MOVEMENT_GRACE) || drop > 6) reject();
+      if (distance > budget + (groundSeat ? .035 : MOVEMENT_GRACE) ||
+          drop > dropBudget + (gravityDrop ? MOVEMENT_GRACE : 0)) reject();
       segment.push(step);
       from = step;
     }
@@ -1632,7 +1658,8 @@ export function createGame(base, store, geometry, {
       return {...passivePosition(target),seat,stance};
     }
     const entry = observing ? passivePosition(target) : enterPosition(player, target, previous,stance);
-    positions.set(player, {position:target, stance, updated:now, seen:now, budget:budget-distance, requestId});
+    positions.set(player, {position:target, stance, updated:now, seen:now, budget:budget-distance, requestId,
+      ...(gravityDrop && {fallBudget:dropBudget-drop})});
     if (!sequenced) movementChannel.invalidate(player);
     if (survival?.enabled&&survival.isGame(player)) {
       const medium=movementMedium(cellAt,target.x,target.y,target.z,models);
@@ -1725,8 +1752,9 @@ export function createGame(base, store, geometry, {
     if (observing) position = {...previous,y:Math.min(previous.y,highest)};
     else if (seat) position = leaveSeat(player);
     else {
-      const center = {x:Math.floor(previous.x)+.5,y:previous.y,z:Math.floor(previous.z)+.5};
-      const candidates = [previous, center,
+      const nearby = {...previous,y:Math.min(previous.y,highest)};
+      const center = {x:Math.floor(nearby.x)+.5,y:nearby.y,z:Math.floor(nearby.z)+.5};
+      const candidates = [nearby, center,
         ...faceOffsets.filter(([,dy]) => !dy).map(([dx, ,dz]) => ({...center,x:center.x+dx,z:center.z+dz}))];
       for (const candidate of candidates) {
         if (bodyWithinMap(candidate,standing) && !physical.collides(candidate,standing)) {
@@ -1843,6 +1871,14 @@ export function createGame(base, store, geometry, {
       return {entities:carts.snapshot(),boats:boats.snapshot(),position:playerAt(player),seat:publicSeat(player)};
     },
     flushMinecarts() { carts.flush(); boats.flush(); },
+    checkpointPositions() {
+      if (!persistPositions || !positions.size) return;
+      store.atomic(() => {
+        for (const [player, {position, stance}] of positions) {
+          store.putState('movement',player,'pos',1,{world:base.hash,position,stance:stance ?? 'stand'});
+        }
+      });
+    },
     sit,
     leaveSeat,
     poseFor,
@@ -1871,7 +1907,7 @@ export function createGame(base, store, geometry, {
     contentHash: base.hash,
     worldRevision: store.worldRevision,
     session(playerId) {
-      if (!positions.has(playerId)) positions.set(playerId, { position: spawn, updated: clock(), budget: 1 });
+      initializePosition(playerId);
       const ground = publicSeat(playerId);
       if (ground?.kind === 'ground' && !supportedGroundSeat(ground,bodyAtSeat(playerId,ground))) leaveSeat(playerId);
       return {

@@ -3,6 +3,7 @@ import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickItemFrame, pi
 import {World, chunkKey, json} from './world-data.mjs';
 import {WorldAudio,audioDefaults} from './audio.mjs';
 import {bindAltitudeMusic} from './altitude-music-settings.mjs';
+import {createAltitudeMap} from './altitude-map.mjs';
 import {createSoloDownloadUi} from './solo-download-ui.mjs';
 import {windAt} from './wind.mjs';
 import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
@@ -21,7 +22,7 @@ import {blockState, jammyUseSound} from '../world/block-interactions.mjs';
 import {seatFor, SEATED_EYE, SEATED_HEIGHT} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
-import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,playerBody} from '../world/player-body.mjs';
+import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,WORLD_GRAVITY,playerBody} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox, publicMicroPart} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
@@ -1492,7 +1493,7 @@ function tick(now) {
     }
     horizontalSpeed = dt > 0 ? Math.hypot(position.x - startX, position.z - startZ) / dt : 0;
     if (!resetting && !flying && movement.grounded && !movement.medium) {
-      if (fallSpeed < -Math.sqrt(40*3)) view.groundDust(position,movement.body,[0,0],-fallSpeed,now);
+      if (fallSpeed < -Math.sqrt(2*WORLD_GRAVITY*3)) view.groundDust(position,movement.body,[0,0],-fallSpeed,now);
       else if (sprinting() && movement.stance === 'stand' && horizontalSpeed > 4 && now >= nextSprintDust) {
         nextSprintDust = now + 70;
         view.groundDust(position,movement.body,[(position.x-startX)/dt,(position.z-startZ)/dt],0,now);
@@ -1588,43 +1589,13 @@ function tick(now) {
 
 function bindControls() {
   const canvas = view.renderer.domElement;
-  const wholeMap=element('altitude-map'), mapBack=element('altitude-map-back');
-  const gameSurface=element('game');
-  wholeMap.hidden=!view.altitudeOverview?.supported;
-  const closeMap=()=>{
-    view.mapPosition=null;
-    view.nextIdleRender=0;
-    gameSurface.classList.remove('altitude-map-open');
-    mapBack.hidden=true;
-    wholeMap.focus();
-  };
-  wholeMap.addEventListener('click',async ()=>{
-    wholeMap.disabled=true;
-    const title=wholeMap.textContent;
-    wholeMap.textContent='Готовим карту…';
-    await view.altitudeOverview.prepare(performance.now());
-    wholeMap.disabled=false;
-    wholeMap.textContent=title;
-    if (!view.altitudeOverview.mesh) {
-      notice('Карта пока недоступна');
-      return;
-    }
-    if (playing) setPlaying(false);
-    view.mapPosition={x:position.x,z:position.z,yaw:heading.yaw};
-    view.nextMapRender=0;
-    gameSurface.classList.add('altitude-map-open');
-    mapBack.hidden=false;
-    mapBack.focus();
+  createAltitudeMap({
+    game,openButton:element('altitude-map'),backButton:element('altitude-map-back'),
+    manifest:world.manifest,palette:view.terrainTextures?.average?.image,
+    localMarker:()=>({x:position.x,z:position.z,name:profile.confirmed.nickname}),
+    remoteMarkers:()=>view.players.mapMarkers(),
+    pause:()=>{if (playing) setPlaying(false);},
   });
-  mapBack.addEventListener('click',closeMap);
-  document.addEventListener('keydown',event=>{
-    if (!view.mapPosition) return;
-    event.stopImmediatePropagation();
-    if (event.code==='Escape') {
-      event.preventDefault();
-      closeMap();
-    }
-  },true);
   button.addEventListener('click', () => {
     let pending;
     try {

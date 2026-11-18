@@ -1,11 +1,52 @@
-#game.altitude-map-open > :not(#scene, #altitude-map-back, #build-outdated) {
+#game.altitude-map-open > :not(#altitude-map-panel, #build-outdated) {
   visibility: hidden !important;
 }
 
-#altitude-map-back {
+#altitude-map-panel {
   position: absolute;
+  inset: 0;
   z-index: 24;
-  top: max(12px, env(safe-area-inset-top));
-  left: max(12px, env(safe-area-inset-left));
+  background: #172928;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#altitude-map-panel canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  outline-offset: -3px;
+  touch-action: none;
+}
+
+#altitude-map-panel canvas:active { cursor: grabbing; }
+
+.altitude-map-controls {
+  position: absolute;
+  inset: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) auto max(8px, env(safe-area-inset-left));
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .4rem;
+  pointer-events: none;
+}
+
+.altitude-map-controls > div {
+  display: flex;
+  gap: .25rem;
+}
+
+.altitude-map-controls button {
+  min-width: 44px;
   min-height: 44px;
+  padding: 0 .65rem;
+  background: #182c32ef;
+  touch-action: manipulation;
+  pointer-events: auto;
+}
+
+.altitude-map-controls button:not(:disabled):hover {
+  background: #2b454b;
 }

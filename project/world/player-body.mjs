@@ -28,9 +28,12 @@ export const HIGH_FLIGHT_Y = 256;
 export const HIGH_FLIGHT_SPEED = FLIGHT_SPEED * 1.4;
 export const HIGH_FLIGHT_SPRINT_SPEED = FLIGHT_SPRINT_SPEED * 2;
 export const FLIGHT_VERTICAL_MULTIPLIER = 1;
+export const WORLD_GRAVITY = 9.81;
 export const POSITION_TRAIL_LIMIT = 32;
 // Allow the longest 16 ms flight sprint step plus rounding and diagonal collision corrections.
 export const POSITION_STEP_LIMIT = .34;
+export const POSITION_VERTICAL_STEP_LIMIT = .55;
+export const POSITION_FLIGHT_DROP_LIMIT = 6;
 export const POSITION_BATCH_LIMIT = 4.2;
 
 export function positionCost(planar, vertical) {

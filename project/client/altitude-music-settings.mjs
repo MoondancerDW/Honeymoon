@@ -31,7 +31,7 @@ export function bindAltitudeMusic({input,clear,status,setSource}) {
     setSource(objectUrl);
     if (previous) URL.revokeObjectURL(previous);
     clear.hidden=!file;
-    status.textContent=file?.name ?? 'Обычная музыка';
+    status.textContent=file ? file.name+' · сохранено в этом браузере' : 'Выберите файл для замены обычной музыки на высоте.';
   }
   savedTrack({mode:'readonly',run:store=>store.get(trackKey)}).then(file=>{
     if (!revision && file instanceof Blob) activate(file);

@@ -36,6 +36,7 @@ const boxEdges = [0,1, 0,2, 0,4, 1,3, 1,5, 2,3, 2,6, 3,7, 4,5, 4,6, 5,7, 6,7];
 const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
   1,3,5, 3,7,5, 0,1,4, 1,5,4, 2,6,3, 3,6,7];
 const perspectives = ['first', 'back', 'front'];
+const LANDING_VISTA_WAIT_MS = 1250;
 
 function partGeometry(pointsPerBox) {
   const geometry = new THREE.BufferGeometry();
@@ -161,6 +162,7 @@ export class Display {
     this.movingVehicles = new Map();
     this.chunkEntities = new Map();
     this.exactChunks = new Set();
+    this.visiblePreciseTerrain = new Set();
     this.preciseLevels = new Map();
     this.completedChunks = new Set();
     this.camera = new THREE.PerspectiveCamera(70, 1, .06, 850);
@@ -711,6 +713,7 @@ export class Display {
       this.preciseLevels.delete(key);
       this.completedChunks.delete(key);
       this.exactChunks.delete(key);
+      this.visiblePreciseTerrain.delete(key);
       this.farTerrain?.chunkChanged(x,z);
       const entities = this.chunkEntities.get(key);
       if (entities) {
@@ -764,10 +767,11 @@ export class Display {
   updateAltitude(position, now) {
     const overview=this.altitudeOverview;
     if (!overview) return;
-    if (position.y>=224 || this.mapOpen) overview.prepare(now);
+    if (position.y>=224) overview.prepare(now);
     if (this.world.upperOverrides.size || overview.highBlocks.children.length) overview.updateHighBlocks(position,now);
     if (!overview.mesh) return;
     const previous=this.overviewMode;
+    const landingVistaReady=position.y<256 && previous && this.farTerrain.hasVistaAt(position.x,position.z);
     if (position.y>=256) {
       if (previous!=='high') {
         this.overviewMode='high';
@@ -776,27 +780,35 @@ export class Display {
       }
     } else if (previous==='high' && (position.y<=252 || now-this.lastHigh>=550)) {
       this.overviewMode='landing';
+      this.landingVistaRendered=false;
+      this.landingVistaDeadline=now+LANDING_VISTA_WAIT_MS;
       const area=this.streamArea;
       if (area) for (const chunk of this.world.chunks.values()) {
         if (Math.max(Math.abs(chunk.x-area.x),Math.abs(chunk.z-area.z))>area.radius) continue;
         for (const y of this.preciseLevels.get(chunkKey(chunk.x,chunk.z)) ?? []) {
           const id=sectionKey(chunk.x,y,chunk.z);
-          if (y<16 && !this.groups.has(id)) this.schedule(chunk.x,y,chunk.z,true);
+          if (y<16 && !this.groups.has(id)) this.schedule(chunk.x,y,chunk.z,!chunk.sections.has(y));
         }
       }
-    } else if (previous==='landing' && this.nearGroundReady(position)) {
-      this.overviewMode=undefined;
+    } else if (previous==='landing') {
+      const vistaUnavailable=!landingVistaReady && (now>=this.landingVistaDeadline ||
+        !this.farTerrain.supportsVistaAt(position.x,position.z));
+      if ((this.landingVistaRendered || vistaUnavailable) && this.nearGroundReady(position)) this.overviewMode=undefined;
     }
     if (this.overviewMode!==previous) {
-      this.farTerrain.setAltitude(Boolean(this.overviewMode));
-      overview.scene.visible=Boolean(this.overviewMode);
-      this.applyTerrainFog();
+      this.farTerrain.setAltitude(this.overviewMode);
       if (this.streamArea) this.farTerrain.move(this.streamArea.x,this.streamArea.z);
       for (const chunk of this.world.chunks.values()) this.updateChunkVisibility(chunk.x,chunk.z);
       for (const [id,group] of this.groups) if (id.startsWith('lod:')) {
         group.visible=!this.overviewMode && Number(id.split(':')[1])<=this.requestedDistance;
       }
     }
+    // Keep the single map surface on screen until the landing tile is ready, then hand off to Vista.
+    const showOverview=this.overviewMode==='high' || (this.overviewMode==='landing' && overview.scene.visible && !landingVistaReady);
+    const terrainChanged=overview.scene.visible!==showOverview;
+    overview.scene.visible=showOverview;
+    this.farTerrain.scene.visible=!showOverview;
+    if (terrainChanged || this.overviewMode!==previous) this.applyTerrainFog();
     if (this.overviewMode==='high' && this.altitudeReleaseAt && now>=this.altitudeReleaseAt) {
       this.altitudeReleaseAt=undefined;
       this.releaseGroundMeshes();
@@ -828,6 +840,7 @@ export class Display {
     for (const id of this.pending.keys()) if (lower(id)) this.pending.delete(id);
     this.completedChunks.clear();
     this.exactChunks.clear();
+    this.visiblePreciseTerrain.clear();
   }
 
   get detailedDistance() {
@@ -862,12 +875,19 @@ export class Display {
     }
     const visible = this.isPreciseVisible(x,z);
     const {minY,maxY} = this.world.manifest.bounds;
+    let coversVista = false;
     for (let y = Math.floor(minY / 16); y <= Math.floor(maxY / 16); y++) {
       const group = this.groups.get(sectionKey(x,y,z));
       if (!group) continue;
-      group.userData.preciseVisible = visible && (!this.overviewMode || y>=16);
+      group.userData.preciseVisible = this.overviewMode ? y>=16 && (!this.lowDevice || visible) : visible;
       group.visible = group.userData.preciseVisible;
+      if (group.visible && y<16 && group.children.some(mesh=>!mesh.userData.sign)) coversVista = true;
       if (this.sectionVisibility.enabled) this.sectionVisibility.dirty = true;
+    }
+    if (coversVista !== this.visiblePreciseTerrain.has(key)) {
+      if (coversVista) this.visiblePreciseTerrain.add(key);
+      else this.visiblePreciseTerrain.delete(key);
+      this.farTerrain?.invalidateVistaCoverage();
     }
     const entities = this.chunkEntities.get(key);
     if (entities) entities.visible = visible && !this.overviewMode;
@@ -987,10 +1007,15 @@ export class Display {
 
   applyTerrainFog() {
     const distance=this.requestedDistance;
-    if (this.overviewMode) {
+    if (this.altitudeOverview?.scene.visible) {
       this.scene.fog.near=1500;
       this.scene.fog.far=8500;
       this.camera.far=10500;
+    } else if (this.overviewMode==='landing') {
+      const reach=this.farTerrain.vistaRange*16;
+      this.scene.fog.near=reach*.5;
+      this.scene.fog.far=reach;
+      this.camera.far=reach+280;
     } else if (this.world.manifest.chunkPalettes) {
       const layered = distance >= 24 && this.farTerrain?.lod.maxDistance === 32;
       const vista = distance === 32 && this.farTerrain?.vista;
@@ -1543,14 +1568,6 @@ export class Display {
     this.frameTimes.push(interval);
     if (this.frameTimes.length > 10000) this.frameTimes.shift();
     this.lastFrame = now;
-    if (this.mapPosition && this.altitudeOverview?.mesh) {
-      if (now>=(this.nextMapRender ?? 0)) {
-        this.altitudeOverview.renderMap(this.mapPosition);
-        this.renderedFrames++;
-        this.nextMapRender=now+100;
-      }
-      return;
-    }
     this.camera.getWorldDirection(this.viewDirection);
     const turning = playing && this.lastViewDirection.dot(this.viewDirection) < .82;
     if (turning) this.nextBackgroundUpload = now + 80;
@@ -1658,6 +1675,7 @@ export class Display {
       },(x,z) => this.isPreciseVisible(x,z));
       this.npcs.update(now,Math.min(.1,interval*.001)||0);
       this.updateOcclusion(now);
+      this.farTerrain?.updateVistaCoverage();
       const eye=this.camera.position;
       const medium=fluidAt(this.fluidCellAt,eye.x,eye.y,eye.z,this.world.models);
       const immersed=this.fluidFog[medium];
@@ -1673,6 +1691,7 @@ export class Display {
           this.sky.visible=true;
         }
       } else this.renderer.render(this.scene,this.camera);
+      if (this.overviewMode==='landing' && !this.altitudeOverview.scene.visible) this.landingVistaRendered=true;
       this.renderedFrames++;
       this.nextIdleRender = now + 100;
     }
@@ -1698,6 +1717,7 @@ export class Display {
       renderedFrames:this.renderedFrames,framebuffer:[this.renderer.domElement.width,this.renderer.domElement.height],
       lowDevice:this.lowDevice,detailedDistance:this.detailedDistance,
       altitude:this.overviewMode ?? 'ground',overviewReady:Boolean(this.altitudeOverview?.mesh),
+      overviewVisible:Boolean(this.altitudeOverview?.scene.visible),
       altitudeLandmarks:this.altitudeOverview?.landmarks?.children.length ?? 0,
       lastSectionError:this.lastSectionError,
       occlusion:this.sectionVisibility.statistics(), heldLights:this.heldLights.statistics(),

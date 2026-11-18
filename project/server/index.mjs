@@ -287,7 +287,7 @@ export function createHoneymoonServer({
   try {
     game = createGame(base, store, withExtractedModels(geometry, models),
       {clock, allowRemoval, models, creativeBlocks:creative?.placeable, creativeItems:creative?.items, playerSize,
-        survival,survivalChanged});
+        survival,survivalChanged,persistPositions:!singlePlayer&&state!==':memory:'});
   } catch (error) {
     store.close();
     throw error;
@@ -884,15 +884,20 @@ export function createHoneymoonServer({
         presence.update(player, result.position, {...pose, stance:result.stance, spectator:result.spectator});
         return json(response, 200, result);
       }
-      if (path === '/api/warps' && method === 'GET') return json(response,200,warps.list());
+      if (path === '/api/warps' && method === 'GET') {
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        return json(response,200,warps.list());
+      }
       if ((path === '/api/warps' || path === '/api/warps/remove') && method === 'POST') {
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
         const body = await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
         const next = path === '/api/warps' ? warps.add(body.title,game.session(player).position) : warps.remove(body.id);
-        sendSocial('warps',next);
+        sendSocial('warps',next,access.isAdmin);
         return json(response,200,next);
       }
       if (path === '/api/teleport' && method === 'POST') {
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
         const body = await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const target = body.warpId === undefined ? body : warps.get(body.warpId).position;
@@ -1154,6 +1159,7 @@ export function createHoneymoonServer({
         listener.closeAllConnections();
       })));
       game.flushMinecarts();
+      game.checkpointPositions();
       game.clearDroppedItems();
       await Promise.all([chat.close(),loadLog?.close()]);
       localJournal?.record({kind:'server-stop',build});

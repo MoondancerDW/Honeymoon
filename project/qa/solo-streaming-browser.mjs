@@ -8,6 +8,7 @@ import {chromium} from 'playwright-core';
 import {loadSoloDistribution} from '../server/solo-distribution.mjs';
 
 const [installationArg,generatedArg,outputArg]=process.argv.slice(2);
+const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 4);
 const installation=resolve(installationArg), generated=resolve(generatedArg), output=resolve(outputArg);
 await mkdir(output,{recursive:true});
 const distribution=loadSoloDistribution(generated);
@@ -53,7 +54,7 @@ async function start(offline=false) {
     child.once('exit',code=>{clearTimeout(timer);reject(Error(`Launcher exit ${code}: ${output}`));});
   });
   const state=await fetch(url+'api/solo-cache').then(r=>r.json());
-  assert.equal(state.build,4);
+  assert.equal(state.build,expectedBuild);
   return {url,state};
 }
 

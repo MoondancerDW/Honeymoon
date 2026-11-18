@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {once} from 'node:events';
 import {test} from 'node:test';
 import {Movement} from '../client/movement.mjs';
-import {POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
+import {positionBatch} from '../client/position-packet.mjs';
+import {POSITION_TRAIL_LIMIT, WORLD_GRAVITY} from '../world/player-body.mjs';
 import * as geometry from '../world/geometry.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import {createGame} from './game.mjs';
@@ -119,4 +120,96 @@ test('positions validate body changes at their own step and do not stand through
   game.teleport(player,point(edge));
   send(edge,[[...edge,'crouch']],'crouch-at-edge');
   assert.throws(() => send(edge,[[4.31,1,.5,'crouch']],'try-edge-step'),{code:'movement_blocked'});
+});
+
+test('a world-height fall accelerates at normal gravity and arrives through valid batches', t => {
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const bounds = {minX:-4,maxX:4,minY:0,maxY:511,minZ:-4,maxZ:4};
+  const start = [.5,500,.5];
+  const base = {manifest:{bounds,spawn:start},hash:'gravity-fixture',
+    inBounds:(x,y,z) => x >= -4 && x <= 4 && y >= 0 && y <= 511 && z >= -4 && z <= 4,
+    getCell:(_x,y) => ({key:y === 0 ? 'legacy:1:0' : 'air'})};
+  let now = 0;
+  const game = createGame(base,store,geometry,{modules:[],clock:() => now});
+  const movement = new Movement({manifest:base.manifest, hasChunk:() => true, cellAt:base.getCell});
+  const player = store.createPlayer().id;
+  const {position} = game.session(player);
+  const feet = {...position};
+  const page = crypto.randomUUID();
+  const {epoch} = game.movementChannel.open(player,'device',page,true);
+  let first = 1;
+  let from = start;
+  let largestDrop = 0;
+  while (!movement.grounded && now < 11000) {
+    const samples = [];
+    for (let step = 0; step < 8 && !movement.grounded; step++) {
+      movement.update(feet,0,0,false,.016,{recordStep:p => samples.push(tuple(p))});
+    }
+    now += 128;
+    if (!movement.grounded) {
+      const expected = start[1] - .5 * WORLD_GRAVITY * (now/1000)**2;
+      assert.ok(Math.abs(feet.y-expected) < 1e-7, `height ${feet.y} instead of ${expected} at ${now} ms`);
+    }
+    const batch = positionBatch(from,samples);
+    assert.equal(batch.trail.length,samples.length);
+    largestDrop = Math.max(largestDrop,from[1]-batch.target[1]);
+    const packet = {...point(batch.target),page,epoch,first,from,trail:batch.trail,requestId:`fall-batch-${first}`};
+    const state = game.movementChannel.receive(player,'device',packet,body => game.position(player,body));
+    first += batch.trail.length;
+    assert.equal(state.accepted,first-1);
+    from = tuple(state.position);
+  }
+  assert.ok(largestDrop > 12);
+  assert.ok(Math.abs(now/1000 - Math.sqrt(2 * (start[1]-1) / WORLD_GRAVITY)) < .128);
+  assert.ok(movement.grounded);
+  assert.ok(Math.abs(from[1]-1) < .005);
+});
+
+test('increasing avatar height at the world ceiling keeps its flight position', t => {
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const bounds = {minX:-4,maxX:4,minY:0,maxY:511,minZ:-4,maxZ:4};
+  const base = {manifest:{bounds,spawn:[.5,65,.5]},hash:'ceiling-profile',
+    inBounds:(x,y,z) => x >= -4 && x <= 4 && y >= 0 && y <= 511 && z >= -4 && z <= 4,
+    getCell:() => ({key:'air'})};
+  let size = 'normal';
+  const game = createGame(base,store,geometry,{modules:[],playerSize:() => size});
+  const player = store.createPlayer().id;
+  game.session(player);
+  const high = {x:2.5,y:510.5,z:-1.5};
+  assert.deepEqual(game.teleport(player,high).position,high);
+  size = 'large';
+  const local = {...high,y:510};
+  assert.deepEqual(game.reconcileProfile(player).position,local);
+  assert.deepEqual(game.session(player).position,local);
+});
+
+test('a restarted movement channel returns an authoritative saved position for the same world', t => {
+  const store = openStore(':memory:');
+  t.after(() => store.close());
+  const bounds = {minX:-4,maxX:4,minY:0,maxY:511,minZ:-4,maxZ:4};
+  const spawn = [.5,65,.5];
+  const base = {manifest:{bounds,spawn},hash:'movement-checkpoint',
+    inBounds:(x,y,z) => x >= -4 && x <= 4 && y >= 0 && y <= 511 && z >= -4 && z <= 4,
+    getCell:() => ({key:'air'})};
+  const options = {modules:[],persistPositions:true};
+  const player = store.createPlayer().id;
+  const first = createGame(base,store,geometry,options);
+  first.session(player);
+  const page = crypto.randomUUID();
+  const high = {x:2.5,y:500,z:-1.5};
+  first.teleport(player,high);
+  const before = first.movementChannel.open(player,'device',page,true);
+  first.checkpointPositions();
+  const second = createGame(base,store,geometry,options);
+  const {movement:after} = second.movementChannel.restart(player,'device',page,before.epoch);
+  assert.notEqual(after.epoch,before.epoch);
+  assert.deepEqual(after.position,high);
+  assert.deepEqual(second.session(player).position,high);
+  const anotherWorld = createGame({...base,hash:'different-world'},store,geometry,options);
+  assert.deepEqual(anotherWorld.session(player).position,point(spawn));
+  const obstructed = createGame({...base,getCell:(_x,y) => ({key:y === high.y ? 'legacy:1:0' : 'air'})},
+    store,geometry,options);
+  assert.deepEqual(obstructed.session(player).position,point(spawn));
 });
