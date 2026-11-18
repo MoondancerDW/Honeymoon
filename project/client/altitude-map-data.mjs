@@ -1,1 +1,1 @@
-export default {"vistaHash": "eaed84c4ce9fc2694285d3c8da33fd84e92b180b6b5d2f2dda7ff8e1f922dc0d", "west": -4992, "north": -6656, "east": 5504, "south": 5504, "step": 64, "columns": 165, "rows": 191};
+export default {"vistaHash": "eaed84c4ce9fc2694285d3c8da33fd84e92b180b6b5d2f2dda7ff8e1f922dc0d", "west": -4992, "north": -6656, "east": 5504, "south": 5504, "step": 32, "columns": 329, "rows": 381, "heightScale": 8, "detail": {"west": -1600, "north": -2048, "east": 1600, "south": 960}};

@@ -72,6 +72,7 @@ const signSave = element('sign-save');
 const audioSettings = element('audio-settings');
 const teleportLoading = element('teleport-loading');
 const keys = new Set();
+const movementKeys=new Set(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowLeft','ArrowDown','ArrowRight']);
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const detailPreference=touchMode?'honeymoon-touch-detail-distance':'honeymoon-detail-distance';
 const lowDevicePreference='honeymoon-low-device';
@@ -105,6 +106,7 @@ const mobileFrameMs = 1000/32;
 let nextMobileFrame;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 let playing = false, jump = false, lastFrame = 0, physicsTime = 0, timer;
+let autoMovement=null;
 let previousFramePosition, framePosition, correctionOffset;
 let feedReopenAt=-Infinity;
 let flying = false;
@@ -657,11 +659,12 @@ function heldPonyItem() {
 }
 
 function playerPose() {
-  const motion = seat ? 'sit' : !playing ? 'idle' : flying ? 'fly' : movement.stance === 'swim' ? 'swim' :
+  const moving=playing || automaticTravelEnabled();
+  const motion = seat ? 'sit' : !moving ? 'idle' : flying ? 'fly' : movement.stance === 'swim' ? 'swim' :
     !movement.grounded && !movement.medium && movement.stance === 'stand' ? 'air' : horizontalSpeed > .15 ?
       (sprinting() && movement.stance === 'stand' ? 'run' : 'walk') : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
-    stance:seat?.bed ? 'crawl' : movement.stance, boost:!seat && flying && playing && sprinting(), eye:view.eyeOffset(),
+    stance:seat?.bed ? 'crawl' : movement.stance, boost:!seat && flying && moving && sprinting(), eye:view.eyeOffset(),
     typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(), groundSeat:seat?.kind === 'ground',
     equipment:inventory.equipment,emote,
     seq:Math.round(performance.timeOrigin + performance.now())};
@@ -731,8 +734,22 @@ function toggleOrbit() {
   updateCameraHint();
 }
 
+function setAutoMovement(mode) {
+  if (mode===autoMovement) return;
+  autoMovement=mode;
+  presenceDirty=true;
+  const status=element('auto-move-status');
+  status.hidden=!mode;
+  status.textContent=mode==='sprint'?'Автодвижение · спринт · H':'Автодвижение · H';
+}
+
+function automaticTravelEnabled(openMenu) {
+  return Boolean(autoMovement && entered && !seat && !seatPending && !modeUi.death && !resetting &&
+    teleportLoading.hidden && !switchingSoloWorld && (!(openMenu ?? menuOpen()) || social.isChatOpen()));
+}
+
 function sprinting() {
-  return keys.has('ShiftLeft') || keys.has('ShiftRight');
+  return autoMovement ? autoMovement==='sprint' : keys.has('ShiftLeft') || keys.has('ShiftRight');
 }
 
 function forwardInput() {
@@ -760,6 +777,7 @@ function look(dx, dy, sensitivity = .0023) {
 
 function enterWorld() {
   entered = true;
+  audio.setPlaying(true);
   presenceDirty = true;
   creativeToggle.disabled = spectator || !creativeAvailable || !modeUi.creative;
   inventoryToggle.disabled = spectator;
@@ -770,10 +788,12 @@ function enterWorld() {
 function setPlaying(active) {
   playing = active;
   if (active && !entered && !button.disabled) enterWorld();
-  audio.setPlaying(active);
   game.classList.toggle('playing', active);
   game.classList.toggle('paused', !active && entered);
-  element('resume-help').hidden = active || !entered;
+  if (active) {
+    element('keys').open=false;
+    element('resume-help').hidden=true;
+  }
   entry.hidden = active;
   if (!active) {
     repeatPlacement = false;
@@ -1423,11 +1443,16 @@ function tick(now) {
   }
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
   const hasPredictionRoom=movementSync.canPredict(now);
+  if (autoMovement && (stick.x || stick.z)) setAutoMovement(null);
+  const openMenu=menuOpen();
+  const manualTravel=playing && !openMenu && !orbitHeading;
+  const automaticTravel=automaticTravelEnabled(openMenu);
+  const travelling=manualTravel || automaticTravel;
   movement.waitingForTerrain=false;
-  physicsTime=playing && !menuOpen() && !orbitHeading && !resetting && hasPredictionRoom ? Math.min(physicsTime+dt,.064) : 0;
+  physicsTime=travelling && !resetting && hasPredictionRoom ? Math.min(physicsTime+dt,.064) : 0;
   const liveActionsReady=connection.canMove();
   let seatedSpeed = 0;
-  if (emote && (flying || seat || jump || forwardInput() || turnInput() || movement.stance!=='stand' ||
+  if (emote && (automaticTravel || flying || seat || jump || forwardInput() || turnInput() || movement.stance!=='stand' ||
       emote.id==='wave'&&Date.now()-emote.started>2200)) {
     emote=null;
     presenceDirty=true;
@@ -1442,7 +1467,7 @@ function tick(now) {
     Object.assign(position, {x:anchor.x, y:anchor.y, z:anchor.z});
     Object.assign(seat, anchor);
   }
-  if (seat?.kind === 'ground' && playing && liveActionsReady && !menuOpen() && !orbitHeading && (forwardInput() || turnInput())) {
+  if (seat?.kind === 'ground' && manualTravel && liveActionsReady && (forwardInput() || turnInput())) {
     seatedMoveSince ??= now;
     if (!acting && !seatPending && !resetting) {
       if (now-seatedMoveSince >= 1000) {
@@ -1463,19 +1488,20 @@ function tick(now) {
       }
     }
   } else seatedMoveSince = undefined;
-  if (playing && !menuOpen() && !orbitHeading && !seat && !seatPending && teleportLoading.hidden) {
+  if (travelling && !seat && !seatPending && teleportLoading.hidden) {
     const startX = position.x, startZ = position.z;
     const fallSpeed = movement.fall;
-    const forward = forwardInput();
-    const strafe = turnInput();
-    const descending = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
-    const vertical = flying ? Number(keys.has('Space')) - Number(descending) : 0;
+    const forward = automaticTravel ? 1 : forwardInput();
+    const strafe = manualTravel && !automaticTravel ? turnInput() : 0;
+    const rising = manualTravel && keys.has('Space');
+    const descending = manualTravel && (keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC'));
+    const vertical = flying ? Number(rising) - Number(descending) : 0;
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
     if (!resetting && hasPredictionRoom) {
       if (!flying) {
         const previous = movement.stance;
         const stance = movement.wantsSwim(position,sprinting()) ? 'swim' :
-          crawlRequested ? 'crawl' : keys.has('KeyC') || now < crouchUntil ? 'crouch' : 'stand';
+          crawlRequested ? 'crawl' : manualTravel && (keys.has('KeyC') || now < crouchUntil) ? 'crouch' : 'stand';
         if (movement.setStance(position,stance) !== previous) recordPosition(position);
       }
       const inputSize=Math.max(1,Math.hypot(forward,strafe,vertical));
@@ -1485,10 +1511,10 @@ function tick(now) {
         const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance,y:position.y}) / inputSize;
         const dx = (-sin * forward + cos * strafe) * speed;
         const dz = (-cos * forward - sin * strafe) * speed;
-        if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, physicsStep, recordPosition, spectator);
-        else movement.update(position, dx, dz, jump, physicsStep,
-          {rise: jump || keys.has('Space'), descend: descending || movement.medium === 'ladder' && sprinting(),
-            swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition});
+        if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, physicsStep, recordPosition, spectator, automaticTravel);
+        else movement.update(position, dx, dz, manualTravel && jump, physicsStep,
+          {rise: manualTravel && jump || rising, descend: descending || movement.medium === 'ladder' && sprinting(),
+            swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition, automatic:automaticTravel});
         jump=false;
       }
     }
@@ -1505,7 +1531,7 @@ function tick(now) {
     jump=false;
     horizontalSpeed = seatedSpeed;
   }
-  if (!hasPredictionRoom || resetting || menuOpen() || seat?.entity || !playing || orbitHeading) {
+  if (!hasPredictionRoom || resetting || !travelling || seat?.entity) {
     previousFramePosition={...position};
     physicsTime=0;
     if (!hasPredictionRoom) jump=false;
@@ -1519,7 +1545,7 @@ function tick(now) {
     z:previous.z+(position.z-previous.z)*blend+(correctionOffset?.z??0)*fade,
   };
   if (!fade) correctionOffset=undefined;
-  if (playing && !menuOpen()) {
+  if (entered) {
     const hour = view.dayTick(now);
     if (now>=nextBardCheck) {
       audio.npcMusic(npcBards.values(),position,now);
@@ -1534,12 +1560,12 @@ function tick(now) {
   }
   if (!resetting && teleportLoading.hidden && !acting) movementSync.pump();
   if (!movementSync.busy() || presenceDirty) sendPresence(now);
-  const intended=Boolean(forwardInput() || turnInput() || keys.has('Space') || flying &&
+  const intended=Boolean(automaticTravel || forwardInput() || turnInput() || keys.has('Space') || flying &&
     (keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC')));
-  const waiting=playing && !menuOpen() && !resetting && (intended || positionTrail.length) && !hasPredictionRoom;
-  const needsTerrain=playing && intended && !menuOpen() && movement.waitingForTerrain;
+  const waiting=travelling && !resetting && (intended || positionTrail.length) && !hasPredictionRoom;
+  const needsTerrain=travelling && intended && movement.waitingForTerrain;
   connection.movementWaiting(Boolean(waiting),needsTerrain && (now < unavailableSoloTerrainUntil ? 'solo-unavailable' : true));
-  if (playing && !menuOpen() && !seat && !flying && movement.stance === 'stand') {
+  if (travelling && !seat && !flying && movement.stance === 'stand') {
     view.viewBob.step(horizontalSpeed * dt, dt, movement.grounded && !movement.medium, movement.fall);
   } else {
     view.viewBob.step(0, dt, true, 0);
@@ -1578,11 +1604,11 @@ function tick(now) {
   touchControls?.update({flying,spectator,stance:movement.stance,crawlRequested,seated:seat?.kind==='ground',
     orbit:Boolean(orbitHeading),chisel:chiseling,actionLabel:seat?'Встать':npcTarget?'Диалог':
       containerSpec(selection?.cell)?'Открыть':targetSeat?(targetSeat.bed?'Лечь':'Сесть'):undefined});
-  view.render(now, npcTarget||hitPlayer?null:selection, playing && !menuOpen(), placement, document.hasFocus(),{x:eye[0],y:eye[1],z:eye[2]});
+  view.render(now, npcTarget||hitPlayer?null:selection, playing && !openMenu || automaticTravel, placement, document.hasFocus(),{x:eye[0],y:eye[1],z:eye[2]});
   connection.frames(view.renderedFrames,now);
   if (diagnostics.active(now)) {
-    const reason=!playing?'paused':menuOpen()?'menu':resetting || !teleportLoading.hidden?'teleport':
-      orbitHeading?'camera':seat || seatPending?'seated':!hasPredictionRoom?'queue_full':movement.waitingForTerrain?'terrain':undefined;
+    const reason=!playing&&!automaticTravel?'paused':openMenu&&!automaticTravel?'menu':resetting || !teleportLoading.hidden?'teleport':
+      orbitHeading&&!automaticTravel?'camera':seat || seatPending?'seated':!hasPredictionRoom?'queue_full':movement.waitingForTerrain?'terrain':undefined;
     diagnostics.frame(now,intended,reason,positionTrail.length,position);
   }
   requestAnimationFrame(tick);
@@ -1590,6 +1616,10 @@ function tick(now) {
 
 function bindControls() {
   const canvas = view.renderer.domElement;
+  const controls=element('keys');
+  controls.addEventListener('toggle',()=>{
+    if (controls.open) controls.querySelector('summary').scrollIntoView({block:'start'});
+  });
   createAltitudeMap({
     game,openButton:element('altitude-map'),backButton:element('altitude-map-back'),
     manifest:world.manifest,palette:view.terrainTextures?.average?.image,
@@ -1655,6 +1685,19 @@ function bindControls() {
     }
   });
   document.addEventListener('keydown', event => {
+    if (['Enter','Space'].includes(event.code) && event.target?.closest?.('#keys > summary')) return;
+    const editable=event.target?.isContentEditable || event.target?.closest?.('input, textarea, select');
+    if (entered && !modeUi.death && !editable && !event.defaultPrevented && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      const movementHotkeys=teleportLoading.hidden && (!menuOpen() || social.isChatOpen());
+      if (event.code==='KeyH' && (autoMovement || (movementHotkeys && !seat && !resetting))) {
+        event.preventDefault();
+        if (!event.repeat) {
+          setAutoMovement(autoMovement ? null : (event.shiftKey || sprinting() ? 'sprint' : 'walk'));
+        }
+        return;
+      }
+      if (movementHotkeys && !event.repeat && movementKeys.has(event.code)) setAutoMovement(null);
+    }
     if ((!teleportLoading.hidden && event.target !== element('teleport-reload'))||modeUi.death) return;
     if (signEditor.open || audioSettings?.open || itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen()||
         modeUi.isOpen() || adminUi.isOpen() || soloDownloadUi.isOpen()) return;
@@ -1875,7 +1918,9 @@ function bindControls() {
   try { Object.assign(settings,JSON.parse(localStorage.getItem(settingsKey)) ?? {}); } catch {}
   if (typeof settings.muted!=='boolean') {
     settings.muted=localStorage.getItem('honeymoon-muted')==='1';
-    settings.musicVolume=localStorage.getItem('honeymoon-music')==='1' ? settings.musicVolume||.16 : 0;
+    const legacyMusic=localStorage.getItem('honeymoon-music');
+    if (legacyMusic==='0') settings.musicVolume=0;
+    else if (legacyMusic==='1') settings.musicVolume=settings.musicVolume||.16;
   }
   audio.setEnvironment(settings);
   audio.setVolume(settings.soundVolume);
@@ -2178,7 +2223,7 @@ async function start() {
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
       revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
       terrainNetwork:terrainNetwork.status(),
-      flying, spectator, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
+      flying, spectator, autoMovement, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
       movementSync: {...positionMetrics,...movementSync.inspect(),queued:positionTrail.length,confirmed:movementSync.inspect().pos},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },

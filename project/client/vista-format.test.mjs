@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {decodeVista, VISTA_LOFT, VISTA_STEP, VISTA_VERSION, vistaBytes, vistaCell} from './vista-format.mjs';
+import {VISTA_STITCH_FACE} from './vista-stitch.mjs';
 
 function vistaFixture() {
   const data = new DataView(new ArrayBuffer(vistaBytes));
@@ -78,4 +79,21 @@ test('elevated structures retain their underside and a real gap even in the coar
     assert.ok(elevated.every(face=>face.y>=129));
     assert.ok(elevated.every(face=>face.x!==24 || face.face!==0 && face.face!==1));
   }
+});
+
+test('stitchable ground preserves a vertex every eight blocks and leaves lofts untouched', () => {
+  const {data,height} = vistaFixture();
+  height(0,0,67);
+  height(1,0,67);
+  const loft=vistaCell(0,0)+VISTA_LOFT;
+  data.setUint16(loft,73*8,true);
+  data.setUint16(loft+9,70*8,true);
+  data.setUint16(loft+11,65535,true);
+  const [mesh]=decodeVista(data.buffer,false,true).layers;
+  const flags=[...mesh.surface].filter((_,index)=>index%2===1);
+  assert.deepEqual(flags.filter(flag=>flag>=VISTA_STITCH_FACE),[VISTA_STITCH_FACE+3,VISTA_STITCH_FACE+3]);
+  assert.ok(flags.includes(2));
+  assert.ok(flags.slice(0,-2).every(flag=>flag<VISTA_STITCH_FACE));
+  assert.deepEqual([...mesh.span.slice(-4)],[64,64,64,64]);
+  assert.deepEqual([...mesh.offset.slice(-6)],[0,67*8,0,8*8,67*8,0]);
 });

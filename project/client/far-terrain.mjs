@@ -1,7 +1,8 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {DEFAULT_DETAILED_LOD_DISTANCE,lodDistance,supportedLodVersion,validateDetailedLodDistance} from './far-tile-format.mjs';
 import {terrainFilterShader} from './terrain-filter.mjs';
-import {VISTA_BLOCKS,supportedVistaVersion} from './vista-format.mjs';
+import {VISTA_BLOCKS,VISTA_STEP,supportedVistaVersion} from './vista-format.mjs';
+import {VISTA_STITCH_FACE,VISTA_STITCH_LIMIT,writeVistaStitch} from './vista-stitch.mjs';
 
 const PACK_CHUNKS = 4;
 const PACK_BLOCKS = PACK_CHUNKS * 16;
@@ -13,6 +14,7 @@ const MAX_FETCH = 2;
 const MAX_PENDING_UPLOADS = 6;
 const RETAIN_MARGIN = 1;
 const VISTA_MASK_SIDE=80;
+const VISTA_STITCH_SIDE=VISTA_MASK_SIDE*2+1;
 const paletteModes=new Set([0,1,2]);
 const keyOf = (x,z,outer = false) => `${x}.${z}${outer ? '.outer' : ''}`;
 const vistaKey = (x,z) => `vista:${x}.${z}`;
@@ -35,7 +37,7 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
     terrainWater:{value:textures.water},
     lightmap:{value:lightmap}, terrainRows:{value:rows}, visibilityMask:{value:65535}, heightScale:{value:1},
     coordinateScale:{value:1},
-    vistaMask:{value:null}, vistaMaskOrigin:{value:new THREE.Vector2()},
+    vistaMask:{value:null}, vistaMaskOrigin:{value:new THREE.Vector2()}, vistaStitch:{value:null},
     paletteMode:{value:1},
     seamMasks:{value:new THREE.Vector4()},
   };
@@ -54,6 +56,7 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
       uniform float heightScale;
       uniform float coordinateScale;
       uniform sampler2D lightmap;
+      ${vista ? 'uniform sampler2D vistaStitch; uniform vec2 vistaMaskOrigin;' : ''}
       varying vec2 localUv;
       varying float tile;
       varying float cutout;
@@ -98,6 +101,16 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
         else if (face < 3.5) point.zx += extent;
         else if (face < 4.5) point.yx += extent;
         else point.xy += extent;
+        ${vista ? `
+        if (faceSurface.y >= ${VISTA_STITCH_FACE}.0) {
+          vec2 worldXZ = (modelMatrix * vec4(point,1.0)).xz;
+          vec2 node = (worldXZ / ${VISTA_STEP}.0 - 2.0 * vistaMaskOrigin + .5) / ${VISTA_STITCH_SIDE}.0;
+          if (all(greaterThan(node,vec2(0.0))) && all(lessThan(node,vec2(1.0)))) {
+            vec2 edge = texture2D(vistaStitch,node).rg;
+            if (edge.x > 0.0 && edge.y == faceSurface.x && abs(edge.x-point.y) <= ${VISTA_STITCH_LIMIT}.0) point.y = edge.x;
+          }
+        }
+        ` : ''}
         if (face < 1.5) localUv = vec2(face < .5 ? point.z : -point.z, -point.y);
         else if (face < 3.5) localUv = point.xz;
         else localUv = vec2(face < 4.5 ? -point.x : point.x, -point.y);`}
@@ -202,7 +215,8 @@ function meshFor(layer, material, region, extent = PACK_BLOCKS) {
   geometry.setIndex(new THREE.BufferAttribute(triangles,1));
   geometry.instanceCount = count;
   const center = new THREE.Vector3(extent/2,(minY+maxY)/2,extent/2);
-  geometry.boundingSphere = new THREE.Sphere(center,Math.hypot(extent/2,extent/2,(maxY-minY)/2));
+  const heightMargin = region.vista && !region.coarse ? VISTA_STITCH_LIMIT : 0;
+  geometry.boundingSphere = new THREE.Sphere(center,Math.hypot(extent/2,extent/2,(maxY-minY)/2+heightMargin));
   const mesh = new THREE.Mesh(geometry,material);
   mesh.onBeforeRender = () => {
     material.uniforms.visibilityMask.value = region.mask;
@@ -234,10 +248,16 @@ export class FarTerrain {
       this.vista = {...vista,packs:new Set(vista.regions.map(([x,z]) => vistaKey(x,z)))};
       const {uniforms} = this.materials.vista = material({vista:true});
       this.coveragePixels=new Uint8Array(VISTA_MASK_SIDE**2);
+      this.coverageSources=new Array(VISTA_MASK_SIDE**2);
       this.coverageTexture=new THREE.DataTexture(this.coveragePixels,VISTA_MASK_SIDE,VISTA_MASK_SIDE,THREE.RedFormat);
       this.coverageTexture.minFilter=this.coverageTexture.magFilter=THREE.NearestFilter;
       this.coverageTexture.needsUpdate=true;
       uniforms.vistaMask.value=this.coverageTexture;
+      this.stitchPixels=new Float32Array(VISTA_STITCH_SIDE**2*2);
+      this.stitchTexture=new THREE.DataTexture(this.stitchPixels,VISTA_STITCH_SIDE,VISTA_STITCH_SIDE,THREE.RGFormat,THREE.FloatType);
+      this.stitchTexture.minFilter=this.stitchTexture.magFilter=THREE.NearestFilter;
+      this.stitchTexture.needsUpdate=true;
+      uniforms.vistaStitch.value=this.stitchTexture;
     }
     this.packs = new Map();
     this.pending = new Map();
@@ -272,9 +292,15 @@ export class FarTerrain {
     for (let z=0;z<VISTA_MASK_SIDE;z++) for (let x=0;x<VISTA_MASK_SIDE;x++) {
       const xx=minX+x,zz=minZ+z;
       const key=`${xx},${zz}`;
-      this.coveragePixels[x+z*VISTA_MASK_SIDE]=(exactChunks.has(key) || visiblePreciseTerrain.has(key) || this.regionAt(xx,zz)) ? 255 : 0;
+      const at=x+z*VISTA_MASK_SIDE;
+      const precise=exactChunks.has(key) || visiblePreciseTerrain.has(key);
+      const region=precise ? undefined : this.regionAt(xx,zz);
+      this.coveragePixels[at]=precise || region ? 255 : 0;
+      this.coverageSources[at]=region;
     }
     this.coverageTexture.needsUpdate=true;
+    writeVistaStitch(this.stitchPixels,this.coveragePixels,this.coverageSources,VISTA_MASK_SIDE,minX,minZ);
+    this.stitchTexture.needsUpdate=true;
   }
 
   invalidateVistaCoverage() {
@@ -499,7 +525,7 @@ export class FarTerrain {
     const group = new THREE.Group();
     const extent = vista ? VISTA_BLOCKS : PACK_BLOCKS;
     group.position.set(rx * extent,0,rz * extent);
-    const region = {key,rx,rz,outer,vista,coarse,previous,group,counts:tile.counts,bytes:tile.bytes,triangles:tile.triangles,
+    const region = {key,rx,rz,outer,vista,coarse,previous,group,counts:tile.counts,boundary:tile.boundary,bytes:tile.bytes,triangles:tile.triangles,
       mask:65535,seams:new THREE.Vector4(),installed:false};
     for (const [index,layer] of tile.layers.entries()) {
       if (!layer.count) continue;
@@ -562,7 +588,7 @@ export class FarTerrain {
     const direction = this.display.viewDirection;
     let closest, score = Infinity;
     for (const [key,region] of this.targets) {
-      if (!region.vista && (this.display.startupChunks || this.altitude==='landing' && !this.scene.visible)) continue;
+      if (!region.vista && (this.display.startupChunks || this.altitude==='landing')) continue;
       const loaded = this.packs.get(key);
       if (loaded && (!loaded.coarse || region.coarse) || busy.includes(key) || (this.failed.get(key) ?? 0) > now) continue;
       const stride = region.vista ? VISTA_CHUNKS : PACK_CHUNKS, half = (stride-1)/2;

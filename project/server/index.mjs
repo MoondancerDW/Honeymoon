@@ -203,6 +203,7 @@ async function serveFile(request, response, path) {
 
 function staticPath(path, project, generated) {
   if (path === '/') return join(project, 'client', 'index.html');
+  if (path === '/altitude-theme.wav') return join(project, 'client', 'altitude-theme.wav');
   if (path === '/honeymoon.webmanifest') return join(project, 'client', 'honeymoon.webmanifest');
   if (path === '/generated/weather/biomes.json') return join(generated, 'weather', 'biomes.json');
   const vendor = path.match(/^\/vendor\/(?:three\/)?(three\.(?:module|core)\.js)$/);

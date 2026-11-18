@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
-  <meta name="honeymoon-build" content="7">
+  <meta name="honeymoon-build" content="8">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -106,7 +106,7 @@
         <button class="solo-entry-button" type="button" aria-haspopup="dialog" aria-controls="solo-entry" hidden>Одиночная игра</button>
         <button id="solo-world-switch" type="button" aria-describedby="solo-world-status" hidden>Тестовый полигон</button>
         <small id="solo-world-status" role="status" hidden></small>
-        <small id="resume-help" hidden>Esc или Enter — продолжить с захватом мыши</small>
+        <small id="resume-help" role="status" hidden></small>
         <div id="mobile-pause-sections" hidden>
           <button type="button" data-pause-section="profile" aria-controls="mobile-profile" aria-expanded="false">Профиль</button>
           <button type="button" data-pause-section="settings" aria-controls="mobile-settings" aria-expanded="false">Настройки</button>
@@ -127,35 +127,70 @@
           <button id="npc-editor-toggle" type="button" aria-haspopup="dialog" aria-controls="npc-menu" disabled>Редактор NPC</button>
           <button id="admin-toggle" type="button" aria-haspopup="dialog" aria-controls="admin-menu" hidden>Администрирование</button>
         </div>
+        <details id="keys">
+          <summary>Управление</summary>
+          <section class="touch-guide" aria-label="Сенсорное управление">
+            <h2>На экране</h2>
+            <dl>
+              <dt>Стик / провести по миру</dt><dd>Движение / поворот камеры</dd>
+              <dt>Разгон / Прыжок / Пригнуться</dt><dd>Ускориться, подпрыгнуть или присесть. В полёте кнопки меняются на «Вверх» и «Вниз».</dd>
+              <dt>Действие / Другое действие</dt><dd>Взаимодействовать с объектом или выполнить альтернативное действие через «Ещё»</dd>
+              <dt>Строительство</dt><dd>Открыть кнопки «Поставить», «Сломать» и «Копия»</dd>
+              <dt>Панель предметов / ячейка</dt><dd>Развернуть или свернуть панель, выбрать предмет нажатием на ячейку</dd>
+              <dt>Чат / Пауза / На весь экран</dt><dd>Открыть чат, меню паузы или полноэкранный режим</dd>
+              <dt>Ещё</dt><dd>Полёт, ползти, сесть или встать, сменить вид, свободный обзор, наблюдатель, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
+              <dt data-admin-control-hint hidden>Телепорт</dt><dd data-admin-control-hint hidden>Открыть ввод координат из меню «Ещё»</dd>
+            </dl>
+          </section>
+          <h2>Клавиатура и мышь</h2>
+          <dl>
+            <dt>WASD / стрелки</dt><dd>Движение</dd>
+            <dt>Мышь</dt><dd>Повернуть камеру</dd>
+            <dt>Пробел</dt><dd>Прыжок или подъём в полёте</dd>
+            <dt>Ctrl / C</dt><dd>Спуститься в полёте</dd>
+            <dt>Shift</dt><dd>Ускориться</dd>
+            <dt>H / Shift+H</dt><dd>Автодвижение / автоспринт. H или ручное движение отключают режим.</dd>
+            <dt>F / P</dt><dd>Полёт / режим наблюдателя</dd>
+            <dt>C / V / X</dt><dd>Присесть или подобрать предмет / ползти / сесть или встать</dd>
+            <dt>F5 или Y / U</dt><dd>Сменить вид / свободный обзор</dd>
+            <dt>ЛКМ / ПКМ</dt><dd>Сломать / поставить</dd>
+            <dt>СКМ / O</dt><dd>Копировать блок</dd>
+            <dt>R</dt><dd>Перебрать положение блока при установке</dd>
+            <dt>K / Shift+K</dt><dd>Резец / размер резца</dd>
+            <dt>E / Shift+E</dt><dd>Действие / альтернативное действие</dd>
+            <dt>Q / Ctrl+Q</dt><dd>Выбросить один предмет / всю стопку</dd>
+            <dt>1–9 / колесо</dt><dd>Выбрать ячейку</dd>
+            <dt>I / J</dt><dd>Предметы / инвентарь</dd>
+            <dt>B / Z</dt><dd>Помахать копытом / танцевать</dd>
+            <dt>T / Enter</dt><dd>Открыть чат в игре</dd>
+            <dt>Tab</dt><dd>Показать список игроков, пока клавиша нажата</dd>
+            <dt data-admin-control-hint hidden>G / L</dt><dd data-admin-control-hint hidden>Телепорт / настройка игрового времени</dd>
+            <dt>Esc / Enter</dt><dd>Пауза, закрытие меню или возврат к игре</dd>
+          </dl>
+          <h2>Инвентарь и карта</h2>
+          <dl>
+            <dt>Shift+клик</dt><dd>Переложить стопку или взять полную стопку из каталога</dd>
+            <dt>1–9 / Q / Delete</dt><dd>Перенести выбранную стопку на панель, выбросить или удалить</dd>
+            <dt>Стрелки / Home / End</dt><dd>Перейти между вкладками каталога, к первой или последней</dd>
+            <dt>↓ / Enter в поиске</dt><dd>Перейти к первому результату или выбрать его</dd>
+            <dt>Перетаскивание / стрелки</dt><dd>Переместить карту</dd>
+            <dt>Колесо / двойной клик</dt><dd>Изменить масштаб карты</dd>
+            <dt>+ / − / 0</dt><dd>Приблизить, отдалить или показать всю карту. На телефоне масштаб меняется двумя пальцами.</dd>
+          </dl>
+          <div class="context-keys">
+            <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
+            <span id="chisel-hint" role="status" hidden>Резец 1/8 · Shift+K — сменить размер · ЛКМ — убрать · ПКМ — добавить · O/СКМ — взять материал</span>
+            <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift — ускориться</span>
+            <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
+            <span id="orbit-status" role="status" hidden>Свободный обзор · U — выйти</span>
+            <span id="spectator-status" role="status" hidden>Наблюдатель · Пробел вверх · Ctrl/C вниз · P — выйти</span>
+          </div>
+        </details>
         <small id="entry-help" hidden></small>
       </div>
     </section>
     <span id="selected" class="target-tag"></span>
-    <aside id="keys" aria-label="Управление">
-      <dl>
-        <dt>WASD</dt><dd>Движение</dd><dt>Пробел</dt><dd>Прыгнуть</dd>
-        <dt>Shift</dt><dd>Ускориться</dd><dt>C</dt><dd>Присесть / подобрать</dd>
-        <dt>V</dt><dd>Ползти</dd><dt>X</dt><dd>Сесть / встать</dd>
-        <dt>ЛКМ</dt><dd>Сломать</dd><dt>ПКМ</dt><dd>Поставить</dd>
-        <dt>СКМ / O</dt><dd>Копировать</dd><dt>E</dt><dd>Действие</dd>
-        <dt>Q</dt><dd>Выбросить</dd><dt>1–9</dt><dd>Выбрать ячейку</dd>
-        <dt>I / J</dt><dd>Предметы / инвентарь</dd><dt>F</dt><dd>Полёт</dd>
-        <dt>F5 / Y</dt><dd>Сменить вид</dd><dt>U</dt><dd>Свободный обзор</dd>
-        <dt>P</dt><dd>Наблюдатель</dd><dt>K</dt><dd>Резец</dd>
-        <dt>Shift+K</dt><dd>Размер резца</dd>
-        <dt>B</dt><dd>Помахать копытом</dd><dt>Z</dt><dd>Танец</dd>
-        <dt data-teleport-hint hidden>G</dt><dd data-teleport-hint hidden>Телепорт</dd><dt>T / Enter</dt><dd>Чат</dd>
-        <dt>Esc</dt><dd>Пауза</dd>
-      </dl>
-      <div class="context-keys">
-        <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
-        <span id="chisel-hint" role="status" hidden>Резец 1/8 · Shift+K — сменить размер · ЛКМ — убрать · ПКМ — добавить · O/СКМ — взять материал</span>
-        <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift ×2</span>
-        <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
-        <span id="orbit-status" role="status" hidden>Свободный обзор · U — выйти</span>
-        <span id="spectator-status" role="status" hidden>Наблюдатель · Пробел вверх · Ctrl/C вниз · P — выйти</span>
-      </div>
-    </aside>
+    <span id="auto-move-status" role="status" hidden></span>
     <div id="toast" role="status" aria-live="polite"></div>
     <aside id="online" class="social-panel" aria-label="Игроки онлайн" hidden>
       <strong>Онлайн · <span id="online-count">0</span></strong>
@@ -320,8 +355,8 @@
           <legend>Музыка высотного обзора</legend>
           <button id="altitude-music-choose" type="button" aria-describedby="altitude-music-status">Выбрать аудиофайл</button>
           <input id="altitude-music-file" type="file" accept="audio/*" hidden>
-          <span id="altitude-music-status" role="status">Выберите файл для замены обычной музыки на высоте.</span>
-          <button id="altitude-music-clear" type="button" hidden>Вернуть обычную музыку</button>
+          <span id="altitude-music-status" role="status">На высоте играет встроенная тема. Здесь можно выбрать свою.</span>
+          <button id="altitude-music-clear" type="button" hidden>Вернуть встроенную тему</button>
         </fieldset>
         <label>Режим окружения
           <select id="audio-profile">

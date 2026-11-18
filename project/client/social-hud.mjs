@@ -246,7 +246,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       if (!admin&&panel&&panel!=='chat') close(false);
       clockButton.disabled=teleportButton.disabled=warpButton.disabled=!connected||!admin;
       teleportButton.hidden=warpButton.hidden=byId('touch-teleport').hidden=!admin;
-      for (const hint of document.querySelectorAll('[data-teleport-hint]')) hint.hidden=!admin;
+      for (const hint of document.querySelectorAll('[data-admin-control-hint]')) hint.hidden=!admin;
     },
     isOpen: () => !!panel,
     isChatOpen: () => panel === 'chat',

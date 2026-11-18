@@ -52,7 +52,7 @@ def build(output, node, node_license, generated, state=None, single_player=False
             for name in ("package.json", "README.md"):
                 archive.write(PROJECT / name, name)
             for source in ("client", "server", "world"):
-                add_tree(archive, PROJECT / source, source, lambda path: path.suffix in {".mjs", ".html", ".css", ".json", ".webmanifest", ".webp", ".png", ".svg"}
+                add_tree(archive, PROJECT / source, source, lambda path: path.suffix in {".mjs", ".html", ".css", ".json", ".webmanifest", ".webp", ".png", ".svg", ".wav"}
                          and not path.name.endswith(".test.mjs"))
             if not streaming_source:
                 for family in ("world", "full-world", "textures", "models", "sounds", "lod", "vista", "weather", "npcs"):

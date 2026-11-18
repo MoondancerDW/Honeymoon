@@ -9,11 +9,9 @@ const sites=[
   {key:'castle-airship',x:-1584,z:12,width:13,length:32,bottom:127,top:163,step:2},
   {key:'east-airship',x:591,z:541,width:13,length:32,bottom:112,top:148,step:2},
   {key:'north-airship',x:1940,z:-3286,width:13,length:32,bottom:170,top:206,step:2},
-  {key:'sunset-plaza',x:-390,z:-1522,width:27,length:25,bottom:171,top:201,step:3},
-  {key:'sky-plaza',x:-321,z:-1537,width:28,length:27,bottom:209,top:242,step:3},
-  {key:'cloud-service-platform',x:-380,z:-1588,width:15,length:15,bottom:207,top:224,step:3},
-  {key:'canterlot',x:689,z:-1359,width:27,length:48,bottom:182,top:239,step:3},
-  {key:'white-mountain-span',x:728,z:-900,width:16,length:30,bottom:160,top:175,step:2},
+  {key:'sunset-plaza',x:-390,z:-1522,width:27,length:25,bottom:171,top:201,step:1},
+  {key:'sky-plaza',x:-321,z:-1537,width:28,length:27,bottom:209,top:242,step:1},
+  {key:'cloud-service-platform',x:-380,z:-1588,width:15,length:15,bottom:207,top:224,step:1},
   ...[[38,34],[55,-7],[-26,64]].map(([x,z],index)=>({
     key:'ponyville-crossing-'+(index+1),x,z,width:17,length:17,bottom:67,top:67,step:1,crossing:true
   })),

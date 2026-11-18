@@ -97,11 +97,15 @@ test('overview replaces ordinary music and resumes its prior playback position',
   normal.currentTime=14;
 
   audio.frame(world,high,{altitudeOverview:true});
-  assert.equal(normal.paused,false);
-  assert.equal(players.length,1);
-  audio.setAltitudeMusic('blob:local-track');
-  const [,upper]=players;
+  const [,theme]=players;
   assert.equal(normal.paused,true);
+  assert.equal(theme.src,'/altitude-theme.wav');
+  assert.equal(theme.paused,false);
+  assert.equal(audio.stats().altitudeMusicSource,'default');
+  audio.setAltitudeMusic('blob:local-track');
+  const [,,upper]=players;
+  assert.equal(theme.paused,true);
+  assert.equal(theme.src,undefined);
   assert.equal(upper.loop,true);
   assert.equal(upper.paused,false);
   assert.equal(upper.gain.gain.value,.4);
@@ -169,12 +173,29 @@ test('the NPC track takes priority and departing resumes the applicable music',a
   assert.equal(players.at(-1).src,'blob:two');
   audio.setAltitudeMusic(null);
   assert.equal(audio.stats().altitudeMusicConfigured,false);
+  assert.equal(audio.stats().altitudeMusicSource,'default');
+  assert.equal(record.paused,true);
+  audio.frame(world,ground,{altitudeOverview:false});
   assert.equal(record.paused,false);
   audio.npcMusic([bard],ground,2300);
   await Promise.resolve();
   assert.equal(audio.stats().musicMode,'npc');
   audio.npcMusic([],ground,2400);
   assert.equal(record.paused,false);
+});
+
+test('an unreadable selected track falls back to the built-in altitude music',async t=>{
+  const {audio,players}=await audioFixture(t);
+  audio.setAltitudeMusic('blob:unreadable');
+  audio.frame(world,high,{altitudeOverview:true});
+  const custom=players.at(-1);
+  assert.equal(audio.stats().altitudeMusicSource,'custom');
+  custom.onerror();
+  const builtIn=players.at(-1);
+  assert.equal(custom.paused,true);
+  assert.equal(builtIn.src,'/altitude-theme.wav');
+  assert.equal(audio.stats().altitudeMusicSource,'default');
+  assert.equal(audio.stats().musicPlaying,true);
 });
 
 test('entering an unavailable NPC music zone keeps the background track playing',async t=>{

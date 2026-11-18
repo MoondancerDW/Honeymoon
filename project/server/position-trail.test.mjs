@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
 import {test} from 'node:test';
-import {Movement} from '../client/movement.mjs';
+import {Movement, movementSpeed} from '../client/movement.mjs';
 import {positionBatch} from '../client/position-packet.mjs';
 import {POSITION_TRAIL_LIMIT, WORLD_GRAVITY} from '../world/player-body.mjs';
 import * as geometry from '../world/geometry.mjs';
@@ -164,6 +164,40 @@ test('a world-height fall accelerates at normal gravity and arrives through vali
   assert.ok(Math.abs(now/1000 - Math.sqrt(2 * (start[1]-1) / WORLD_GRAVITY)) < .128);
   assert.ok(movement.grounded);
   assert.ok(Math.abs(from[1]-1) < .005);
+});
+
+test('the server accepts the faster high sprint while automatic flight clears a wall', t => {
+  const store=openStore(':memory:');
+  t.after(()=>store.close());
+  const bounds={minX:-12,maxX:32,minY:0,maxY:511,minZ:-12,maxZ:12};
+  const start=[-2.5,274,.5];
+  const base={manifest:{bounds,spawn:start},hash:'high-auto-flight',
+    inBounds:(x,y,z)=>x>=-12 && x<=32 && y>=0 && y<=511 && z>=-12 && z<=12,
+    getCell:(x,y,z)=>({key:x===0 && z===0 && y>=274 && y<=277 ? 'legacy:1:0' : 'air'})};
+  let now=0;
+  const game=createGame(base,store,geometry,{modules:[],clock:()=>now});
+  const player=store.createPlayer().id;
+  const feet={...game.session(player).position};
+  const movement=new Movement({manifest:base.manifest,hasChunk:()=>true,cellAt:base.getCell});
+  const page=crypto.randomUUID();
+  const {epoch}=game.movementChannel.open(player,'device',page,true);
+  const speed=movementSpeed({flying:true,sprint:true,y:feet.y});
+  let first=1;
+  let from=start;
+  for (let i=0;i<5;i++) {
+    const samples=[];
+    for (let tick=0;tick<8;tick++) movement.fly(feet,speed,0,0,.016,p=>samples.push(tuple(p)),false,true);
+    now+=128;
+    const batch=positionBatch(from,samples,undefined,true);
+    assert.equal(batch.trail.length,samples.length);
+    const packet={...point(batch.target),page,epoch,first,from,trail:batch.trail,
+      requestId:`flight-batch-${first}`,pose:{motion:'fly'}};
+    const state=game.movementChannel.receive(player,'device',packet,body=>game.position(player,body));
+    first+=batch.trail.length;
+    assert.equal(state.accepted,first-1);
+    from=tuple(state.position);
+  }
+  assert.ok(from[0]>12 && from[1]>=278 && from[1]<279);
 });
 
 test('increasing avatar height at the world ceiling keeps its flight position', t => {

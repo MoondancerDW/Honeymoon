@@ -102,6 +102,13 @@ try {
       await click('#touch-pause');
       assert.equal(await visible('#play'),true);
       await shot('pause-'+id);
+      const controls=page.locator('#keys');
+      assert.equal(await controls.evaluate(panel=>panel.open),false);
+      await click('#keys > summary');
+      assert.equal(await controls.evaluate(panel=>panel.open),true);
+      assert.equal(await controls.getByRole('heading',{name:'На экране'}).isVisible(),true);
+      await shot('controls-'+id);
+      await click('#keys > summary');
       await click('#inventory-toggle');
       const dimensions=await page.locator('#creative-close').boundingBox();
       assert.ok(dimensions.width>=44 && dimensions.height>=44,JSON.stringify(dimensions));
@@ -126,6 +133,69 @@ try {
       if (await visible('#play')) await click('#play');
       result.checks.push({orientation:id,inventoryClose:dimensions});
     }
+  } else if (test==='altitude-registration') {
+    await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='globalThis.honeymoon = Object.freeze({';
+      assert.ok(source.includes(marker));
+      const probe=`qaOverview:()=>{
+        const overview=view.altitudeOverview, mesh=overview?.mesh;
+        return {imageWidth:mesh?.material.map.image.width,imageHeight:mesh?.material.map.image.height,
+          detail:Boolean(mesh?.material.onBeforeCompile.toString().includes('altitudeDetail')),
+          landmarks:Object.fromEntries(overview?.landmarks?.children.map(mesh=>[mesh.name,mesh.count])??[])};
+      },qaZoom:zoom=>{view.camera.zoom=zoom;view.camera.updateProjectionMatrix();},`;
+      await route.fulfill({response,body:source.replace(marker,marker+probe)});
+    });
+    await start();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    async function look(yaw,pitch,zoom=1) {
+      await page.evaluate(async ({yaw,pitch,zoom})=>{
+        honeymoon.qaZoom(zoom);
+        honeymoon.look(yaw,pitch);
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      },{yaw,pitch,zoom});
+    }
+    async function terrainShot(name) {
+      const frame=await shot(name);
+      const distinct=await page.evaluate(async png=>{
+        const bitmap=await createImageBitmap(new Blob([Uint8Array.from(atob(png),value=>value.charCodeAt(0))]));
+        const sample=new OffscreenCanvas(96,64);
+        const context=sample.getContext('2d',{willReadFrequently:true});
+        context.drawImage(bitmap,bitmap.width/2-192,bitmap.height/2-128,384,256,0,0,96,64);
+        bitmap.close();
+        const rgba=context.getImageData(0,0,96,64).data;
+        const colors=new Set();
+        for (let at=0;at<rgba.length;at+=4) colors.add((rgba[at]<<16)|(rgba[at+1]<<8)|rgba[at+2]);
+        return colors.size;
+      },frame.toString('base64'));
+      assert.ok(distinct>40,`Terrain missing from ${name} (${distinct} colors)`);
+      return distinct;
+    }
+    await hop(-109.89,202.65,-154.92);
+    await look(Math.PI,-1.48);
+    await shot('ponyville-ground-alignment');
+    await hop(-109.89,300.28,-154.92);
+    await page.waitForFunction(()=>honeymoon.stats().overviewVisible && honeymoon.qaOverview().detail &&
+      Object.keys(honeymoon.qaOverview().landmarks).length>=10,undefined,{timeout:25000});
+    const overview=await page.evaluate(()=>honeymoon.qaOverview());
+    assert.deepEqual([overview.imageWidth,overview.imageHeight],[2624,3040]);
+    assert.equal(overview.landmarks.canterlot,undefined);
+    assert.equal(overview.landmarks['white-mountain-span'],undefined);
+    assert.ok(['sunset-plaza','sky-plaza','cloud-service-platform'].reduce((sum,key)=>sum+overview.landmarks[key],0)>10000);
+    await look(Math.PI,-1.48,(300.28-65)/(202.65-65));
+    overview.visibleTerrainColors=await terrainShot('ponyville-overview-alignment');
+    await hop(601.66,333.23,-1299.61);
+    await look(0,-1.34);
+    await terrainShot('overview-no-canterlot-proxy');
+    await hop(564.63,333.8,-1051.63);
+    await look(0,-1.34);
+    await terrainShot('overview-no-mountain-proxy');
+    await hop(-279.19,389.35,-1385.37);
+    await look(0,-1.34);
+    await terrainShot('overview-detailed-buildings');
+    result.checks.push(overview);
   } else if (test==='height') {
     await start();
     await page.keyboard.press('KeyF');
@@ -173,6 +243,44 @@ try {
       phases.at(-1).renderedFrames>landing.renderedFrames,JSON.stringify(phases));
     await shot('ground-ponyville');
     result.checks.push({phases,below:await stat()});
+  } else if (test==='vista-stitch') {
+    await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='globalThis.honeymoon = Object.freeze({';
+      assert.ok(source.includes(marker));
+      const probe=`qaVistaStitch:()=>{
+        const terrain=view.farTerrain;
+        const lod=terrain.regionAt(-36,-12);
+        const x=-576,z=-184;
+        const origin=terrain.materials.vista.uniforms.vistaMaskOrigin.value;
+        const {width}=terrain.stitchTexture.image;
+        const at=((x/8-origin.x*2)+(z/8-origin.y*2)*width)*2;
+        const edge=Array.from(terrain.stitchPixels.slice(at,at+2));
+        const current=terrain.packs.get('vista:-2.-1');
+        const pack=current?.previous??current;
+        const ground=pack?.group.children[0]?.geometry;
+        if (!pack?.installed || pack.coarse || !ground || !lod?.outer || terrain.regionAt(-37,-12)) return;
+        const locations=ground.attributes.faceOrigin.array, surfaces=ground.attributes.faceSurface.array;
+        for (let i=0;i<ground.instanceCount;i++) {
+          if (locations[i*3]/8+pack.rx*512!==x-8 || locations[i*3+2]/8+pack.rz*512!==z ||
+            surfaces[i*2+1]%8!==3 || locations[i*3+1]/8!==67) continue;
+          return {edge,sourceHeight:67,sourceTile:surfaces[i*2],stitched:surfaces[i*2+1]>=512};
+        }
+      },`;
+      await route.fulfill({response,body:source.replace(marker,marker+probe)});
+    });
+    await start();
+    await page.evaluate(()=>honeymoon.setDistance(32));
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-24.5,146,-184.5);
+    await page.evaluate(()=>honeymoon.look(Math.PI/2,-.14));
+    await page.waitForFunction(()=>honeymoon.qaVistaStitch()?.edge[0]>0,undefined,{timeout:60_000});
+    const stitch=await page.evaluate(()=>honeymoon.qaVistaStitch());
+    assert.deepEqual(stitch,{edge:[68,0],sourceHeight:67,sourceTile:0,stitched:true});
+    await shot('vista-grass-edge');
+    result.checks.push({stitch,farTerrain:(await stat()).farTerrain});
   } else if (test==='terrain-seam') {
     await page.route('**/game.mjs',async route=>{
       const response=await route.fetch();
@@ -289,6 +397,30 @@ try {
       click('#reset'),
     ]);
     result.checks.push({travelHidden:true,spawn:(await spawn.json()).position});
+  } else if (test==='controls') {
+    await start();
+    await page.evaluate(()=>document.exitPointerLock());
+    await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+    const controls=page.locator('#keys'), summary=controls.locator('summary');
+    assert.equal(await summary.isVisible(),true);
+    assert.equal(await controls.evaluate(panel=>panel.open),false);
+    assert.equal(await controls.getByText('H / Shift+H',{exact:true}).isVisible(),false);
+    await summary.focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await controls.evaluate(panel=>panel.open),true);
+    for (const key of ['H / Shift+H','Q / Ctrl+Q','G / L','Tab','Стрелки / Home / End']) {
+      assert.equal(await controls.getByText(key,{exact:true}).isVisible(),true);
+    }
+    await shot('controls-desktop');
+    await page.keyboard.press('Space');
+    assert.equal(await controls.evaluate(panel=>panel.open),false);
+    await summary.click();
+    await click('#play');
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement) && document.getElementById('game').classList.contains('playing'));
+    await page.evaluate(()=>document.exitPointerLock());
+    await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+    assert.equal(await controls.evaluate(panel=>panel.open),false);
+    result.checks.push({collapsedByDefault:true,keyboardAccessible:true,collapsedOnReopen:true});
   } else if (test==='solo-entry') {
     await page.route('**/api/session',route=>route.fulfill({
       status:403,json:{error:'invite_required'},
@@ -316,16 +448,19 @@ try {
     assert.ok(records.some(record=>record.kind==='heartbeat' && record.position.length===3));
     result.checks.push({records,stats:await stat()});
     await shot('solo-play');
-  } else if (test==='altitude-audio') {
+  } else if (test==='altitude-audio' || test==='altitude-default') {
     await start();
-    await page.evaluate(()=>document.exitPointerLock());
-    await page.waitForFunction(()=>!document.pointerLockElement && document.getElementById('game').classList.contains('paused'));
-    await click('#audio-settings-toggle');
-    await page.locator('#music-volume').fill('35');
-    await page.locator('#altitude-music-file').setInputFiles(process.env.HONEYMOON_QA_AUDIO);
-    await page.waitForFunction(()=>honeymoon.stats().audio.altitudeMusicConfigured);
-    await click('#audio-settings-close');
-    if (await visible('#play')) await click('#play');
+    const custom=test==='altitude-audio';
+    if (custom) {
+      await page.evaluate(()=>document.exitPointerLock());
+      await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+      await click('#audio-settings-toggle');
+      await page.locator('#music-volume').fill('35');
+      await page.locator('#altitude-music-file').setInputFiles(process.env.HONEYMOON_QA_AUDIO);
+      await page.waitForFunction(()=>honeymoon.stats().audio.altitudeMusicConfigured);
+      await click('#audio-settings-close');
+      if (await visible('#play')) await click('#play');
+    }
     await page.waitForFunction(()=>{
       const audio=honeymoon.stats().audio;
       return audio.musicMode==='npc' && audio.musicPlaying && audio.musicTime>0.2;
@@ -343,11 +478,20 @@ try {
       if (await visible('#play')) await click('#play');
     }
     await hop(-8,275,-19);
-    await page.waitForFunction(()=>{
+    await page.waitForFunction(source=>{
       const audio=honeymoon.stats().audio;
-      return audio.musicMode==='altitude' && audio.musicPlaying && audio.musicTime>0.2;
-    },undefined,{timeout:16000});
+      return audio.musicMode==='altitude' && audio.altitudeMusicSource===source && audio.musicPlaying && audio.musicTime>0.2;
+    },custom?'custom':'default',{timeout:16000});
     const above=await stat();
+    await page.evaluate(()=>document.exitPointerLock());
+    await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+    const pausedAt=(await stat()).audio.musicTime;
+    await page.waitForFunction(at=>{
+      const audio=honeymoon.stats().audio;
+      return audio.musicMode==='altitude' && audio.musicPlaying && audio.musicTime>at+.4;
+    },pausedAt,{timeout:5000});
+    const pauseMusic=(await stat()).audio;
+    await click('#play');
     await hop(-8,225,-19);
     await page.waitForFunction(()=>{
       const audio=honeymoon.stats().audio;
@@ -360,10 +504,59 @@ try {
       return audio.musicMode==='npc' && audio.musicPlaying && audio.musicTime>0.2;
     },undefined,{timeout:20000});
     const returned=await stat();
-    await page.reload();
-    await ready();
-    await page.waitForFunction(()=>honeymoon.stats().audio.altitudeMusicConfigured);
-    result.checks.push({before:before.audio,above:above.audio,below:below.audio,returned:returned.audio,persists:true});
+    if (custom) {
+      await page.reload();
+      await ready();
+      await page.waitForFunction(()=>honeymoon.stats().audio.altitudeMusicConfigured);
+    }
+    result.checks.push({before:before.audio,above:above.audio,pauseMusic,below:below.audio,returned:returned.audio,persists:custom});
+  } else if (test==='auto-move') {
+    await start();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-109.89,218,-154.92);
+    await page.evaluate(()=>honeymoon.look(Math.PI/2,0));
+    const moveLeftFrom=async (position,mode)=>{
+      await page.waitForFunction(({x,mode})=>{
+        const state=honeymoon.stats();
+        return state.autoMovement===mode && state.position.x<x-1 && state.movementSync.confirmed[0]<x-.5;
+      },{x:position.x,mode},{timeout:10000});
+      return (await stat()).position;
+    };
+    const startPosition=(await stat()).position;
+    await page.keyboard.press('KeyH');
+    await moveLeftFrom(startPosition,'walk');
+    await page.keyboard.press('KeyR');
+    assert.equal((await stat()).autoMovement,'walk');
+    await page.keyboard.press('KeyT');
+    const input=page.locator('#chat-input');
+    await input.waitFor({state:'visible'});
+    const chatStart=(await stat()).position;
+    await input.press('KeyH');
+    await input.press('ArrowLeft');
+    assert.equal(await input.inputValue(),'h');
+    const chatEnd=await moveLeftFrom(chatStart,'walk');
+    assert.equal(await input.evaluate(element=>element===document.activeElement),true);
+    await shot('auto-move-chat');
+    await input.press('Escape');
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+    await page.evaluate(()=>document.exitPointerLock());
+    await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+    const pauseStart=(await stat()).position;
+    const pauseEnd=await moveLeftFrom(pauseStart,'walk');
+    await shot('auto-move-paused');
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForFunction(()=>honeymoon.stats().autoMovement===null);
+    const stopped=(await stat()).position;
+    await page.waitForTimeout(350);
+    assert.ok(Math.abs((await stat()).position.x-stopped.x)<.1);
+    await page.keyboard.press('Shift+H');
+    const sprintEnd=await moveLeftFrom(stopped,'sprint');
+    assert.match(await page.locator('#auto-move-status').textContent(),/спринт/i);
+    await page.keyboard.press('KeyH');
+    await page.waitForFunction(()=>honeymoon.stats().autoMovement===null);
+    assert.equal(await visible('#auto-move-status'),false);
+    result.checks.push({startPosition,chatStart,chatEnd,pauseStart,pauseEnd,stopped,sprintEnd});
   } else if (test==='outage') {
     await start();
     await page.keyboard.press('KeyF');

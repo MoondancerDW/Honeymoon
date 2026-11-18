@@ -1480,6 +1480,7 @@ export class Display {
     if (!this.pending.size) return;
     const direction = this.camera.getWorldDirection(new THREE.Vector3());
     const eye = this.camera.position;
+    const landing = this.overviewMode==='landing' && this.streamArea;
     const score = job => {
       const scale = job.type === 'precise' ? 8 : 32;
       const x = job.cx * 16 + scale - eye.x;
@@ -1488,7 +1489,10 @@ export class Display {
       const distance = Math.hypot(x, y, z);
       const visible = x * direction.x + y * direction.y + z * direction.z > 0;
       const startup = this.startupChunks?.has(chunkKey(job.cx, job.cz)) && job.type === 'precise';
-      return distance * (visible ? .8 : 1.2) + (job.type === 'coarse' ? 260 : job.visualOnly ? 100 : 0) - (job.edit || startup ? 500 : 0);
+      const landingCore = landing && job.type==='precise' && job.cy<16 &&
+        Math.max(Math.abs(job.cx-landing.x),Math.abs(job.cz-landing.z))<=1;
+      return distance * (visible ? .8 : 1.2) + (job.type === 'coarse' ? 260 : job.visualOnly ? 100 : 0) -
+        (job.edit || startup || landingCore ? 500 : 0);
     };
     for (const worker of this.workers) {
       if (this.active.size >= workerLimit || performance.now() >= deadline || this.ready.length > 5 || this.uploads.length > 32) break;

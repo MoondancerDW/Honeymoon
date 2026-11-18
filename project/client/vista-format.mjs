@@ -1,3 +1,5 @@
+import {VISTA_STITCH_FACE} from './vista-stitch.mjs';
+
 export const VISTA_VERSION = 2;
 export const supportedVistaVersion = version => version === 1 || version === VISTA_VERSION;
 export const VISTA_STEP = 8;
@@ -44,20 +46,20 @@ function coarsen(view,cell,hasLofts) {
   }
 }
 
-export function decodeVista(buffer,coarse = false) {
+export function decodeVista(buffer,coarse = false,stitch = false) {
   const view = readVista(coarse ? buffer.slice(0) : buffer);
   const hasLofts = view.getUint8(4)>1;
   const cell = hasLofts ? vistaCell : (x,z)=>address(x,z,VISTA_LOFT);
   if (coarse) coarsen(view,cell,hasLofts);
   const offsets = [], spans = [], surfaces = [], lights = [], colors = [];
   let minY = 256, maxY = 0;
-  function emit(x,z,base,width,height,face,at,shade) {
+  function emit(x,z,base,width,height,face,at,shade,ground=false) {
     offsets.push(x*SCALE,base,z*SCALE);
     spans.push(width,height);
     const tile = view.getUint16(at+2,true);
     const light = view.getUint16(at+4,true);
     const leaf = tile === 304 || tile === 305;
-    surfaces.push(leaf ? 304 : tile,face);
+    surfaces.push(leaf ? 304 : tile,face+(stitch && ground ? VISTA_STITCH_FACE : 0));
     lights.push(leaf ? 240 | (light & 15) : light);
     for (let i=0; i<3; i++) colors.push(Math.round(view.getUint8(at+6+i)*shade));
     minY = Math.min(minY,base/SCALE);
@@ -74,19 +76,23 @@ export function decodeVista(buffer,coarse = false) {
   }
   function flatTop(x,z,at) {
     let width = 1, length = 1;
-    while (x+width < VISTA_SIDE && matches(x+width,z,at)) width++;
-    rows: while (z+length < VISTA_SIDE) {
-      for (let dx=0; dx<width; dx++) if (!matches(x+dx,z+length,at)) break rows;
-      length++;
+    // At an active boundary every sample corner may have a different
+    // height. Keep those vertices even when the raw plateau could merge.
+    if (!stitch) {
+      while (x+width < VISTA_SIDE && matches(x+width,z,at)) width++;
+      rows: while (z+length < VISTA_SIDE) {
+        for (let dx=0; dx<width; dx++) if (!matches(x+dx,z+length,at)) break rows;
+        length++;
+      }
     }
     let row = x+z*VISTA_SIDE;
     for (let dz=0; dz<length; dz++,row+=VISTA_SIDE) exposed.fill(1,row,row+width);
-    emit(x*VISTA_STEP,z*VISTA_STEP,view.getUint16(at,true),length*step,width*step,3,at,1);
+    emit(x*VISTA_STEP,z*VISTA_STEP,view.getUint16(at,true),length*step,width*step,3,at,1,true);
   }
   function cliff(x,z,top,at,dx,dz,face,bit) {
     const base = heightAt(x+dx,z+dz);
     if (!base || base >= top || edges[x+z*VISTA_SIDE] & bit) return;
-    const limit = dx ? VISTA_SIDE-z : VISTA_SIDE-x;
+    const limit = stitch ? 1 : dx ? VISTA_SIDE-z : VISTA_SIDE-x;
     let length = 1;
     for (; length < limit; length++) {
       const nx = x+(dz ? length : 0), nz = z+(dx ? length : 0);
@@ -95,7 +101,7 @@ export function decodeVista(buffer,coarse = false) {
     }
     emit((x+Number(dx > 0))*VISTA_STEP,(z+Number(dz > 0))*VISTA_STEP,base,
       face === 0 || face === 5 ? length*step : top-base,
-      face === 0 || face === 5 ? top-base : length*step,face,at,dx ? .78 : .92);
+      face === 0 || face === 5 ? top-base : length*step,face,at,dx ? .78 : .92,true);
   }
   function wholeLoftCaps(x,z,at,base,top) {
     if (loftCaps[x+z*VISTA_SIDE]) return;

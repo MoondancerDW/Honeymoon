@@ -163,11 +163,15 @@ export class Movement {
     return fluidAt(this.cellAt,x,y+depth,z,this.world.models) === 'water';
   }
 
+  withinBounds(x, y, z, {halfWidth:half, height} = this.body) {
+    const b = this.world.manifest.bounds;
+    return x - half >= b.minX && x + half <= b.maxX + 1 && z - half >= b.minZ && z + half <= b.maxZ + 1 &&
+      y >= b.minY && y + height <= b.maxY + 1;
+  }
+
   blocked(x, y, z, body = this.body) {
     const {halfWidth:half, height} = body;
-    const b = this.world.manifest.bounds;
-    if (x - half < b.minX || x + half > b.maxX + 1 || z - half < b.minZ || z + half > b.maxZ + 1 ||
-        y < b.minY || y + height > b.maxY + 1) return true;
+    if (!this.withinBounds(x,y,z,body)) return true;
     if (this.pendingPlacement && overlapsPlacement({x,y,z}, this.pendingPlacement,body)) return true;
     for (let yy = Math.floor(y) - 1; yy <= Math.floor(y + height); yy++) {
       for (let zz = Math.floor(z - half - .0625); zz <= Math.floor(z + half + .0625); zz++) {
@@ -267,12 +271,14 @@ export class Movement {
     }
   }
 
-  update(position, dx, dz, jump, dt, {descend = false, rise = jump, swimPitch = 0, recordStep} = {}) {
+  startJump() {
+    this.fall = Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
+    this.grounded = false;
+  }
+
+  update(position, dx, dz, jump, dt, {descend = false, rise = jump, swimPitch = 0, recordStep, automatic = false} = {}) {
     this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
-    if (!this.medium && jump && this.grounded) {
-      this.fall = Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
-      this.grounded = false;
-    }
+    if (!this.medium && jump && this.grounded) this.startJump();
     const fastestDrop = (Math.max(0,-this.fall) + WORLD_GRAVITY * dt) * dt;
     const n = Math.max(1, Math.ceil(dt / .016), Math.ceil(fastestDrop / VERTICAL_STEP));
     const step = dt / n;
@@ -313,11 +319,19 @@ export class Movement {
         if (this.medium === 'water') this.fall = 2.5;
         if (this.medium === 'lava') this.fall = 1.15;
       }
+      if (automatic && (wallX || wallZ) && this.grounded && !this.medium && this.stance === 'stand' && !this.waitingForTerrain) {
+        // A normal step already failed. Jump only if the body can rise and advance at its apex.
+        const {x,y,z}=position;
+        const apex=y+this.body.jumpHeight;
+        if (!this.blocked(x,apex,z) && !this.blocked(x+dx*step,apex,z) && !this.blocked(x+dx*step,apex,z+dz*step)) {
+          this.startJump();
+        }
+      }
       recordStep?.(position);
     }
   }
 
-  fly(position, dx, dy, dz, dt, recordStep, spectator = false) {
+  fly(position, dx, dy, dz, dt, recordStep, spectator = false, automatic = false) {
     this.fall = 0;
     this.grounded = false;
     this.medium = null;
@@ -325,6 +339,7 @@ export class Movement {
     const steps = Math.max(1, Math.ceil(dt / .016),Math.ceil(Math.hypot(dx,dz)*dt/(POSITION_STEP_LIMIT-.001)),
       Math.ceil(Math.abs(dy)*dt/VERTICAL_STEP));
     const time = dt / steps;
+    const stepX=dx*time,stepZ=dz*time;
     for (let i = 0; i < steps; i++) {
       if (spectator) {
         const {halfWidth, height} = this.body;
@@ -334,8 +349,15 @@ export class Movement {
         position.z = Math.max(minZ + halfWidth, Math.min(maxZ + 1 - halfWidth, position.z + dz * time));
       } else {
         this.axis(position, 'y', dy * time);
-        this.axis(position, 'x', dx * time);
-        this.axis(position, 'z', dz * time);
+        const {x,z}=position;
+        const wallX=this.axis(position,'x',stepX);
+        const wallZ=this.axis(position,'z',stepZ);
+        if (automatic && !dy && (wallX || wallZ) && !this.waitingForTerrain &&
+            this.withinBounds(x+stepX,position.y,z+stepZ)) {
+          // Use the remaining movement budget for ascent if the forward step is clipped.
+          const remaining=stepX**2+stepZ**2-(position.x-x)**2-(position.z-z)**2;
+          this.axis(position,'y',Math.sqrt(Math.max(0,remaining)));
+        }
       }
       recordStep?.(position);
     }

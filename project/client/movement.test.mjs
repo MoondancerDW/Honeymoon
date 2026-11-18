@@ -158,12 +158,72 @@ test('flight hovers, uses physical colliders and records each movement step', ()
   assert.ok(position.y < y);
 });
 
+test('automatic walking jumps a climbable step and stays low at walls and ceilings', () => {
+  const block=['0,1,0','legacy:1:0'];
+  for (const [obstacles,clear] of [
+    [[block],true],
+    [[block,['0,2,0','legacy:1:0']],false],
+    [[block,['-1,3,0','legacy:1:0'],['0,3,0','legacy:1:0']],false],
+  ]) {
+    const movement=new Movement(worldFor(new Map(obstacles)));
+    const position={x:-.6,y:1,z:.5};
+    let apex=position.y;
+    for (let i=0;i<48;i++) {
+      movement.update(position,3.8,0,false,.016,{automatic:true});
+      apex=Math.max(apex,position.y);
+    }
+    if (clear) {
+      assert.ok(position.x>.6);
+      assert.ok(apex>=1.999);
+    } else {
+      assert.ok(Math.abs(position.x+.3)<.002);
+      assert.ok(Math.abs(apex-1)<.001);
+    }
+  }
+});
+
+test('automatic flight climbs a wall, levels off and respects the ceiling', () => {
+  for (const wallTop of [6,15]) {
+    const obstacles=new Map();
+    for (let y=4;y<=wallTop;y++) obstacles.set(`1,${y},0`,'legacy:1:0');
+    const movement=new Movement(worldFor(obstacles));
+    const position={x:.5,y:4,z:.5};
+    for (let i=0;i<112;i++) movement.fly(position,7.65,0,0,.016,undefined,false,true);
+    if (wallTop===6) {
+      assert.ok(position.x>4);
+      assert.ok(position.y>=7 && position.y<7.2);
+    } else {
+      assert.ok(Math.abs(position.x-.7)<.002);
+      assert.ok(Math.abs(position.y-14.5)<.002);
+    }
+  }
+});
+
+test('automatic flight does not attempt to climb missing terrain or the world boundary', () => {
+  const world=worldFor(new Map());
+  for (const [start,hasChunk,waiting] of [[.5,x=>x<=0,true],[8.5,()=>true,false]]) {
+    const movement=new Movement({...world,hasChunk});
+    const position={x:start,y:4,z:.5};
+    for (let i=0;i<12;i++) movement.fly(position,7.65,0,0,.016,undefined,false,true);
+    assert.ok(Math.abs(position.x-start-.2)<.002);
+    assert.equal(position.y,4);
+    assert.equal(Boolean(movement.waitingForTerrain),waiting);
+  }
+});
+
 test('sprint accelerates ground movement by 40 percent and flying by 100 percent', () => {
   const flight = movementSpeed({flying:true});
   assert.equal(movementSpeed(),3.8);
   assert.equal(movementSpeed({sprint:true}),5.1 * 1.4);
   assert.equal(movementSpeed({flying:true, sprint:true}), flight * 2);
   assert.ok(movementSpeed({flying:true, sprint:true}) * .016 < POSITION_STEP_LIMIT);
+});
+
+test('high flight sprint is 20 percent faster than its previous 30.6 blocks per second', () => {
+  const speed=movementSpeed({flying:true,sprint:true,y:258});
+  assert.ok(Math.abs(speed-36.72)<1e-9);
+  assert.equal(movementSpeed({flying:true,y:258}),7.65*1.4);
+  assert.equal(movementSpeed({flying:true,sprint:true,y:256}),15.3);
 });
 
 test('third-person camera stays four blocks away in open space and stops at near obstacles', () => {

@@ -30,6 +30,11 @@ export class AltitudeOverview {
         throw new Error('Missing altitude map');
       }
       this.build(height.value,color.value);
+      if (map.detail && !this.display.lowDevice) {
+        colorLoader.loadAsync('/altitude-detail.webp').then(texture=>this.useDetailTexture(texture)).catch(error=>{
+          console.warn('Nearby altitude map detail could not be loaded',error);
+        });
+      }
     }).catch(error=>{
       this.retryAt=performance.now()+5000;
       console.warn('Altitude map could not be loaded',error);
@@ -46,7 +51,15 @@ export class AltitudeOverview {
       const stream=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
       const groups=await new Response(stream).json();
       const geometry=new THREE.BoxGeometry(1,1,1);
-      const material=new THREE.MeshBasicMaterial({polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1});
+      const shade=new Float32Array(geometry.attributes.position.count*3);
+      const normal=geometry.attributes.normal;
+      for (let i=0;i<normal.count;i++) {
+        const light=.83+.17*normal.getY(i)+.08*normal.getX(i)-.04*normal.getZ(i);
+        shade.fill(light,i*3,i*3+3);
+      }
+      geometry.setAttribute('color',new THREE.BufferAttribute(shade,3));
+      const material=new THREE.MeshBasicMaterial({vertexColors:true,polygonOffset:true,polygonOffsetFactor:-1,
+        polygonOffsetUnits:-1});
       const markers=new THREE.Group();
       const dummy=new THREE.Object3D(), color=new THREE.Color();
       for (const {key,boxes} of groups) {
@@ -85,25 +98,27 @@ export class AltitudeOverview {
   }
 
   build(heightImage, colors) {
-    const {west,north,east,south,step,columns,rows}=map;
+    const {west,north,step,columns,rows,heightScale}=map;
     const canvas=document.createElement('canvas');
     canvas.width=columns; canvas.height=rows;
     const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    if (heightImage.width!==columns || heightImage.height!==rows) throw new Error('Invalid altitude height map dimensions');
     ctx.drawImage(heightImage,0,0);
     const pixels=ctx.getImageData(0,0,columns,rows).data;
     const vertices=new Float32Array(columns*rows*3), uv=new Float32Array(columns*rows*2);
     const indices=[];
     for (let z=0;z<rows;z++) for (let x=0;x<columns;x++) {
-      const at=x+z*columns, y=pixels[at*4];
-      vertices.set([west+x*step-(west+east)/2,y-1,north+z*step-(north+south)/2],at*3);
+      const at=x+z*columns;
+      const y=(pixels[at*4]*256+pixels[at*4+1])/heightScale;
+      // Display disables automatic world matrices. Keep the immutable relief in world coordinates.
+      vertices.set([west+x*step,y,north+z*step],at*3);
       uv.set([x/(columns-1),1-z/(rows-1)],at*2);
       if (x>=columns-1 || z>=rows-1) continue;
       const a=at,b=a+1,c=a+columns,d=c+1;
       if (pixels[a*4+3]&&pixels[b*4+3]&&pixels[c*4+3]) indices.push(a,c,b);
       if (pixels[d*4+3]&&pixels[b*4+3]&&pixels[c*4+3]) indices.push(b,c,d);
     }
-    colors.colorSpace=THREE.SRGBColorSpace;
-    colors.anisotropy=Math.min(4,this.display.renderer.capabilities.getMaxAnisotropy());
+    this.configureTexture(colors);
     const geometry=new THREE.BufferGeometry();
     geometry.setAttribute('position',new THREE.BufferAttribute(vertices,3));
     geometry.setAttribute('uv',new THREE.BufferAttribute(uv,2));
@@ -111,8 +126,43 @@ export class AltitudeOverview {
     geometry.computeBoundingSphere();
     const material=new THREE.MeshBasicMaterial({map:colors});
     this.mesh=new THREE.Mesh(geometry,material);
-    this.mesh.position.set((west+east)/2,0,(north+south)/2);
     this.scene.add(this.mesh);
+  }
+
+  configureTexture(texture) {
+    texture.colorSpace=THREE.SRGBColorSpace;
+    texture.anisotropy=Math.min(8,this.display.renderer.capabilities.getMaxAnisotropy());
+  }
+
+  useDetailTexture(texture) {
+    const {west,north,east,south,detail}=map;
+    const width=east-west, length=south-north;
+    this.configureTexture(texture);
+    texture.magFilter=THREE.NearestFilter;
+    const origin=new THREE.Vector2((detail.west-west)/width,(south-detail.south)/length);
+    const span=new THREE.Vector2((detail.east-detail.west)/width,(detail.south-detail.north)/length);
+    const feather=new THREE.Vector2(64/(detail.east-detail.west),64/(detail.south-detail.north));
+    const material=this.mesh.material;
+    material.onBeforeCompile=shader=>{
+      shader.uniforms.altitudeDetail={value:texture};
+      shader.uniforms.altitudeOrigin={value:origin};
+      shader.uniforms.altitudeSpan={value:span};
+      shader.uniforms.altitudeFeather={value:feather};
+      shader.fragmentShader=`
+        uniform sampler2D altitudeDetail;
+        uniform vec2 altitudeOrigin;
+        uniform vec2 altitudeSpan;
+        uniform vec2 altitudeFeather;
+      `+shader.fragmentShader.replace('#include <map_fragment>',`
+        #include <map_fragment>
+        vec2 detailUv=(vMapUv-altitudeOrigin)/altitudeSpan;
+        vec2 weight=smoothstep(vec2(0.0),altitudeFeather,min(detailUv,1.0-detailUv));
+        if (weight.x*weight.y>0.0) {
+          diffuseColor.rgb=mix(diffuseColor.rgb,texture2D(altitudeDetail,detailUv).rgb,weight.x*weight.y);
+        }
+      `);
+    };
+    material.needsUpdate=true;
   }
 
   updateHighBlocks(position, now) {
