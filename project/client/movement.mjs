@@ -153,10 +153,6 @@ export class Movement {
 
   get body() { return playerBody(this.size, this.stance); }
 
-  get minecraftJump() {
-    return this.ponyType !== 'pegasus' && this.ponyType !== 'alicorn' && this.stance !== 'crawl';
-  }
-
   setStance({x,y,z}, stance) {
     if (stance === this.stance || !isPlayerStance(stance)) return this.stance;
     if (stance === 'swim') {
@@ -281,9 +277,10 @@ export class Movement {
   }
 
   startJump(y) {
-    const minecraft = this.minecraftJump;
-    this.jumpArc = minecraft ? {y, tickLeft:MINECRAFT_TICK} : undefined;
-    this.fall = minecraft ? MINECRAFT_JUMP_SPEED : Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
+    const regular = this.stance !== 'crawl';
+    this.jumpArc = regular ? {y, tickLeft:MINECRAFT_TICK,
+      slowDescent:this.ponyType === 'pegasus' || this.ponyType === 'alicorn'} : undefined;
+    this.fall = regular ? MINECRAFT_JUMP_SPEED : Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
     this.grounded = false;
   }
 
@@ -310,6 +307,11 @@ export class Movement {
       arc.tickLeft -= step;
       if (arc.tickLeft <= 0) {
         this.fall = nextMinecraftJumpSpeed(this.fall);
+        if (arc.slowDescent && this.fall < 0) {
+          // Winged ponies share the same ascent, then fall from rest at the apex.
+          this.resetFall();
+          break;
+        }
         arc.tickLeft = MINECRAFT_TICK;
       }
     }
@@ -362,8 +364,9 @@ export class Movement {
       if (automatic && (wallX || wallZ) && this.grounded && !this.medium && this.stance === 'stand' && !this.waitingForTerrain) {
         // A normal step already failed. Jump only if the body can rise and advance at its apex.
         const {x,y,z}=position;
-        const apex=y+(this.minecraftJump ? MINECRAFT_JUMP_HEIGHT : this.body.jumpHeight);
-        if (!this.blocked(x,apex,z) && !this.blocked(x+dx*step,apex,z) && !this.blocked(x+dx*step,apex,z+dz*step)) {
+        const apex=y+MINECRAFT_JUMP_HEIGHT;
+        if (!this.blocked(x,(y+apex)/2,z) && !this.blocked(x,apex,z) &&
+            !this.blocked(x+dx*step,apex,z) && !this.blocked(x+dx*step,apex,z+dz*step)) {
           this.startJump(y);
         }
       }

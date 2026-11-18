@@ -166,12 +166,15 @@ try {
         globalThis.jumpSample=new Promise(resolve=>{
           const floor=honeymoon.stats().position.y;
           const beginning=performance.now();
-          let startTime,apex=0;
+          let startTime,apexTime,apex=0;
           function sample(now) {
             const height=honeymoon.stats().position.y-floor;
             if (height>.02) startTime??=now;
-            apex=Math.max(apex,height);
-            if (startTime && height<.02 || now-beginning>4500) resolve({apex,ms:startTime && now-startTime});
+            if (height>apex) {
+              apex=height;
+              apexTime=now;
+            }
+            if (startTime && height<.02 || now-beginning>4500) resolve({apex,ms:startTime && now-startTime,descentMs:apexTime && now-apexTime});
             else requestAnimationFrame(sample);
           }
           requestAnimationFrame(sample);
@@ -203,7 +206,9 @@ try {
     await click('#play');
     await page.waitForFunction(()=>!document.getElementById('chat-toggle').disabled);
     const pegasus=await sampleJump();
-    assert.ok(pegasus.apex>.93 && pegasus.apex<1.06,JSON.stringify(pegasus));
+    assert.ok(pegasus.apex>1.18 && pegasus.apex<1.28,JSON.stringify(pegasus));
+    assert.ok(Math.abs(pegasus.apex-earth.apex)<.07,JSON.stringify({earth,pegasus}));
+    assert.ok(pegasus.descentMs>earth.descentMs+50,JSON.stringify({earth,pegasus}));
     result.checks.push({earth,pegasus});
   } else if (test==='overview-boundary') {
     await start();
