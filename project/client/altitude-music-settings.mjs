@@ -31,7 +31,7 @@ export function bindAltitudeMusic({input,clear,status,setSource}) {
     setSource(objectUrl);
     if (previous) URL.revokeObjectURL(previous);
     clear.hidden=!file;
-    status.textContent=file ? file.name+' · сохранено в этом браузере' : 'На высоте играет встроенная тема. Здесь можно выбрать свою.';
+    status.textContent=file ? file.name+' · сохранено в этом браузере' : 'Можно выбрать свой трек для высоты.';
   }
   savedTrack({mode:'readonly',run:store=>store.get(trackKey)}).then(file=>{
     if (!revision && file instanceof Blob) activate(file);

@@ -819,7 +819,7 @@ function setFlight(active) {
     recordPosition(position);
   }
   flying = active;
-  movement.fall = 0;
+  movement.resetFall();
   movement.grounded = false;
   jump = false;
   element('flight-status').hidden = !active || spectator;
@@ -935,7 +935,7 @@ function setAuthoritativePosition(feet, stance = 'stand') {
   physicsTime=0;
   movement.stance = stance;
   crawlRequested = stance === 'crawl' && !seat;
-  movement.fall = 0;
+  movement.resetFall();
   movement.grounded = false;
 }
 
@@ -1712,6 +1712,7 @@ function bindControls() {
         }
         profile.saved(body, pending);
         movement.size = body.size ?? 'normal';
+        movement.ponyType = body.ponyType ?? 'earth';
         if (body.position) setSeat(body.seat,body.position,body.stance);
         social.profileUpdated(profile.confirmed);
         view.setLocalSkin(profile.confirmed.skin);
@@ -2219,6 +2220,7 @@ function bindSoloWorld(kind) {
 async function start() {
   const sessionBody = await accessUi.acquire();
   if (!sessionBody) return;
+  audio.setDefaultAltitudeMusic(sessionBody.altitudeMusic);
   soloStreaming=Boolean(sessionBody.soloDownload);
   soloDownloadUi.enable(soloStreaming);
   bindSoloWorld(sessionBody.soloWorld);
@@ -2252,6 +2254,7 @@ async function start() {
   position = p ? {...p} : {x, y, z};
   movement = new Movement(world);
   movement.size = profile.confirmed.size ?? 'normal';
+  movement.ponyType = profile.confirmed.ponyType ?? 'earth';
   movement.stance = session.body.stance ?? 'stand';
   movementSync.reset(position,movement.stance);
   crawlRequested = movement.stance === 'crawl';

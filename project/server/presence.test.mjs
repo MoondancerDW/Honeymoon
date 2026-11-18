@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { createHoneymoonServer } from './index.mjs';
-import { profileChanges, savedSkinSize } from './presence-profile.mjs';
+import { profileChanges, savedSkinSize, savedSkinTraits } from './presence-profile.mjs';
 import { createPresence, readPose } from './presence.mjs';
 
 const work = fileURLToPath(new URL('../work/', import.meta.url));
@@ -55,6 +55,29 @@ test('server reads the exact size marker for new and previously saved skin pixel
     chunk('PLTE',Buffer.from([0,0,0,255,190,83])), chunk('IDAT',deflateSync(pixels)), chunk('IEND',Buffer.alloc(0))]);
   assert.equal((await profileChanges({skin:indexed.toString('base64')})).skin.size,'small');
   assert.equal(savedSkinSize(indexed),'small');
+});
+
+test('server uses the opaque renderer species marker for new and saved skins', async () => {
+  for (const [rgba,ponyType] of [
+    [[136,202,240,255],'pegasus'],[[254,249,252,255],'alicorn'],[[40,43,41,255],'alicorn'],
+    [[209,159,228,255],'unicorn'],[[136,202,240,254],'earth'],[[0,0,0,0],'earth'],
+  ]) {
+    const pixels=Buffer.alloc((1+64*4)*32);
+    pixels.set(rgba,1);
+    const png=skin(64,32,{pixels});
+    const uploaded=(await profileChanges({skin:png.toString('base64')})).skin;
+    assert.equal(uploaded.ponyType,ponyType);
+    assert.deepEqual(savedSkinTraits(uploaded.png),{size:'normal',ponyType});
+  }
+  const header=Buffer.from(skin().subarray(16,29));
+  header[12]=1;
+  const passes=[[8,4],[8,4],[16,4],[16,8],[32,8],[32,16],[64,16]];
+  const lengths=passes.map(([width,rows])=>(1+width*4)*rows);
+  const interlaced=Buffer.alloc(lengths.reduce((total,length)=>total+length,0));
+  interlaced.set([136,202,240,255],1);
+  interlaced.set([255,190,83,255],lengths.slice(0,5).reduce((total,length)=>total+length,0)+5);
+  const png=Buffer.concat([signature,chunk('IHDR',header),chunk('IDAT',deflateSync(interlaced)),chunk('IEND',Buffer.alloc(0))]);
+  assert.deepEqual(savedSkinTraits(png),{size:'small',ponyType:'pegasus'});
 });
 
 test('skins accept supported layouts and discard private PNG metadata with bounded decompression', async () => {
@@ -202,12 +225,16 @@ test('independent cookies share profiles and only confirmed movement, and retain
   assert.notEqual(a.data.profile.id, b.data.profile.id);
   assert.equal((await post('profile',{nickname:'Ветер'}, undefined)).status,401);
   assert.equal((await post('profile',{nickname:'Ветер'}, b.cookie,'https://example.test')).status,403);
-  const chosenSkin = markedSkin(255,190,83);
+  const pixels = Buffer.alloc((1+64*4)*32);
+  pixels.set([136,202,240,255],1);
+  pixels.set([255,190,83,255],13);
+  const chosenSkin = skin(64,32,{pixels});
   const chosen = await post('profile',{nickname:' Лунный Ветер ',skin:chosenSkin.toString('base64')}, b.cookie);
   assert.equal(chosen.status,200);
   assert.equal(chosen.data.nickname,'Лунный Ветер');
   assert.equal(chosen.data.nicknameChosen,true);
   assert.equal(chosen.data.size,'small');
+  assert.equal(chosen.data.ponyType,'pegasus');
   assert.equal((await post('session',{},a.cookie)).data.profile.nicknameChosen,false);
   assert.match(chosen.data.skin, /^\/skins\/[a-f0-9]{64}\.png$/);
   const image = await fetch(url + chosen.data.skin);
@@ -249,6 +276,7 @@ test('independent cookies share profiles and only confirmed movement, and retain
   const skinChanged = await post('profile',{skin:skin(64,64).toString('base64')},b.cookie);
   assert.equal(skinChanged.data.nickname,renamed.data.nickname);
   assert.notEqual(skinChanged.data.skin,chosen.data.skin);
+  assert.equal(skinChanged.data.ponyType,'earth');
   assert.equal((await post('profile',{skin:null},b.cookie)).data.skin,null);
   assert.equal((await post('profile',{skin:chosenSkin.toString('base64')},b.cookie)).data.skin,chosen.data.skin);
   assert.equal((await post('profile',{skin:null},b.cookie)).data.skin,null);

@@ -17,7 +17,7 @@ import {diagnosticPagePattern,diagnosticTracePattern,loadPlayerDiagnostics,parse
 import {loadLodAssets,loadVistaAssets,serveClimateMap,serveLodTile,serveVistaTile} from './lod-assets.mjs';
 import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
-import { MAX_PROFILE_BODY, profileChanges, publicProfile, savedSkinSize } from './presence-profile.mjs';
+import { MAX_PROFILE_BODY, profileChanges, publicProfile, savedSkinTraits } from './presence-profile.mjs';
 import { openStore } from './store.mjs';
 import { createWorldTime } from './world-time.mjs';
 import { createWarps } from './warps.mjs';
@@ -60,6 +60,7 @@ const MIME = {
   '.webp': 'image/webp',
   '.bin': 'application/octet-stream',
   '.svg': 'image/svg+xml',
+  '.mp3': 'audio/mpeg',
   '.ogg': 'audio/ogg',
   '.wav': 'audio/wav',
 };
@@ -125,12 +126,12 @@ function serveWorldJson() {
   };
 }
 
-async function serveNpcRecording(request,response,path) {
-  const file=statSync(path,{throwIfNoEntry:false});
+async function serveAudioRecording(request,response,path,{type=MIME['.ogg'],cacheControl,
+  file=statSync(path,{throwIfNoEntry:false})}={}) {
   if (!file?.isFile()) throw new RequestError(404,'not_found');
   const requested=request.headers.range;
-  const headers={'Content-Type':MIME['.ogg'],'Accept-Ranges':'bytes',
-    'Cache-Control':response.getHeader('Vary')==='Cookie'?'private, max-age=3600':'public, max-age=3600'};
+  const headers={'Content-Type':type,'Accept-Ranges':'bytes',
+    'Cache-Control':cacheControl ?? (response.getHeader('Vary')==='Cookie'?'private, max-age=3600':'public, max-age=3600')};
   let start=0,end=file.size-1;
   if (requested) {
     const range=/^bytes=(\d*)-(\d*)$/.exec(requested);
@@ -203,7 +204,6 @@ async function serveFile(request, response, path) {
 
 function staticPath(path, project, generated) {
   if (path === '/') return join(project, 'client', 'index.html');
-  if (path === '/altitude-theme.wav') return join(project, 'client', 'altitude-theme.wav');
   if (path === '/honeymoon.webmanifest') return join(project, 'client', 'honeymoon.webmanifest');
   if (path === '/generated/weather/biomes.json') return join(generated, 'weather', 'biomes.json');
   const vendor = path.match(/^\/vendor\/(?:three\/)?(three\.(?:module|core)\.js)$/);
@@ -233,6 +233,7 @@ export function createHoneymoonServer({
   publicOrigin = allowedOrigin,
   inviteRequired = secure,
   singlePlayer = false,
+  altitudeMusic = process.env.HONEYMOON_ALTITUDE_TRACK,
   soloWorld,
   switchSoloWorld,
   ownerOnPrimary = !inviteRequired && !secure,
@@ -251,6 +252,17 @@ export function createHoneymoonServer({
   const testRange=soloWorld==='test-range';
   const streamedWorld=soloCache && !testRange;
   const persistSoloPosition=singlePlayer && Boolean(soloCache || soloWorld);
+  const altitudeTrack=(inviteRequired || singlePlayer) && typeof altitudeMusic==='string' &&
+    extname(altitudeMusic).toLowerCase()==='.mp3' ? resolve(altitudeMusic) : undefined;
+  function altitudeTrackFile() {
+    if (!altitudeTrack) return;
+    try {
+      const file=statSync(altitudeTrack,{throwIfNoEntry:false});
+      if (file?.isFile() && file.size>0) return file;
+    } catch {
+      // A local music configuration may point to an unavailable drive.
+    }
+  }
   const build = readBuildNumber(project);
   let soloDistribution;
   if (!singlePlayer) {
@@ -283,19 +295,22 @@ export function createHoneymoonServer({
   if (state !== ':memory:') mkdirSync(dirname(state), { recursive: true });
   const store = openStore(state);
   const survival = createSurvival(store,initialMode,clock ? {now:clock} : undefined);
-  const playerSizes = new Map();
-  function rememberSize(player,size) {
-    if (!playerSizes.has(player) && playerSizes.size >= 512) playerSizes.delete(playerSizes.keys().next().value);
-    playerSizes.set(player,size);
-    return size;
+  const savedTraits = new Map();
+  function rememberTraits(player,{size,ponyType}) {
+    if (!savedTraits.has(player) && savedTraits.size >= 512) savedTraits.delete(savedTraits.keys().next().value);
+    const traits={size,ponyType};
+    savedTraits.set(player,traits);
+    return traits;
   }
-  function playerSize(player, saved) {
-    if (playerSizes.has(player)) return playerSizes.get(player);
+  function playerTraits(player, saved) {
+    if (savedTraits.has(player)) return savedTraits.get(player);
     saved ??= store.getProfile(player);
-    return rememberSize(player,savedSkinSize(saved?.skinHash && store.getSkin(saved.skinHash)));
+    return rememberTraits(player,savedSkinTraits(saved?.skinHash && store.getSkin(saved.skinHash)));
   }
+  const playerSize=(player,saved)=>playerTraits(player,saved).size;
   function profileFor(player, saved = store.getProfile(player)) {
-    return publicProfile(player,saved,playerSize(player,saved));
+    const {size,ponyType}=playerTraits(player,saved);
+    return publicProfile(player,saved,size,ponyType);
   }
   let game;
   try {
@@ -417,6 +432,7 @@ export function createHoneymoonServer({
     const weatherSettings=worldTime.weatherSettings();
     return { ...game.session(player), modelFamilies:Object.keys(models),sounds,boatTexture,dayTick:time.tick,time,
       weather:weatherSettings.mode,weatherSettings,creative:Boolean(creative),
+      ...(altitudeTrackFile() && {altitudeMusic:'/api/altitude-music'}),
       ...(survival.enabled&&{gameMode:playerMode(player)}),...(diagnostics&&{playerDiagnostics:diagnostics}),
       ...(streamedWorld&&{soloDownload:true}),...(soloWorld&&{soloWorld}),
       profile:profileFor(player),access:accessView(credential,owner) };
@@ -646,6 +662,14 @@ export function createHoneymoonServer({
         return json(response,200,legacyRoute?{...body,editor:true}:body,token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
       }
       if (!player) throw new RequestError(401, 'session_required');
+      if (path==='/api/altitude-music' && (method==='GET' || method==='HEAD')) {
+        requireSameOrigin(request,requestSecure,requestOrigin);
+        const file=altitudeTrackFile();
+        if (!file) throw new RequestError(404,'not_found');
+        response.setHeader('Vary','Cookie');
+        response.setHeader('Cross-Origin-Resource-Policy','same-origin');
+        return serveAudioRecording(request,response,altitudeTrack,{file,type:MIME['.mp3'],cacheControl:'private, no-store'});
+      }
       if (switchSoloWorld && method==='POST' && path==='/api/solo-world/switch') {
         await readInput();
         saveSoloPosition();
@@ -809,7 +833,7 @@ export function createHoneymoonServer({
           saved?.nickname ?? presence.onlineProfile(player)?.nickname);
         let relocation;
         if (updates.skin !== undefined) {
-          const size = rememberSize(player,updates.skin?.size ?? 'normal');
+          const {size}=rememberTraits(player,updates.skin ?? {size:'normal',ponyType:'earth'});
           if (size !== previousSize) relocation = game.reconcileProfile(player);
         }
         const profile = profileFor(player, different ? store.getProfile(player) : saved);
@@ -1027,7 +1051,7 @@ export function createHoneymoonServer({
       try { name=decodeURIComponent(path.slice('/generated/npcs/sound/'.length)); }
       catch { throw new RequestError(404,'not_found'); }
       if (!npcs.sounds.has(name)) throw new RequestError(404,'not_found');
-      return serveNpcRecording(request,response,join(generated,'npcs','sound',name));
+      return serveAudioRecording(request,response,join(generated,'npcs','sound',name));
     }
     const npcModel=path.match(/^\/generated\/npcs\/([a-zA-Z0-9]+\.json)$/)?.[1];
     if (npcModel && !privateNpcFiles.has(npcModel.toLowerCase()) &&

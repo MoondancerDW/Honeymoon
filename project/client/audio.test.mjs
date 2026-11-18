@@ -32,6 +32,7 @@ test('cave mood keeps the original audible distance of greater than two through 
 const overworld = 'a'.repeat(24)+'.ogg';
 const disc = 'b'.repeat(24)+'.ogg';
 const effect = 'c'.repeat(24)+'.ogg';
+const altitudeTrack = '/api/altitude-music';
 const world = {cellAt:()=>null};
 const ground = {x:0,y:254,z:0};
 const high = {...ground,y:256};
@@ -91,6 +92,7 @@ async function audioFixture(t) {
 
 test('overview replaces ordinary music and resumes its prior playback position',async t=>{
   const {audio,players,context}=await audioFixture(t);
+  audio.setDefaultAltitudeMusic(altitudeTrack);
   audio.frame(world,ground);
   const [normal]=players;
   assert.ok(normal.src.endsWith(overworld));
@@ -98,11 +100,14 @@ test('overview replaces ordinary music and resumes its prior playback position',
 
   audio.frame(world,high,{altitudeOverview:true});
   const [,theme]=players;
+  assert.equal(normal.paused,false);
+  await Promise.resolve();
   assert.equal(normal.paused,true);
-  assert.equal(theme.src,'/altitude-theme.wav');
+  assert.equal(theme.src,altitudeTrack);
   assert.equal(theme.paused,false);
   assert.equal(audio.stats().altitudeMusicSource,'default');
   audio.setAltitudeMusic('blob:local-track');
+  await Promise.resolve();
   const [,,upper]=players;
   assert.equal(theme.paused,true);
   assert.equal(theme.src,undefined);
@@ -163,6 +168,7 @@ test('the NPC track takes priority and departing resumes the applicable music',a
   assert.equal(audio.stats().musicMode,'npc');
   audio.npcMusic([bard],{...high,x:128},2100);
   const first=players.at(-1);
+  await Promise.resolve();
   assert.equal(npc.paused,true);
   assert.equal(record.paused,true);
   assert.equal(first.paused,false);
@@ -173,8 +179,8 @@ test('the NPC track takes priority and departing resumes the applicable music',a
   assert.equal(players.at(-1).src,'blob:two');
   audio.setAltitudeMusic(null);
   assert.equal(audio.stats().altitudeMusicConfigured,false);
-  assert.equal(audio.stats().altitudeMusicSource,'default');
-  assert.equal(record.paused,true);
+  assert.equal(audio.stats().altitudeMusicSource,undefined);
+  assert.equal(record.paused,false);
   audio.frame(world,ground,{altitudeOverview:false});
   assert.equal(record.paused,false);
   audio.npcMusic([bard],ground,2300);
@@ -184,18 +190,45 @@ test('the NPC track takes priority and departing resumes the applicable music',a
   assert.equal(record.paused,false);
 });
 
-test('an unreadable selected track falls back to the built-in altitude music',async t=>{
+test('overview without an announced track keeps ordinary music playing',async t=>{
   const {audio,players}=await audioFixture(t);
+  audio.setDefaultAltitudeMusic('https://example.invalid/track');
+  audio.frame(world,ground);
+  const [normal]=players;
+  normal.currentTime=18;
+  audio.frame(world,high,{altitudeOverview:true});
+  assert.equal(normal.paused,false);
+  assert.equal(normal.currentTime,18);
+  assert.equal(players.length,1);
+  assert.equal(audio.stats().musicMode,'overworld');
+});
+
+test('an unreadable custom track tries the announced track, then restores ordinary music on error',async t=>{
+  const {audio,players}=await audioFixture(t);
+  audio.frame(world,ground);
+  const [normal]=players;
+  normal.currentTime=27;
+  audio.setDefaultAltitudeMusic(altitudeTrack);
   audio.setAltitudeMusic('blob:unreadable');
   audio.frame(world,high,{altitudeOverview:true});
   const custom=players.at(-1);
   assert.equal(audio.stats().altitudeMusicSource,'custom');
+  await Promise.resolve();
+  assert.equal(normal.paused,true);
   custom.onerror();
-  const builtIn=players.at(-1);
+  const announced=players.at(-1);
+  await Promise.resolve();
   assert.equal(custom.paused,true);
-  assert.equal(builtIn.src,'/altitude-theme.wav');
+  assert.equal(announced.src,altitudeTrack);
   assert.equal(audio.stats().altitudeMusicSource,'default');
   assert.equal(audio.stats().musicPlaying,true);
+  announced.onerror();
+  audio.frame(world,high,{altitudeOverview:true});
+  assert.equal(audio.stats().musicMode,'overworld');
+  assert.equal(audio.stats().altitudeMusicSource,undefined);
+  assert.equal(normal.paused,false);
+  assert.equal(normal.currentTime,27);
+  assert.equal(players.length,3);
 });
 
 test('entering an unavailable NPC music zone keeps the background track playing',async t=>{

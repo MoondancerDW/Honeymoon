@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { crc32, inflate, inflateSync } from 'node:zlib';
-import { maxSkinBytes, ponySizeMarker, skinSizes } from '../world/pony-skins.mjs';
+import { maxSkinBytes, ponySizeMarker, ponyTypeMarker, skinSizes } from '../world/pony-skins.mjs';
 import { RequestError } from './errors.mjs';
 
 export const MAX_PROFILE_BODY = Math.ceil(maxSkinBytes / 3) * 4 + 1024;
@@ -14,11 +14,12 @@ const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const inflatePng = promisify(inflate);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const invalidSkin = () => new RequestError(400, 'invalid_skin');
+const defaultSkinTraits = Object.freeze({size:'normal',ponyType:'earth'});
 
-export function publicProfile(player, { nickname, skinHash } = {}, size = 'normal') {
+export function publicProfile(player, { nickname, skinHash } = {}, size = 'normal', ponyType = 'earth') {
   const id = hash(`pony:${player}`).slice(0, 24);
   return { id, nickname: nickname ?? `Игрок ${id.slice(0, 5)}`, nicknameChosen: Boolean(nickname),
-    skin: skinHash ? `/skins/${skinHash}.png` : null, size };
+    skin: skinHash ? `/skins/${skinHash}.png` : null, size, ponyType };
 }
 
 function scanlineLayout(width, height, bits, interlaced) {
@@ -31,13 +32,10 @@ function scanlineLayout(width, height, bits, interlaced) {
   }));
 }
 
-function markerSize(pixels, layout, depth, type, palette, transparency) {
-  // In Adam7 the marker at (3, 0) is sample 1 in the first row of pass 6.
-  const interlaced = layout.length > 1;
-  const at = interlaced ? layout.slice(0,5).reduce((count,{rows,bytes}) => count + rows * bytes, 0) : 0;
+function markerRgb(pixels, at, sample, depth, type, palette, transparency) {
+  if (type === 0 || type === 4) return undefined;
   const bits = channels[type] * depth;
   const stride = Math.ceil(bits / 8);
-  const sample = interlaced ? 1 : 3;
   const bytes = Buffer.from(pixels.subarray(at + 1, at + 1 + Math.ceil((sample + 1) * bits / 8)));
   const filter = pixels[at];
   // The preceding row is zero on every pass's first scanline.
@@ -53,32 +51,41 @@ function markerSize(pixels, layout, depth, type, palette, transparency) {
     if (depth === 16) return bytes.readUInt16BE(byte);
     return bytes[byte] >> (8 - depth - (offset & 7)) & masks;
   });
-  if (type === 0 || type === 4) return 'normal';
   if (type === 3) {
     const entry = values[0];
-    if ((transparency?.[entry] ?? 255) !== 255 || entry * 3 + 2 >= palette.length) return 'normal';
-    return ponySizeMarker(palette.readUIntBE(entry * 3, 3));
+    if ((transparency?.[entry] ?? 255) !== 255 || entry * 3 + 2 >= palette.length) return undefined;
+    return palette.readUIntBE(entry * 3, 3);
   }
   if (type === 6 && values[3] !== masks || type === 2 && transparency &&
-      values.every((value, channel) => value === transparency.readUInt16BE(channel * 2))) return 'normal';
+      values.every((value, channel) => value === transparency.readUInt16BE(channel * 2))) return undefined;
   const [red,green,blue] = depth === 16 ? values.map(value => value >> 8) : values;
-  return ponySizeMarker(red << 16 | green << 8 | blue);
+  return red << 16 | green << 8 | blue;
 }
 
-export function savedSkinSize(input) {
-  if (!input) return 'normal';
+function skinTraits(pixels, layout, depth, type, palette, transparency) {
+  // Adam7 puts species (0, 0) in pass 1 and size (3, 0) in sample 1 of pass 6.
+  const interlaced = layout.length > 1;
+  const at = interlaced ? layout.slice(0,5).reduce((count,{rows,bytes}) => count + rows * bytes, 0) : 0;
+  return {
+    size:ponySizeMarker(markerRgb(pixels,at,interlaced ? 1 : 3,depth,type,palette,transparency)),
+    ponyType:ponyTypeMarker(markerRgb(pixels,0,0,depth,type,palette,transparency)),
+  };
+}
+
+export function savedSkinTraits(input) {
+  if (!input) return defaultSkinTraits;
   const png = Buffer.from(input);
   try {
-    if (!png.subarray(0,signature.length).equals(signature) || png.length > maxSkinBytes) return 'normal';
+    if (!png.subarray(0,signature.length).equals(signature) || png.length > maxSkinBytes) return defaultSkinTraits;
     const width = png.readUInt32BE(16), height = png.readUInt32BE(20);
     const depth = png[24], type = png[25];
-    if (!skinSizes.includes(`${width}x${height}`) || !colorDepths[type]?.includes(depth) || png[28] > 1) return 'normal';
+    if (!skinSizes.includes(`${width}x${height}`) || !colorDepths[type]?.includes(depth) || png[28] > 1) return defaultSkinTraits;
     const layout = scanlineLayout(width,height,depth * channels[type],png[28] === 1);
     const chunks = [];
     let palette, transparency;
     for (let start = signature.length; start + 12 <= png.length;) {
       const end = start + 12 + png.readUInt32BE(start);
-      if (end > png.length) return 'normal';
+      if (end > png.length) return defaultSkinTraits;
       const key = png.toString('ascii',start + 4,start + 8);
       const data = png.subarray(start + 8,end - 4);
       if (key === 'IDAT') chunks.push(data);
@@ -89,9 +96,11 @@ export function savedSkinSize(input) {
     }
     const expected = layout.reduce((sum,{rows,bytes}) => sum + rows * bytes, 0);
     const pixels = inflateSync(Buffer.concat(chunks), {maxOutputLength:expected});
-    return pixels.length === expected ? markerSize(pixels,layout,depth,type,palette,transparency) : 'normal';
-  } catch { return 'normal'; }
+    return pixels.length === expected ? skinTraits(pixels,layout,depth,type,palette,transparency) : defaultSkinTraits;
+  } catch { return defaultSkinTraits; }
 }
+
+export const savedSkinSize = input => savedSkinTraits(input).size;
 
 async function readSkin(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) throw invalidSkin();
@@ -172,7 +181,7 @@ async function readSkin(value) {
     }
   }
   const png = Buffer.concat(retained);
-  return { png, hash: hash(png), size:markerSize(pixels,layout,bitDepth,colorType,palette,transparency) };
+  return { png, hash: hash(png), ...skinTraits(pixels,layout,bitDepth,colorType,palette,transparency) };
 }
 
 export async function profileChanges({ nickname, skin }) {

@@ -75,7 +75,7 @@ test('crawl fits under a low roof and waits for enough headroom to stand again',
   assert.equal(movement.setStance(position,'stand'),'stand');
 });
 
-test('crouching stops at the edge and jump heights match the pony size', () => {
+test('crouching stops at the edge and winged jump heights match the pony size', () => {
   const world = worldFor(new Map());
   const movement = new Movement({...world,cellAt:(x,y,z) => x <= 0 ? world.cellAt(x,y,z) : null});
   const position = {x:.5,y:1,z:.5};
@@ -87,6 +87,7 @@ test('crouching stops at the edge and jump heights match the pony size', () => {
   for (const [size,height] of [['small',1],['normal',1],['large',1.5]]) {
     const flight = new Movement(world);
     const feet = {x:.5,y:1,z:.5};
+    flight.ponyType = 'pegasus';
     flight.size = size;
     flight.grounded = true;
     let apex = feet.y;
@@ -99,12 +100,51 @@ test('crouching stops at the edge and jump heights match the pony size', () => {
     const steps = [['0,1,0','legacy:1:0']];
     if (height === 1.5) steps.push(['0,2,0','legacy:44:0']);
     const jumper = new Movement(worldFor(new Map(steps)));
+    jumper.ponyType = 'alicorn';
     jumper.size = size;
     jumper.grounded = true;
     const landing = {x:-.6,y:1,z:.5};
     for (let i=0; i<33; i++) jumper.update(landing,3.8,0,i === 0,.016);
     assert.ok(landing.x > 0 && Math.abs(landing.y-1-height) < .001);
   }
+});
+
+test('dry jumps use Minecraft ticks only for ponies without wings', () => {
+  for (const ponyType of ['earth','unicorn','pegasus','alicorn']) {
+    const movement=new Movement(worldFor(new Map()));
+    movement.ponyType=ponyType;
+    movement.grounded=true;
+    const position={x:.5,y:1,z:.5};
+    let elapsed=0, apex=position.y;
+    for (let step=0;step<80;step++) {
+      movement.update(position,0,0,step===0,.016);
+      elapsed+=.016;
+      apex=Math.max(apex,position.y);
+      if (movement.grounded) break;
+    }
+    const winged=['pegasus','alicorn'].includes(ponyType);
+    assert.ok(Math.abs(apex-1-(winged ? 1 : 1.2522))<.001);
+    assert.ok(Math.abs(elapsed-(winged ? .784 : .576))<.001);
+  }
+});
+
+test('flight-off free fall keeps world gravity for all pony species', () => {
+  const traces=['earth','unicorn','pegasus','alicorn'].map(ponyType=>{
+    const world=worldFor(new Map());
+    world.manifest={bounds:{...world.manifest.bounds,maxY:600}};
+    const movement=new Movement(world);
+    movement.ponyType=ponyType;
+    const start=401;
+    const position={x:.5,y:start,z:.5};
+    movement.fly(position,0,0,0,.016);
+    for (let i=1;i<575;i++) {
+      movement.update(position,0,0,false,.016);
+      if (i===125) assert.ok(Math.abs(position.y-(start-.5*9.81*2**2))<1e-6);
+      if (movement.grounded) return i;
+    }
+    assert.fail('fall did not reach the ground');
+  });
+  assert.deepEqual(traces,[565,565,565,565]);
 });
 
 test('finishes a dry vertical collision before leaving the edge horizontally', () => {

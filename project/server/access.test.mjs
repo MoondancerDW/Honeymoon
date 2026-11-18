@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
-import {mkdtempSync,mkdirSync,rmSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {test} from 'node:test';
@@ -463,6 +463,43 @@ test('the single-player owner can use coordinate travel and manage warps without
   assert.deepEqual(code(await local('/api/respawn',{})).position,session.position);
   assert.deepEqual(code(await local('/api/teleport',{warpId:warp.id})).position,target);
   assert.deepEqual(code(await local('/api/warps/remove',{id:warp.id})).warps,[]);
+});
+
+test('altitude music is announced to an invited session and streams only with access',async t=>{
+  const generated=startAssets();
+  const altitudeMusic=join(generated,'local-track.mp3');
+  writeFileSync(altitudeMusic,'audio');
+  const {start}=fixture(t,generated);
+  const urls=await start({altitudeMusic});
+  const track='/api/altitude-music';
+  assert.equal(code(await request(urls.public,track),401).error,'session_required');
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const invite=code(await request(urls.owner,'/api/admin/invites',{body:{kind:'player'},cookie:owner.cookie}));
+  const player=await request(urls.public,'/api/session',{body:{invite:invite.code,profileName:'Music Player'},origin:external});
+  assert.equal(code(player).altitudeMusic,track);
+  const read=await fetch(urls.public+track,{headers:{Cookie:player.cookie,Range:'bytes=1-3'}});
+  assert.equal(read.status,206);
+  assert.equal(read.headers.get('content-type'),'audio/mpeg');
+  assert.equal(read.headers.get('cache-control'),'private, no-store');
+  assert.equal(await read.text(),'udi');
+  assert.equal(code(await request(urls.public,track,{cookie:player.cookie,headers:{Origin:'https://elsewhere.test'}}),403).error,'origin_denied');
+  unlinkSync(altitudeMusic);
+  assert.equal(code(await request(urls.public,'/api/session',{body:{},cookie:player.cookie,origin:external})).altitudeMusic,undefined);
+  assert.equal(code(await request(urls.public,track,{cookie:player.cookie}),404).error,'not_found');
+});
+
+test('altitude music supports a configured solo track on loopback',async t=>{
+  const generated=startAssets();
+  const altitudeMusic=join(generated,'local-track.mp3');
+  writeFileSync(altitudeMusic,'audio');
+  const {start}=fixture(t,generated);
+  const {public:url}=await start({altitudeMusic,singlePlayer:true,secure:false,inviteRequired:false,ownerOnPrimary:true,
+    allowedOrigin:undefined,publicOrigin:undefined});
+  const session=code(await request(url,'/api/session',{body:{}}));
+  assert.equal(session.altitudeMusic,'/api/altitude-music');
+  const music=await fetch(url+session.altitudeMusic);
+  assert.equal(music.headers.get('content-type'),'audio/mpeg');
+  assert.equal(await music.text(),'audio');
 });
 
 test('flight preferences persist for an invited profile and ignore delayed updates',async t=>{

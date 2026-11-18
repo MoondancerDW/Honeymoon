@@ -15,7 +15,8 @@ const solo=test==='solo';
 const state=solo ? join(await mkdtemp(join(output,'solo-')),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
 const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo?'game':'creative',
-  generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey});
+  generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
+  ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
 app.server.listen(0,'127.0.0.1');
 await once(app.server,'listening');
 const url=`http://127.0.0.1:${app.server.address().port}/`;
@@ -48,7 +49,8 @@ async function start(admin=!solo) {
   await page.goto(url,{waitUntil:'domcontentloaded'});
   await ready();
   assert.equal((await page.request.get(url+'api/build').then(response=>response.json())).build,expectedBuild);
-  await click('#play');
+  if (await visible('#play')) await click('#play');
+  else await page.locator('#scene canvas').click();
   await page.waitForFunction(()=>!document.getElementById('chat-toggle').disabled);
   result.checks.push({start:(await stat()).playable});
 }
@@ -156,6 +158,53 @@ try {
     await ready();
     assert.equal((await stat()).flying,false);
     result.checks.push({restoredFlight:true,heldHeight:before.y,restoredWalking:true});
+  } else if (test==='jump-types') {
+    await start();
+    async function sampleJump() {
+      await page.waitForFunction(()=>honeymoon.stats().movementSync.status==='ready');
+      await page.evaluate(()=>{
+        globalThis.jumpSample=new Promise(resolve=>{
+          const floor=honeymoon.stats().position.y;
+          const beginning=performance.now();
+          let startTime,apex=0;
+          function sample(now) {
+            const height=honeymoon.stats().position.y-floor;
+            if (height>.02) startTime??=now;
+            apex=Math.max(apex,height);
+            if (startTime && height<.02 || now-beginning>4500) resolve({apex,ms:startTime && now-startTime});
+            else requestAnimationFrame(sample);
+          }
+          requestAnimationFrame(sample);
+        });
+      });
+      await page.keyboard.press('Space');
+      return page.evaluate(()=>jumpSample);
+    }
+    const earth=await sampleJump();
+    assert.ok(earth.apex>1.18 && earth.apex<1.28,JSON.stringify(earth));
+    const skin=await page.evaluate(()=>{
+      const canvas=new OffscreenCanvas(64,64);
+      const context=canvas.getContext('2d');
+      context.fillStyle='#dc9262';
+      context.fillRect(0,0,64,64);
+      context.fillStyle='#88caf0';
+      context.fillRect(0,0,1,1);
+      return canvas.convertToBlob({type:'image/png'}).then(blob=>new Promise(resolve=>{
+        const reader=new FileReader();
+        reader.onload=()=>resolve(reader.result.split(',')[1]);
+        reader.readAsDataURL(blob);
+      }));
+    });
+    const update=await page.request.post(url+'api/profile',{data:{skin}});
+    assert.equal(update.status(),200,await update.text());
+    assert.equal((await update.json()).ponyType,'pegasus');
+    await page.reload({waitUntil:'domcontentloaded'});
+    await ready();
+    await click('#play');
+    await page.waitForFunction(()=>!document.getElementById('chat-toggle').disabled);
+    const pegasus=await sampleJump();
+    assert.ok(pegasus.apex>.93 && pegasus.apex<1.06,JSON.stringify(pegasus));
+    result.checks.push({earth,pegasus});
   } else if (test==='overview-boundary') {
     await start();
     await page.keyboard.press('KeyF');
@@ -483,9 +532,15 @@ try {
     assert.ok(records.some(record=>record.kind==='heartbeat' && record.position.length===3));
     result.checks.push({records,stats:await stat()});
     await shot('solo-play');
-  } else if (test==='altitude-audio' || test==='altitude-default') {
+  } else if (test==='altitude-audio' || test==='altitude-default' || test==='altitude-server') {
+    let requestedAltitude=false;
+    page.on('request',request=>{
+      if (new URL(request.url()).pathname==='/api/altitude-music') requestedAltitude=true;
+    });
     await start();
     const custom=test==='altitude-audio';
+    const expectedSource=custom?'custom':test==='altitude-server'?'default':undefined;
+    const expectedMode=expectedSource?'altitude':'overworld';
     if (custom) {
       await page.evaluate(()=>document.exitPointerLock());
       await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
@@ -501,6 +556,8 @@ try {
       return audio.musicMode==='npc' && audio.musicPlaying && audio.musicTime>0.2;
     },undefined,{timeout:20000});
     const before=await stat();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
     async function hop(x,y,z) {
       await page.locator('#teleport-toggle').evaluate(button=>button.click());
       await page.locator('#teleport-x').fill(String(x));
@@ -513,18 +570,19 @@ try {
       if (await visible('#play')) await click('#play');
     }
     await hop(-8,275,-19);
-    await page.waitForFunction(source=>{
+    await page.waitForFunction(({source,mode})=>{
       const audio=honeymoon.stats().audio;
-      return audio.musicMode==='altitude' && audio.altitudeMusicSource===source && audio.musicPlaying && audio.musicTime>0.2;
-    },custom?'custom':'default',{timeout:16000});
+      return audio.musicMode===mode && audio.altitudeMusicSource===source && audio.musicPlaying && audio.musicTime>0.2;
+    },{source:expectedSource,mode:expectedMode},{timeout:16000});
+    assert.equal(requestedAltitude,test==='altitude-server');
     const above=await stat();
     await page.evaluate(()=>document.exitPointerLock());
     await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
     const pausedAt=(await stat()).audio.musicTime;
-    await page.waitForFunction(at=>{
+    await page.waitForFunction(({at,mode})=>{
       const audio=honeymoon.stats().audio;
-      return audio.musicMode==='altitude' && audio.musicPlaying && audio.musicTime>at+.4;
-    },pausedAt,{timeout:5000});
+      return audio.musicMode===mode && audio.musicPlaying && audio.musicTime>at+.4;
+    },{at:pausedAt,mode:expectedMode},{timeout:5000});
     const pauseMusic=(await stat()).audio;
     await click('#play');
     await hop(-8,225,-19);

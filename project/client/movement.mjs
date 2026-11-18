@@ -19,6 +19,10 @@ const EPSILON = .00001;
 const CAMERA_OFFSET = 4;
 const CAMERA_RADIUS = .1;
 const JUMP_ASCENT_GRAVITY = 20;
+const MINECRAFT_TICK = .05;
+const MINECRAFT_JUMP_SPEED = .42 / MINECRAFT_TICK;
+const nextMinecraftJumpSpeed = speed => (speed - .08 / MINECRAFT_TICK) * .98;
+const MINECRAFT_JUMP_HEIGHT = 1.252203352512;
 const VERTICAL_STEP = POSITION_VERTICAL_STEP_LIMIT - .01;
 const cartsByChunk = new WeakMap();
 const framesByChunk = new WeakMap();
@@ -138,6 +142,7 @@ export class Movement {
   constructor(world) {
     this.world = world;
     this.size = 'normal';
+    this.ponyType = 'earth';
     this.stance = 'stand';
     this.fall = 0;
     this.grounded = false;
@@ -147,6 +152,10 @@ export class Movement {
   }
 
   get body() { return playerBody(this.size, this.stance); }
+
+  get minecraftJump() {
+    return this.ponyType !== 'pegasus' && this.ponyType !== 'alicorn' && this.stance !== 'crawl';
+  }
 
   setStance({x,y,z}, stance) {
     if (stance === this.stance || !isPlayerStance(stance)) return this.stance;
@@ -271,14 +280,53 @@ export class Movement {
     }
   }
 
-  startJump() {
-    this.fall = Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
+  startJump(y) {
+    const minecraft = this.minecraftJump;
+    this.jumpArc = minecraft ? {y, tickLeft:MINECRAFT_TICK} : undefined;
+    this.fall = minecraft ? MINECRAFT_JUMP_SPEED : Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
     this.grounded = false;
+  }
+
+  resetFall() {
+    this.fall = 0;
+    this.jumpArc = undefined;
+  }
+
+  dryVerticalDelta(y, remaining) {
+    let delta = 0;
+    while (this.jumpArc && remaining > 0) {
+      const arc = this.jumpArc;
+      const step = Math.min(remaining,arc.tickLeft);
+      // Only the jump above takeoff uses Minecraft ticks. Continue with world gravity below it.
+      const toTakeoff = this.fall < 0 ? Math.max(0,y + delta - arc.y) / -this.fall : Infinity;
+      if (toTakeoff <= step) {
+        delta += this.fall * toTakeoff;
+        remaining -= toTakeoff;
+        this.jumpArc = undefined;
+        break;
+      }
+      delta += this.fall * step;
+      remaining -= step;
+      arc.tickLeft -= step;
+      if (arc.tickLeft <= 0) {
+        this.fall = nextMinecraftJumpSpeed(this.fall);
+        arc.tickLeft = MINECRAFT_TICK;
+      }
+    }
+    if (remaining <= 0) return delta;
+    const initial = this.fall;
+    this.fall -= (initial > 0 ? JUMP_ASCENT_GRAVITY : WORLD_GRAVITY) * remaining;
+    if (initial > 0 && this.fall < 0) {
+      // Resolve the apex exactly so the player can land on a full block.
+      this.fall = 0;
+      return delta + initial * initial / (2 * JUMP_ASCENT_GRAVITY);
+    }
+    return delta + (initial + this.fall) * .5 * remaining;
   }
 
   update(position, dx, dz, jump, dt, {descend = false, rise = jump, swimPitch = 0, recordStep, automatic = false} = {}) {
     this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
-    if (!this.medium && jump && this.grounded) this.startJump();
+    if (!this.medium && jump && this.grounded) this.startJump(position.y);
     const fastestDrop = (Math.max(0,-this.fall) + WORLD_GRAVITY * dt) * dt;
     const n = Math.max(1, Math.ceil(dt / .016), Math.ceil(fastestDrop / VERTICAL_STEP));
     const step = dt / n;
@@ -288,6 +336,7 @@ export class Movement {
       const swimming = this.stance === 'swim' && startMedium === 'water';
       const current = submerged ? fluidCurrent(this.cellAt,position.x,position.y,position.z,startMedium) : [0,0,0];
       let deltaY;
+      if (startMedium) this.jumpArc = undefined;
       if (startMedium === 'ladder') {
         this.fall = descend ? -1.8 : rise ? 2.4 : Math.max(-1.8, this.fall - 12 * step);
       } else if (startMedium === 'water') {
@@ -295,16 +344,7 @@ export class Movement {
       } else if (startMedium === 'lava') {
         this.fall = descend ? -1.04 : rise ? 1.15 : Math.max(-.63,this.fall-3.5*step);
       } else {
-        const initial = this.fall;
-        // Keep the jump ascent responsive, then accelerate normally without a low speed cap.
-        this.fall = initial - (initial > 0 ? JUMP_ASCENT_GRAVITY : WORLD_GRAVITY) * step;
-        if (initial > 0 && this.fall < 0) {
-          // Resolve the top of a one-block jump exactly so it can land on a full block.
-          deltaY = initial * initial / (2 * JUMP_ASCENT_GRAVITY);
-          this.fall = 0;
-        } else {
-          deltaY = (initial + this.fall) * .5 * step;
-        }
+        deltaY = this.dryVerticalDelta(position.y,step);
       }
       // Resolve Y before X and Z, including when leaving a ledge or climbing
       // past a ceiling. Contact with a wall can start ascent on the next step.
@@ -322,9 +362,9 @@ export class Movement {
       if (automatic && (wallX || wallZ) && this.grounded && !this.medium && this.stance === 'stand' && !this.waitingForTerrain) {
         // A normal step already failed. Jump only if the body can rise and advance at its apex.
         const {x,y,z}=position;
-        const apex=y+this.body.jumpHeight;
+        const apex=y+(this.minecraftJump ? MINECRAFT_JUMP_HEIGHT : this.body.jumpHeight);
         if (!this.blocked(x,apex,z) && !this.blocked(x+dx*step,apex,z) && !this.blocked(x+dx*step,apex,z+dz*step)) {
-          this.startJump();
+          this.startJump(y);
         }
       }
       recordStep?.(position);
@@ -332,7 +372,7 @@ export class Movement {
   }
 
   fly(position, dx, dy, dz, dt, recordStep, spectator = false, automatic = false) {
-    this.fall = 0;
+    this.resetFall();
     this.grounded = false;
     this.medium = null;
     if (!dx && !dy && !dz) return;
@@ -369,7 +409,7 @@ export class Movement {
     let hit = false;
     for (let i = 0; i < segments && !hit; i++) hit = this.axis(position, 'y', amount / segments);
     this.grounded = hit && amount < 0;
-    if (hit) this.fall = 0;
+    if (hit) this.resetFall();
   }
 }
 
