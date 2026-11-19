@@ -566,11 +566,11 @@ export class Display {
       this.actionEye.map((value,index) => value + position[['x','y','z'][index]]) : [position.x,position.y + eyeHeight,position.z];
   }
 
-  setLocalSkin(skin, ponyType, size) {
+  setLocalSkin(skin) {
+    const changed = this.localSkin !== skin;
     this.localSkin = skin;
-    this.localPonyType = ponyType;
-    this.localPonySize = size;
-    this.localAvatar?.setSkin(skin, ponyType, size);
+    this.localAvatar?.setSkin(skin);
+    return changed;
   }
 
   heldItemAssets() {
@@ -593,7 +593,7 @@ export class Display {
     if (!this.localAvatar) {
       this.localAvatar = createPonyAvatar(this.ponyAirAt);
       this.scene.add(this.localAvatar.object);
-      this.localAvatar.setSkin(this.localSkin, this.localPonyType, this.localPonySize);
+      this.localAvatar.setSkin(this.localSkin);
     }
     const firstPerson = this.perspective === 0;
     const {object} = this.localAvatar;

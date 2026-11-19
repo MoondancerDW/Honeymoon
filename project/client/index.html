@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
   <meta name="apple-mobile-web-app-title" content="Lilium Moonlight">
-  <meta name="honeymoon-build" content="20">
+  <meta name="honeymoon-build" content="21">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -125,6 +125,7 @@
                 <button id="altitude-map" type="button" hidden>Карта</button>
                 <button id="chat-toggle" type="button" title="Чат · T / Enter" disabled>Чат</button>
                 <button id="craft-toggle" type="button" aria-controls="craft-menu" hidden>Изготовить</button>
+                <button id="admin-toggle" type="button" aria-haspopup="dialog" aria-controls="admin-menu" hidden>Администрирование</button>
               </div>
             </div>
             <div id="pause-profile" hidden>
@@ -145,7 +146,6 @@
                   <button id="self-mode-toggle" type="button" title="Переключить режим для себя" hidden>Режим: Игровой</button>
                   <button id="mode-toggle" type="button" aria-controls="mode-menu" hidden>Режимы игроков</button>
                   <button id="npc-editor-toggle" type="button" aria-haspopup="dialog" aria-controls="npc-menu" disabled>Редактор NPC</button>
-                  <button id="admin-toggle" type="button" aria-haspopup="dialog" aria-controls="admin-menu" hidden>Администрирование</button>
                 </div>
                 <label class="pause-setting" for="weather">Погода
                   <select id="weather" disabled>

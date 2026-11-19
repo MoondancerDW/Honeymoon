@@ -284,7 +284,7 @@ const creative = createCreativeMenu({load:loadCreative,
   clone:(from,to,count)=>inventoryAction('inventory_clone',{from,to,count}),
   trash:slot=>inventoryAction('inventory_trash',{slot}),
   drop:fields=>inventoryAction('drop_item',{...fields,yaw:heading.yaw,eye:view.eyeOffset()}),
-  preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin,view?.localPonyType,view?.localPonySize),
+  preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin),
   editItem:itemDocuments.openItem,readBook:itemDocuments.openBook,
   swap:swapHands,
   canCopy:()=>modeUi.creative,
@@ -897,8 +897,7 @@ function applyPonyTraits(payload) {
   movement.size=size;
   if (movement.ponyType!==ponyType) movement.cancelSlowFall();
   movement.ponyType=ponyType;
-  view.setLocalSkin(profile.confirmed.skin,ponyType,size);
-  creative.refreshPreview();
+  if (view.setLocalSkin(profile.confirmed.skin)) creative.refreshPreview();
   ponyUi.setTraits(ponyType,size);
   ponyUi.sync(payload);
   refreshOffhand();

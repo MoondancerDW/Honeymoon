@@ -51,13 +51,12 @@ function setNameplate(player) {
   player.labelTyping = player.typing;
 }
 
-function setProfile(player,{nickname,skin,size,ponyType}) {
+function setProfile(player,{nickname,skin,size}) {
   player.nickname = nickname;
-  if (player.skin !== skin || player.ponyType !== ponyType || player.size !== size) {
+  player.size = size;
+  if (player.skin !== skin) {
     player.skin = skin;
-    player.ponyType = ponyType;
-    player.size = size;
-    player.avatar.setSkin(skin, ponyType, size);
+    player.avatar.setSkin(skin);
   }
 }
 

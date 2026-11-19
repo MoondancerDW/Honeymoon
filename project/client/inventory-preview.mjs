@@ -21,7 +21,7 @@ function createPreview(canvas) {
   return {renderer,scene,avatar,camera,lastSkin:undefined};
 }
 
-export function renderInventoryPreview(canvas,equipment,skin,ponyType,size) {
+export function renderInventoryPreview(canvas,equipment,skin) {
   if (!previews.has(canvas)) previews.set(canvas,createPreview(canvas));
   const preview = previews.get(canvas);
   if (!preview) return;
@@ -33,11 +33,9 @@ export function renderInventoryPreview(canvas,equipment,skin,ponyType,size) {
     renderer.render(scene,camera);
   }
   draw();
-  if (preview.lastSkin !== skin || preview.lastPonyType !== ponyType || preview.lastSize !== size) {
+  if (preview.lastSkin !== skin) {
     preview.lastSkin = skin;
-    preview.lastPonyType = ponyType;
-    preview.lastSize = size;
-    void avatar.setSkin(skin,ponyType,size).then(draw);
+    void avatar.setSkin(skin).then(draw);
   }
   if (equipment?.some(Boolean)) void equipmentTextureReady().then(draw);
 }

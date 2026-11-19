@@ -47,6 +47,17 @@
 }
 #admin-menu .admin-record { display: grid; gap: .42rem; min-width: 0; padding: .65rem 0; border-top: 1px solid var(--line); }
 #admin-menu .admin-summary { display: flex; justify-content: space-between; align-items: start; gap: .55rem; flex-wrap: wrap; }
+:is(.admin-player-management, .mode-player-management) {
+  min-width: 0; border: 1px solid var(--line); border-radius: .4rem; background: #172e3a;
+}
+:is(.admin-player-management, .mode-player-management) > summary {
+  align-content: center; padding: .45rem .6rem; cursor: pointer; font-weight: 600; overflow-wrap: anywhere;
+}
+:is(.admin-player-management, .mode-player-management) > summary:focus-visible {
+  outline: 2px solid var(--gold); outline-offset: -2px;
+}
+#admin-menu .admin-player-actions { display: grid; gap: .5rem; padding: .15rem .6rem .6rem; }
+#mode-players .mode-player-management > label { flex-wrap: wrap; padding: .15rem .6rem .6rem; }
 #admin-menu .admin-device { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .4rem; align-items: center; }
 #admin-menu .admin-subtle, #admin-menu small { color: #cbdcde; font-size: .82rem; overflow-wrap: anywhere; }
 #admin-menu .admin-error { color: #ffbaaa; }
@@ -59,7 +70,8 @@
 #admin-menu .admin-link input { font-family: ui-monospace, Consolas, monospace; }
 #admin-menu :is(.admin-record, .admin-device) strong { overflow-wrap: anywhere; }
 @media (pointer:coarse) {
-  #admin-menu button, #admin-menu .admin-pony-trait-form select, #access-submit { min-height: 44px; }
+  #admin-menu button, #admin-menu .admin-pony-trait-form select, #access-submit,
+  :is(.admin-player-management, .mode-player-management) > summary { min-height: 44px; }
   #admin-menu input, #access-form input { font-size: 1rem; }
 }
 @media (max-width: 520px) {

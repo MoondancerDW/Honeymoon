@@ -49,19 +49,30 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     changed(next);
   }
   function render(config) {
+    const openRows=new Set([...list.querySelectorAll('[data-mode-player-uid][open]')].map(row=>row.dataset.modePlayerUid));
+    const focused=document.activeElement;
+    const focusedPlayer=focused?.closest('[data-mode-player-uid]')?.dataset.modePlayerUid;
+    const focusDefault=defaultRow.contains(focused);
     const global=selectMode(config.mode);
     global.setAttribute('aria-label','Режим по умолчанию');
     global.addEventListener('change',()=>void change({mode:global.value}));
     defaultRow.replaceChildren(global);
     list.replaceChildren(...config.players.map(profile=>{
-      const row=document.createElement('label'), name=document.createElement('span');
+      const row=document.createElement('details'), summary=document.createElement('summary');
+      const label=document.createElement('label');
       const mode=selectMode(profile.override,true);
-      name.textContent=profile.nickname;
-      row.append(name,mode);
+      row.className='mode-player-management';
+      row.dataset.modePlayerUid=profile.id;
+      row.open=openRows.has(profile.id);
+      summary.textContent=`${profile.nickname} · ${labels[profile.mode??config.mode]}`;
+      label.append('Изменить режим',mode);
+      row.append(summary,label);
       mode.addEventListener('change',()=>void change({target:profile.id,mode:mode.value||null}));
       return row;
     }));
     if (config.players.length===0) list.textContent='Пока нет игроков в мире';
+    if (focusedPlayer) list.querySelector(`[data-mode-player-uid="${CSS.escape(focusedPlayer)}"] > summary`)?.focus({preventScroll:true});
+    else if (focusDefault) global.focus({preventScroll:true});
   }
   async function change(fields) {
     if (pending) return;
@@ -90,6 +101,8 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     pause();
     admin.showModal();
     right.textContent='';
+    list.replaceChildren();
+    defaultRow.replaceChildren();
     try {render(await fetchModes());}
     catch {right.textContent='Список игроков недоступен';}
   });

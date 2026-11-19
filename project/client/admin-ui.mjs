@@ -5,9 +5,9 @@ const titles={player:'Игрок',admin:'Администратор',device:'У�
 const sizeLabels={normal:'Обычный',small:'Жеребёнок',large:'Крупный',tall:'Высокий'};
 const ponyTraits={
   race:{field:'ponyType',override:'raceOverride',labels:raceLabels,fallback:'earth',
-    title:'Текущая раса',label:'Назначить расу',changed:'назначена раса',restored:'восстановлена раса'},
+    title:'Игровая раса',label:'Назначить игровую расу',changed:'назначена раса',restored:'восстановлена раса'},
   size:{field:'size',override:'sizeOverride',labels:sizeLabels,fallback:'normal',
-    title:'Текущий размер',label:'Назначить размер',changed:'назначен размер',restored:'восстановлен размер'},
+    title:'Игровой размер',label:'Назначить игровой размер',changed:'назначен размер',restored:'восстановлен размер'},
 };
 const inviteStatus={active:'Действует',available:'Действует',pending:'Действует',used:'Использовано',
   expired:'Истекло',revoked:'Отозвано'};
@@ -50,6 +50,7 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
   let data,access,busy=false,tab='profiles',freshLink,searchText='',banTarget;
   let worldWeather;
   let uidRows,uidSearch='';
+  const expandedProfiles=new Set();
   const activeTab=()=>tabs.forEach(control=>control.setAttribute('aria-pressed',String(control.dataset.adminTab===tab)));
 
   function tell(message='',error=false) {
@@ -114,6 +115,8 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     busy=true;
     dialog.setAttribute('aria-busy','true');
     tell();
+    const focused=document.activeElement;
+    const focusUid=focused?.closest('[data-player-management]')?.dataset.playerManagement;
     const controls=[...body.querySelectorAll('button,input,select')].filter(control=>!control.disabled);
     for (const control of controls) control.disabled=true;
     try {
@@ -124,7 +127,11 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
       }
       await done?.(response.body);
       if (refresh) await fetchList();
-      if (dialog.open) render();
+      if (dialog.open) {
+        const restore=focusUid && [focused,document.body,dialog].includes(document.activeElement);
+        render();
+        if (restore) body.querySelector(`[data-player-management="${CSS.escape(focusUid)}"] > summary`)?.focus({preventScroll:true});
+      }
     } catch(error) {tell(error.message||'Связь с сервером прервана.',true);}
     finally {
       busy=false;
@@ -265,24 +272,39 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
       information.append(current);
     }
     header.append(information);
-    if (!access.singlePlayer && manageable && !person.ban) header.append(button('Привязать устройство',
-      ()=>void submit('admin/invites',{kind:'device',profileUid:person.uid},reply=>createdLink(reply,person))));
     row.append(header);
-    for (const [key,trait] of Object.entries(ponyTraits)) row.append(ponyTraitForm(person,key,trait));
-    row.append(nightVisionControls(person));
+    if (!access.singlePlayer && person.ban?.reason) row.append(node('small','admin-error','Причина блокировки · '+person.ban.reason));
+    const details=node('details','admin-player-management');
+    details.dataset.playerManagement=person.uid;
+    details.open=expandedProfiles.has(person.uid);
+    const summary=node('summary',null,'Управление');
+    summary.setAttribute('aria-label',`Управление профилем ${nameOf(person)}`);
+    const management=node('div','admin-player-actions');
+    details.append(summary,management);
+    row.append(details);
+    for (const [key,trait] of Object.entries(ponyTraits)) management.append(ponyTraitForm(person,key,trait));
+    management.append(nightVisionControls(person));
     if (access.singlePlayer) return row;
-    if (person.ban?.reason) row.append(node('small','admin-error','Причина блокировки · '+person.ban.reason));
     const actions=profileActions(person,manageable);
-    if (actions.childElementCount) row.append(actions);
-    if (banTarget===person.uid) row.append(banForm(person));
+    if (manageable && !person.ban) actions.prepend(button('Привязать устройство',
+      ()=>void submit('admin/invites',{kind:'device',profileUid:person.uid},reply=>createdLink(reply,person))));
+    if (actions.childElementCount) management.append(actions);
+    if (banTarget===person.uid) management.append(banForm(person));
     const devices=person.devices??[];
     if (devices.length) {
-      const details=node('details');
-      details.append(node('summary',null,'Устройства · '+devices.filter(device=>!device.revokedAt).length));
-      details.append(...devices.map(device=>deviceLine(device,manageable)));
-      row.append(details);
+      const devicesPanel=node('details');
+      devicesPanel.append(node('summary',null,'Устройства · '+devices.filter(device=>!device.revokedAt).length));
+      devicesPanel.append(...devices.map(device=>deviceLine(device,manageable)));
+      management.append(devicesPanel);
     }
     return row;
+  }
+
+  function rememberExpandedProfiles() {
+    for (const details of body.querySelectorAll('[data-player-management]')) {
+      if (details.open) expandedProfiles.add(details.dataset.playerManagement);
+      else expandedProfiles.delete(details.dataset.playerManagement);
+    }
   }
 
   function profiles() {
@@ -301,7 +323,7 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
       list.replaceChildren(...people.map(profileCard));
       if (!people.length) list.append(node('p','admin-subtle','Профили не найдены.'));
     }
-    search.input.addEventListener('input',filter);
+    search.input.addEventListener('input',()=>{rememberExpandedProfiles();filter();});
     filter();
     active.append(search.wrapper,list);
     return active;
@@ -412,6 +434,7 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
   }
 
   function render() {
+    rememberExpandedProfiles();
     activeTab();
     worldWeather=undefined;
     if (!data&&tab!=='world'&&tab!=='uids') return;
@@ -435,7 +458,12 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     catch(error) {body.replaceChildren(); tell(error.message,true);}
   });
   element('admin-close').addEventListener('click',()=>dialog.close());
-  dialog.addEventListener('close',()=>{freshLink=undefined;banTarget=undefined;});
+  dialog.addEventListener('close',()=>{
+    freshLink=undefined;
+    banTarget=undefined;
+    expandedProfiles.clear();
+    body.replaceChildren();
+  });
   for (const control of tabs) control.addEventListener('click',()=>{
     tab=control.dataset.adminTab;
     tell();

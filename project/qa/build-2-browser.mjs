@@ -347,10 +347,18 @@ try {
     }
     await page.evaluate(()=>document.exitPointerLock());
     await page.locator('#pause-home').waitFor({state:'visible'});
-    await pauseSection('world');
-    await click('#admin-toggle');
+    await click('#pause-home #admin-toggle');
     await click('#admin-menu [data-admin-tab="profiles"]');
+    const management=id=>page.locator(`[data-profile-uid="${id}"] [data-player-management]`);
+    await management(uid).waitFor({state:'visible'});
+    assert.equal(await page.locator('[data-player-management][open]').count(),0);
+    assert.equal(await management(uid).locator('select[name="pony-race"]').isVisible(),false);
+    async function openManagement(id) {
+      const spoiler=management(id);
+      if (!await spoiler.evaluate(details=>details.open)) await spoiler.locator(':scope > summary').click();
+    }
     async function assign(id,value,trait='race') {
+      await openManagement(id);
       const card=page.locator(`[data-profile-uid="${id}"]`);
       await card.locator(`select[name="pony-${trait}"]`).selectOption(value);
       const [response]=await Promise.all([
@@ -359,26 +367,29 @@ try {
       ]);
       assert.equal(response.status(),200,await response.text());
       await page.waitForFunction(()=>document.getElementById('admin-menu').getAttribute('aria-busy')==='false');
+      assert.equal(await management(id).evaluate(details=>details.open),true);
       return response.json();
     }
+    const observeRace=(tab,effective,visibleType='earth',size='normal')=>tab.waitForFunction(({effective,visibleType,size})=>{
+      const avatar=honeymoon.localAvatar();
+      return honeymoon.stats().ponyType===effective && avatar?.ponyType===visibleType && avatar.skinReady && avatar.size===size &&
+        avatar.hasWings===['pegasus','alicorn'].includes(visibleType) && avatar.hasHorn===['unicorn','alicorn'].includes(visibleType);
+    },{effective,visibleType,size},{timeout:20000});
     const own=await assign(uid,'alicorn');
     assert.equal(own.raceOverride,'alicorn');
-    const observeRace=(tab,type,wings,horn)=>tab.waitForFunction(({type,wings,horn})=>{
-      const avatar=honeymoon.localAvatar();
-      return honeymoon.stats().ponyType===type && avatar?.ponyType===type && avatar.skinReady &&
-        avatar.hasWings===wings && avatar.hasHorn===horn;
-    },{type,wings,horn},{timeout:20000});
-    await observeRace(page,'alicorn',true,true);
+    await observeRace(page,'alicorn');
     assert.equal((await page.evaluate(()=>honeymoon.health())).maxHealth,12);
     const small=await assign(uid,'small','size');
     assert.equal(small.sizeOverride,'small');
     assert.equal(small.raceOverride,'alicorn');
-    await page.waitForFunction(()=>honeymoon.localAvatar()?.size==='small' && honeymoon.stats().body.size==='small' &&
+    await page.waitForFunction(()=>honeymoon.localAvatar()?.size==='normal' && honeymoon.stats().body.size==='small' &&
       honeymoon.health().maxHealth===8);
     assert.equal((await assign(uid,'','size')).sizeOverride,null);
     await page.waitForFunction(()=>honeymoon.localAvatar()?.size==='normal' && honeymoon.health().maxHealth===12);
     await shot('admin-race-'+(solo?'solo':'profiles'));
     if (guest) {
+      assert.equal(await management(guestUid).evaluate(details=>details.open),false);
+      await openManagement(guestUid);
       const guestCard=page.locator(`[data-profile-uid="${guestUid}"]`);
       async function setGuestNightVision(enabled) {
         const setting=enabled?'on':'off';
@@ -394,6 +405,7 @@ try {
       assert.equal((await stat()).nightVision,false);
       await setGuestNightVision(false);
       await guest.locator('#touch-pause').tap();
+      assert.equal(await guest.locator('#pause-home #admin-toggle').isVisible(),false);
       await guest.locator('[data-pause-section="settings"]').tap();
       const [personal]=await Promise.all([
         guest.waitForResponse(response=>new URL(response.url()).pathname==='/api/night-vision'),
@@ -404,17 +416,17 @@ try {
       await guest.locator('#play').tap();
       const assigned=await assign(guestUid,'pegasus');
       assert.equal(assigned.raceOverride,'pegasus');
-      await observeRace(guest,'pegasus',true,false);
+      await observeRace(guest,'pegasus');
       await guest.waitForFunction(()=>honeymoon.health().maxHealth===8 && document.getElementById('health').childElementCount===8);
-      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.ponyType==='pegasus'&&player.hasWings),guestPublicId);
+      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.ponyType==='earth'&&!player.hasWings),guestPublicId);
       assert.equal((await assign(guestUid,'large','size')).sizeOverride,'large');
-      await guest.waitForFunction(()=>honeymoon.localAvatar()?.size==='large' && honeymoon.stats().body.size==='large' &&
+      await guest.waitForFunction(()=>honeymoon.localAvatar()?.size==='normal' && honeymoon.stats().body.size==='large' &&
         honeymoon.health().maxHealth===11);
-      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.size==='large'),guestPublicId);
+      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.size==='normal'),guestPublicId);
       await guest.locator('#touch-flight').tap();
       await guest.waitForFunction(()=>honeymoon.stats().flying);
       await assign(guestUid,'unicorn');
-      await observeRace(guest,'unicorn',false,true);
+      await observeRace(guest,'unicorn');
       assert.equal((await guest.evaluate(()=>honeymoon.stats())).flying,false);
       assert.equal(await guest.locator('#touch-flight').isVisible(),false);
       assert.equal(await guest.locator('#touch-swap-hands').isVisible(),true);
@@ -425,30 +437,55 @@ try {
         const context=canvas.getContext('2d');
         context.fillStyle='#f9b131';
         context.fillRect(0,0,64,32);
+        context.fillStyle='#88caf0';
+        context.fillRect(0,0,1,1);
         context.fillStyle='#ffbe53';
         context.fillRect(3,0,1,1);
         return canvas.toDataURL('image/png').split(',')[1];
       });
       await guest.locator('#touch-pause').tap();
       await guest.locator('[data-pause-section="profile"]').tap();
-      await guest.locator('#pony-skin').setInputFiles({name:'earth.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
-      await guest.waitForFunction(()=>document.getElementById('skin-status').textContent.includes('earth.png'));
+      await guest.locator('#pony-skin').setInputFiles({name:'pegasus.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
+      await guest.waitForFunction(()=>document.getElementById('skin-status').textContent.includes('pegasus.png'));
       await guest.locator('#play').tap();
-      await observeRace(guest,'earth',false,false);
+      await observeRace(guest,'pegasus','pegasus','small');
       const reset=await guest.request.post(url+'api/session',{data:{}}).then(response=>response.json());
       assert.equal(reset.profile.raceOverride,null);
       assert.equal(reset.profile.sizeOverride,null);
-      await guest.waitForFunction(()=>honeymoon.stats().body.size==='small' && honeymoon.health().maxHealth===8);
-      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.ponyType==='earth'),guestPublicId);
-      await assign(guestUid,'pegasus');
-      await guest.waitForFunction(()=>honeymoon.stats().body.size==='small' && honeymoon.health().maxHealth===4 &&
-        document.getElementById('health').childElementCount===4);
+      await guest.waitForFunction(()=>honeymoon.stats().body.size==='small' && honeymoon.health().maxHealth===4);
+      await click('#admin-close');
+      const [refreshed]=await Promise.all([
+        page.waitForResponse(response=>response.url().endsWith('/api/admin/access')&&response.ok()),
+        click('#pause-home #admin-toggle'),
+      ]);
+      await refreshed.finished();
+      await management(guestUid).waitFor({state:'visible'});
+      await assign(guestUid,'unicorn');
+      await assign(guestUid,'large','size');
+      await observeRace(guest,'unicorn','pegasus','small');
+      await guest.waitForFunction(()=>honeymoon.stats().body.size==='large' && honeymoon.health().maxHealth===13 &&
+        document.getElementById('health').childElementCount===13);
+      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.ponyType==='pegasus'&&
+        player.size==='small'&&player.hasWings&&!player.hasHorn),guestPublicId);
       await guest.close();
     }
     const restored=await assign(uid,'');
     assert.equal(restored.raceOverride,null);
-    await observeRace(page,'earth',false,false);
-    result.checks.push({self:true,other:Boolean(guest),remoteVisuals:Boolean(guest),skinReset:Boolean(guest),manualReset:true,sizeOverride:true,
+    await observeRace(page,'earth');
+    if (!solo) {
+      assert.equal(await page.locator('#pause-world #admin-toggle').count(),0);
+      await click('#admin-menu [data-admin-tab="world"]');
+      await page.locator('#admin-menu').getByRole('button',{name:'Игровые режимы',exact:true}).click();
+      const modeProfile=page.locator('[data-mode-player-uid]').first();
+      await modeProfile.waitFor({state:'visible'});
+      assert.equal(await page.locator('[data-mode-player-uid][open]').count(),0);
+      assert.equal(await modeProfile.locator('select').isVisible(),false);
+      await modeProfile.locator('summary').click();
+      assert.ok(await modeProfile.locator('select').isVisible());
+      await click('#mode-close');
+    }
+    result.checks.push({self:true,other:Boolean(guest),skinOnlyVisuals:true,remoteVisuals:Boolean(guest),skinReset:Boolean(guest),manualReset:true,
+      sizeOverride:true,adminOnHome:true,controlsInitiallyCollapsed:true,
       remoteNightVision:Boolean(guest),personalNightVision:Boolean(guest)});
   } else if (raceQa) {
     await skipPreload();
@@ -924,6 +961,9 @@ try {
       await resume.waitFor({state:'visible'});
       const resumeBox=await resume.boundingBox();
       assert.ok(resumeBox.x>=0&&resumeBox.y>=0&&resumeBox.y+resumeBox.height<=height);
+      const adminEntry=page.locator('#pause-home #admin-toggle');
+      assert.ok(await adminEntry.isVisible());
+      assert.ok(await adminEntry.evaluate(button=>button.scrollWidth<=button.clientWidth));
       await shot('pause-home-'+width);
       if (mobileQa) await pauseSection('settings');
       else await page.locator('[data-pause-section="settings"]').press('Enter');
