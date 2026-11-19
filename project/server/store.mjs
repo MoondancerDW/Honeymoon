@@ -357,14 +357,15 @@ export function openStore(filename) {
         return {setting,changed:true};
       });
     },
-    updateProfile(player, { nickname, skin, ponyTraits }, previousNickname, writeInventory, chatDay) {
+    updateProfile(player, { nickname, skin, ponyTraits }, previousNickname, writeInventory, {day,admin} = {}) {
       return transaction(db, () => {
         if (nickname !== undefined) writeNickname.run(player, nickname);
         if (skin !== undefined) writeSkin.run(player, skin?.hash ?? null, skin?.png ?? null);
         if (ponyTraits) writePonyTraits(player,ponyTraits);
         writeInventory?.();
         if (nickname !== undefined && previousNickname && nickname !== previousNickname) {
-          return appendChat({kind:'rename', nickname:previousNickname, newNickname:nickname, channel:'global',day:chatDay});
+          return appendChat({kind:'rename',nickname:previousNickname,newNickname:nickname,channel:'global',day,
+            ...(admin && {admin:true})});
         }
       });
     },

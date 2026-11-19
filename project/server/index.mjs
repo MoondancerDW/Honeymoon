@@ -386,7 +386,7 @@ export function createHoneymoonServer({
   const worldTime = createWorldTime(store,clock);
   const warps = createWarps(store);
   const chat = createChat({
-    store,now:clock,logDirectory:state===':memory:'?undefined:join(dirname(state),'chat-logs'),
+    store,now:clock,isAdmin:access.isAdmin,logDirectory:state===':memory:'?undefined:join(dirname(state),'chat-logs'),
     publish: (entry, audience) => sendSocial('chat', entry, player => !audience || audience.includes(player)),
     onDayChanged: data => sendSocial('chat-reset',data),
     recipients(origin) {
@@ -403,7 +403,7 @@ export function createHoneymoonServer({
       game.clearLavaContact(player);
       npcs.leave(player);
     }
-    try { chat.playerStatus(profile, online); }
+    try { chat.playerStatus(profile, online, player); }
     catch (error) { console.error(error); }
   } });
   const npcs=createNpcs({generated,store,creativeBlocks:creative?.placeable,creativeItems:creative?.items,
@@ -534,7 +534,7 @@ export function createHoneymoonServer({
     sendSocial('game-mode',{...state,admin:npcs.isAdmin(player),flight,flightAllowed},id=>id===player);
     const position=presence.onlinePosition(player);
     if (position) presence.update(player,game.session(player).position,{death:survival.avatarDeath(player)});
-    if (state.death) chat.playerDeath(profileFor(player),state.death.cause);
+    if (state.death) chat.playerDeath(profileFor(player),state.death.cause,player);
   }
 
   function modeAdministration() {
@@ -980,8 +980,9 @@ export function createHoneymoonServer({
         const different = updates.nickname !== undefined || submittedSkin !== undefined;
         const drop=previousTraits && prepareRaceDrop(player,previousTraits.ponyType,nextSkinTraits.ponyType);
         const renameDate=updates.nickname !== undefined ? chat.stamp() : undefined;
+        const renameChat=renameDate && {day:renameDate.day,admin:access.isAdmin(player)};
         const renamed = different && store.updateProfile(player, updates,
-          saved?.nickname ?? presence.onlineProfile(player)?.nickname,drop?.writeInventory,renameDate?.day);
+          saved?.nickname ?? presence.onlineProfile(player)?.nickname,drop?.writeInventory,renameChat);
         let relocation, movementState;
         if (submittedSkin !== undefined) {
           const traits=rememberTraits(player,nextSkinTraits);

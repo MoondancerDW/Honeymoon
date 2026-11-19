@@ -314,8 +314,8 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
   }
   const owner = await post('access/owner',{key,profileName:'Администратор'},undefined,null);
   assert.equal(owner.status,200);
-  async function player(nickname) {
-    const {data:{code:invite}} = await post('admin/invites',{kind:'admin'},owner.cookie);
+  async function player(nickname, kind = 'admin') {
+    const {data:{code:invite}} = await post('admin/invites',{kind},owner.cookie);
     const {cookie,data} = await post('session',{invite,profileName:nickname});
     assert.equal(data.profile.nickname,nickname);
     const feed = await eventFeed(url,cookie,signal,true);
@@ -323,9 +323,12 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
     await feed.next('presence', event => event.selfOnline);
     return {cookie,feed};
   }
-  const sender = await player('Отправитель');
   const near = await player('Восемнадцать');
+  const sender = await player('Отправитель');
   const far = await player('Далеко');
+  const joined = await near.feed.next('chat', entry => entry.kind === 'join' && entry.nickname === 'Отправитель');
+  assert.equal(joined.data.admin,true);
+  assert.equal(joined.data.channel,undefined);
   assert.equal((await post('session',{},near.cookie,'203.0.113.2')).data.profile.nickname,'Восемнадцать');
   for (const [target, error] of [
     [{...point,x:'8'}, 'invalid_coordinates'],
@@ -343,18 +346,22 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
   assert.equal((await post('teleport',{...edgePosition,y:1.1},far.cookie)).status,200);
   const local = 'Слышно рядом';
   const global = 'Слышно везде';
-  assert.equal((await post('chat',{text:local,channel:'local'},sender.cookie)).data.channel,'local');
-  assert.equal((await post('chat',{text:global,channel:'global'},sender.cookie)).data.channel,'global');
+  const localMessage = (await post('chat',{text:local,channel:'local',admin:false},sender.cookie)).data;
+  const globalMessage = (await post('chat',{text:global,channel:'global'},sender.cookie)).data;
+  assert.equal(localMessage.channel,'local');
+  assert.equal(localMessage.admin,true);
+  assert.equal(globalMessage.channel,'global');
+  assert.equal(globalMessage.admin,true);
   const nextMessage = feed => feed.next('chat', entry => entry.kind === 'message');
-  assert.equal((await nextMessage(sender.feed)).data.text,local);
-  assert.equal((await nextMessage(near.feed)).data.text,local);
-  assert.equal((await nextMessage(far.feed)).data.text,global);
+  assert.deepEqual((await nextMessage(sender.feed)).data,localMessage);
+  assert.deepEqual((await nextMessage(near.feed)).data,localMessage);
+  assert.deepEqual((await nextMessage(far.feed)).data,globalMessage);
   assert.equal((await post('teleport',point,far.cookie)).status,200);
   assert.equal((await post('teleport',{...edgePosition,y:1.1},near.cookie)).status,200);
   await far.feed.close();
   const reconnect = await eventFeed(url,far.cookie,signal,true);
   const {data} = await reconnect.next('chat-history');
-  assert.ok(data.entries.some(entry => entry.text === global));
+  assert.deepEqual(data.entries.find(entry => entry.text === global),globalMessage);
   assert.ok(!data.entries.some(entry => entry.text === local));
   await reconnect.close();
   await near.feed.close();
@@ -371,6 +378,22 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
   assert.equal((await post('teleport',{warpId:warp.id},sender.cookie)).data.error,'warp_missing');
   const remaining = await fetch(`${url}/api/warps`,{headers:{Cookie:sender.cookie},signal}).then(response=>response.json());
   assert.deepEqual(remaining,{revision:2,warps:[]});
+  assert.equal((await post('profile',{nickname:'Новое имя'},sender.cookie)).status,200);
+  const renamed = (await nearReconnect.next('chat',entry => entry.kind === 'rename' && entry.nickname === 'Отправитель')).data;
+  assert.equal(renamed.admin,true);
+  assert.equal(renamed.newNickname,'Новое имя');
+  const observer = await player('Зритель','player');
+  assert.equal((await post('profile',{nickname:'Новое имя'},observer.cookie)).status,200);
+  const forged = (await post('chat',{text:'Обычная реплика',admin:true},observer.cookie)).data;
+  assert.equal(forged.nickname,'Новое имя');
+  assert.ok(!Object.hasOwn(forged,'admin'));
+  assert.deepEqual((await nearReconnect.next('chat',entry => entry.id === forged.id)).data,forged);
+  const left = await fetch(url+'/api/presence',{method:'DELETE',headers:{Cookie:sender.cookie,Origin:url},signal});
+  assert.equal(left.status,200);
+  const departed = (await nearReconnect.next('chat',entry => entry.kind === 'leave' && entry.nickname === 'Новое имя')).data;
+  assert.equal(departed.admin,true);
+  assert.equal(departed.channel,undefined);
+  await observer.feed.close();
   await nearReconnect.close();
   await sender.feed.close();
 });

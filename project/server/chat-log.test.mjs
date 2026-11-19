@@ -15,6 +15,7 @@ test('chat logs rotate at Moscow midnight and survive a drained shutdown or rest
   let now=Date.parse('2026-11-16T20:59:59.995Z');
   const options={store, logDirectory,now:()=>now,
     publish:(entry,audience)=>published.push({entry,audience}),recipients:()=>['near'],
+    isAdmin:player=>player==='sender',
     onLogError:error=>errors.push(error)};
   const chat=createChat(options);
   let restarted;
@@ -37,7 +38,7 @@ test('chat logs rotate at Moscow midnight and survive a drained shutdown or rest
     const corrected=restarted.message(profile,{text:'Коррекция часов'},'sender',{x:4,y:5,z:6});
     assert.equal(corrected.day,'2026-11-17');
     now+=1;
-    restarted.playerDeath({...profile,nickname:rename.newNickname});
+    restarted.playerDeath({...profile,nickname:rename.newNickname},undefined,'sender');
     now+=999;
     restarted.playerStatus({...profile,nickname:rename.newNickname},false);
     await restarted.close();
@@ -66,6 +67,8 @@ test('chat logs rotate at Moscow midnight and survive a drained shutdown or rest
     ]);
     assert.deepEqual(published.find(({entry})=>entry.channel==='local').audience,['sender','near']);
     assert.equal(restarted.history('sender').filter(entry=>entry.kind==='rename').length,1);
+    assert.equal(restarted.history('sender').find(entry=>entry.kind==='death').admin,true);
+    assert.ok(!Object.hasOwn(restarted.history('sender').find(entry=>entry.kind==='rename'),'admin'));
     assert.ok(!restarted.history('far').some(entry=>entry.channel==='local'));
     assert.ok(restarted.history('sender').every(entry=>entry.day==='2026-11-17'&&!Object.hasOwn(entry,'position')));
   } finally {

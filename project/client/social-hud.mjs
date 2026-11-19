@@ -175,7 +175,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     teleportForm.hidden = panel !== 'teleport';
   }
 
-  function entry({id, day, kind, cause, nickname, newNickname, text, channel:target = 'global'}, recent) {
+  function entry({id, day, kind, cause, nickname, newNickname, text, admin, channel:target = 'system'}, recent) {
     if (!setChatDay(day)) return false;
     if (seen.has(id)) return true;
     const readingChat = panel === 'chat' || chat.classList.contains('docked');
@@ -191,15 +191,16 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       marker.textContent = '[G] ';
       row.append(marker);
     }
-    if (kind === 'message') {
-      const sender = document.createElement('strong');
-      sender.textContent = nickname;
-      row.append(sender, document.createTextNode(`  ${text}`));
-    } else {
+    const sender = document.createElement(kind === 'message' ? 'strong' : 'span');
+    sender.textContent = nickname;
+    sender.classList.toggle('chat-admin-name',admin === true);
+    row.append(sender);
+    if (kind === 'message') row.append(document.createTextNode(`  ${text}`));
+    else {
       row.className = 'chat-status';
       const changes = kind === 'death' ? (cause==='lava' ? 'Сгорел' : 'помер') : kind === 'rename' ? `сменил ник на ${newNickname}` :
         kind === 'join' ? 'входит в игру' : 'выходит из игры';
-      row.append(document.createTextNode(`${nickname} ${changes}`));
+      row.append(document.createTextNode(` ${changes}`));
     }
     if (recent) {
       row.classList.add('recent');

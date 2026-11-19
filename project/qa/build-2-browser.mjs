@@ -1177,11 +1177,45 @@ try {
     const publicText='Проверка общего канала';
     await input.fill(publicText);
     const publicRow=await send(publicText,'global');
+    const adminName=publicRow.locator('strong.chat-admin-name');
+    assert.equal(await adminName.count(),1);
+    assert.equal(await adminName.evaluate(name=>getComputedStyle(name).color),'rgb(255, 109, 115)');
     await globalToggle.click();
     assert.equal(await globalToggle.getAttribute('aria-pressed'),'false');
     assert.equal(await page.locator('#chat-channel[hidden]').count(),1);
     await publicRow.waitFor({state:'hidden'});
     assert.equal(await publicRow.count(),1);
+    const guest=await browser.newContext();
+    const guestFeed=new AbortController();
+    let guestRow;
+    try {
+      const nickname='Проверка входа';
+      assert.ok((await guest.request.post(url+'api/session',{data:{}})).ok());
+      assert.ok((await guest.request.post(url+'api/profile',{data:{nickname}})).ok());
+      const cookie=(await guest.cookies()).map(({name,value})=>name+'='+value).join('; ');
+      const feed=await fetch(url+'api/events?presence=1',{headers:{cookie},signal:guestFeed.signal});
+      assert.equal(feed.status,200);
+      assert.ok((await guest.request.post(url+'api/presence',{data:{yaw:0,pitch:0,motion:'idle'}})).ok());
+      const joined=transcript.getByText(`${nickname} входит в игру`,{exact:true});
+      await joined.waitFor({state:'visible'});
+      assert.equal(await joined.locator('.chat-admin-name').count(),0);
+      const sent=await guest.request.post(url+'api/chat',{data:{text:'Сообщение гостя',channel:'global'}});
+      assert.ok(sent.ok());
+      const {id}=await sent.json();
+      guestRow=transcript.locator(`[data-message-id="${id}"]`);
+      await guestRow.waitFor({state:'attached'});
+      assert.equal(await guestRow.isVisible(),false);
+      assert.equal(await guestRow.locator('.chat-admin-name').count(),0);
+      assert.ok((await guest.request.delete(url+'api/presence')).ok());
+      const left=transcript.getByText(`${nickname} выходит из игры`,{exact:true});
+      await left.waitFor({state:'visible'});
+      assert.equal(await left.locator('.chat-admin-name').count(),0);
+      assert.equal(await globalToggle.getAttribute('aria-pressed'),'false');
+      assert.equal(await publicRow.isVisible(),false);
+    } finally {
+      guestFeed.abort();
+      await guest.close();
+    }
     const nearbyText='Проверка принудительного локального канала';
     await input.fill(nearbyText);
     const localRow=await send(nearbyText,'local');
@@ -1189,6 +1223,7 @@ try {
     assert.equal(await globalToggle.getAttribute('aria-pressed'),'true');
     assert.ok(await channel.isVisible());
     assert.ok(await publicRow.isVisible());
+    assert.ok(await guestRow.isVisible());
     assert.ok(await localRow.isVisible());
     await input.fill('Удалить при выходе из меню');
     if (mobileQa) await chatClose.click();
@@ -1235,7 +1270,7 @@ try {
     await input.fill(emojiText);
     await send(emojiText,'global');
     await shot(test);
-    result.checks.push({menuAndGameplay:true,globalFilter:true,localOnlyPost:true,unsavedDraftCleared:true,
+    result.checks.push({menuAndGameplay:true,globalFilter:true,systemPresenceWithGlobalHidden:true,adminNicknameOnly:true,localOnlyPost:true,unsavedDraftCleared:true,
       savedDraftSurvivesReload:true,sentDraftCleared:true,chatLimitCodePoints:512});
   } else if (pauseQa) {
     await skipPreload();

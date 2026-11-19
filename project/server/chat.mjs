@@ -53,7 +53,7 @@ function createLog(directory, onError) {
 }
 
 export function createChat({store, publish, recipients, now = Date.now, logDirectory,
-                            onDayChanged = () => {}, onLogError = error=>console.error(error)}) {
+                            isAdmin = () => false, onDayChanged = () => {}, onLogError = error=>console.error(error)}) {
   const sent = new Map();
   const log = logDirectory ? createLog(logDirectory,onLogError) : undefined;
   let activeDay = store.getState('chat','','day')?.value;
@@ -101,6 +101,7 @@ export function createChat({store, publish, recipients, now = Date.now, logDirec
     const {day} = stamp();
     return {day,entries:store.chatHistory(player).filter(entry=>entry.day===day)};
   }
+  const author = (profile, player) => ({nickname:profile.nickname,...(isAdmin(player) && {admin:true})});
   return {
     history: player => snapshot(player).entries,
     snapshot,
@@ -110,12 +111,12 @@ export function createChat({store, publish, recipients, now = Date.now, logDirec
       clearTimeout(midnightTimer);
       return log?.flush();
     },
-    playerDeath(profile,cause) {
-      return add({kind:'death',nickname:profile.nickname,channel:'global',...(cause==='lava'&&{cause,text:'Сгорел'})});
+    playerDeath(profile,cause,player) {
+      return add({kind:'death',...author(profile,player),channel:'global',...(cause==='lava'&&{cause,text:'Сгорел'})});
     },
-    playerStatus(profile, joined) {
+    playerStatus(profile, joined, player) {
       if (!joined) sent.delete(profile.id);
-      add({kind:joined ? 'join' : 'leave', nickname:profile.nickname});
+      add({kind:joined ? 'join' : 'leave',...author(profile,player)});
     },
     message(profile, body, player, origin) {
       const position = confirmedPosition(origin);
@@ -130,7 +131,7 @@ export function createChat({store, publish, recipients, now = Date.now, logDirec
       const recent = (sent.get(profile.id) || []).filter(previous => time - previous < rateWindow);
       if (recent.length >= 5) throw new RequestError(429, 'chat_rate_limit');
       const audience = channel === 'local' ? [...new Set([player, ...recipients(position)])] : null;
-      const entry = add({kind:'message', nickname:profile.nickname, text, channel}, audience,stamp(time),position);
+      const entry = add({kind:'message',...author(profile,player),text,channel},audience,stamp(time),position);
       recent.push(time);
       sent.set(profile.id, recent);
       return entry;

@@ -114,6 +114,7 @@ button:disabled { cursor: wait; opacity: .45; }
 .playing #chat:not(.expanded) li.recent:has(~ .recent:not([hidden]) ~ .recent:not([hidden]) ~ .recent:not([hidden]) ~ .recent:not([hidden])) { display: none; }
 #chat.expanded .chat-log { max-height: min(36vh, 19rem); overflow-y: auto; margin-bottom: .55rem; }
 .chat-log strong, .chat-status { color: var(--gold); }
+.chat-log .chat-admin-name { color: #ff6d73; }
 .chat-log .chat-global { color: #8bef94; font-weight: 700; }
 #chat-channel[aria-pressed="true"] { color: var(--gold); border-color: var(--gold); }
 #chat-form:not([hidden]) { display: flex; flex-wrap: wrap; gap: .38rem; }
