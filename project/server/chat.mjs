@@ -1,5 +1,6 @@
 import {appendFile, mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
+import {limitChatText} from '../world/chat-text.mjs';
 import {RequestError} from './errors.mjs';
 
 const rateWindow = 5000;
@@ -122,7 +123,7 @@ export function createChat({store, publish, recipients, now = Date.now, logDirec
       const channel = body.channel ?? 'global';
       if (channel !== 'global' && channel !== 'local') throw new RequestError(400, 'invalid_chat_channel');
       const text = typeof body.text === 'string' ? body.text.trim() : '';
-      if (!text || [...text].length > 240 || /[\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(text)) {
+      if (!text || limitChatText(text) !== text || /[\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(text)) {
         throw new RequestError(400, 'invalid_chat');
       }
       const time = now();

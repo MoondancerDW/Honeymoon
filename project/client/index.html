@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
   <meta name="apple-mobile-web-app-title" content="Lilium Moonlight">
-  <meta name="honeymoon-build" content="24">
+  <meta name="honeymoon-build" content="25">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -284,13 +284,17 @@
     <section id="chat" aria-label="Чат">
       <header id="chat-header" hidden>
         <strong>Чат</strong>
-        <button id="fullscreen-chat-toggle" class="icon-button fullscreen-toggle fullscreen-panel-toggle" type="button" aria-label="На весь экран" data-fullscreen-toggle hidden><i aria-hidden="true"></i></button>
-        <button id="chat-close" type="button" aria-label="Закрыть чат" title="Закрыть чат">×</button>
+        <div class="chat-header-actions">
+          <button id="chat-global-toggle" class="icon-button" type="button" aria-label="Общий чат" aria-pressed="true" title="Скрыть общий чат">G</button>
+          <button id="chat-draft-toggle" class="icon-button" type="button" aria-label="Сохранять черновик" aria-pressed="false" title="Сохранить черновик"><i aria-hidden="true"></i></button>
+          <button id="fullscreen-chat-toggle" class="icon-button fullscreen-toggle fullscreen-panel-toggle" type="button" aria-label="На весь экран" data-fullscreen-toggle hidden><i aria-hidden="true"></i></button>
+          <button id="chat-close" type="button" aria-label="Закрыть чат" title="Закрыть чат">×</button>
+        </div>
       </header>
       <ul id="chat-log" class="chat-log" role="log" aria-label="История чата" aria-live="polite" tabindex="0"></ul>
       <form id="chat-form" hidden>
         <button id="chat-channel" type="button" aria-pressed="false"><i aria-hidden="true"></i><span>Мир</span></button>
-        <input id="chat-input" autocomplete="off" aria-label="Сообщение" placeholder="Сообщение…" maxlength="480" enterkeyhint="send">
+        <input id="chat-input" autocomplete="off" aria-label="Сообщение" placeholder="Сообщение…" maxlength="1024" enterkeyhint="send">
         <button id="chat-send" type="submit" aria-label="Отправить" title="Отправить">➤</button>
       </form>
     </section>

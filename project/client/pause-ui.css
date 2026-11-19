@@ -129,9 +129,8 @@
     background: #13232bf7;
   }
   #pause-chat-slot #chat-header { flex: none; }
-  #pause-chat-slot #chat-close[hidden] { display: none; }
   #pause-chat-slot #chat-log { flex: 1 1 auto; min-height: 0; margin-block-end: .5rem; overflow-y: auto; }
-  #pause-chat-slot #chat #chat-log li { display: block; white-space: normal; overflow: visible; }
+  #pause-chat-slot #chat #chat-log li:not([hidden]) { display: block; white-space: normal; overflow: visible; }
   #pause-chat-slot #chat-form:not([hidden]) { flex: none; gap: .3rem; }
   #pause-chat-slot #chat-input { flex: 1 1 0; }
   #pause-chat-slot #chat-channel { width: auto; min-width: 44px; padding-inline: .35rem; }

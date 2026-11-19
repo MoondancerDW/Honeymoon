@@ -22,8 +22,9 @@ const controlsQa=test==='controls-update'||test==='controls-update-mobile';
 const touchGameplayQa=test==='touch-gameplay';
 const pauseQa=test==='pause-desktop'||test==='pause-mobile';
 const chatDayQa=test==='chat-day';
+const chatToolsQa=test==='chat-tools'||test==='chat-tools-mobile';
 const raceQa=test==='races-desktop'||test==='races-mobile';
-const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile'].includes(test);
+const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
@@ -1111,6 +1112,131 @@ try {
     await transcript.getByText(nearby,{exact:false}).waitFor({state:'visible'});
     assert.equal(await transcript.getByText(yesterday,{exact:false}).count(),0);
     result.checks.push({moscowMidnight:true,samePageCleared:true,reconnectedTodayOnly:true,localHistory:true});
+  } else if (chatToolsQa) {
+    await skipPreload();
+    if (!mobileQa) await page.setViewportSize({width:1200,height:750});
+    await start();
+    const input=page.locator('#chat-input');
+    const globalToggle=page.locator('#chat-global-toggle');
+    const draftToggle=page.locator('#chat-draft-toggle');
+    const channel=page.locator('#chat-channel');
+    const chatClose=page.locator('#chat-close');
+    const expanded=page.locator('#chat.expanded');
+    const transcript=page.locator('#chat-log');
+    const playing=()=>page.waitForFunction(mobile=>document.getElementById('game').classList.contains('playing') &&
+      (mobile || Boolean(document.pointerLockElement)),mobileQa);
+
+    async function openMenuChat() {
+      await playing();
+      if (mobileQa) {
+        await page.locator('#touch-pause').tap();
+        await page.locator('#pause-chat-slot #chat-toggle').tap();
+        await expanded.waitFor({state:'visible'});
+      } else {
+        await page.keyboard.press('Escape');
+        await page.locator('#pause-chat-slot > #chat.docked').waitFor({state:'visible'});
+      }
+      await input.waitFor({state:'visible'});
+      assert.ok(await globalToggle.isVisible());
+      assert.ok(await draftToggle.isVisible());
+    }
+
+    async function closeGameplayChat() {
+      await chatClose.click();
+      await expanded.waitFor({state:'hidden'});
+      await playing();
+    }
+
+    async function openGameplayChat() {
+      await playing();
+      if (mobileQa) await page.locator('#touch-chat').tap();
+      else await page.keyboard.press('KeyT');
+      await expanded.waitFor({state:'visible'});
+      assert.ok(await globalToggle.isVisible());
+      assert.ok(await draftToggle.isVisible());
+    }
+
+    async function send(text,expectedChannel) {
+      assert.equal(await input.inputValue(),text);
+      const [response]=await Promise.all([
+        page.waitForResponse(response=>new URL(response.url()).pathname==='/api/chat' &&
+          response.request().method()==='POST' && response.request().postDataJSON()?.text===text),
+        input.press('Enter'),
+      ]);
+      assert.equal(response.status(),200,await response.text());
+      assert.equal(response.request().postDataJSON()?.channel,expectedChannel);
+      const entry=await response.json();
+      assert.equal(entry.text,text);
+      assert.equal(entry.channel,expectedChannel);
+      await transcript.locator(`[data-message-id="${entry.id}"]`).waitFor({state:'visible'});
+      await page.waitForFunction(()=>!document.getElementById('chat-input').value);
+      return transcript.locator(`[data-message-id="${entry.id}"]`);
+    }
+
+    await openMenuChat();
+    const publicText='Проверка общего канала';
+    await input.fill(publicText);
+    const publicRow=await send(publicText,'global');
+    await globalToggle.click();
+    assert.equal(await globalToggle.getAttribute('aria-pressed'),'false');
+    assert.equal(await page.locator('#chat-channel[hidden]').count(),1);
+    await publicRow.waitFor({state:'hidden'});
+    assert.equal(await publicRow.count(),1);
+    const nearbyText='Проверка принудительного локального канала';
+    await input.fill(nearbyText);
+    const localRow=await send(nearbyText,'local');
+    await globalToggle.click();
+    assert.equal(await globalToggle.getAttribute('aria-pressed'),'true');
+    assert.ok(await channel.isVisible());
+    assert.ok(await publicRow.isVisible());
+    assert.ok(await localRow.isVisible());
+    await input.fill('Удалить при выходе из меню');
+    if (mobileQa) await chatClose.click();
+    await click('#play');
+
+    await openGameplayChat();
+    assert.equal(await input.inputValue(),'');
+    await input.fill('Удалить при закрытии игрового чата');
+    await closeGameplayChat();
+    await openGameplayChat();
+    assert.equal(await input.inputValue(),'');
+
+    await globalToggle.click();
+    assert.equal(await page.locator('#chat-channel[hidden]').count(),1);
+    await input.fill('Первоначальный черновик');
+    await draftToggle.click();
+    assert.equal(await draftToggle.getAttribute('aria-pressed'),'true');
+    const savedText='Изменённый черновик после сохранения 🦄';
+    await input.fill(savedText);
+    const storedDraft=await page.evaluate(()=>JSON.parse(localStorage.getItem('honeymoon-chat-draft')));
+    assert.equal(storedDraft.text,savedText);
+    assert.equal(storedDraft.channel,'local');
+    await closeGameplayChat();
+    await openMenuChat();
+    assert.equal(await input.inputValue(),savedText);
+    await start(false);
+    await openGameplayChat();
+    assert.equal(await input.inputValue(),savedText);
+    assert.equal(await globalToggle.getAttribute('aria-pressed'),'false');
+    await globalToggle.click();
+    assert.equal(await channel.getAttribute('aria-pressed'),'true');
+    await send(savedText,'local');
+    assert.equal(await page.evaluate(()=>localStorage.getItem('honeymoon-chat-draft')),null);
+    await closeGameplayChat();
+    await start(false);
+    await openGameplayChat();
+    assert.equal(await input.inputValue(),'');
+
+    if (await channel.getAttribute('aria-pressed')==='true') await channel.click();
+    const mixedText='🦄'.repeat(511)+'ab';
+    await input.fill(mixedText);
+    assert.equal(await input.inputValue(),'🦄'.repeat(511)+'a');
+    const emojiText='🦄'.repeat(512);
+    await input.fill(emojiText);
+    await send(emojiText,'global');
+    await shot(test);
+    result.checks.push({menuAndGameplay:true,globalFilter:true,localOnlyPost:true,unsavedDraftCleared:true,
+      savedDraftSurvivesReload:true,sentDraftCleared:true,chatLimitCodePoints:512});
   } else if (pauseQa) {
     await skipPreload();
     await start();

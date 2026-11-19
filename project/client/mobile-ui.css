@@ -7,7 +7,7 @@
   background: var(--glass);
   touch-action: manipulation;
 }
-.icon-button[hidden], #chat-header[hidden], #chat-unread[hidden] { display: none; }
+.icon-button[hidden], #chat-header[hidden], #chat-unread[hidden], #chat-channel[hidden], #chat-close[hidden] { display: none; }
 .fullscreen-toggle {
   position: absolute;
   z-index: 5;
@@ -35,7 +35,6 @@
 #game:has(dialog[open]) #fullscreen-toggle, #game:has(#chat.expanded) #fullscreen-toggle { visibility: hidden; }
 .fullscreen-panel-toggle { position: static; flex: 0 0 auto; display: none; }
 .touch .fullscreen-panel-toggle:not([hidden]) { display: grid; }
-#fullscreen-chat-toggle { margin-inline: auto .35rem; }
 .touch #fullscreen-inventory-toggle {
   position: absolute;
   top: calc(-28 * var(--gui-px) - 47px);
@@ -64,8 +63,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: .3rem;
   margin-bottom: .45rem;
 }
+.chat-header-actions { display: flex; align-items: center; gap: .25rem; margin-inline-start: auto; }
+#chat-global-toggle, #chat-draft-toggle { color: #a8bac0; font-weight: 650; flex: 0 0 auto; }
+#chat-global-toggle[aria-pressed="true"], #chat-draft-toggle[aria-pressed="true"] { color: var(--gold); border-color: var(--gold); }
+#chat-draft-toggle i { position: relative; width: 17px; height: 17px; border: 1.5px solid currentColor; border-radius: 3px; }
+#chat-draft-toggle i::before, #chat-draft-toggle i::after { content: ""; position: absolute; inset-inline: 3px; border: 1px solid currentColor; }
+#chat-draft-toggle i::before { top: -1px; height: 5px; border-top: 0; border-radius: 0 0 1px 1px; }
+#chat-draft-toggle i::after { bottom: -1px; height: 5px; border-bottom: 0; border-radius: 1px 1px 0 0; }
 #chat-close, #chat-send { display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 auto; padding: 0; font-size: 1.15rem; }
 #chat-channel {
   display: flex;
@@ -99,7 +106,7 @@
   padding: .55rem;
 }
 .touch #chat.expanded .chat-log { min-height: 0; max-height: min(42vh, 18rem); }
-.touch #chat:not(.expanded) li.recent:has(~ .recent:not(.chat-status) ~ .recent:not(.chat-status)), .touch #chat:not(.expanded) li.chat-status { display: none; }
+.touch #chat:not(.expanded) li.recent:has(~ .recent:not(.chat-status, [hidden]) ~ .recent:not(.chat-status, [hidden])), .touch #chat:not(.expanded) li.chat-status { display: none; }
 .touch #chat:not(.expanded) li { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .touch:has(#chat.expanded) #touch, .touch:has(#chat.expanded) .bottom { display: none; }
 

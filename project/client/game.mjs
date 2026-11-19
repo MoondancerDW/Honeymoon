@@ -2583,6 +2583,7 @@ async function start() {
   if (!sessionBody) return;
   multiplayer=!sessionBody.access?.singlePlayer;
   profileUid=sessionBody.access?.uid ?? sessionBody.playerId;
+  social.setChatProfile(profileUid);
   audio.setDefaultAltitudeMusic(sessionBody.altitudeMusic);
   soloStreaming=Boolean(sessionBody.soloDownload);
   soloDownloadUi.enable(soloStreaming);

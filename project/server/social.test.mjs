@@ -3,6 +3,7 @@ import {test} from 'node:test';
 import {createChat} from './chat.mjs';
 import {createWorldTime} from './world-time.mjs';
 import {openStore} from './store.mjs';
+import {limitChatText} from '../world/chat-text.mjs';
 import {formatClock, tickFromTime} from '../world/world-time.mjs';
 
 test('all 1440 clock minutes round trip and the shared clock freezes, resumes and reloads', () => {
@@ -72,7 +73,7 @@ test('chat preserves ordering, sends join and leave with the nickname and bounds
     assert.throws(() => chat.message(profile, {text:'Привет'}, 'sender'), {code:'not_online'});
     assert.throws(() => chat.message(profile, {text:'Привет'}, 'sender', {...point,x:NaN}), {code:'not_online'});
     chat.playerStatus(profile, true);
-    assert.throws(() => chat.message(profile, {text:'x'.repeat(241)}, 'sender', point), {code:'invalid_chat'});
+    assert.throws(() => chat.message(profile, {text:'x'.repeat(513)}, 'sender', point), {code:'invalid_chat'});
     assert.throws(() => chat.message(profile, {text:'one\ntwo'}, 'sender', point), {code:'invalid_chat'});
     for (let i = 0; i < 5; i++) chat.message(profile, {text:'  Привет!  '}, 'sender', point);
     assert.throws(() => chat.message(profile, {text:'Снова'}, 'sender', point), {code:'chat_rate_limit'});
@@ -90,4 +91,11 @@ test('chat preserves ordering, sends join and leave with the nickname and bounds
     assert.deepEqual(chat.history('sender').at(-1), local);
     assert.equal(chat.history('far').at(-1).text, '<img src=x>');
   } finally { chat.close(); store.close(); }
+});
+
+test('the shared chat text limiter never splits an emoji at the 512-code-point boundary', () => {
+  assert.equal(limitChatText('x'.repeat(513)), 'x'.repeat(512));
+  assert.equal(limitChatText('🌙'.repeat(513)), '🌙'.repeat(512));
+  const mixed = 'x'.repeat(511) + '🌙';
+  assert.equal(limitChatText(mixed + '!'), mixed);
 });

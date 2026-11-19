@@ -107,10 +107,11 @@ button:disabled { cursor: wait; opacity: .45; }
 #chat.expanded { pointer-events: auto; }
 .chat-log:not([hidden]) { display: flex; flex-direction: column; gap: .2rem; list-style: none; padding: 0; margin: 0; }
 .chat-log li { align-self: flex-start; max-width: 100%; overflow-wrap: anywhere; font-size: .86rem; }
+.chat-log li[hidden] { display: none; }
 #chat:not(.expanded) li { display: none; }
-.playing #chat:not(.expanded) li.recent { display: block; padding: .24rem .4rem; border-radius: .25rem; background: var(--glass); }
+.playing #chat:not(.expanded) li.recent:where(:not([hidden])) { display: block; padding: .24rem .4rem; border-radius: .25rem; background: var(--glass); }
 .playing #chat:not(.expanded) li.recent.fading { opacity: 0; transition: opacity 2s ease; }
-.playing #chat:not(.expanded) li.recent:has(~ .recent ~ .recent ~ .recent ~ .recent) { display: none; }
+.playing #chat:not(.expanded) li.recent:has(~ .recent:not([hidden]) ~ .recent:not([hidden]) ~ .recent:not([hidden]) ~ .recent:not([hidden])) { display: none; }
 #chat.expanded .chat-log { max-height: min(36vh, 19rem); overflow-y: auto; margin-bottom: .55rem; }
 .chat-log strong, .chat-status { color: var(--gold); }
 .chat-log .chat-global { color: #8bef94; font-weight: 700; }

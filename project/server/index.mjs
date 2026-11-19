@@ -39,6 +39,7 @@ import { createTestRangeNpc } from './test-range-npc.mjs';
 
 const PROJECT = fileURLToPath(new URL('..', import.meta.url));
 const MAX_BODY = 4096;
+const MAX_CHAT_BODY = 8192;
 const MAX_ACTION_BODY = 16384;
 const MAX_NPC_EDITOR_BODY = 4 * 1024 * 1024;
 const MAX_STREAMS = 64;
@@ -944,7 +945,7 @@ export function createHoneymoonServer({
         return json(response,200,{inventory:game.craft(player,recipe)});
       }
       if (path === '/api/chat' && method === 'POST') {
-        const body = await readInput();
+        const body = await readInput(MAX_CHAT_BODY);
         return json(response, 200, chat.message(presence.onlineProfile(player), body, player, presence.onlinePosition(player)));
       }
       if (path === '/api/time' && method === 'POST') {

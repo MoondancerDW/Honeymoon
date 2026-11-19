@@ -1,4 +1,5 @@
 import {formatClock, tickFromTime} from '../world/world-time.mjs';
+import {CHAT_TEXT_LIMIT,limitChatText} from '../world/chat-text.mjs';
 import {createWarpMenu} from './warp-menu.mjs';
 
 const teleportErrors = {
@@ -12,6 +13,8 @@ const teleportErrors = {
 };
 const historyLimit = 100;
 const calendarDay = /^\d{4}-\d{2}-\d{2}$/;
+const globalChatPreference = 'honeymoon-chat-global';
+const chatDraftKey = 'honeymoon-chat-draft';
 
 export function createSocialHud({post, notice, pause, resume, teleport, loadWarps, placeWarp, worldEditCommand, weatherChanged}) {
   const byId = id => document.getElementById(id);
@@ -22,6 +25,8 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   const touchChat = byId('touch-chat'), unreadBadge = byId('chat-unread');
   const chatHeader = byId('chat-header');
   const chatClose = byId('chat-close');
+  const globalToggle = byId('chat-global-toggle');
+  const draftToggle = byId('chat-draft-toggle');
   const seen = new Set();
   const channelButton = byId('chat-channel');
   const chatForm = byId('chat-form');
@@ -51,10 +56,56 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   let pauseDock = false, openedFromPause = false, sendingChat = false;
   let peers = [];
   let channel = 'global';
+  let globalEnabled = true;
+  let draftProfile, keepDraft = false;
+  const outgoingChannel = () => globalEnabled ? channel : 'local';
   let unread = 0, chatDay;
   let admin=false;
   let dynamicWeather=false;
   chatInput.disabled = chatSend.disabled = true;
+  chatInput.maxLength = CHAT_TEXT_LIMIT * 2;
+  try { globalEnabled = localStorage.getItem(globalChatPreference) !== '0'; } catch {}
+
+  function storedDraft() {
+    try {
+      const record = JSON.parse(localStorage.getItem(chatDraftKey));
+      if (typeof record?.uid === 'string' && typeof record.text === 'string') return record;
+    } catch {}
+  }
+
+  function removeDraft(expectedText) {
+    const record = storedDraft();
+    if (!record || record.uid !== draftProfile || (expectedText !== undefined && expectedText !== record.text)) return;
+    try { localStorage.removeItem(chatDraftKey); }
+    catch { notice('Не удалось удалить сохранённый черновик'); }
+  }
+
+  function setKeepingDraft(value) {
+    keepDraft = value;
+    draftToggle.disabled = !draftProfile;
+    draftToggle.setAttribute('aria-pressed',String(value));
+    draftToggle.title = value ? 'Не сохранять черновик' : 'Сохранить черновик';
+  }
+
+  function updateDraft() {
+    const text = limitChatText(chatInput.value);
+    if (chatInput.value !== text) chatInput.value = text;
+    if (!keepDraft) return;
+    if (!text.trim()) { removeDraft(); return; }
+    try { localStorage.setItem(chatDraftKey,JSON.stringify({uid:draftProfile,text,channel:outgoingChannel()})); }
+    catch {
+      setKeepingDraft(false);
+      notice('Не удалось сохранить черновик на устройстве');
+    }
+  }
+
+  function finishSend(sentText) {
+    removeDraft(sentText);
+    if (chatInput.value === sentText) {
+      chatInput.value = '';
+      setKeepingDraft(false);
+    }
+  }
 
   function updateUnread(value) {
     unread=value;
@@ -83,7 +134,19 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       'Глобальный чат. Нажмите для локального чата';
     channelButton.setAttribute('aria-label',channelButton.title);
   }
+
+  function updateGlobalChat() {
+    globalToggle.setAttribute('aria-pressed',String(globalEnabled));
+    globalToggle.title = globalEnabled ? 'Скрыть общий чат' : 'Показать общий чат';
+    channelButton.hidden = !globalEnabled;
+    chatInput.placeholder = globalEnabled ? 'Сообщение…' : 'Сообщение рядом…';
+    chatInput.setAttribute('aria-label',globalEnabled ? 'Сообщение' : 'Сообщение в локальный чат');
+    for (const row of log.querySelectorAll('[data-chat-channel="global"]')) row.hidden = !globalEnabled;
+    log.scrollTop = log.scrollHeight;
+  }
   updateChannel();
+  updateGlobalChat();
+  setKeepingDraft(false);
 
   function placePanel(element, slot, home, docked) {
     if (docked) {
@@ -97,6 +160,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     const dockClock = pauseDock && openedFromPause && panel === 'clock';
     const dockChat = pauseDock && (!panel || dockClock);
     const showChat = dockChat || panel === 'chat';
+    if (!showChat && !chatForm.hidden && !keepDraft) chatInput.value = '';
     if (wasDocked && !dockChat && document.activeElement === chatInput) chatInput.blur();
     placePanel(chat, chatSlot, chatHome, dockChat);
     chat.classList.toggle('expanded', panel === 'chat');
@@ -119,6 +183,8 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     seen.add(id);
     const row = document.createElement('li');
     row.dataset.messageId = id;
+    row.dataset.chatChannel = target;
+    row.hidden = !globalEnabled && target === 'global';
     if (target === 'global') {
       const marker = document.createElement('span');
       marker.className = 'chat-global';
@@ -137,7 +203,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     }
     if (recent) {
       row.classList.add('recent');
-      if (kind==='message' && !readingChat) updateUnread(unread+1);
+      if (kind==='message' && !readingChat && !row.hidden) updateUnread(unread+1);
       setTimeout(() => row.classList.add('fading'), 6500);
       setTimeout(() => row.classList.remove('recent', 'fading'), 8500);
     }
@@ -229,30 +295,55 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
 
   chatForm.addEventListener('submit', async event => {
     event.preventDefault();
-    const text = chatInput.value.trim();
+    const sentText = chatInput.value;
+    const text = sentText.trim();
     if (!text || !connected || sendingChat) return;
+    if (limitChatText(text) !== text) {
+      notice(`Введите сообщение длиной до ${CHAT_TEXT_LIMIT} символов`);
+      return;
+    }
     sendingChat = chatSend.disabled = true;
-    const destination = channel;
+    const destination = outgoingChannel();
     try {
       if (text.startsWith('//') && worldEditCommand) {
-        if (await worldEditCommand(text) && chatInput.value.trim()===text) chatInput.value='';
+        if (await worldEditCommand(text)) finishSend(sentText);
         return;
       }
-      const message = await submit('chat', {text, channel:destination}, 'Введите сообщение длиной до 240 символов');
-      if (message && entry(message, true) && chatInput.value.trim() === text) chatInput.value = '';
+      const message = await submit('chat', {text, channel:destination}, `Введите сообщение длиной до ${CHAT_TEXT_LIMIT} символов`);
+      if (message) {
+        entry(message, true);
+        finishSend(sentText);
+      }
     } finally {
       sendingChat = false;
       chatSend.disabled = !connected;
     }
   });
   chatToggle.addEventListener('click', () => open('chat'));
-  channelButton.addEventListener('pointerdown',event=>{
+  const keepComposerFocus = event=>{
     if (document.activeElement===chatInput) event.preventDefault();
-  });
+  };
+  for (const control of [channelButton,globalToggle,draftToggle]) control.addEventListener('pointerdown',keepComposerFocus);
   channelButton.addEventListener('click', () => {
+    if (!globalEnabled) return;
     channel = channel === 'global' ? 'local' : 'global';
     updateChannel();
+    if (keepDraft) updateDraft();
   });
+  globalToggle.addEventListener('click', () => {
+    globalEnabled = !globalEnabled;
+    try { localStorage.setItem(globalChatPreference,globalEnabled ? '1' : '0'); } catch {}
+    updateGlobalChat();
+    if (keepDraft) updateDraft();
+  });
+  draftToggle.addEventListener('click', () => {
+    if (!draftProfile) return;
+    setKeepingDraft(!keepDraft);
+    if (keepDraft) updateDraft();
+    else removeDraft();
+  });
+  chatInput.addEventListener('input',event=>{ if (!event.isComposing) updateDraft(); });
+  chatInput.addEventListener('compositionend',updateDraft);
   clockButton.addEventListener('click', () => open('clock'));
   teleportButton.addEventListener('click', () => open('teleport'));
   warpButton.addEventListener('click', () => open('warps'));
@@ -296,6 +387,16 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   });
 
   return {
+    setChatProfile(uid) {
+      if (draftProfile === uid) return;
+      draftProfile = uid;
+      const record = storedDraft();
+      const text = uid && record?.uid === uid ? limitChatText(record.text) : '';
+      chatInput.value = text;
+      channel = text && record.channel === 'local' ? 'local' : 'global';
+      updateChannel();
+      setKeepingDraft(Boolean(text.trim()));
+    },
     setAdmin(allowed) {
       admin=Boolean(allowed);
       if (!admin&&panel&&panel!=='chat') close(false);
