@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
   <meta name="apple-mobile-web-app-title" content="Lilium Moonlight">
-  <meta name="honeymoon-build" content="22">
+  <meta name="honeymoon-build" content="23">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -78,6 +78,22 @@
       </aside>
     </header>
     <section id="entry" class="entry">
+      <p id="pause-brand">Lilium Moonlight</p>
+      <aside id="pause-side" aria-label="Игровой мир и чат">
+        <div id="pause-world-quick">
+          <button id="pause-clock" type="button" aria-controls="clock-form" aria-expanded="false" disabled>Время · 12:00</button>
+          <label class="pause-setting" for="weather"><span>Погода</span>
+            <select id="weather" disabled>
+              <option value="clear">Ясно</option><option value="cloudy">Облачно</option>
+              <option value="rain">Дождь</option><option value="snow">Снег</option>
+            </select>
+          </label>
+          <div id="pause-clock-slot"></div>
+        </div>
+        <div id="pause-chat-slot">
+          <button id="chat-toggle" type="button" title="Чат · T / Enter" aria-controls="chat" disabled>Чат</button>
+        </div>
+      </aside>
       <div class="panel">
         <div id="entry-start">
           <h1>Lilium Moonlight</h1>
@@ -104,8 +120,8 @@
         </div>
         <section id="pause-menu" aria-labelledby="pause-heading" hidden>
           <header class="pause-header">
-            <button id="pause-back" type="button" aria-label="Назад в меню паузы" title="Назад" hidden>‹</button>
-            <h2 id="pause-heading" tabindex="-1">Пауза</h2>
+            <button id="pause-back" type="button" aria-label="Назад в главное меню" title="Назад" hidden>‹</button>
+            <h2 id="pause-heading" tabindex="-1">Меню</h2>
             <div class="pause-identity">
               <span id="player-name" hidden></span>
               <span id="build-caption">Equestria</span>
@@ -123,7 +139,7 @@
                 <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="J" disabled>Инвентарь</button>
                 <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>
                 <button id="altitude-map" type="button" hidden>Карта</button>
-                <button id="chat-toggle" type="button" title="Чат · T / Enter" disabled>Чат</button>
+                <button id="pause-skin" type="button" disabled>Сменить скин</button>
                 <button id="craft-toggle" type="button" aria-controls="craft-menu" hidden>Изготовить</button>
                 <button id="admin-toggle" type="button" aria-haspopup="dialog" aria-controls="admin-menu" hidden>Администрирование</button>
               </div>
@@ -140,19 +156,12 @@
               <div class="pause-world-admin">
                 <h3>Управление миром</h3>
                 <div class="pause-actions">
-                  <button id="pause-clock" type="button" aria-controls="clock-form" hidden disabled>Игровое время</button>
                   <button id="warp-toggle" type="button" aria-controls="warps-menu" aria-expanded="false" disabled hidden>Варпы</button>
                   <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled hidden>Телепорт</button>
                   <button id="self-mode-toggle" type="button" title="Переключить режим для себя" hidden>Режим: Игровой</button>
                   <button id="mode-toggle" type="button" aria-controls="mode-menu" hidden>Режимы игроков</button>
                   <button id="npc-editor-toggle" type="button" aria-haspopup="dialog" aria-controls="npc-menu" disabled>Редактор NPC</button>
                 </div>
-                <label class="pause-setting" for="weather">Погода
-                  <select id="weather" disabled>
-                    <option value="clear">Ясно</option><option value="cloudy">Облачно</option>
-                    <option value="rain">Дождь</option><option value="snow">Снег</option>
-                  </select>
-                </label>
               </div>
             </div>
             <div id="pause-settings" hidden>
@@ -204,7 +213,7 @@
                       <dt>Строительство</dt><dd>Открыть кнопки установки и копирования блока.</dd>
                       <dt>Панель предметов / ячейка</dt><dd>Развернуть или свернуть панель, выбрать предмет нажатием на ячейку</dd>
                       <dt>Стрелки рядом с чатом</dt><dd>Поменять местами предметы в руках у единорогов и аликорнов.</dd>
-                      <dt>Чат / Пауза / На весь экран</dt><dd>Открыть чат, меню паузы или полноэкранный режим</dd>
+                      <dt>Чат / Меню / На весь экран</dt><dd>Открыть чат, главное меню или полноэкранный режим</dd>
                       <dt>Ещё</dt><dd>Другое действие, ползти, сесть или встать, сменить вид, свободный обзор, наблюдатель, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
                       <dt data-admin-control-hint hidden>Телепорт</dt><dd data-admin-control-hint hidden>Открыть ввод координат из меню «Ещё»</dd>
                     </dl>
@@ -234,7 +243,7 @@
                     <dt>T / Enter</dt><dd>Открыть чат в игре</dd>
                     <dt>Tab</dt><dd>Показать список игроков, пока клавиша нажата</dd>
                     <dt data-admin-control-hint hidden>G / L</dt><dd data-admin-control-hint hidden>Телепорт / настройка игрового времени</dd>
-                    <dt>Esc / Enter</dt><dd>Пауза, закрытие меню или возврат к игре</dd>
+                    <dt>Esc / Enter</dt><dd>Открыть или закрыть меню, вернуться к игре</dd>
                   </dl>
                   <h2>Инвентарь и карта</h2>
                   <dl>
@@ -263,6 +272,7 @@
           </footer>
         </section>
       </div>
+      <aside id="pause-commands" aria-label="Команды управления"></aside>
     </section>
     <span id="selected" class="target-tag"><span id="selected-label"></span><span id="selected-details" hidden></span><small id="selected-action" hidden></small><small id="selected-id" hidden></small></span>
     <span id="auto-move-status" role="status" hidden></span>
@@ -540,7 +550,7 @@
         <button id="touch-more" type="button" class="icon-button touch-control" aria-expanded="false" aria-controls="touch-more-panel" aria-label="Ещё" title="Ещё">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
         </button>
-        <button id="touch-pause" type="button" class="icon-button touch-control" aria-label="Пауза" title="Пауза">
+        <button id="touch-pause" type="button" class="icon-button touch-control" aria-label="Меню" title="Меню">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
       </div>

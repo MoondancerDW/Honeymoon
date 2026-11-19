@@ -4,18 +4,32 @@ export function createPauseMenu(game, touchMode) {
   const start = byId('entry-start');
   const profile = start.querySelector('.profile');
   const play = byId('play');
+  const skin = byId('pony-skin');
+  const quickSkin = byId('pause-skin');
   const entryWorld = byId('entry-world-switch');
   const pauseWorld = byId('pause-world-switch');
   const heading = byId('pause-heading');
+  const homeTitle = heading.textContent;
   const back = byId('pause-back');
   const home = byId('pause-home');
   const content = menu.querySelector('.pause-content');
   const footer = menu.querySelector('.pause-footer');
+  const guide = byId('keys');
+  const guideParent = guide.parentElement;
+  const commands = byId('pause-commands');
+  const wideLayout = matchMedia('(min-width: 65rem) and (min-height: 35rem)');
   const sections = [...home.querySelectorAll('[data-pause-section]')].map(button => ({
     button, panel:byId(button.getAttribute('aria-controls')),
   }));
   const tabs = [...menu.querySelectorAll('[data-pause-tab]')];
-  let activeSection, watchingClose;
+  let activeSection, watchingClose, setSocialDock;
+
+  function layout() {
+    const docked = !menu.hidden && wideLayout.matches;
+    const parent = docked ? commands : guideParent;
+    if (guide.parentElement !== parent) parent.append(guide);
+    setSocialDock?.(docked);
+  }
 
   function selectTab(tab, focus = false) {
     for (const button of tabs) {
@@ -34,7 +48,7 @@ export function createPauseMenu(game, touchMode) {
     home.hidden = Boolean(section);
     back.hidden = !section;
     for (const page of sections) page.panel.hidden = page !== section;
-    heading.textContent = section?.button.textContent ?? 'Пауза';
+    heading.textContent = section?.button.textContent ?? homeTitle;
     content.scrollTop = 0;
     if (focus) {
       const target = section ? heading : previous?.button ?? play;
@@ -72,6 +86,7 @@ export function createPauseMenu(game, touchMode) {
       menu.hidden = false;
       selectTab(tabs[0]);
       openSection(null,false);
+      layout();
       if (!childOpen()) heading.focus({preventScroll:true});
       watchClose();
     } else {
@@ -81,13 +96,23 @@ export function createPauseMenu(game, touchMode) {
       start.insertBefore(entryWorld,byId('entry-help'));
       menu.hidden = true;
       start.hidden = false;
+      layout();
       watchingClose?.destroy();
       watchingClose = undefined;
     }
   }
 
   back.addEventListener('click', () => openSection(null));
+  wideLayout.addEventListener('change',layout);
   for (const page of sections) page.button.addEventListener('click', () => openSection(page));
+  quickSkin.addEventListener('click', () => {
+    if (skin.disabled) return;
+    openSection(sections.find(page => page.panel.id === 'pause-profile'),false);
+    skin.click();
+  });
+  const syncSkinButton = () => { quickSkin.disabled = skin.disabled; };
+  new MutationObserver(syncSkinButton).observe(skin,{attributeFilter:['disabled']});
+  syncSkinButton();
   for (const tab of tabs) tab.addEventListener('click', () => selectTab(tab));
   menu.querySelector('.pause-tabs').addEventListener('keydown', event => {
     const index = tabs.indexOf(event.target);
@@ -100,7 +125,7 @@ export function createPauseMenu(game, touchMode) {
   });
 
   document.addEventListener('keydown', event => {
-    if (event.code !== 'Escape' || menu.hidden || childOpen() ||
+    if (event.code !== 'Escape' || menu.hidden || childOpen() || event.target?.closest?.('#pause-chat-slot > #chat') ||
         (!activeSection && !game.classList.contains('touch'))) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -110,7 +135,7 @@ export function createPauseMenu(game, touchMode) {
   const clock = byId('clock-toggle');
   const pauseClock = byId('pause-clock');
   const updateClock = () => {
-    pauseClock.hidden = pauseClock.disabled = clock.disabled;
+    pauseClock.disabled = clock.disabled;
     const label = `Игровое время · ${clock.textContent}`;
     if (pauseClock.textContent !== label) pauseClock.textContent = label;
   };
@@ -135,6 +160,7 @@ export function createPauseMenu(game, touchMode) {
 
   return {
     show,
+    setSocialDock(handler) { setSocialDock = handler; layout(); },
     focusProfile() {
       if (menu.hidden) return;
       openSection(sections.find(page => page.button.dataset.pauseSection === 'profile'),false);

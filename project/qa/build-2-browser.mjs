@@ -7,6 +7,7 @@ import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
 import {stackRevision} from '../world/item-text.mjs';
 import {playerBody} from '../world/player-body.mjs';
+import {tickFromTime} from '../world/world-time.mjs';
 
 const [outputArg='work/build-2-qa', test='mobile']=process.argv.slice(2);
 const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 2);
@@ -449,6 +450,12 @@ try {
       await setGuestNightVision(false);
       await guest.locator('#touch-pause').tap();
       assert.equal(await guest.locator('#pause-home #admin-toggle').isVisible(),false);
+      const guestClock=guest.locator('#pause-world-quick #pause-clock');
+      const guestWeather=guest.locator('#pause-world-quick #weather');
+      assert.ok(await guestClock.isVisible());
+      assert.ok(await guestClock.isDisabled());
+      assert.ok(await guestWeather.isVisible());
+      assert.ok(await guestWeather.isDisabled());
       await guest.locator('[data-pause-section="settings"]').tap();
       const [personal]=await Promise.all([
         guest.waitForResponse(response=>new URL(response.url()).pathname==='/api/night-vision'),
@@ -1056,6 +1063,10 @@ try {
   } else if (pauseQa) {
     await skipPreload();
     await start();
+    const paused=()=>page.waitForFunction(()=>document.getElementById('game').classList.contains('paused') &&
+      !document.pointerLockElement && getComputedStyle(document.getElementById('entry')).visibility==='visible');
+    const requestFor=route=>page.waitForResponse(response=>new URL(response.url()).pathname===`/api/${route}` &&
+      response.request().method()==='POST');
     for (const [width,height] of mobileQa?[[390,730],[800,370],[667,300]]:[[1200,750]]) {
       await page.setViewportSize({width,height});
       if (mobileQa) await page.locator('#touch-pause').tap();
@@ -1065,12 +1076,72 @@ try {
       }
       const resume=page.locator('#play');
       await resume.waitFor({state:'visible'});
+      assert.equal(await page.locator('#pause-heading').textContent(),'Меню');
       const resumeBox=await resume.boundingBox();
       assert.ok(resumeBox.x>=0&&resumeBox.y>=0&&resumeBox.y+resumeBox.height<=height);
       const adminEntry=page.locator('#pause-home #admin-toggle');
       assert.ok(await adminEntry.isVisible());
       assert.ok(await adminEntry.evaluate(button=>button.scrollWidth<=button.clientWidth));
+      const brand=page.locator('#pause-brand');
+      assert.ok(await brand.isVisible());
+      assert.equal(await brand.textContent(),'Lilium Moonlight');
+      const clock=page.locator('#pause-world-quick #pause-clock');
+      const weather=page.locator('#pause-world-quick #weather');
+      assert.ok(await clock.isVisible());
+      assert.ok(await weather.isVisible());
+      assert.ok(await clock.isEnabled());
+      assert.ok(await weather.isEnabled());
+      assert.equal(await page.locator('#pause-home #chat-toggle').count(),0);
+      assert.ok(await visible('#pause-home #pause-skin'));
+      if (mobileQa) {
+        assert.equal(await page.locator('#pause-controls #keys').count(),1);
+        await page.locator('#pause-chat-slot #chat-toggle').tap();
+        await page.locator('#game > #chat.expanded #chat-input').waitFor({state:'visible'});
+        await page.locator('#chat-close').tap();
+        await paused();
+      } else {
+        const main=await page.locator('#pause-menu').boundingBox();
+        const title=await brand.boundingBox();
+        const world=await page.locator('#pause-world-quick').boundingBox();
+        const sideGuide=page.locator('#pause-commands > #keys');
+        const sideGuideBox=await sideGuide.boundingBox();
+        assert.ok(title.y+title.height<=main.y && Math.abs(title.x+title.width/2-main.x-main.width/2)<1);
+        assert.ok(world.x+world.width<=main.x && sideGuideBox.x>=main.x+main.width);
+        assert.equal(await sideGuide.evaluate(panel=>panel.open),false);
+        const dockedChat=page.locator('#pause-chat-slot > #chat.docked');
+        const input=dockedChat.locator('#chat-input');
+        assert.equal(await dockedChat.locator('#chat-close').isVisible(),false);
+        const message='Сообщение из меню паузы';
+        await input.fill(message);
+        const [posted]=await Promise.all([requestFor('chat'),input.press('Enter')]);
+        assert.equal(posted.status(),200,await posted.text());
+        await dockedChat.locator('#chat-log').getByText(message,{exact:false}).waitFor();
+        await paused();
+        assert.equal(await input.inputValue(),'');
+      }
       await shot('pause-home-'+width);
+      if (!mobileQa) {
+        await clock.click();
+        const editor=page.locator('#pause-clock-slot > #clock-form.docked');
+        await editor.waitFor({state:'visible'});
+        assert.ok(await resume.isVisible());
+        await editor.locator('#clock-input').fill('18:30');
+        await editor.locator('#clock-frozen').check();
+        const [applied]=await Promise.all([requestFor('time'),editor.locator('button[type=submit]').click()]);
+        assert.equal(applied.status(),200,await applied.text());
+        const time=await applied.json();
+        assert.equal(time.tick,tickFromTime('18:30'));
+        assert.equal(time.frozen,true);
+        await page.waitForFunction(()=>document.getElementById('pause-clock').textContent.includes('18:30'));
+        await shot('pause-clock-'+width);
+        await editor.locator('#clock-close').click();
+        await editor.waitFor({state:'hidden'});
+        await paused();
+        const [updated]=await Promise.all([requestFor('weather'),weather.selectOption('rain')]);
+        assert.equal(updated.status(),200,await updated.text());
+        assert.equal((await updated.json()).mode,'rain');
+        await paused();
+      }
       if (mobileQa) await pauseSection('settings');
       else await page.locator('[data-pause-section="settings"]').press('Enter');
       const cacheUsage=page.locator('#game-cache-usage');
@@ -1097,9 +1168,47 @@ try {
       if (mobileQa) await click('#pause-back');
       else await page.keyboard.press('Escape');
       await page.locator('[data-pause-section="settings"]').waitFor({state:'visible'});
+      let skinSaved;
+      if (!mobileQa) {
+        const [chooser]=await Promise.all([page.waitForEvent('filechooser'),click('#pause-skin')]);
+        assert.equal(await chooser.element().getAttribute('id'),'pony-skin');
+        await page.locator('#pause-profile').waitFor({state:'visible'});
+        await paused();
+        const png=await page.evaluate(()=>{
+          const canvas=document.createElement('canvas');
+          canvas.width=64;
+          canvas.height=32;
+          const context=canvas.getContext('2d');
+          context.fillStyle='#c98c6e';
+          context.fillRect(0,0,64,32);
+          return canvas.toDataURL('image/png').split(',')[1];
+        });
+        const filename='pause-skin.png';
+        await chooser.setFiles({name:filename,mimeType:'image/png',buffer:Buffer.from(png,'base64')});
+        await page.waitForFunction(name=>document.getElementById('skin-status').textContent.includes(name),filename);
+        await paused();
+        await click('#pause-back');
+        await pauseSection('profile');
+        assert.equal(await page.locator('#skin-status').textContent(),filename);
+        await click('#pause-back');
+        await clock.click();
+        await page.locator('#pause-clock-slot > #clock-form.docked').waitFor({state:'visible'});
+        skinSaved=requestFor('profile');
+      }
       await resume.click();
       await page.waitForFunction(()=>document.getElementById('game').classList.contains('playing'));
-      result.checks.push({width,height,resumeVisible:true,graphicsAudioAndControls:true});
+      if (skinSaved) {
+        const saved=await skinSaved;
+        assert.equal(saved.status(),200,await saved.text());
+        assert.match((await saved.json()).skin,/^\/skins\/[a-f0-9]+\.png$/);
+        assert.equal(await visible('#clock-form'),false);
+        await page.keyboard.press('KeyT');
+        await page.locator('#game > #chat.expanded').waitFor({state:'visible'});
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+      }
+      result.checks.push({width,height,resumeVisible:true,graphicsAudioAndControls:true,worldControls:true,
+        ...(mobileQa ? {responsiveChat:true} : {dockedChat:true,inlineClock:true,weatherApplied:true,quickSkinSaved:true})});
     }
   } else if (controlsQa) {
     await start();

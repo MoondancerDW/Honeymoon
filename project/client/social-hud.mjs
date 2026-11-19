@@ -14,16 +14,21 @@ const historyLimit = 100;
 
 export function createSocialHud({post, notice, pause, resume, teleport, loadWarps, placeWarp, worldEditCommand, weatherChanged}) {
   const byId = id => document.getElementById(id);
+  const game = byId('game');
   const chat = byId('chat');
   const log = byId('chat-log');
+  const chatToggle = byId('chat-toggle');
   const touchChat = byId('touch-chat'), unreadBadge = byId('chat-unread');
   const chatHeader = byId('chat-header');
+  const chatClose = byId('chat-close');
   const seen = new Set();
   const channelButton = byId('chat-channel');
   const chatForm = byId('chat-form');
   const chatInput = byId('chat-input');
+  const chatSend = byId('chat-send');
   const clockButton = byId('clock-toggle');
   const clockForm = byId('clock-form');
+  const pauseClock = byId('pause-clock');
   const clockInput = byId('clock-input');
   const frozen = byId('clock-frozen');
   const dynamic = byId('clock-dynamic-weather');
@@ -36,12 +41,19 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   const coordinateInputs = ['x','y','z'].map(axis => [axis, byId(`teleport-${axis}`)]);
   const online = byId('online');
   const names = byId('online-names');
+  const chatSlot = byId('pause-chat-slot'), clockSlot = byId('pause-clock-slot');
+  const chatHome = document.createComment('gameplay chat');
+  const clockHome = document.createComment('gameplay clock');
+  chat.before(chatHome);
+  clockForm.before(clockHome);
   let panel, onlineVisible = false, connected = false, players = [], clockText, writingTime = false;
+  let pauseDock = false, openedFromPause = false, sendingChat = false;
   let peers = [];
   let channel = 'global';
   let unread = 0;
   let admin=false;
   let dynamicWeather=false;
+  chatInput.disabled = chatSend.disabled = true;
 
   function updateUnread(value) {
     unread=value;
@@ -60,9 +72,36 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   }
   updateChannel();
 
+  function placePanel(element, slot, home, docked) {
+    if (docked) {
+      if (element.parentNode !== slot) slot.append(element);
+    } else if (home.nextSibling !== element) home.after(element);
+    element.classList.toggle('docked', docked);
+  }
+
+  function renderPanels() {
+    const wasDocked = chat.classList.contains('docked');
+    const dockClock = pauseDock && openedFromPause && panel === 'clock';
+    const dockChat = pauseDock && (!panel || dockClock);
+    const showChat = dockChat || panel === 'chat';
+    if (wasDocked && !dockChat && document.activeElement === chatInput) chatInput.blur();
+    placePanel(chat, chatSlot, chatHome, dockChat);
+    chat.classList.toggle('expanded', panel === 'chat');
+    chatHeader.hidden = chatForm.hidden = !showChat;
+    chatClose.hidden = dockChat;
+    if (dockChat && !wasDocked) {
+      updateUnread(0);
+      log.scrollTop = log.scrollHeight;
+    }
+    placePanel(clockForm, clockSlot, clockHome, dockClock);
+    clockForm.hidden = panel !== 'clock';
+    teleportForm.hidden = panel !== 'teleport';
+  }
+
   function entry({id, kind, cause, nickname, newNickname, text, channel:target = 'global'}, recent) {
     if (seen.has(id)) return;
-    const follow = panel !== 'chat' || log.scrollHeight - log.clientHeight - log.scrollTop < 8;
+    const readingChat = panel === 'chat' || chat.classList.contains('docked');
+    const follow = !readingChat || log.scrollHeight - log.clientHeight - log.scrollTop < 8;
     seen.add(id);
     const row = document.createElement('li');
     row.dataset.messageId = id;
@@ -84,7 +123,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     }
     if (recent) {
       row.classList.add('recent');
-      if (kind==='message' && panel!=='chat') updateUnread(unread+1);
+      if (kind==='message' && !readingChat) updateUnread(unread+1);
       setTimeout(() => row.classList.add('fading'), 6500);
       setTimeout(() => row.classList.remove('recent', 'fading'), 8500);
     }
@@ -101,15 +140,17 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
 
   function close(continuePlaying = true) {
     if (!panel) return;
-    const wasWarpMenu = panel === 'warps';
+    const previous = panel, returnToPause = openedFromPause;
     panel = null;
-    chat.classList.remove('expanded');
-    chatHeader.hidden = true;
-    chatForm.hidden = clockForm.hidden = teleportForm.hidden = true;
-    if (wasWarpMenu) {
+    openedFromPause = false;
+    renderPanels();
+    if (previous === 'warps') {
       warpMenu.show(false);
       warpButton.setAttribute('aria-expanded','false');
       warpButton.focus({preventScroll:true});
+    } else if (continuePlaying && returnToPause) {
+      const control = {chat:chatToggle, clock:pauseClock, teleport:teleportButton}[previous];
+      (control?.getClientRects().length ? control : byId('pause-heading')).focus({preventScroll:true});
     } else if (continuePlaying) resume();
   }
 
@@ -117,20 +158,21 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     if (next!=='chat'&&!admin) return;
     if (!connected) return;
     if (panel === next) return close();
+    if (!panel && next === 'chat' && pauseDock) {
+      chatInput.focus({preventScroll:true});
+      return;
+    }
+    openedFromPause = game.classList.contains('paused');
     pause();
     panel = next;
-    chat.classList.toggle('expanded', panel === 'chat');
-    chatHeader.hidden = panel !== 'chat';
-    chatForm.hidden = panel !== 'chat';
-    clockForm.hidden = panel !== 'clock';
-    teleportForm.hidden = panel !== 'teleport';
+    renderPanels();
     warpButton.setAttribute('aria-expanded',String(panel === 'warps'));
     warpMenu.show(panel === 'warps');
     if (panel === 'warps') return;
     if (panel === 'clock') clockInput.value = clockText;
     if (panel === 'chat') {
       updateUnread(0);
-      if (byId('game').classList.contains('touch')) log.focus({preventScroll:true});
+      if (game.classList.contains('touch')) log.focus({preventScroll:true});
       else chatInput.focus();
       log.scrollTop = log.scrollHeight;
     } else {
@@ -155,7 +197,8 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       item.textContent = nick;
       return item;
     }));
-    byId('chat-toggle').disabled = !connected;
+    chatToggle.disabled = chatInput.disabled = !connected;
+    chatSend.disabled = sendingChat || !connected;
     clockButton.disabled=teleportButton.disabled=warpButton.disabled=!connected||!admin;
   }
 
@@ -172,25 +215,25 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   chatForm.addEventListener('submit', async event => {
     event.preventDefault();
     const text = chatInput.value.trim();
-    if (!text) return;
-    const send = byId('chat-send');
-    if (send.disabled) return;
-    send.disabled = true;
+    if (!text || !connected || sendingChat) return;
+    sendingChat = chatSend.disabled = true;
     const destination = channel;
-    if (text.startsWith('//') && worldEditCommand) {
-      try {
+    try {
+      if (text.startsWith('//') && worldEditCommand) {
         if (await worldEditCommand(text) && chatInput.value.trim()===text) chatInput.value='';
-      } finally {send.disabled=false;}
-      return;
-    }
-    const message = await submit('chat', {text, channel:destination}, 'Введите сообщение длиной до 240 символов');
-    send.disabled = false;
-    if (message) {
-      entry(message, true);
-      if (chatInput.value.trim() === text) chatInput.value = '';
+        return;
+      }
+      const message = await submit('chat', {text, channel:destination}, 'Введите сообщение длиной до 240 символов');
+      if (message) {
+        entry(message, true);
+        if (chatInput.value.trim() === text) chatInput.value = '';
+      }
+    } finally {
+      sendingChat = false;
+      chatSend.disabled = !connected;
     }
   });
-  byId('chat-toggle').addEventListener('click', () => open('chat'));
+  chatToggle.addEventListener('click', () => open('chat'));
   channelButton.addEventListener('pointerdown',event=>{
     if (document.activeElement===chatInput) event.preventDefault();
   });
@@ -201,7 +244,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   clockButton.addEventListener('click', () => open('clock'));
   teleportButton.addEventListener('click', () => open('teleport'));
   warpButton.addEventListener('click', () => open('warps'));
-  byId('chat-close').addEventListener('click', () => close());
+  chatClose.addEventListener('click', () => close());
   byId('clock-close').addEventListener('click', () => close());
   byId('teleport-close').addEventListener('click', () => close());
   dynamic.addEventListener('change',async()=>{
@@ -251,7 +294,17 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     isOpen: () => !!panel,
     isChatOpen: () => panel === 'chat',
     close,
+    setPauseDock(active) {
+      if (pauseDock === active) return;
+      pauseDock = active;
+      if ((active && panel === 'chat' && openedFromPause) || (!active && clockForm.classList.contains('docked'))) close(false);
+      else renderPanels();
+    },
     keydown(event, playing) {
+      if (chat.classList.contains('docked') && chat.contains(event.target)) {
+        if (event.code === 'Escape') { event.preventDefault(); event.target.blur?.(); }
+        return true;
+      }
       if (panel) {
         if (event.code === 'Escape') { event.preventDefault(); close(); }
         return true;

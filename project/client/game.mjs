@@ -226,6 +226,7 @@ function resume() {
 const social = createSocialHud({post, notice, pause, resume, teleport, placeWarp,weatherChanged:updateWeather,
   worldEditCommand:command=>worldEdit.command(command),
   loadWarps:()=>json('/api/warps',{signal:AbortSignal.timeout(5000)})});
+pauseMenu.setSocialDock(social.setPauseDock);
 const inventoryStackAt=slot=>slot===offhandSlot ? inventory.offhand :
   slot<36 ? inventory.slots[slot] : inventory.equipment?.[slot-36];
 const holdingNpcWand=()=>isNpcEditorWand(inventoryStackAt(inventory.selected)) ||
@@ -294,14 +295,20 @@ const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open |
   itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen() || modeUi.isOpen() || adminUi.isOpen() ||
   soloDownloadUi.isOpen() || switchingSoloWorld;
 
+let worldAdmin = false;
+function setWorldAdmin(allowed) {
+  worldAdmin = Boolean(allowed);
+  element('weather').disabled = !worldAdmin;
+  social.setAdmin(worldAdmin);
+}
+
 function updateGameMode(next) {
   creativeToggle.disabled=spectator||!creativeAvailable||!modeUi.creative;
   creativeToggle.hidden=modeUi.active&&!modeUi.creative;
   element('touch-catalog').hidden=modeUi.active&&!modeUi.creative;
   element('touch-copy').hidden=modeUi.active&&!modeUi.creative;
   element('touch-spectator').hidden=!modeUi.creative;
-  element('weather').disabled=!next.admin;
-  social.setAdmin(next.admin);
+  setWorldAdmin(next.admin);
   game.classList.toggle('dead',Boolean(next.death));
   if (!view) return;
   element('touch-flight').hidden=!canFly();
@@ -865,7 +872,6 @@ function enterWorld() {
   creativeToggle.disabled = spectator || !creativeAvailable || !modeUi.creative;
   inventoryToggle.disabled = spectator;
   npcUi.setAvailable(npcEditorAvailable);
-  element('weather').disabled = modeUi.active&&!modeUi.admin;
 }
 
 function setPlaying(active) {
@@ -1986,7 +1992,7 @@ function bindControls() {
   };
   const controls=element('keys');
   controls.addEventListener('toggle',()=>{
-    if (controls.open) controls.querySelector('summary').scrollIntoView({block:'start'});
+    if (controls.open && !controls.closest('#pause-commands')) controls.querySelector('summary').scrollIntoView({block:'start'});
   });
   const altitudeMap=createAltitudeMap({
     game,openButton:element('altitude-map'),backButton:element('altitude-map-back'),
@@ -2042,6 +2048,7 @@ function bindControls() {
         profile.setSaving(false);
       });
     }
+    social.close(false);
     audio.enable();
     if (touchMode) setPlaying(true);
     else {
@@ -2070,7 +2077,7 @@ function bindControls() {
     }
   });
   document.addEventListener('keydown', event => {
-    if (event.code === 'Enter' && event.target?.closest?.('#pause-menu :is(button,input,select,summary)')) return;
+    if (event.code === 'Enter' && entered && event.target?.closest?.('#entry :is(button,input,select,summary)')) return;
     const editable=event.target?.isContentEditable || event.target?.closest?.('input, textarea, select');
     if (entered && !modeUi.death && !editable && !event.defaultPrevented && !event.ctrlKey && !event.altKey && !event.metaKey) {
       const movementHotkeys=teleportLoading.hidden && (!menuOpen() || social.isChatOpen());
@@ -2315,7 +2322,7 @@ function bindControls() {
       notice('Не удалось изменить погоду');
     } finally {
       weather.value = view.weather;
-      weather.disabled = modeUi.active&&!modeUi.admin;
+      weather.disabled = !worldAdmin;
     }
   });
   const masterAudio=element('audio-master'), muteAudio=element('audio-mute-toggle');
@@ -2588,7 +2595,7 @@ async function start() {
   const session = {body:sessionBody};
   adminUi.setAccess(sessionBody.access);
   modeUi.setSelf(sessionBody.access?.uid??sessionBody.profile?.id);
-  social.setAdmin(sessionBody.access?.role==='admin');
+  setWorldAdmin(sessionBody.access?.role==='admin');
   if (sessionBody.access?.role==='admin') npcUi.setAccess(true);
   const manifest = await json('/generated/world/world.json');
   const lowDevice=localStorage.getItem(lowDevicePreference)==='1';
