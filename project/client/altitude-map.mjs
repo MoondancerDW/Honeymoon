@@ -45,7 +45,7 @@ function control(parent,label,text,action) {
   return button;
 }
 
-export function createAltitudeMap({game,openButton,backButton,manifest,palette,localMarker,remoteMarkers,pause}) {
+export function createAltitudeMap({game,openButton,backButton,manifest,palette,localMarker,remoteMarkers,pause,persistentTerrain}) {
   const hasOverview=manifest.vista?.hash===overview.vistaHash;
   const layers=layersFor(manifest);
   if (!hasOverview && !layers.length) return;
@@ -229,7 +229,7 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
       }
       failures.delete(id);
       inflight.add(id);
-      worker.postMessage({id,url:`/generated/${layer.name}/${layer.hash}/${key}.bin`,vista:layer.name==='vista'});
+      worker.postMessage({id,url:`/generated/${layer.name}/${layer.hash}/${key}.bin`,vista:layer.name==='vista',persistentTerrain});
       if (inflight.size>=maxFetch) break;
     }
     clearTimeout(retryTimer);

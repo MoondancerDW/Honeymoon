@@ -108,7 +108,8 @@ function quadGeometry(quads, light, shade) {
 }
 
 export class Display {
-  constructor(container, world, dayTick = 6000, {mobile=false,lowDevice=false,terrainNetwork}={}) {
+  constructor(container, world, dayTick = 6000, {mobile=false,lowDevice=false,terrainNetwork,persistentTerrain=false}={}) {
+    this.persistentTerrain = persistentTerrain;
     this.terrainNetwork = terrainNetwork;
     this.world = world;
     this.mobile = mobile;

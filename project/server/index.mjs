@@ -87,12 +87,13 @@ function serveWorldJson() {
   const pending = new Map();
   let bytes = 0;
 
-  async function loadEntry(key, load) {
+  async function loadEntry(key, load, revalidate) {
     const data = load();
     if (!data) throw new RequestError(404, 'chunk_missing');
     const identity = Buffer.isBuffer(data) ? data : Buffer.from(JSON.stringify(data));
     const compressed = await gzipWorld(identity, {level:1});
-    const entry = {identity, compressed, size:identity.length+compressed.length};
+    const etag = revalidate ? `W/"${createHash('sha256').update(identity).digest('hex')}"` : undefined;
+    const entry = {identity, compressed, etag, size:identity.length+compressed.length};
     if (entry.size <= MAX_WORLD_CACHE_BYTES) {
       while (entries.size >= MAX_WORLD_RESPONSES || bytes + entry.size > MAX_WORLD_CACHE_BYTES) {
         const [oldKey, oldest] = entries.entries().next().value;
@@ -111,18 +112,25 @@ function serveWorldJson() {
       entries.delete(key);
       entries.set(key, entry);
     } else {
-      if (!pending.has(key)) pending.set(key,loadEntry(key,load).finally(()=>pending.delete(key)));
+      if (!pending.has(key)) pending.set(key,loadEntry(key,load,!cacheControl&&!key.startsWith('chunk:')).finally(()=>pending.delete(key)));
       entry = await pending.get(key);
     }
     if (response.destroyed) return;
     const compressed = acceptsGzip(request.headers['accept-encoding']);
     const body = compressed ? entry.compressed : entry.identity;
     const authenticated=response.getHeader('Vary')==='Cookie';
-    response.writeHead(200, {
-      'Content-Type': MIME['.json'], 'Content-Length': body.length, Vary:authenticated?'Cookie, Accept-Encoding':'Accept-Encoding',
+    const headers = {
+      'Content-Type': MIME['.json'], Vary:authenticated?'Cookie, Accept-Encoding':'Accept-Encoding',
       'Cache-Control':cacheControl ?? (authenticated?'private, no-cache':'no-cache'),
+      ...(entry.etag && {ETag:entry.etag}),
       ...(compressed && { 'Content-Encoding': 'gzip' }),
-    });
+    };
+    if (entry.etag && matchesEtag(request,entry.etag)) {
+      response.writeHead(304,headers);
+      response.end();
+      return;
+    }
+    response.writeHead(200, {...headers,'Content-Length':body.length});
     response.end(request.method === 'HEAD' ? undefined : body);
   };
 }
@@ -192,12 +200,28 @@ function requireSameOrigin(request, secure, allowedOrigin) {
   }
 }
 
+function matchesEtag(request,etag) {
+  return request.headers['if-none-match']?.split(',').some(value => {
+    const candidate=value.trim();
+    return candidate==='*' || candidate===etag || candidate===etag.slice(2);
+  });
+}
+
 async function serveFile(request, response, path) {
   const type = MIME[extname(path)];
   if (!type) return false;
-  const stat = statSync(path, { throwIfNoEntry: false });
+  const stat = statSync(path, { bigint:true, throwIfNoEntry:false });
   if (!stat?.isFile()) return false;
-  response.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size, 'Cache-Control': 'no-cache' });
+  const identity = [resolve(path), stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join('\0');
+  const etag = `W/"${createHash('sha256').update(identity).digest('hex')}"`;
+  const headers = { 'Content-Type':type, ETag:etag,
+    'Cache-Control':response.getHeader('Vary')==='Cookie' ? 'private, no-cache' : 'no-cache' };
+  if (matchesEtag(request,etag)) {
+    response.writeHead(304, headers);
+    response.end();
+    return true;
+  }
+  response.writeHead(200, { ...headers, 'Content-Length':stat.size.toString() });
   if (request.method === 'HEAD') response.end();
   else await pipeline(createReadStream(path), response);
   return true;
@@ -890,7 +914,13 @@ export function createHoneymoonServer({
         }));
         return json(response, 200, result);
       }
-      if (path === '/api/world' && method === 'GET') return json(response, 200, game.snapshot(player));
+      if (path === '/api/world' && method === 'GET') {
+        const cursor = url.searchParams.get('since');
+        const delta = url.searchParams.get('delta') === '1' ? {
+          epoch:url.searchParams.get('epoch'), since:/^\d+$/.test(cursor ?? '') ? Number(cursor) : undefined,
+        } : undefined;
+        return json(response, 200, game.snapshot(player, delta));
+      }
       if (path === '/api/flight' && method === 'POST') {
         const flight=game.setFlight(player,credential.deviceId,await readMovementInput());
         return json(response,200,{flight});
@@ -1019,8 +1049,10 @@ export function createHoneymoonServer({
           sendStudyHeartbeat(stream);
         }
         const cursor = request.headers['last-event-id'] ?? url.searchParams.get('since');
+        const epoch = url.searchParams.get('epoch');
         const revision = game.worldRevision();
-        const kind = cursor !== null && Number(cursor) !== revision ? 'reset' : 'ready';
+        const stale = (cursor !== null && Number(cursor) !== revision) || (epoch !== null && epoch !== game.worldEpoch);
+        const kind = stale ? 'reset' : 'ready';
         writeEvent(response, kind, { worldRevision: revision, contentHash: game.contentHash }, revision);
         if (stream.movementPage) {
           const movement=game.movementChannel.state(player,credential.deviceId,stream.movementPage);

@@ -1,6 +1,6 @@
 import {Display} from './display.mjs';
 import {Movement, EYE, movementSpeed, overlapsPlacement, pick, pickItemFrame, pickVehicle} from './movement.mjs';
-import {World, chunkKey, json} from './world-data.mjs';
+import {World, chunkKey, json,readJson} from './world-data.mjs';
 import {WorldAudio,audioDefaults} from './audio.mjs';
 import {bindAltitudeMusic} from './altitude-music-settings.mjs';
 import {createAltitudeMap} from './altitude-map.mjs';
@@ -43,6 +43,8 @@ import {createConnectionStatus} from './connection-status.mjs';
 import {connectionFailure,createConnectionReport} from './connection-report.mjs';
 import {createPlayerDiagnostics} from './player-diagnostics.mjs';
 import {createTerrainNetwork} from './terrain-network.mjs';
+import {pruneTerrainCache,readTerrain} from './terrain-cache.mjs';
+import {createWorldCheckpoint} from './world-checkpoint.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -80,6 +82,7 @@ const heading = {yaw: 0, pitch: -.045};
 let orbitHeading = null, orbitReturn = 0;
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
+let worldCheckpoint;
 let heldPart = null, heldPonyPart, partRotation = 0, placement = null, placementKey = '';
 let heldSofa = null, sofaTurns = 0;
 let chiseling = false, chiselMaterial = null, chiselSize = 1;
@@ -584,8 +587,8 @@ function changes(list = [], revision = 0, frames) {
 }
 
 async function refresh() {
-  const snapshot = await json('/api/world');
-  if (snapshot.contentHash && snapshot.contentHash !== world.manifest.contentHash) {
+  const snapshot = worldCheckpoint ? await worldCheckpoint.refresh() : await json('/api/world');
+  if (snapshot.restart || snapshot.contentHash && snapshot.contentHash !== world.manifest.contentHash) {
     location.reload();
     return;
   }
@@ -598,8 +601,9 @@ function stream() {
   clearTimeout(feedRetry);
   feed?.close();
   const page=diagnostics.page();
+  const epoch=worldCheckpoint?.epoch();
   const source=feed=new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1&npcs=1&movement='+movementSync.page+
-    (page?'&diag='+page:''));
+    (page?'&diag='+page:'')+(epoch?'&epoch='+encodeURIComponent(epoch):''));
   source.addEventListener('movement-ack',event=>movementSync.received(JSON.parse(event.data).movement));
   if (page) source.addEventListener('diagnostics-heartbeat',event=>{
     if (feed===source) diagnostics.heartbeat(JSON.parse(event.data));
@@ -1706,6 +1710,7 @@ function bindControls() {
   createAltitudeMap({
     game,openButton:element('altitude-map'),backButton:element('altitude-map-back'),
     manifest:world.manifest,palette:view.terrainTextures?.average?.image,
+    persistentTerrain:Boolean(worldCheckpoint),
     localMarker:()=>({x:position.x,z:position.z,name:profile.confirmed.nickname}),
     remoteMarkers:()=>view.players.mapMarkers(),
     pause:()=>{if (playing) setPlaying(false);},
@@ -2091,7 +2096,12 @@ async function addChunk([x, z], visualOnly = false, isNeeded, signal, highOnly=f
   const version = world.manifest.chunkCacheVersion;
   const directory = version ? `/generated/world/chunks/${version}` : '/generated/world/chunks';
   metrics.lastChunk=[x,z,highOnly];
-  const chunk = await json(`${directory}/${x}.${z}.json${highOnly ? '?height=upper' : ''}`, {signal,priority:urgent?'high':'low'});
+  const url=`${directory}/${x}.${z}.json${highOnly ? '?height=upper' : ''}`;
+  const chunk = await readTerrain(url,{signal,priority:urgent?'high':'low'},Boolean(worldCheckpoint),async response=>{
+    const data=await readJson(url,response);
+    if (data?.x!==x || data.z!==z || !Array.isArray(data.sections)) throw new Error('Invalid terrain chunk');
+    return data;
+  });
   if (isNeeded && !isNeeded()) return;
   if (highOnly && world.chunks.has(chunkKey(x,z))) return;
   view.addChunk(world.addChunk(chunk, visualOnly));
@@ -2266,6 +2276,10 @@ async function start() {
   social.setAdmin(sessionBody.access?.role==='admin');
   if (sessionBody.access?.role==='admin') npcUi.setAccess(true);
   const manifest = await json('/generated/world/world.json');
+  if (!sessionBody.access?.singlePlayer && manifest.chunkCacheVersion) {
+    worldCheckpoint=createWorldCheckpoint(manifest.chunkCacheVersion);
+    void pruneTerrainCache();
+  }
   creativeAvailable = session.body.creative;
   profile.initialize(session.body.profile);
   if (session.body.sounds) void audio.load();
@@ -2283,7 +2297,7 @@ async function start() {
   movementSync.reset(position,movement.stance);
   crawlRequested = movement.stance === 'crawl';
   view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
-    lowDevice:localStorage.getItem(lowDevicePreference)==='1',terrainNetwork});
+    lowDevice:localStorage.getItem(lowDevicePreference)==='1',terrainNetwork,persistentTerrain:Boolean(worldCheckpoint)});
   modeUi.update(session.body.gameMode);
   view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);

@@ -27,7 +27,10 @@ export function decodeIndices(encoded) {
 }
 
 export async function json(url, init) {
-  const response = await fetch(url, init);
+  return readJson(url,await fetch(url,init));
+}
+
+export function readJson(url,response) {
   if (!response.ok) {
     const error=new Error(url + ' — ' + response.status);
     error.status=response.status;

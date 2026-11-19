@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { displayObject, cellAddress } from './base.mjs';
 import { RequestError } from './errors.mjs';
@@ -294,6 +295,8 @@ export function createGame(base, store, geometry, {
   }).map(({x,y,z}) => [cellAddress(x,y,z),[x,y,z]]));
 
   const snapshotCells = () => mechanics.flatMap(module => module.snapshot?.() ?? []);
+  // A recovered save may have a different history, even at the same revision.
+  const snapshotEpoch = randomUUID();
   let mechanicCells = new Map();
   function refreshMechanicCells() {
     mechanicCells = new Map(snapshotCells().map(cell => [cellAddress(cell.x, cell.y, cell.z), cell]));
@@ -1943,6 +1946,7 @@ export function createGame(base, store, geometry, {
     },
     conflicts,
     contentHash: base.hash,
+    worldEpoch: snapshotEpoch,
     worldRevision: store.worldRevision,
     session(playerId) {
       initializePosition(playerId);
@@ -1957,11 +1961,17 @@ export function createGame(base, store, geometry, {
         inventory:inventory.read(playerId),
       };
     },
-    snapshot(player) {
+    snapshot(player, delta) {
+      const worldRevision = store.worldRevision();
+      const resumed = delta?.epoch === snapshotEpoch && Number.isSafeInteger(delta.since) &&
+        delta.since >= 0 && delta.since <= worldRevision;
+      const edits = (resumed ? store.editsSince(delta.since) : store.edits())
+        .map(edit => publicChange(edit, editObject(edit)));
+      const mechanicOverrides = snapshotCells();
       return {
-        bounds: base.manifest.bounds, spawn: base.manifest.spawn, worldRevision: store.worldRevision(), contentHash: base.hash,
-        overrides: [...store.edits().map(edit => publicChange(edit, editObject(edit))),
-          ...snapshotCells()],
+        bounds: base.manifest.bounds, spawn: base.manifest.spawn, worldRevision, contentHash: base.hash,
+        ...(delta ? {epoch:snapshotEpoch, complete:!resumed, edits, mechanicOverrides} :
+          {overrides:[...edits, ...mechanicOverrides]}),
         frames:frames.snapshot(),
         droppedItems:drops.snapshot(playerAt(player)),
         inventory:inventory.read(player),

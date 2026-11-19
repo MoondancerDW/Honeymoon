@@ -396,6 +396,8 @@ export class NpcView {
         object.add(row.label);
       }
       if(row.label) row.label.visible=Boolean(labeled);
+      // The world scene skips automatic matrix traversal.
+      object.updateMatrixWorld(true);
     }
   }
 

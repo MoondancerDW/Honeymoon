@@ -603,7 +603,7 @@ export class FarTerrain {
     this.nextRequest = now + 25;
     const id = ++this.ticket;
     this.pending.set(id,closest);
-    this.worker.postMessage({id,vista:closest.vista,coarse:closest.coarse,url:closest.vista
+    this.worker.postMessage({id,vista:closest.vista,coarse:closest.coarse,persistentTerrain:this.display.persistentTerrain,url:closest.vista
       ? `/generated/vista/${this.vista.hash}/${closest.rx}.${closest.rz}.bin`
       : `/generated/lod/${this.lod.contentHash}/${closest.key}.bin`});
   }

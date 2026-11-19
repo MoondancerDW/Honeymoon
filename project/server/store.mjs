@@ -194,6 +194,7 @@ export function openStore(filename) {
   try {
     db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
     migrate(db);
+    db.exec('CREATE INDEX IF NOT EXISTS edits_by_revision ON edits(revision)');
   } catch (error) {
     db.close();
     throw error;
@@ -236,6 +237,8 @@ export function openStore(filename) {
   const readMicroParts = statement('SELECT micro_parts FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
   const readEditOwner = statement('SELECT placed_by FROM edits WHERE x=? AND y=? AND z=? AND cell IS NOT NULL AND quarantined=0');
   const listEdits = statement('SELECT x,y,z,cell,object,revision,micro_parts,voxels,fluid FROM edits WHERE quarantined=0 ORDER BY x,y,z');
+  const listEditsSince = statement(`SELECT x,y,z,cell,object,revision,micro_parts,voxels,fluid FROM edits
+    WHERE revision>? AND quarantined=0 ORDER BY revision,x,y,z`);
   const writeEdit = statement(`INSERT INTO edits(x,y,z,cell,object,revision,original,quarantined,placed_by,micro_parts,voxels,fluid)
     VALUES (?,?,?,?,?,?,?,0,?,?,?,?) ON CONFLICT(x,y,z) DO UPDATE SET cell=excluded.cell,
     object=excluded.object,revision=excluded.revision,quarantined=0,micro_parts=excluded.micro_parts,voxels=excluded.voxels,fluid=excluded.fluid,
@@ -377,6 +380,9 @@ export function openStore(filename) {
     },
     edits() {
       return listEdits.all().map(unpackEdit);
+    },
+    editsSince(revision) {
+      return listEditsSince.all(revision).map(unpackEdit);
     },
     writeEdit({ x, y, z, cell, object, revision, voxels, fluid }, original, placedBy = null, parts = null, inheritOwner = true) {
       writeEdit.run(x, y, z, cell, object ? JSON.stringify(object) : null, revision, original, placedBy,

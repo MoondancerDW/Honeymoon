@@ -13,20 +13,25 @@ const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 2);
 const output=resolve(outputArg);
 await mkdir(output,{recursive:true});
 const solo=test==='solo';
+const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
+const mobileQa=test==='mobile'||test==='online-cache-mobile';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
 const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
+  ...(onlineCacheQa&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
 app.server.listen(0,'127.0.0.1');
 await once(app.server,'listening');
 const url=`http://127.0.0.1:${app.server.address().port}/`;
 const result={test,checks:[],errors:[],failedAssets:[]};
 const browser=await chromium.launch({channel:'msedge',args:['--enable-unsafe-swiftshader']});
-const page=await browser.newPage(test==='mobile' ?
-  {viewport:{width:390,height:730},isMobile:true,hasTouch:true,deviceScaleFactor:1} :
-  {viewport:{width:1000,height:640},deviceScaleFactor:1});
+const page=await browser.newPage({
+  ...(mobileQa?{viewport:{width:390,height:730},isMobile:true,hasTouch:true}:{viewport:{width:1000,height:640}}),
+  deviceScaleFactor:1,
+  ...(onlineCacheQa&&{serviceWorkers:'block'}),
+});
 page.on('pageerror',error=>result.errors.push(error.message));
 page.on('console',message=>{
   if (message.type()==='error' && /WebGLProgram|shader error|INVALID_OPERATION/i.test(message.text())) {
@@ -70,7 +75,124 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (test==='hold-attack') {
+  if (onlineCacheQa) {
+    const cdp=await page.context().newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.setCacheDisabled',{cacheDisabled:true});
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка кэша'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId,spawn}=await owner.json();
+    const x=Math.floor(spawn[0]), y=Math.floor(spawn[1])+6, z=Math.floor(spawn[2]);
+    const unchanged={x,y,z,cell:'legacy:1:0',object:null};
+    const removed={...unchanged,y:y+1};
+    const firstRevision=app.game.worldEdit.write(playerId,[unchanged,removed]).worldRevision;
+    const chunkRequests=[];
+    page.on('request',request=>{
+      const path=new URL(request.url()).pathname;
+      if (path.startsWith('/generated/world/chunks/')) chunkRequests.push(path);
+    });
+    const snapshotResponse=()=>page.waitForResponse(response=>{
+      const address=new URL(response.url());
+      return address.pathname==='/api/world' && address.searchParams.get('delta')==='1';
+    },{timeout:45000});
+    async function openWorld() {
+      const snapshot=snapshotResponse();
+      await page.goto(url,{waitUntil:'domcontentloaded'});
+      const response=await snapshot;
+      assert.equal(response.status(),200);
+      await ready();
+      return {request:new URL(response.url()),body:await response.json()};
+    }
+    const cold=await openWorld();
+    assert.equal((await page.request.get(url+'api/build').then(response=>response.json())).build,expectedBuild);
+    assert.equal(cold.request.searchParams.has('since'),false);
+    assert.equal(cold.body.complete,true);
+    assert.equal(cold.body.worldRevision,firstRevision);
+    assert.equal(cold.body.edits.length,2);
+    const currentChunk=`/${x>>4}.${z>>4}.json`;
+    assert.ok(chunkRequests.some(path=>path.endsWith(currentChunk)),'cold load requests the spawn chunk');
+    const chunkPaths=[...new Set(chunkRequests)].filter(path=>{
+      const [,cx,cz]=/\/(-?\d+)\.(-?\d+)\.json$/.exec(path)??[];
+      return Math.max(Math.abs(Number(cx)-(x>>4)),Math.abs(Number(cz)-(z>>4)))<=2;
+    });
+    await page.waitForFunction(async({paths,revision})=>{
+      const read=(name, method)=>new Promise(resolve=>{
+        const open=indexedDB.open(name);
+        open.onerror=()=>resolve(null);
+        open.onsuccess=()=>{
+          const db=open.result;
+          if (!db.objectStoreNames.contains('entries')) {db.close();resolve(null);return;}
+          const store=db.transaction('entries').objectStore('entries');
+          const get=store[method]();
+          get.onsuccess=()=>resolve(get.result);
+          get.onerror=()=>resolve(null);
+          db.close();
+        };
+      });
+      const terrain=new Set(await read('honeymoon-terrain-v1','getAllKeys'));
+      if (!paths.every(path=>terrain.has(path))) return false;
+      const saved=(await read('honeymoon-world-checkpoints-v1','getAll'))?.[0];
+      return saved && JSON.parse(await saved.blob.text()).revision===revision;
+    },{paths:chunkPaths,revision:firstRevision},{timeout:12000});
+
+    // Close the document before editing, so the warm page gets the edit from its delta.
+    await page.goto('about:blank');
+    chunkRequests.length=0;
+    const secondRevision=app.game.worldEdit.write(playerId,[{...removed,cell:null}]).worldRevision;
+    const warm=await openWorld();
+    assert.equal(warm.request.searchParams.get('since'),String(firstRevision));
+    assert.equal(warm.request.searchParams.get('epoch'),cold.body.epoch);
+    assert.equal(warm.body.complete,false);
+    assert.equal(warm.body.worldRevision,secondRevision);
+    assert.deepEqual(warm.body.edits.map(({x,y,z,cell})=>({x,y,z,cell})),[{x,y:y+1,z,cell:null}]);
+    const visibleCells=await page.evaluate(({x,y,z})=>[honeymoon.getCell(x,y,z),honeymoon.getCell(x,y+1,z)],unchanged);
+    assert.deepEqual(visibleCells,['legacy:1:0',null]);
+    assert.ok(chunkRequests.every(path=>!chunkPaths.includes(path)),'warm load reuses previously loaded chunks near spawn');
+    const empty=await page.request.get(url+`api/world?delta=1&since=${secondRevision}&epoch=${warm.body.epoch}`);
+    assert.equal(empty.status(),200);
+    assert.deepEqual((await empty.json()).edits,[]);
+    const downloadedWarmChunks=chunkRequests.length;
+    const spawnPath=chunkPaths.find(path=>path.endsWith(currentChunk));
+    const recoveredChunk=await page.evaluate(async path=>{
+      const {createPersistentCache}=await import('/persistent-cache.mjs');
+      const {readTerrain}=await import('/terrain-cache.mjs');
+      const terrain=createPersistentCache({name:'honeymoon-terrain-v1',maxBytes:160*1024*1024,
+        maxEntries:2400,maxAgeMs:45*24*60*60_000});
+      if (!await terrain.put(path,new Blob(['corrupt']))) throw new Error('Could not write the cache fixture');
+      return readTerrain(path,{},true,response=>response.json());
+    },spawnPath);
+    assert.deepEqual([recoveredChunk.x,recoveredChunk.z],[x>>4,z>>4]);
+    assert.ok(chunkRequests.slice(downloadedWarmChunks).includes(spawnPath),'damaged data is downloaded again');
+    const validated=[];
+    for (const asset of ['generated/textures/atlas.png','generated/world/world.json']) {
+      const initial=await page.request.get(url+asset);
+      const etag=initial.headers().etag;
+      assert.ok(etag);
+      const confirmed=await page.request.get(url+asset,{headers:{'If-None-Match':etag}});
+      assert.equal(confirmed.status(),304);
+      assert.equal((await confirmed.body()).length,0);
+      validated.push(asset);
+    }
+
+    const eviction=await page.evaluate(async()=>{
+      const {createPersistentCache}=await import('/persistent-cache.mjs');
+      const sizeBound=createPersistentCache({name:'qa-cache-size',maxBytes:8,maxEntries:3,maxAgeMs:60000});
+      const fourBytes=new Blob(['1234']);
+      const writes=[await sizeBound.put('a',fourBytes),await sizeBound.put('b',fourBytes)];
+      await new Promise(resolve=>setTimeout(resolve,10));
+      await sizeBound.get('a');
+      writes.push(await sizeBound.put('c',fourBytes));
+      const smallestExpired=createPersistentCache({name:'qa-cache-age',maxBytes:8,maxEntries:3,maxAgeMs:1});
+      writes.push(await smallestExpired.put('stale',fourBytes));
+      await new Promise(resolve=>setTimeout(resolve,10));
+      await smallestExpired.prune();
+      return {writes,retained:await Promise.all(['a','b','c'].map(async key=>Boolean(await sizeBound.get(key)))),
+        expiredAbsent:!(await smallestExpired.get('stale'))};
+    });
+    assert.deepEqual(eviction,{writes:[true,true,true,true],retained:[true,false,true],expiredAbsent:true});
+    result.checks.push({coldEdits:cold.body.edits.length,warmEdits:warm.body.edits.length,firstRevision,secondRevision,
+      cachedColdChunks:chunkPaths.length,downloadedWarmChunks,recoveredChunk:[recoveredChunk.x,recoveredChunk.z],validated,eviction});
+  } else if (test==='hold-attack') {
     const y=73, z=1467;
     const blocks=Array.from({length:6},(_,i)=>3361+i).concat([3357,3358,3359]);
     const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка удержания ЛКМ'}});
