@@ -88,10 +88,9 @@
   top: max(.5rem, env(safe-area-inset-top));
   right: max(.5rem, env(safe-area-inset-right));
 }
-.touch.playing.fullscreen-available .fullscreen-toggle { right: calc(max(.5rem, env(safe-area-inset-right)) + 49px); }
+.touch .touch-quick .fullscreen-toggle { position: static; }
 #touch .touch-quick button { width: 44px; height: 44px; line-height: 1; padding: .15rem; }
 #touch .touch-quick #touch-pause { font-size: 1.25rem; }
-.touch.fullscreen-available #touch-pause { margin-left: 49px; }
 #touch #touch-build { font-size: 1.25rem; }
 #touch-chat {
   position: absolute;
@@ -201,6 +200,28 @@
 }
 #mobile-settings .tools > :not([hidden]) { min-height: 44px; align-items: center; justify-content: center; }
 #mobile-settings .tools .distance { flex-wrap: wrap; font-size: .77rem; }
+.audio-menu-controls { gap: .35rem; }
+#audio-settings-toggle { flex: 1 1 auto; }
+#audio-mute-toggle { flex: 0 0 32px; width: 32px; height: auto; }
+#audio-mute-toggle i { position: relative; width: 18px; height: 18px; }
+#audio-mute-toggle i::before, #audio-mute-toggle i::after { content: ""; position: absolute; }
+#audio-mute-toggle i::before {
+  inset: 1px 7px 1px 0;
+  background: currentColor;
+  clip-path: polygon(0 33%, 36% 33%, 100% 5%, 100% 95%, 36% 67%, 0 67%);
+}
+#audio-mute-toggle i::after { inset: 2px 0 2px 10px; border-right: 2px solid; border-radius: 50%; }
+#audio-mute-toggle[aria-pressed="true"] { color: var(--gold); border-color: var(--gold); }
+#audio-mute-toggle[aria-pressed="true"] i::after {
+  inset: 0 3px 0 auto;
+  width: 2px;
+  border: 0;
+  border-radius: 1px;
+  background: currentColor;
+  rotate: 34deg;
+}
+#mobile-settings .tools .audio-menu-controls { align-items: stretch; }
+.touch #audio-mute-toggle { flex-basis: 44px; width: 44px; }
 #fullscreen-help { font-size: .82rem; margin: .35rem 0; }
 #game.touch.paused .pause-inventory button { min-height: 44px; }
 #game.touch.paused #npc-editor-toggle:disabled { display: none; }

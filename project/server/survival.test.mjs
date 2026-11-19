@@ -4,9 +4,11 @@ import {createSurvival} from './survival.mjs';
 import {openStore} from './store.mjs';
 import {createGame} from './game.mjs';
 import {createInventory} from './inventory.mjs';
+import {createChat} from './chat.mjs';
 import {harvestRule} from '../world/survival-tools.mjs';
 import * as geometry from '../world/geometry.mjs';
 import {signItemKey,signPlacementCell} from '../world/creative-items.mjs';
+import {encodeVoxels,VOXEL_COUNT,voxelIndex,voxelKey} from '../world/voxel-chisel.mjs';
 
 test('game mode damage, recovery, death and personal creative overrides follow the server clock',t=>{
   const store=openStore(':memory:');
@@ -34,6 +36,85 @@ test('game mode damage, recovery, death and personal creative overrides follow t
   assert.equal(mode.damage(id,3,point,70),undefined);
   mode.setMode(id,null);
   assert.equal(mode.mode(id),'game');
+});
+
+test('continuous lava contact deals one point per second and a lava death revives at spawn',t=>{
+  const store=openStore(':memory:');
+  t.after(()=>store.close());
+  let time=0;
+  const clock=()=>time;
+  const survival=createSurvival(store,'game',{now:clock});
+  const {id}=store.createPlayer();
+  const spawn={x:3.5,y:1,z:3.5};
+  const lava={x:6.5,y:1,z:5.5};
+  const edge={...lava,x:5.8};
+  const dry={...edge,x:5.65};
+  const base={hash:'lava-survival',manifest:{spawn:Object.values(spawn),bounds:{minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15}},
+    catalog:new Set(['legacy:1:0','legacy:11:0']),inBounds:(...point)=>point.every(n=>n>=0&&n<=15),
+    getCell(x,y,z){return {key:y===0?'legacy:1:0':x===6&&y===1&&z===5?'legacy:11:0':'air',object:null};}};
+  const updates=[];
+  const game=createGame(base,store,geometry,{modules:[],clock,survival,survivalChanged:(_id,state)=>updates.push(state)});
+  const tick=(delta,online=true)=>{
+    time+=delta;
+    game.advanceLava(online?[id]:[]);
+    return survival.status(id).health;
+  };
+
+  game.teleport(id,edge);
+  assert.equal(tick(999),10);
+  assert.equal(tick(1),9);
+  time+=600;
+  game.position(id,dry);
+  game.position(id,edge);
+  assert.equal(tick(999),9);
+  assert.equal(tick(1),8);
+  assert.equal(tick(2400),6);
+  assert.equal(tick(1,false),6);
+  assert.equal(tick(5000),6);
+  assert.equal(tick(999),6);
+  assert.equal(tick(1),5);
+
+  game.setSpectator(id,{enabled:true});
+  assert.equal(tick(5000),5);
+  game.setSpectator(id,{enabled:false});
+  game.teleport(id,lava);
+  assert.equal(tick(4900),1);
+  assert.equal(tick(100),0);
+  assert.equal(tick(5000),0);
+  const death=survival.status(id).death;
+  assert.deepEqual(death,{at:time-5000,position:lava,floor:1,cause:'lava'});
+  assert.deepEqual(createSurvival(store,'game',{now:clock}).avatarDeath(id),death);
+  assert.equal(updates.filter(({death})=>Boolean(death)).length,1);
+  const chat=createChat({store,publish:()=>{}});
+  chat.playerDeath({nickname:'Проверка'},death.cause);
+  assert.deepEqual(chat.history(id).map(({kind,cause,text})=>({kind,cause,text})),
+    [{kind:'death',cause:'lava',text:'Сгорел'}]);
+  assert.deepEqual(game.revive(id,death).position,spawn);
+  assert.equal(survival.reset(id).health,10);
+  assert.equal(tick(5000),10);
+
+  const samples=new Uint8Array(VOXEL_COUNT);
+  samples[voxelIndex(6,4,4)]=1;
+  game.worldEdit.write(id,[
+    {x:8,y:1,z:5,cell:voxelKey,object:null,voxels:encodeVoxels(samples,['legacy:11:0'])},
+    {x:10,y:1,z:5,cell:'legacy:44:0',object:null,fluid:'lava'},
+  ]);
+  game.teleport(id,{x:8.55,y:1,z:5.55});
+  assert.equal(tick(1000),9);
+  game.teleport(id,{x:10.5,y:1.5,z:5.5});
+  assert.equal(tick(1000),8);
+  game.teleport(id,{...lava,y:1.9});
+  assert.equal(tick(1000),8);
+
+  game.teleport(id,edge);
+  time+=1001;
+  game.position(id,dry);
+  assert.equal(survival.status(id).health,7,'exiting after a full second counts before the next timer tick');
+
+  survival.setMode(id,'creative');
+  game.teleport(id,lava);
+  assert.equal(tick(5000),10);
+  assert.equal(survival.status(id).death,null);
 });
 
 test('game mode rejects forged creative acquisition and bare-handed stone, and supplies a crafting path',t=>{

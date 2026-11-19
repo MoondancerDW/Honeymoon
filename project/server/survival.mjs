@@ -32,12 +32,12 @@ export function createSurvival(store,initialMode,{now=Date.now}={}) {
     store.putState(scope,player,'health',1,{health,death});
     return status(player);
   }
-  function damage(player,amount,point,floor) {
+  function damage(player,amount,point,floor,cause) {
     if (!isGame(player)||dead(player)||!Number.isFinite(amount)||amount<1) return;
     const state=record(player);
     state.health=Math.max(0,state.health-Math.floor(amount));
     state.recoverAt=now()+recoveryMs;
-    if (state.health===0) state.death={at:now(),position:point,floor};
+    if (state.health===0) state.death={at:now(),position:point,floor,...(cause&&{cause})};
     return save(player,state);
   }
   function heal(player,amount=healthCells) {

@@ -49,7 +49,9 @@ export function createChat({store, publish, recipients, now = Date.now, logDirec
     history: player => store.chatHistory(player),
     publishRecorded,
     close:()=>log?.flush(),
-    playerDeath(profile) { return add({kind:'death',nickname:profile.nickname,channel:'global'}); },
+    playerDeath(profile,cause) {
+      return add({kind:'death',nickname:profile.nickname,channel:'global',...(cause==='lava'&&{cause,text:'Сгорел'})});
+    },
     playerStatus(profile, joined) {
       if (!joined) sent.delete(profile.id);
       add({kind:joined ? 'join' : 'leave', nickname:profile.nickname});

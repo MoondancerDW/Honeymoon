@@ -116,6 +116,7 @@ let flying = false;
 let flightStorageKey, pendingFlight, flightRequest;
 let flightSequence=0;
 let crawlRequested = false;
+let touchCrouching = false;
 let spectator = false, spectatorReturn = null;
 let seat = null, seatPending = false, seatEpoch = 0;
 let seatedMoveSince;
@@ -169,7 +170,7 @@ let nextAttack = Infinity;
 let repeatPlacement = false, nextPlacement = 0, resumeOnEscape = false, resuming = false;
 let pointerReleasedAt = -Infinity;
 let touchControls;
-let hitPlayer, deathOrbit;
+let hitPlayer, deathOrbit, reviving = false;
 let nextClockUpdate = 0;
 const audio = new WorldAudio();
 const profile = new PlayerProfile({nickname:element('nickname'), skin:element('pony-skin'), status:element('skin-status'),
@@ -185,7 +186,7 @@ const pause = () => {
   if (document.pointerLockElement) document.exitPointerLock();
 };
 function resume() {
-  if (touchMode || !view || !entered) return;
+  if (touchMode || !view || !entered || modeUi.death && !reviving) return;
   const canvas = view.renderer.domElement;
   if (document.pointerLockElement === canvas || resuming) return;
   resuming = true;
@@ -293,7 +294,7 @@ function updateGameMode(next) {
 
 async function revivePlayer() {
   if (resetting) return;
-  resetting=true;
+  reviving=resetting=true;
   if (!touchMode) resume();
   try {
     await movementSync.inFlight();
@@ -301,7 +302,10 @@ async function revivePlayer() {
     if (!ok) throw new Error(body.error);
     await arriveAt(body.position,body.stance);
     modeUi.update(body.gameMode);
-  } finally {resetting=false;}
+  } finally {
+    reviving=resetting=false;
+    if (modeUi.death && document.pointerLockElement) document.exitPointerLock();
+  }
 }
 
 function npcItemEntry(stack) {
@@ -827,6 +831,7 @@ function setFlight(active) {
     crawlRequested = false;
     recordPosition(position);
   }
+  if (active) touchCrouching = false;
   flying = active;
   movement.resetFall();
   movement.grounded = false;
@@ -944,6 +949,7 @@ function setAuthoritativePosition(feet, stance = 'stand') {
   physicsTime=0;
   movement.stance = stance;
   crawlRequested = stance === 'crawl' && !seat;
+  touchCrouching = touchMode && stance === 'crouch' && !seat;
   movement.resetFall();
   movement.grounded = false;
 }
@@ -1578,8 +1584,9 @@ function tick(now) {
     if (!resetting && hasPredictionRoom) {
       if (!flying) {
         const previous = movement.stance;
+        const crouching=touchCrouching || manualTravel && (keys.has('KeyC') || now < crouchUntil);
         const stance = movement.wantsSwim(position,sprinting()) ? 'swim' :
-          crawlRequested ? 'crawl' : manualTravel && (keys.has('KeyC') || now < crouchUntil) ? 'crouch' : 'stand';
+          crawlRequested ? 'crawl' : crouching ? 'crouch' : 'stand';
         if (movement.setStance(position,stance) !== previous) recordPosition(position);
       }
       const inputSize=Math.max(1,Math.hypot(forward,strafe,vertical));
@@ -1688,7 +1695,7 @@ function tick(now) {
   }
   nearbyStream?.update();
   const eye=view.sightOrigin(position,movement.body.eye);
-  touchControls?.update({flying,spectator,stance:movement.stance,crawlRequested,seated:seat?.kind==='ground',
+  touchControls?.update({flying,spectator,stance:movement.stance,crawlRequested,touchCrouching,seated:seat?.kind==='ground',
     orbit:Boolean(orbitHeading),chisel:chiseling,actionLabel:seat?'Встать':npcTarget?'Диалог':
       containerSpec(selection?.cell)?'Открыть':targetSeat?(targetSeat.bed?'Лечь':'Сесть'):undefined});
   view.render(now, npcTarget||hitPlayer?null:selection, playing && !openMenu || automaticTravel, placement, document.hasFocus(),{x:eye[0],y:eye[1],z:eye[2]});
@@ -1703,6 +1710,9 @@ function tick(now) {
 
 function bindControls() {
   const canvas = view.renderer.domElement;
+  const pickUpNearbyItem = () => {
+    if (world.droppedItems.size) void inventoryAction('pickup_item',{eye:view.eyeOffset()});
+  };
   const controls=element('keys');
   controls.addEventListener('toggle',()=>{
     if (controls.open) controls.querySelector('summary').scrollIntoView({block:'start'});
@@ -1716,6 +1726,7 @@ function bindControls() {
     pause:()=>{if (playing) setPlaying(false);},
   });
   button.addEventListener('click', () => {
+    if (modeUi.death) return;
     let pending;
     try {
       pending = profile.changes();
@@ -1758,6 +1769,7 @@ function bindControls() {
   });
   document.addEventListener('pointerlockchange', () => {
     resuming = false;
+    if (modeUi.death && !reviving && document.pointerLockElement === canvas) document.exitPointerLock();
     if (document.pointerLockElement !== canvas) nextAttack = Infinity;
     if (!document.pointerLockElement) pointerReleasedAt = performance.now();
     if (!touchMode && !menuOpen() && !modeUi.death) setPlaying(document.pointerLockElement === canvas);
@@ -1852,6 +1864,7 @@ function bindControls() {
       if (crawlRequested) crawlRequested = false;
       else if (movement.setStance(position,'crawl') === 'crawl') {
         crawlRequested = true;
+        touchCrouching = false;
         recordPosition(position);
       }
     }
@@ -1873,7 +1886,7 @@ function bindControls() {
     }
     if (event.code === 'KeyC' && !flying && !seat && !resetting) {
       crouchUntil = performance.now() + 180;
-      if (world.droppedItems.size) void inventoryAction('pickup_item',{eye:view.eyeOffset()});
+      pickUpNearbyItem();
     }
     if (event.code === 'KeyX' && !flying && !acting && !resetting && (!seat || seat.kind === 'ground')) {
       event.preventDefault();
@@ -1954,6 +1967,12 @@ function bindControls() {
     enabled:()=>playing&&!menuOpen()&&teleportLoading.hidden&&!modeUi.death,
     sendKey:(code,pressed,modifiers)=>document.dispatchEvent(new KeyboardEvent(pressed?'keydown':'keyup',
       {code,cancelable:true,...modifiers})),
+    crouch() {
+      if (flying || seat || spectator || resetting || orbitHeading) return;
+      touchCrouching=!touchCrouching;
+      if (touchCrouching) crawlRequested=false;
+      pickUpNearbyItem();
+    },
     use:interact,
     block(type) { if (type==='rotate') cyclePlacement(); else void action(type,false,true); },
     repeat(held) {
@@ -2012,7 +2031,7 @@ function bindControls() {
       weather.disabled = modeUi.active&&!modeUi.admin;
     }
   });
-  const masterAudio=element('audio-master');
+  const masterAudio=element('audio-master'), muteAudio=element('audio-mute-toggle');
   const soundLevel=element('audio-volume'), musicLevel=element('music-volume');
   const settingsKey='honeymoon-audio-settings';
   const settings={...audioDefaults,soundVolume:.13,musicVolume:.16};
@@ -2050,14 +2069,17 @@ function bindControls() {
   const updateMasterAudio=()=>{
     masterAudio.textContent=settings.muted ? 'Весь звук: выкл.' : 'Весь звук: вкл.';
     masterAudio.setAttribute('aria-pressed', String(!settings.muted));
+    muteAudio.setAttribute('aria-pressed',String(settings.muted));
+    muteAudio.title=settings.muted ? 'Включить весь звук' : 'Выключить весь звук';
     audio.setMuted(settings.muted);
   };
   updateMasterAudio();
-  masterAudio.addEventListener('click',()=>{
+  const toggleMasterAudio=()=>{
     settings.muted=!settings.muted;
     updateMasterAudio();
     persist();
-  });
+  };
+  for (const control of [masterAudio,muteAudio]) control.addEventListener('click',toggleMasterAudio);
   soundLevel.addEventListener('input',()=>{
     settings.soundVolume=Number(soundLevel.value)/100;
     audio.setVolume(settings.soundVolume);
@@ -2296,6 +2318,7 @@ async function start() {
   movement.stance = session.body.stance ?? 'stand';
   movementSync.reset(position,movement.stance);
   crawlRequested = movement.stance === 'crawl';
+  touchCrouching = touchMode && movement.stance === 'crouch';
   view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
     lowDevice:localStorage.getItem(lowDevicePreference)==='1',terrainNetwork,persistentTerrain:Boolean(worldCheckpoint)});
   modeUi.update(session.body.gameMode);

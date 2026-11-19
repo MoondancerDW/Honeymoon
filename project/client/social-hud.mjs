@@ -60,7 +60,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   }
   updateChannel();
 
-  function entry({id, kind, nickname, newNickname, text, channel:target = 'global'}, recent) {
+  function entry({id, kind, cause, nickname, newNickname, text, channel:target = 'global'}, recent) {
     if (seen.has(id)) return;
     const follow = panel !== 'chat' || log.scrollHeight - log.clientHeight - log.scrollTop < 8;
     seen.add(id);
@@ -78,7 +78,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       row.append(sender, document.createTextNode(`  ${text}`));
     } else {
       row.className = 'chat-status';
-      const changes = kind === 'death' ? 'помер' : kind === 'rename' ? `сменил ник на ${newNickname}` :
+      const changes = kind === 'death' ? (cause==='lava' ? 'Сгорел' : 'помер') : kind === 'rename' ? `сменил ник на ${newNickname}` :
         kind === 'join' ? 'входит в игру' : 'выходит из игры';
       row.append(document.createTextNode(`${nickname} ${changes}`));
     }

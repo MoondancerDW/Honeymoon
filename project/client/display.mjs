@@ -19,6 +19,7 @@ import {addTerrainFilter, terrainFilter} from './terrain-filter.mjs';
 import {ViewBobbing} from './view-bobbing.mjs';
 import {PonyShadows} from './pony-shadows.mjs';
 import {BlockDebris} from './block-debris.mjs';
+import {LavaDeathParticles} from './lava-death-particles.mjs';
 import {DroppedItemView} from './dropped-items.mjs';
 import {HeldLights} from './held-light.mjs';
 import {groundSurface} from './audio.mjs';
@@ -174,7 +175,8 @@ export class Display {
     const ponyAirAt = (x,y,z) => this.world.hasChunk(x,z) && !this.world.cellAt(x,y,z);
     this.ponyAirAt = ponyAirAt;
     this.players = new RemotePlayers(this.scene,this.camera,() => this.heldItemAssets(),ponyAirAt,
-      (feet,body,motion,fall,now) => this.groundDust(feet,body,motion,fall,now));
+      (feet,body,motion,fall,now) => this.groundDust(feet,body,motion,fall,now),
+      (parts,center,now) => this.burnPlayer(parts,center,now));
     this.npcs = new NpcView(this.scene,this.camera,()=>this.heldItemAssets(),{mobile,
       chunkVisible:(x,z)=>this.isPreciseVisible(x,z),
       light:(x,y,z)=>{
@@ -603,7 +605,9 @@ export class Display {
       yawOffset:facing.yawOffset, forward:facing.forward, strafe:facing.strafe,
       position, groundSeat:pose.groundSeat || seat?.kind === 'ground', swing:pose.swing, held:pose.held,
       equipment:pose.equipment, itemAssets:this.heldItemAssets(), emote:pose.emote});
-    this.localAvatar.ragdoll(death,dt);
+    this.localAvatar.ragdoll(death?.cause==='lava'?null:death,dt);
+    const ash=this.localAvatar.lavaDeath(death,now);
+    if (ash) this.burnPlayer(ash,object.position,now);
     object.updateMatrixWorld(true);
   }
 
@@ -1211,6 +1215,11 @@ export class Display {
     this.blockDebris.add(effect,this.materials?.cutout,this.atlasRows,performance.now());
   }
 
+  burnPlayer(parts,center,now) {
+    this.lavaDeathParticles ??= new LavaDeathParticles(this.scene);
+    this.lavaDeathParticles.add(parts,center,now);
+  }
+
   groundDust(feet,body,motion,fall,now) {
     const {x,y,z} = this.camera.position;
     if (Math.hypot(feet.x-x,feet.y-y,feet.z-z)>24) return;
@@ -1559,6 +1568,7 @@ export class Display {
     this.updateFrames();
     this.updateDispensers(now);
     this.blockDebris?.update(now,this.camera);
+    this.lavaDeathParticles?.update(now);
     const epoch=Date.now();
     const globalSnow=this.weather==='snow';
     const snow=globalSnow || this.weather==='rain' && this.climate.snowAt(listener.x,listener.y,listener.z);
@@ -1727,7 +1737,7 @@ export class Display {
       lastSectionError:this.lastSectionError,
       occlusion:this.sectionVisibility.statistics(), heldLights:this.heldLights.statistics(),
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles, farTerrain:this.farTerrain?.stats(),
-      foliageQuads, fallingLeaves:this.visibleLeaves ?? 0,
+      foliageQuads, fallingLeaves:this.visibleLeaves ?? 0,lavaDeathParticles:this.lavaDeathParticles?.count??0,
       pending: this.pendingWork, weather:this.weather, nightVision:this.nightVision, rainDrops:this.visibleRain ?? 0,
       loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
   }

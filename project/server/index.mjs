@@ -384,6 +384,7 @@ export function createHoneymoonServer({
     loadLog?.player(player,online);
     if (!online) {
       game.leaveSeat(player);
+      game.clearLavaContact(player);
       npcs.leave(player);
     }
     try { chat.playerStatus(profile, online); }
@@ -479,7 +480,7 @@ export function createHoneymoonServer({
     sendSocial('game-mode',{...state,admin:npcs.isAdmin(player)},id=>id===player);
     const position=presence.onlinePosition(player);
     if (position) presence.update(player,game.session(player).position,{death:survival.avatarDeath(player)});
-    if (state.death) chat.playerDeath(profileFor(player));
+    if (state.death) chat.playerDeath(profileFor(player),state.death.cause);
   }
 
   function modeAdministration() {
@@ -819,6 +820,7 @@ export function createHoneymoonServer({
           if (target!==undefined&&!member) throw new RequestError(404,'player_missing');
           survival.setMode(member,mode);
           for (const id of member?[member]:new Set([...streams].map(stream=>stream.player))) {
+            if (!survival.isGame(id)) game.clearLavaContact(id);
             if (!survival.isGame(id)&&survival.status(id).death) survival.reset(id);
             sendSocial('game-mode',playerMode(id),recipient=>recipient===id);
             const position=presence.onlinePosition(id);
@@ -1210,7 +1212,10 @@ export function createHoneymoonServer({
         const position=presence.onlinePosition(player);
         if (position && !online.has(player)) online.set(player,{id:player,position,spectator:game.npcPlayerView(player).spectator});
       }
-      if (survival.enabled) survival.tick(online.keys(),survivalChanged);
+      if (survival.enabled) {
+        game.advanceLava(online.keys());
+        survival.tick(online.keys(),survivalChanged);
+      }
       npcs.tick([...online.values()]);
       for (const stream of streams) sendNpcs(stream);
     } catch(error) { console.error(error); }

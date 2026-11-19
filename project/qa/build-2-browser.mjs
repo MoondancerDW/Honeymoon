@@ -14,11 +14,13 @@ const output=resolve(outputArg);
 await mkdir(output,{recursive:true});
 const solo=test==='solo';
 const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
-const mobileQa=test==='mobile'||test==='online-cache-mobile';
+const controlsQa=test==='controls-update'||test==='controls-update-mobile';
+const mobileQa=['mobile','online-cache-mobile','controls-update-mobile'].includes(test);
+const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
-const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo?'game':'creative',
+const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
   ...(onlineCacheQa&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
@@ -75,7 +77,106 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (onlineCacheQa) {
+  if (controlsQa) {
+    await start();
+    if (mobileQa) {
+      const fullscreen=page.locator('#touch #fullscreen-toggle');
+      const crouch=page.locator('#touch-lower');
+      for (const [width,height] of [[390,730],[800,370]]) {
+        await page.setViewportSize({width,height});
+        assert.ok(await fullscreen.isVisible());
+        await fullscreen.tap();
+        await page.waitForFunction(()=>Boolean(document.fullscreenElement));
+        await fullscreen.tap();
+        await page.waitForFunction(()=>!document.fullscreenElement);
+        await crouch.tap();
+        await page.waitForFunction(()=>honeymoon.stats().stance==='crouch');
+        await page.waitForTimeout(300);
+        assert.equal((await stat()).stance,'crouch');
+        assert.equal(await crouch.getAttribute('aria-pressed'),'true');
+        await crouch.tap();
+        await page.waitForFunction(()=>honeymoon.stats().stance==='stand');
+        assert.equal(await crouch.getAttribute('aria-pressed'),'false');
+      }
+      await page.locator('#touch-pause').tap();
+      await page.locator('[data-pause-section="settings"]').tap();
+    } else {
+      await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+      await page.keyboard.press('Escape');
+      await page.locator('#play').waitFor({state:'visible'});
+    }
+    const quickMute=page.locator('#audio-mute-toggle');
+    assert.ok(await quickMute.isVisible());
+    assert.equal(await quickMute.evaluate(button=>button.previousElementSibling?.id),'audio-settings-toggle');
+    await quickMute.click();
+    await page.waitForFunction(()=>honeymoon.stats().audio.muted);
+    assert.equal(await quickMute.getAttribute('aria-pressed'),'true');
+    assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('honeymoon-audio-settings')).muted),true);
+    await click('#audio-settings-toggle');
+    assert.equal(await page.locator('#audio-master').getAttribute('aria-pressed'),'false');
+    await click('#audio-master');
+    await page.waitForFunction(()=>!honeymoon.stats().audio.muted);
+    assert.equal(await quickMute.getAttribute('aria-pressed'),'false');
+    assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('honeymoon-audio-settings')).muted),false);
+    result.checks.push({mobile:mobileQa,mutedAndRestored:true});
+  } else if (lavaQa) {
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка лавы'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId,spawn}=await owner.json();
+    const lake={x:3360,y:72,z:1467,cell:'legacy:11:0',object:null};
+    app.game.worldEdit.write(playerId,[lake]);
+    await start(false);
+    await hop(3359.4,72,1467.5);
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+    await page.evaluate(()=>honeymoon.look(-Math.PI/2,0));
+    app.game.damageFromNpc(playerId,8);
+    await page.waitForFunction(()=>honeymoon.health().health===2);
+    await page.evaluate(()=>{
+      const health=document.getElementById('health');
+      globalThis.qaLavaHealth=[];
+      globalThis.qaLavaPhases=new Set();
+      globalThis.qaLavaParticles=0;
+      new MutationObserver(()=>{
+        const value=Number(health.getAttribute('aria-valuenow'));
+        if (qaLavaHealth.at(-1)?.value!==value) qaLavaHealth.push({value,at:performance.now()});
+      }).observe(health,{attributes:true,attributeFilter:['aria-valuenow']});
+      const observeEffect=()=>{
+        const phase=honeymoon.localAvatar()?.lavaDeath;
+        if (phase) qaLavaPhases.add(phase);
+        qaLavaParticles=Math.max(qaLavaParticles,honeymoon.stats().lavaDeathParticles);
+        if (!qaLavaPhases.has('ash') || !qaLavaParticles) requestAnimationFrame(observeEffect);
+      };
+      requestAnimationFrame(observeEffect);
+    });
+    const ashScreenshot=page.waitForFunction(()=>honeymoon.stats().lavaDeathParticles>0,undefined,{timeout:16000})
+      .then(()=>shot('lava-death'));
+    await page.keyboard.down('KeyW');
+    try {await page.waitForFunction(()=>honeymoon.stats().position.x>3360.22);}
+    finally {await page.keyboard.up('KeyW');}
+    await ashScreenshot;
+    await page.waitForFunction(()=>honeymoon.health().death?.cause==='lava',undefined,{timeout:9000});
+    assert.equal(await page.locator('#death-title').textContent(),'Сгорел');
+    const health=await page.evaluate(()=>qaLavaHealth.filter(({value})=>value<=1));
+    assert.deepEqual(health.map(({value})=>value),[1,0]);
+    const interval=health[1].at-health[0].at;
+    assert.ok(interval>=750 && interval<=1500,`lava damage interval ${interval} ms`);
+    await page.waitForFunction(()=>document.getElementById('chat-log').textContent.includes('Сгорел'));
+    assert.deepEqual(await page.evaluate(()=>[...qaLavaPhases]),['charred','ash']);
+    const particles=await page.evaluate(()=>qaLavaParticles);
+    assert.ok(particles>0);
+    await page.waitForFunction(()=>!document.pointerLockElement);
+    const [revive]=await Promise.all([
+      page.waitForResponse(response=>response.url().endsWith('/api/respawn')&&response.ok()),
+      click('#revive'),
+    ]);
+    const respawn=await revive.json();
+    assert.deepEqual(respawn.position,{x:spawn[0],y:spawn[1],z:spawn[2]});
+    await page.waitForFunction(()=>honeymoon.health().health===10&&!honeymoon.health().death&&
+      !honeymoon.localAvatar()?.lavaDeath&&!honeymoon.stats().lavaDeathParticles&&
+      document.getElementById('teleport-loading').hidden,undefined,{timeout:20000});
+    assert.equal(await visible('#death-screen'),false);
+    result.checks.push({interval,particles,respawn:respawn.position});
+  } else if (onlineCacheQa) {
     const cdp=await page.context().newCDPSession(page);
     await cdp.send('Network.enable');
     await cdp.send('Network.setCacheDisabled',{cacheDisabled:true});

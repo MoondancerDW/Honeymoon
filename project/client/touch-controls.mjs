@@ -5,16 +5,18 @@ const keyActions = {
   'touch-teleport':'KeyG','touch-clock':'KeyL','touch-chisel':'KeyK','touch-chisel-size':'KeyK',
 };
 
-export function bindTouchControls({element,stick,enabled,sendKey,use,block,repeat,pause}) {
+export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,block,repeat,pause}) {
   const panel = element('touch-more-panel');
   const toggle = element('touch-more');
   const build = element('touch-build');
   const buildPanel = element('touch-build-panel');
   const useButton = element('touch-use');
+  const lowerButton = element('touch-lower');
   const pad = element('stick'), nub = pad.querySelector('i');
   const captured = new Map();
   let joystick;
   let sprint = false;
+  let flying = false;
   let previous;
   let removeTimer;
   let previousAction;
@@ -53,10 +55,10 @@ export function bindTouchControls({element,stick,enabled,sendKey,use,block,repea
   pad.addEventListener('lostpointercapture',releasePad);
   pad.addEventListener('pointercancel',releasePad);
 
-  function hold(id,act) {
+  function hold(id,act,allowed=enabled) {
     const button=element(id);
     button.addEventListener('pointerdown',event=>{
-      if (!enabled() || captured.has(id)) return;
+      if (!allowed() || captured.has(id)) return;
       event.preventDefault();
       captured.set(id,event.pointerId);
       button.setPointerCapture(event.pointerId);
@@ -73,13 +75,14 @@ export function bindTouchControls({element,stick,enabled,sendKey,use,block,repea
     button.addEventListener('pointercancel',finish);
     button.addEventListener('lostpointercapture',finish);
     button.addEventListener('click',event=>{
-      if (event.detail || !enabled()) return;
+      if (event.detail || !allowed()) return;
       act(true);
       act(false);
     });
   }
   hold('jump',pressed=>sendKey('Space',pressed));
-  hold('touch-lower',pressed=>sendKey('KeyC',pressed));
+  hold('touch-lower',pressed=>sendKey('KeyC',pressed),()=>enabled() && flying);
+  lowerButton.addEventListener('click',()=>{if (enabled() && !flying) crouch();});
   hold('touch-place',pressed=>{
     repeat(pressed);
     if (pressed) block('place');
@@ -138,14 +141,17 @@ export function bindTouchControls({element,stick,enabled,sendKey,use,block,repea
     sprintButton.setAttribute('aria-pressed','false');
     extra(false);
   }
-  return {clear,update({flying,spectator,stance,crawlRequested,seated,orbit,chisel,actionLabel='Действие'}) {
+  return {clear,update({flying:inFlight,spectator,stance,crawlRequested,touchCrouching,seated,orbit,chisel,actionLabel='Действие'}) {
+    flying=inFlight;
     if (actionLabel!==previousAction) useButton.textContent=previousAction=actionLabel;
     const state=Number(flying)+2*Number(spectator)+4*Number(crawlRequested || stance==='crawl')+
-      8*Number(seated)+16*Number(orbit)+32*Number(chisel);
+      8*Number(seated)+16*Number(orbit)+32*Number(chisel)+64*Number(touchCrouching);
     if (state===previous) return;
     previous=state;
     element('jump').textContent=flying?'Вверх':'Прыжок';
-    element('touch-lower').textContent=flying?'Вниз':'Пригнуться';
+    lowerButton.textContent=flying?'Вниз':'Пригнуться';
+    if (flying) lowerButton.removeAttribute('aria-pressed');
+    else lowerButton.setAttribute('aria-pressed',String(touchCrouching));
     for (const [id,active] of [['touch-flight',flying&&!spectator],['touch-spectator',spectator],
       ['touch-crawl',crawlRequested || stance==='crawl'],['touch-seat',seated],['touch-orbit',orbit],['touch-chisel',chisel]]) {
       element(id).setAttribute('aria-pressed',String(active));

@@ -89,12 +89,13 @@ function setPose(player, pose) {
 }
 
 export class RemotePlayers {
-  constructor(scene,camera,itemAssets,isAir,groundDust) {
+  constructor(scene,camera,itemAssets,isAir,groundDust,burnPlayer) {
     this.scene = scene;
     this.camera = camera;
     this.itemAssets = itemAssets;
     this.isAir = isAir;
     this.groundDust = groundDust;
+    this.burnPlayer = burnPlayer;
     this.entries = new Map();
     this.projected = new THREE.Vector3();
   }
@@ -189,7 +190,9 @@ export class RemotePlayers {
         motion:player.motion, stance:player.stance, boost:player.boost, groundSeat:player.groundSeat,
         position:object.position,
         swing:player.swing, held:player.held, equipment:player.equipment, itemAssets:this.itemAssets?.(), emote:player.emote});
-      player.avatar.ragdoll(player.death,dt);
+      player.avatar.ragdoll(player.death?.cause==='lava'?null:player.death,dt);
+      const ash=player.avatar.lavaDeath(player.death,now);
+      if (ash) this.burnPlayer?.(ash,object.position,now);
       player.label.visible = !player.death && player.stance === 'stand' && distance < maxNameplateDistance ** 2;
       player.label.position.y = player.avatar.labelHeight - .12;
       object.updateMatrixWorld(true);

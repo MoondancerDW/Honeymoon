@@ -14,7 +14,7 @@ function selectMode(value,inherit=false) {
 }
 
 export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,changed,pause,notice}) {
-  const health=element('health'), death=element('death-screen'), reviveButton=element('revive');
+  const health=element('health'), death=element('death-screen'), deathTitle=element('death-title'), reviveButton=element('revive');
   const admin=element('mode-menu'), administrator=element('mode-toggle'), list=element('mode-players');
   const selfMode=element('self-mode-toggle');
   const defaultRow=element('mode-default'), craftMenu=element('craft-menu'), craftToggle=element('craft-toggle');
@@ -34,6 +34,7 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     selfMode.textContent=`Режим: ${labels[next.mode]}`;
     craftToggle.hidden=next.mode!=='game';
     death.hidden=!next.death;
+    deathTitle.textContent=next.death?.cause==='lava'?'Сгорел':'Помер';
     if (deathTime!==next.death?.at) {
       deathTime=next.death?.at;
       clearTimeout(retry);

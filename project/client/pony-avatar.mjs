@@ -337,6 +337,8 @@ export function createPonyAvatar(isAir) {
   let previousSwing, strikeTime = Infinity, activeProp, heldItem, hornGlow, firstPerson = false;
   let activeEmote, emoteStrength = 0;
   let bodyFall;
+  let burn;
+  const charredColor=0x171410;
   const eyePosition = new THREE.Vector3();
   const magicPosition = new THREE.Vector3();
   const wingTarget = new THREE.Vector3();
@@ -354,7 +356,7 @@ export function createPonyAvatar(isAir) {
       visual.clear();
       rig = buildRig(visual, materials, skin);
       armor = createPonyArmor(rig);
-      armor.setLight(lightColor);
+      armor.setLight(burn ? charredColor : lightColor);
       armor.update(worn);
       hornGlow?.material.dispose();
       hornGlow = null;
@@ -756,6 +758,7 @@ export function createPonyAvatar(isAir) {
       firstPersonHooves:firstPerson ? rig.legs.slice(0, 2).map(hoof => hoof.rotation.x) : null,
       firstPersonBody:firstPerson, eyes:eyesWorldPosition().toArray(),
       ragdoll:bodyFall ? {roll:bodyFall.roll,drop:bodyFall.drop} : null,
+      lavaDeath:burn ? (burn.shattered ? 'ash' : 'charred') : null,
       wingsExtended: rig.openWings.some(wing => wing.visible),
       wingAngles: rig.openWings.map(wing => wing.rotation.z)};
   }
@@ -797,11 +800,39 @@ export function createPonyAvatar(isAir) {
     if (heldItem) heldItem.object.visible=false;
   }
 
+  function lavaDeath(death,now) {
+    if (death?.cause!=='lava') {
+      if (burn) {
+        burn=undefined;
+        visual.visible=true;
+        applyLight();
+      }
+      return null;
+    }
+    if (burn?.at!==death.at) {
+      burn={at:death.at,now,shattered:false};
+      visual.visible=true;
+      applyLight();
+    }
+    if (heldItem) heldItem.object.visible=false;
+    if (hornGlow) hornGlow.visible=false;
+    if (burn.shattered || now-burn.now<330) return null;
+    burn.shattered=true;
+    visual.visible=false;
+    object.updateWorldMatrix(true,true);
+    return [rig.head,rig.neck,rig.body,...rig.legs];
+  }
+
+  function applyLight() {
+    const color=burn ? charredColor : lightColor;
+    for (const material of materials) material.color.setHex(color, THREE.SRGBColorSpace);
+    armor.setLight(color);
+  }
+
   function setLight(color) {
     if (lightColor === color) return;
     lightColor = color;
-    for (const material of materials) material.color.setHex(color, THREE.SRGBColorSpace);
-    armor.setLight(color);
+    if (!burn) applyLight();
   }
 
   function dispose() {
@@ -818,5 +849,5 @@ export function createPonyAvatar(isAir) {
   }
   return {object, get labelHeight() {
     return rig.labelHeight - rig.head.position.y * rig.headScale;
-  }, get ragdollDrop() {return bodyFall?.drop??0;},setSkin, setLight, animate,ragdoll,setFirstPerson, eyesWorldPosition, heldLight, inspect, dispose};
+  }, get ragdollDrop() {return bodyFall?.drop??0;},setSkin, setLight, animate,ragdoll,lavaDeath,setFirstPerson, eyesWorldPosition, heldLight, inspect, dispose};
 }

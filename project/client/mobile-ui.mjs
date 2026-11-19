@@ -6,6 +6,8 @@ const root = document.documentElement;
 const standalone = matchMedia('(display-mode: standalone)');
 const isFullscreen = () => Boolean(document.fullscreenElement || document.webkitFullscreenElement);
 
+if (matchMedia('(pointer: coarse)').matches) byId('touch-pause').before(fullscreen);
+
 function updateFullscreen() {
   const active = isFullscreen();
   const supported = Boolean(document.fullscreenEnabled || document.webkitFullscreenEnabled);
@@ -15,7 +17,6 @@ function updateFullscreen() {
   fullscreen.setAttribute('aria-pressed', String(active));
   fullscreen.setAttribute('aria-label', active ? 'Выйти из полного экрана' : 'На весь экран');
   fullscreen.title = fullscreen.getAttribute('aria-label');
-  game.classList.toggle('fullscreen-available', !fullscreen.hidden);
 }
 
 fullscreen.addEventListener('click', async () => {

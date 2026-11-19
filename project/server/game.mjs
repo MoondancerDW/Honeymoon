@@ -30,9 +30,9 @@ import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, re
 import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData,
   signItemKey,signPlacementCell } from '../world/creative-items.mjs';
 import { fluidAt, fluidCurrent, liquidLevel, movementMedium } from '../world/block-movement.mjs';
-import { canLogLiquid, liquidCell, liquidKind } from '../world/logged-fluid.mjs';
-import { FAKE_WATER, bucketKeys, fluidState, plantBlock } from '../world/fluid-state.mjs';
-import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush,
+import { canLogLiquid, liquidCavity, liquidCell, liquidKind } from '../world/logged-fluid.mjs';
+import { FAKE_WATER, bucketKeys, fluidState, fluidSurface, plantBlock } from '../world/fluid-state.mjs';
+import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, voxelSelectionBoxes,
   VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
 
@@ -59,6 +59,7 @@ const MAX_ACTIVE_IDLE_MS = 30000;
 const REQUEST_ID = /^[A-Za-z0-9_-]{8,100}$/;
 const actionRate = {player:24,playerBurst:48,total:192,totalBurst:384};
 const receiptCleanupInterval=60_000;
+const lavaDamageInterval=1000;
 
 function point(input, integers = false) {
   const valid = integers ? Number.isSafeInteger : Number.isFinite;
@@ -253,6 +254,7 @@ export function createGame(base, store, geometry, {
   const eyes = new Map();
   const spectators = new Set();
   const seats = new Map();
+  const lavaDamageAt = new Map();
   const actionBudgets=new Map();
   const globalActionBudget={tokens:actionRate.totalBurst,at:clock()};
   let nextReceiptCleanup=0;
@@ -446,6 +448,7 @@ export function createGame(base, store, geometry, {
     const now = clock();
     positions.set(player, {position, stance, updated:now, seen:now, budget:1});
     movementChannel.invalidate(player);
+    trackLava(player,position,bodyFor(player,stance),now);
   }
 
   function seatsAt(x, y, z) {
@@ -1388,19 +1391,75 @@ export function createGame(base, store, geometry, {
     });
   }
 
-  function damagePlayer(player,amount) {
+  function touchesLava(position,body) {
+    const {x,y,z}=position;
+    const {halfWidth,height}=body;
+    const epsilon=.00001;
+    const bottom=y+epsilon, top=y+height-epsilon;
+    for (let bx=Math.floor(x-halfWidth+epsilon);bx<=Math.floor(x+halfWidth-epsilon);bx++) {
+      for (let bz=Math.floor(z-halfWidth+epsilon);bz<=Math.floor(z+halfWidth-epsilon);bz++) {
+        for (let by=Math.floor(bottom);by<=Math.floor(top);by++) {
+          const cell=cellAt(bx,by,bz);
+          const fluid=fluidState(cell);
+          if (fluid?.kind==='lava') {
+            if (!fluid.logged && bottom<by+fluidSurface(fluid,fluidState(cellAt(bx,by+1,bz)))) return true;
+            if (fluid.logged) {
+              const neighbors=(dx,dy,dz)=>cellAt(bx+dx,by+dy,bz+dz);
+              if (liquidCavity(cell,neighbors,models).some(box=>physical.overlapsBox({...position,body},bx,by,bz,box))) return true;
+            }
+          }
+          if (cell?.voxels?.materials.some(material=>chiselMaterialShape(material)?.fluid==='lava') &&
+              voxelSelectionBoxes(cell.voxels).some(box=>box.fluid==='lava' &&
+                physical.overlapsBox({...position,body},bx,by,bz,box))) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function trackLava(player,position,body,now) {
+    if (!survival?.enabled || spectators.has(player) || !survival.isGame(player) || survival.dead(player) ||
+        !touchesLava(position,body)) {
+      lavaDamageAt.delete(player);
+      return;
+    }
+    if (!lavaDamageAt.has(player)) lavaDamageAt.set(player,now+lavaDamageInterval);
+  }
+
+  function advanceLava(onlinePlayers) {
+    const now=clock();
+    const active=new Set(onlinePlayers);
+    for (const player of lavaDamageAt.keys()) if (!active.has(player)) lavaDamageAt.delete(player);
+    for (const player of active) {
+      const seat=publicSeat(player);
+      trackLava(player,playerAt(player),seat ? bodyAtSeat(player,seat) : bodyFor(player),now);
+      settleLavaDamage(player,now);
+    }
+  }
+
+  function settleLavaDamage(player,now) {
+    const due=lavaDamageAt.get(player);
+    if (due===undefined || now<due) return;
+    // Keep the schedule anchored to contact so delayed server ticks do not compound the delay.
+    const amount=1+Math.floor((now-due)/lavaDamageInterval);
+    lavaDamageAt.set(player,due+amount*lavaDamageInterval);
+    return damagePlayer(player,amount,'lava');
+  }
+
+  function damagePlayer(player,amount,cause) {
     if (!survival?.enabled||!survival.isGame(player)||spectators.has(player)) return;
     const point=playerAt(player),body=bodyFor(player);
     let floor=point.y;
-    if (survival.status(player).health<=amount && !physical.supported(point,body)) {
+    if (cause!=='lava' && survival.status(player).health<=amount && !physical.supported(point,body)) {
       for (let y=Math.floor(point.y);y>=base.manifest.bounds.minY;y--) {
         const found=physical.standAbove({...point,y},Math.min(point.y,y+1),{height:.3,halfWidth:.23});
         if (found) { floor=found.y; break; }
       }
     }
-    const state=survival.damage(player,amount,point,floor);
+    const state=survival.damage(player,amount,point,floor,cause);
     if (state) {
       if (state.death) {
+        lavaDamageAt.delete(player);
         forceFlight(player,false);
         releaseSeat(player);
         movementChannel.invalidate(player);
@@ -1517,8 +1576,10 @@ export function createGame(base, store, geometry, {
     }
     const observing = spectators.has(player);
     if (!observing && physical.collides(target,dimensions)) throw new RequestError(409, 'teleport_blocked');
+    if (settleLavaDamage(player,clock())?.death) throw new RequestError(409,'player_dead');
     const entry = observing ? passivePosition(target) : enterPosition(player, target, playerAt(player),'stand');
     releaseSeat(player);
+    lavaDamageAt.delete(player);
     movePlayer(player, target);
     survival?.clearFall(player);
     return {...entry, seat:null, stance:'stand'};
@@ -1653,6 +1714,8 @@ export function createGame(base, store, geometry, {
     let dimensions = groundSeat ? bodyAtSeat(player,seat) : playerBody(size,stance);
     let segmentStart = previous, segment = [];
     const observing = spectators.has(player);
+    let leftLava=false;
+    const wasInLava=lavaDamageAt.has(player);
     const validateSegment = () => {
       if (!segment.length || observing) return;
       if (!(hasTrail ? physical.movementTrailAllowed(segmentStart,segment,dimensions) :
@@ -1684,15 +1747,21 @@ export function createGame(base, store, geometry, {
       drop += Math.max(-vertical, 0);
       if (distance > budget + (groundSeat ? .035 : MOVEMENT_GRACE) ||
           drop > dropBudget + (gravityDrop ? MOVEMENT_GRACE : 0)) reject();
+      if (wasInLava && !leftLava && !touchesLava(step,dimensions)) leftLava=true;
       segment.push(step);
       from = step;
     }
     validateSegment();
+    if (leftLava) {
+      if (settleLavaDamage(player,now)?.death) throw new RequestError(409,'player_dead');
+      lavaDamageAt.delete(player);
+    }
 
     if (groundSeat) {
       Object.assign(seat,target);
       positions.set(player,{position:target,stance,updated:now,seen:now,budget:budget-distance,requestId});
       if (!sequenced) movementChannel.invalidate(player);
+      trackLava(player,target,dimensions,now);
       return {...passivePosition(target),seat,stance};
     }
     const entry = observing ? passivePosition(target) : enterPosition(player, target, previous,stance);
@@ -1701,6 +1770,7 @@ export function createGame(base, store, geometry, {
     if (!sequenced) movementChannel.invalidate(player);
     if (survival?.enabled&&survival.isGame(player)) {
       const medium=movementMedium(cellAt,target.x,target.y,target.z,models);
+      trackLava(player,target,dimensions,now);
       const fall=survival.observe(player,previous,target,{grounded:physical.supported(target,dimensions,.08),
         protectedFall:observing||Boolean(medium)||body.pose?.motion==='fly'});
       if (fall) damagePlayer(player,fall);
@@ -1808,10 +1878,19 @@ export function createGame(base, store, geometry, {
     return {position, stance:'stand', seat:null};
   }
 
+  function respawn(player) {
+    releaseSeat(player);
+    forceFlight(player,false);
+    lavaDamageAt.delete(player);
+    movePlayer(player,spawn);
+    survival?.clearFall(player);
+    return {...passivePosition(spawn),seat:null,stance:'stand'};
+  }
+
   return {
     action,
     craft,
-    damageFromNpc:damagePlayer,
+    damageFromNpc:(player,amount)=>damagePlayer(player,amount),
     healFromNpc(player) {
       const state=survival?.enabled&&survival.heal(player);
       if (state) survivalChanged?.(player,state);
@@ -1833,6 +1912,8 @@ export function createGame(base, store, geometry, {
     teleportNear,
     setSpectator,
     advance,
+    advanceLava,
+    clearLavaContact:player=>lavaDamageAt.delete(player),
     advanceMinecarts,
     advanceDroppedItems: drops.advance,
     clearDroppedItems: drops.clear,
@@ -1926,14 +2007,9 @@ export function createGame(base, store, geometry, {
       const entry = positions.get(player);
       if (entry) entry.seen = clock();
     },
-    respawn(player) {
-      releaseSeat(player);
-      forceFlight(player,false);
-      movePlayer(player, spawn);
-      survival?.clearFall(player);
-      return { position:spawn, seat:null, stance:'stand', effects:[], worldRevision:store.worldRevision() };
-    },
+    respawn,
     revive(player,death) {
+      if (death.cause==='lava') return respawn(player);
       const body=bodyFor(player,'stand');
       const point={...death.position,y:death.floor};
       const position=bodyWithinMap(point,body)&&physical.supported(point,body)&&!physical.collides(point,body) ? point :
