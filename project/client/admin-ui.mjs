@@ -29,6 +29,8 @@ const textErrors={
   outside_playable_area:'Игрок за пределами доступной области.',
   player_dead:'Персонаж должен возродиться перед телепортом.',
   movement_blocked:'Сервер скорректировал позицию. Повторите действие.',
+  drop_obstructed:'Перед игроком нет места, чтобы выбросить предмет из второй руки.',
+  too_many_dropped_items:'На земле слишком много предметов, чтобы выбросить предмет из второй руки.',
   invalid_ban_reason:'Проверьте текст причины блокировки.',
   invalid_pony_type:'Выберите расу из списка.',
   invalid_race:'Выберите расу из списка.',
@@ -40,6 +42,10 @@ const textErrors={
 const date=new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short'});
 const stamp=value=>Number.isFinite(value)?date.format(value):'';
 const nameOf=profile=>profile.profileName||profile.nickname||profile.uid;
+const profileNames=new Intl.Collator('ru-RU',{sensitivity:'base',numeric:true});
+const moscowTime=new Intl.DateTimeFormat('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'2-digit',
+  hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+const deviceTypes={desktop:'ПК',mobile:'Мобильное устройство',tablet:'Планшет'};
 
 export function createAdminUi({element,load,loadUids,post,pause,worldSettings,teleport}) {
   const toggle=element('admin-toggle'),dialog=element('admin-menu'),body=element('admin-body'),status=element('admin-status');
@@ -254,15 +260,29 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
   }
 
   function profileCard(person) {
-    const row=node('article','admin-record');
+    const row=node('article','admin-record admin-profile-record');
     row.dataset.profileUid=person.uid;
-    const header=node('div','admin-summary');
-    const information=node('div','admin-details');
-    const short=person.uid.slice(0,8);
     const manageable=access.owner || person.uid===access.uid || person.role==='player';
-    const identification=[person.owner?'Владелец':titles[person.role],
-      person.ban?'Заблокирован':person.online?'В сети':'Не в сети',short].filter(Boolean);
-    information.append(node('strong',null,nameOf(person)),node('small',null,identification.join(' · ')));
+    const devices=person.devices??[];
+    const lastSeen=devices.reduce((latest,device)=>Math.max(latest,device.lastSeen??0),0);
+    const availability=person.online ? 'В сети' : lastSeen ? `Последний раз был ${moscowTime.format(lastSeen).replace(',', '')}` :
+      'Последний визит неизвестен';
+    const details=node('details','admin-player-management');
+    details.dataset.playerManagement=person.uid;
+    details.open=expandedProfiles.has(person.uid);
+    const summary=node('summary','admin-profile-summary');
+    summary.setAttribute('aria-label',`Управление профилем ${nameOf(person)}. ${person.ban?'Заблокирован. ':''}${availability}`);
+    const name=node('strong','admin-profile-name',nameOf(person));
+    name.title=person.ban ? `${nameOf(person)} · Заблокирован` : nameOf(person);
+    const status=node('small','admin-profile-presence',availability);
+    if (!person.online && lastSeen) status.title='Московское время';
+    if (person.ban) name.insertAdjacentText('beforeend',' ⊘');
+    summary.append(name,status);
+
+    const management=node('div','admin-player-actions');
+    const information=node('div','admin-profile-details');
+    const identification=[person.owner?'Владелец':titles[person.role],person.ban?'Заблокирован':'',person.uid.slice(0,8)].filter(Boolean);
+    information.append(node('small',null,identification.join(' · ')));
     if (person.nickname && person.nickname!==nameOf(person)) information.append(node('small',null,'Ник в игре · '+person.nickname));
     for (const [key,trait] of Object.entries(ponyTraits)) {
       const label=trait.labels[person[trait.field]]??trait.labels[trait.fallback];
@@ -271,15 +291,8 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
       current.setAttribute('data-current-'+key,'');
       information.append(current);
     }
-    header.append(information);
-    row.append(header);
-    if (!access.singlePlayer && person.ban?.reason) row.append(node('small','admin-error','Причина блокировки · '+person.ban.reason));
-    const details=node('details','admin-player-management');
-    details.dataset.playerManagement=person.uid;
-    details.open=expandedProfiles.has(person.uid);
-    const summary=node('summary',null,'Управление');
-    summary.setAttribute('aria-label',`Управление профилем ${nameOf(person)}`);
-    const management=node('div','admin-player-actions');
+    management.append(information);
+    if (!access.singlePlayer && person.ban?.reason) management.append(node('small','admin-error','Причина блокировки · '+person.ban.reason));
     details.append(summary,management);
     row.append(details);
     for (const [key,trait] of Object.entries(ponyTraits)) management.append(ponyTraitForm(person,key,trait));
@@ -290,7 +303,6 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
       ()=>void submit('admin/invites',{kind:'device',profileUid:person.uid},reply=>createdLink(reply,person))));
     if (actions.childElementCount) management.append(actions);
     if (banTarget===person.uid) management.append(banForm(person));
-    const devices=person.devices??[];
     if (devices.length) {
       const devicesPanel=node('details');
       devicesPanel.append(node('summary',null,'Устройства · '+devices.filter(device=>!device.revokedAt).length));
@@ -315,10 +327,11 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     const active=section('Профили игроков');
     const search=field('Найти профиль',{type:'search',value:searchText,placeholder:'Имя, ник или UID'});
     const list=node('div','admin-cards');
+    const sorted=[...(data?.profiles??[])].sort((a,b)=>profileNames.compare(nameOf(a),nameOf(b))||a.uid.localeCompare(b.uid));
     function filter() {
       searchText=search.input.value;
       const value=searchText.trim().toLocaleLowerCase('ru');
-      const people=(data?.profiles??[]).filter(person=>!value ||
+      const people=sorted.filter(person=>!value ||
         [person.profileName,person.nickname,person.uid].join(' ').toLocaleLowerCase('ru').includes(value));
       list.replaceChildren(...people.map(profileCard));
       if (!people.length) list.append(node('p','admin-subtle','Профили не найдены.'));
@@ -336,6 +349,12 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     const meta=[inviteStatus[invitation.status]??invitation.status,
       invitation.expiresAt?'до '+stamp(invitation.expiresAt):''].filter(Boolean);
     header.append(node('strong',null,title),node('small',null,meta.join(' · ')));
+    if (invitation.status==='used') {
+      const {uid,browser,deviceType,profileName}=invitation.usedBy??{};
+      const usedProfile=uid ? data.profiles.find(profile=>profile.uid===uid) : target;
+      const usedName=profileName||(usedProfile&&nameOf(usedProfile))||uid||'профиль не записан';
+      header.append(node('small','admin-invite-used-by',`${usedName} · ${browser||'браузер неизвестен'} · ${deviceTypes[deviceType]||'устройство неизвестно'}`));
+    }
     const row=node('article','admin-record');
     row.dataset.inviteId=invitation.id;
     const actions=node('div','admin-summary');

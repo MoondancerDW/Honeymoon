@@ -39,7 +39,7 @@ function pack(chunks,minX=0,maxX=1,minZ=0,maxZ=0,outer=false) {
   const catalog=makeMaterials();
   const sampled=new Map(chunks.map(chunk => {
     const level = sampleChunk(chunk,catalog);
-    return [`${chunk.x},${chunk.z}`,outer ? outerChunk(level) : level];
+    return [`${chunk.x},${chunk.z}`,outer ? outerChunk(level,catalog) : level];
   }));
   return buildRegion(0,0,(x,z) => sampled.get(`${x},${z}`),catalog,minX,maxX,minZ,maxZ,outer ? OUTER_STEP : undefined);
 }
@@ -179,11 +179,29 @@ test('exposed terrain keeps its original odd height at the exact chunk boundary'
   const soil = [air,rock,'legacy:2:0'];
   const west = supplied(0,0,(_x,y) => y < 6 ? 1 : y === 6 ? 2 : 0,soil);
   const east = supplied(1,0,(_x,y) => y < 6 ? 1 : y === 6 ? 2 : 0,soil);
-  const geometry = pack([west,east]).content;
-  for (const slot of [0,1]) {
-    const tops = faces(geometry,slot).filter(face => face.face===3);
-    assert.deepEqual(tops,[{x:0,z:0,y:7,w:16,h:16,face:3,water:false,tile:0}]);
-    assert.ok(faces(geometry,slot,true).every(face => face.y < 7));
+  for (const outer of [false,true]) {
+    const geometry = pack([west,east],0,1,0,0,outer).content;
+    for (const slot of [0,1]) {
+      const tops = faces(geometry,slot).filter(face => face.face===3);
+      assert.deepEqual(tops,[{x:0,z:0,y:7,w:16,h:16,face:3,water:false,tile:0}]);
+      assert.ok(faces(geometry,slot,true).every(face => face.y < 7));
+    }
+  }
+});
+
+test('lawns remain one block below a coarsened cell ceiling under roofs and beside leaf blocks', () => {
+  const lawn = supplied(0,0,(x,y,z) => {
+    if (y<6) return 1;
+    if (y===6) return z<8 ? 2 : 1;
+    if (y===7 && x===9 && z===5) return 3;
+    return y===10 && x>=4 && x<12 && z>=3 && z<7 ? 4 : 0;
+  },[air,rock,'legacy:2:0','legacy:18:0',masonry]);
+  for (const outer of [false,true]) {
+    const tops=faces(pack([lawn],0,0,0,0,outer).content).filter(face=>face.face===3 && face.tile===0);
+    const at=(x,z)=>tops.filter(f=>f.x<=x && x<f.x+f.h && f.z<=z && z<f.z+f.w);
+    assert.deepEqual(at(5,4).map(face=>face.y),[7]);
+    assert.deepEqual(at(8,5).map(face=>face.y),[7]);
+    assert.ok(tops.every(face=>face.y===7));
   }
 });
 

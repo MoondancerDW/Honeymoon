@@ -45,6 +45,34 @@ function inviteStatus(row,now) {
   return 'active';
 }
 
+function invitationDevice(headers={}) {
+  const agent=headers['user-agent']??'';
+  const brands=headers['sec-ch-ua']??'';
+  let browser=null;
+  if (/\b(?:Edg|EdgA|EdgiOS|Edge)\//i.test(agent) || /"Microsoft Edge"/i.test(brands)) browser='Microsoft Edge';
+  else if (/\b(?:OPR|OPiOS|OPT|Opera)\//i.test(agent) || /"Opera(?: GX)?"/i.test(brands)) browser='Opera';
+  else if (/\bSamsungBrowser\//i.test(agent) || /"Samsung Internet"/i.test(brands)) browser='Samsung Internet';
+  else if (/\bYaBrowser\//i.test(agent) || /"Yandex(?: Browser)?"/i.test(brands)) browser='Яндекс Браузер';
+  else if (/\bVivaldi\//i.test(agent) || /"Vivaldi"/i.test(brands)) browser='Vivaldi';
+  else if (/\b(?:Firefox|FxiOS)\//i.test(agent)) browser='Firefox';
+  else if (/"Google Chrome"/i.test(brands) || /\bCriOS\//i.test(agent)) browser='Google Chrome';
+  else if (/\bChromium\//i.test(agent) || /"Chromium"/i.test(brands)) browser='Chromium';
+  else if (/\bChrome\//i.test(agent)) browser='Google Chrome';
+  else if (/\bVersion\/[^ ]+.*\bSafari\//i.test(agent)) browser='Safari';
+
+  const form=headers['sec-ch-ua-form-factors']??'';
+  const platform=headers['sec-ch-ua-platform']??'';
+  let deviceType=null;
+  if (/"Tablet"/i.test(form) || /\b(?:iPad|Tablet|Kindle|Silk|PlayBook)\b/i.test(agent)) deviceType='tablet';
+  else if (/"Mobile"/i.test(form) || headers['sec-ch-ua-mobile']==='?1' ||
+    /\b(?:iPhone|iPod|Windows Phone|Mobi(?:le)?)\b/i.test(agent)) deviceType='mobile';
+  else if (/"Desktop"/i.test(form)) deviceType='desktop';
+  else if (/"Android"/i.test(platform) || /\bAndroid\b/i.test(agent)) deviceType='tablet';
+  else if (/"(?:Windows|macOS|Linux|Chrome OS)"/i.test(platform) ||
+    /\b(?:Windows NT|Macintosh|X11|CrOS|Linux x86)\b/i.test(agent)) deviceType='desktop';
+  return {browser,deviceType};
+}
+
 export function createAccess(store,{inviteRequired=false,singlePlayer=false,ownerKey,publicOrigin,now=Date.now,revokeStream=()=>{},
   disconnectProfile=()=>{}}={}) {
   const prepare=sql=>store.db.prepare(sql);
@@ -72,13 +100,14 @@ export function createAccess(store,{inviteRequired=false,singlePlayer=false,owne
   const updateInitialNick=prepare(`INSERT INTO player_profiles(player,nickname) VALUES (?,?)
     ON CONFLICT(player) DO UPDATE SET nickname=COALESCE(player_profiles.nickname,excluded.nickname)`);
   const inviteColumns=`id,kind,player AS profileUid,issuer,label,created_at AS createdAt,
-    expires_at AS expiresAt,used_at AS usedAt,revoked_at AS revokedAt`;
+    expires_at AS expiresAt,used_at AS usedAt,revoked_at AS revokedAt,
+    used_by AS usedByUid,used_browser AS browser,used_device_type AS deviceType`;
   const findInvite=prepare('SELECT '+inviteColumns+' FROM access_invites WHERE code_hash=?');
   const inviteList=prepare('SELECT '+inviteColumns+' FROM access_invites ORDER BY created_at DESC,id');
   const inviteById=prepare('SELECT '+inviteColumns+' FROM access_invites WHERE id=?');
   const addInvite=prepare(`INSERT INTO access_invites(id,code_hash,kind,player,issuer,label,created_at,expires_at)
     VALUES (?,?,?,?,?,?,?,?)`);
-  const useInvite=prepare(`UPDATE access_invites SET used_at=?
+  const useInvite=prepare(`UPDATE access_invites SET used_at=?,used_by=?,used_browser=?,used_device_type=?
     WHERE id=? AND used_at IS NULL AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)`);
   const disableInvite=prepare('UPDATE access_invites SET revoked_at=? WHERE id=? AND used_at IS NULL AND revoked_at IS NULL');
   const expected=!singlePlayer && typeof ownerKey==='string' && ownerKey.length ? Buffer.from(hash(ownerKey),'hex') : undefined;
@@ -159,9 +188,10 @@ export function createAccess(store,{inviteRequired=false,singlePlayer=false,owne
     return {credential:{...account.get(uid),deviceId,lastSeen:time},token};
   }
 
-  function invited(value,body) {
+  function invited(value,body,headers) {
     if (typeof value!=='string' || !invitePattern.test(value.trim())) throw new RequestError(400,'invalid_invite');
     const deviceName=label(body.deviceName,80,'invalid_device_name',undefined);
+    const {browser,deviceType}=invitationDevice(headers);
     return store.atomic(()=>{
       const time=Math.trunc(now());
       const row=findInvite.get(hash(value.trim()));
@@ -184,17 +214,17 @@ export function createAccess(store,{inviteRequired=false,singlePlayer=false,owne
         updateAccount.run(name,row.kind,uid);
         initialNick(uid,name);
       }
-      if (useInvite.run(time,row.id,time).changes!==1) throw new RequestError(409,'invite_used');
+      if (useInvite.run(time,uid,browser,deviceType,row.id,time).changes!==1) throw new RequestError(409,'invite_used');
       return mint(uid,deviceName??(row.kind==='device' && row.label ? row.label : 'Браузер'));
     });
   }
 
-  function signIn(body,{credential,legacy,ownerBootstrap}={}) {
+  function signIn(body,{credential,legacy,ownerBootstrap,headers}={}) {
     if (localPlayer) return {credential:localPlayer};
     requireUnbanned(credential?.uid);
     if (credential && body.invite===undefined) return {credential};
     if (credential) throw new RequestError(409,'already_authenticated');
-    if (body.invite!==undefined) return invited(body.invite,body);
+    if (body.invite!==undefined) return invited(body.invite,body,headers);
     if (inviteRequired) throw new RequestError(401,'invite_required',{ownerBootstrap});
     const deviceName=label(body.deviceName,80,'invalid_device_name','Локальный браузер');
     return store.atomic(()=>{
@@ -255,8 +285,13 @@ export function createAccess(store,{inviteRequired=false,singlePlayer=false,owne
   }
 
   function publicInvite(row,time) {
-    const {issuer:_,...fields}=row;
-    return {...fields,status:inviteStatus(row,time),role:row.kind==='device'?account.get(row.profileUid)?.role:row.kind};
+    const {issuer:_,usedByUid,browser,deviceType,...fields}=row;
+    const status=inviteStatus(row,time);
+    const target=row.kind==='device' ? account.get(row.profileUid) : undefined;
+    const uid=usedByUid??target?.uid;
+    const profile=uid===target?.uid ? target : uid ? account.get(uid) : undefined;
+    return {...fields,status,role:row.kind==='device'?target?.role:row.kind,
+      ...(status==='used' && uid && {usedBy:{uid,profileName:profile?.profileName,browser,deviceType}})};
   }
 
   function listAdmin(credential,online) {

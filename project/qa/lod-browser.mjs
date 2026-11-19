@@ -74,7 +74,7 @@ try {
           terrain?.regionAt(terrain.cx+x,terrain.cz+z)?.outer)}));
       const coverage = [34,35].map(distance => ({distance,present:
         Boolean(terrain?.regionAt(terrain.cx+distance,terrain.cz))}));
-      return {fog:[view.scene.fog.near,view.scene.fog.far],probes,coverage};
+      return {fog:[view.scene.fog.near,view.scene.fog.far],vista:Boolean(terrain?.vista),probes,coverage};
     },\n`;
     await route.fulfill({response, body:source.replace(marker,marker+code+
       '\nqaFireFrame: () => view.fireTexture?.offset.y,\n')});
@@ -110,7 +110,7 @@ try {
         return {farTerrain,residentChunks,triangles,calls,occlusion,horizon:honeymoon.qaHorizonState()};
       });
       if (distance === 32) {
-        assert.deepEqual(facts.horizon.fog,[448,512]);
+        assert.deepEqual(facts.horizon.fog,facts.horizon.vista ? [500,1840] : [448,512]);
         assert.equal(facts.farTerrain.innerRadius,20);
         assert.equal(facts.farTerrain.coverageRadius,34);
         if (id === 'boundary') {

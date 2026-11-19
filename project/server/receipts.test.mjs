@@ -34,7 +34,7 @@ test('legacy migration retains recent receipts and preserves the rest of the sav
   legacy.close();
   const upgraded=openStore(path);
   try {
-    assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version,10);
+    assert.equal(upgraded.db.prepare('PRAGMA user_version').get().user_version,11);
     assert.equal(upgraded.getState('inventory',player,'slots').value.selected,8);
     assert.equal(upgraded.getReceipt(player,'legacy-0'),undefined);
     assert.deepEqual(upgraded.getReceipt(player,'legacy-oversized'),{input,status:409,output:{error:'action_result_expired'}});

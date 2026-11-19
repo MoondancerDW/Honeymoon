@@ -194,6 +194,7 @@ export function sampleChunk(chunk, catalog, neighbors) {
   }
   const water = new Map();
   const details = new Map();
+  const outerSurface = new Set();
   const rails = [];
   const micros = [];
   const covered = new Uint8Array(256);
@@ -206,7 +207,7 @@ export function sampleChunk(chunk, catalog, neighbors) {
       const at = x * 2 + z * 32 + y * 512;
       const cy = sectionY * 8 + y;
       let distinct = 0, occupied = 0, architecture = 0, leaf = 0, wet = 0, fluidLight = 0, light = 0;
-      let naturalSurface = false;
+      let naturalSurface = false, lowerGround = 0, lowerGrass = 0, upperSolid = 0;
       const index = x+CHUNK_SIDE*z+samplePlane*cy;
       for (let dy=1; dy>=0; dy--) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
         const raw = at+dx+dz*16+dy*256;
@@ -231,6 +232,12 @@ export function sampleChunk(chunk, catalog, neighbors) {
         const value = lamps.get(position) ?? entries[paletteIndex];
         if (!value) continue;
         const {kind:material,shape} = kind[value];
+        const footprint = 1 << (dx+dz*2);
+        if (dy) upperSolid |= footprint;
+        else if (material === NATURAL) {
+          lowerGround |= footprint;
+          if (shape.faces[3] === 0) lowerGrass |= footprint;
+        }
         if (material === NATURAL) naturalSurface ||= !covered[column];
         if (material === NATURAL || material === CONSTRUCTION) covered[column] = 1;
         occupied++;
@@ -264,7 +271,10 @@ export function sampleChunk(chunk, catalog, neighbors) {
         upper[slot] += dy;
       }
       packedLight[index] = quantizeLight(light);
-      const preserveSurface = naturalSurface && leaf === 0 && occupied < 8;
+      // A roof, canopy or decoration above the lower layer can make a lawn
+      // invisible to the top-down pass. Its empty upper voxels are still air.
+      const preserveSurface = occupied < 8 && (naturalSurface || (lowerGround & ~upperSolid) !== 0);
+      if (naturalSurface || (lowerGrass & ~upperSolid) !== 0) outerSurface.add(index);
       if (occupied < 4 && architecture < 1 && leaf < 2 && !preserveSurface) continue;
       let selected = 0, score = -1;
       const glazed = choices.subarray(0,distinct).some(value => kind[value].glass);
@@ -328,21 +338,28 @@ export function sampleChunk(chunk, catalog, neighbors) {
   }
 
   return {grid:grid.slice(0,highest*samplePlane), tops:tops?.slice(0,highest*samplePlane), highest,
-    details, rails, micros, water:[...water.values()], waterLight:waterLight?.slice(0,highest*samplePlane),
+    details, outerSurface, rails, micros, water:[...water.values()], waterLight:waterLight?.slice(0,highest*samplePlane),
     light:packedLight.slice(0,(highest+1)*samplePlane)};
 }
 
-export function outerChunk(chunk) {
+export function outerChunk(chunk,catalog) {
   const side = 16 / OUTER_STEP, plane = side ** 2, innerPlane = CHUNK_SIDE ** 2;
   const highest = Math.ceil(chunk.highest / 2);
   const grid = new Uint16Array(plane * highest), light = new Uint8Array(plane * (highest + 1)).fill(240);
   const variants = new Uint16Array(8), scores = new Uint8Array(8);
+  const details = new Map();
+  const isEmpty = value => !value || catalog.materials[value].kind === LIQUID;
   for (let y=0; y<=highest; y++) for (let z=0; z<side; z++) for (let x=0; x<side; x++) {
     let packed = 0, used = 0, occupied = 0;
+    let land = false, hollow = false;
+    const origin = y*2*innerPlane + z*2*CHUNK_SIDE + x*2;
     for (let dy=0; dy<2; dy++) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
-      const source = (y * 2 + dy) * innerPlane + (z * 2 + dz) * CHUNK_SIDE + x * 2 + dx;
+      const source = origin+dy*innerPlane+dz*CHUNK_SIDE+dx;
       packed = brightest(packed, chunk.light[source] ?? 240);
       const value = chunk.tops?.[source] || chunk.grid[source];
+      const children = chunk.details.get(source);
+      land ||= chunk.outerSurface.has(source);
+      hollow ||= children ? children.some(isEmpty) : isEmpty(value);
       if (!value) continue;
       occupied++;
       let index = 0;
@@ -352,12 +369,27 @@ export function outerChunk(chunk) {
     }
     const at = y * plane + z * side + x;
     light[at] = quantizeLight(packed);
-    if (occupied < 2 || y === highest) continue;
+    const preserve = land && hollow;
+    if (y === highest || occupied < 2 && !preserve) continue;
     let winner = 0;
     for (let index=1; index<used; index++) if (scores[index] > scores[winner]) winner = index;
     grid[at] = variants[winner];
+    if (!preserve) continue;
+    // Keep natural boundaries on the same one-block grid as the inner
+    // tier. Outer cells that contain only architecture or canopy stay coarse.
+    const shape = new Uint16Array(OUTER_STEP ** 3);
+    for (let dy=0; dy<2; dy++) for (let dz=0; dz<2; dz++) for (let dx=0; dx<2; dx++) {
+      const source = origin+dy*innerPlane+dz*CHUNK_SIDE+dx;
+      const children = chunk.details.get(source), base = chunk.grid[source];
+      const top = chunk.tops?.[source] || base;
+      for (let j=0; j<2; j++) for (let k=0; k<2; k++) for (let i=0; i<2; i++) {
+        const value = children ? children[i+k*2+j*4] : j ? top : base;
+        if (!isEmpty(value)) shape[dx*2+i+(dz*2+k)*OUTER_STEP+(dy*2+j)*OUTER_STEP**2] = value;
+      }
+    }
+    details.set(at,shape);
   }
-  return {grid, light, highest, details:new Map(), water:chunk.water, rails:[], micros:chunk.micros};
+  return {grid, light, highest, details, water:chunk.water, rails:[], micros:chunk.micros};
 }
 
 function microFaces(records, terrain, begin, chunk, sampleStep, catalog) {
@@ -474,31 +506,38 @@ function chunkBoundary(mask, uSize, vSize, consume) {
   }
 }
 
-function detailFaces(masks, skirt, width, start, catalog, terrain, face, at, adjacent, cutoff) {
+function detailFaces(masks, skirt, width, start, catalog, terrain, face, at, adjacent, cutoff, children) {
   const {grid,light,waterLight,liquid,visited,details} = terrain;
   const {materials,styleFor} = catalog;
   const here = details.get(at), there = details.get(adjacent);
   const hereSolid = liquid[grid[at]] ? 0 : grid[at];
   const thereSolid = liquid[grid[adjacent]] ? 0 : grid[adjacent];
   const axis = face >> 1, upper = face & 1;
+  const count = masks.length, direction = upper ? -1 : 1;
   const [uAxis,vAxis] = AXES[face];
   function style(cube, packed) {
     const material = materials[cube];
     return packed === 240 ? material.sides[face] : styleFor(material.shape,face,false,packed,true);
   }
-  for (let v=0; v<2; v++) for (let u=0; u<2; u++) {
-    const child = u*CHILD_AXIS[uAxis]+v*CHILD_AXIS[vAxis];
-    const front = child+upper*CHILD_AXIS[axis];
-    const back = child+(1-upper)*CHILD_AXIS[axis];
+  const packed = liquid[grid[adjacent]] ? waterLight[adjacent] : light[adjacent];
+  for (let v=0; v<count; v++) for (let u=0; u<count; u++) {
+    const child = u*children[uAxis]+v*children[vAxis];
+    const front = child+upper*(count-1)*children[axis];
+    const back = child+(1-upper)*(count-1)*children[axis];
     const facing = here ? here[front] : hereSolid;
     const other = there ? there[back] : thereSolid;
     const slot = start + u + v*width;
-    const packed = liquid[grid[adjacent]] ? waterLight[adjacent] : light[adjacent];
     const exposed = !other || materials[other].glass && !materials[facing]?.glass ||
       materials[other].kind === LEAVES && materials[facing]?.kind !== LEAVES;
     if (!cutoff && visited[adjacent] && facing && exposed) masks[0][slot] = style(facing,packed);
     else if (skirt && facing) skirt[slot] = style(facing,brightest(light[at],packed));
-    if (here && visited[at] && here[back] && !facing) masks[1][slot] = style(here[back],light[at]);
+    if (!here || !visited[at]) continue;
+    let previous = facing;
+    for (let step=1; step<count; step++) {
+      const value = here[front+direction*step*children[axis]];
+      if (value && !previous) masks[step][slot] = style(value,light[at]);
+      previous = value;
+    }
   }
 }
 
@@ -510,6 +549,7 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary, sampleStep) {
   const chunkSide = 16 / sampleStep;
   const limits = [chunkSide,highest,chunkSide];
   const strides = [1,plane,size];
+  const children = sampleStep===STEP ? CHILD_AXIS : [1,sampleStep**2,sampleStep];
   const records = [];
   for (let face=0; face<6; face++) {
     const axis = face>>1;
@@ -519,8 +559,9 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary, sampleStep) {
     const uSize = limits[uAxis], vSize = limits[vAxis];
     const mask = new Uint32Array(uSize*vSize);
     const skirt = axis !== 1 ? new Uint32Array(uSize*vSize) : null;
-    const fine = details.size ? [new Uint32Array(uSize*vSize*4),new Uint32Array(uSize*vSize*4)] : null;
-    const fineSkirt = fine && skirt ? new Uint32Array(uSize*vSize*4) : null;
+    const fineLength = uSize*vSize*sampleStep**2;
+    const fine = details.size ? Array.from({length:sampleStep},()=>new Uint32Array(fineLength)) : null;
+    const fineSkirt = fine && skirt ? new Uint32Array(fineLength) : null;
     const point = [0,0,0];
     const emit = (mask,step,transition = 0) => chunkBoundary(mask,uSize*sampleStep/step,vSize*sampleStep/step,(u,v,width,height,style) => {
       point[uAxis] = u*step;
@@ -542,7 +583,8 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary, sampleStep) {
           const value=grid[at], neighbor=grid[at+offset];
           if (fine && value && (details.has(at) || !cutoff && details.has(at+offset))) {
             refined = true;
-            detailFaces(fine,transition && fineSkirt,uSize*2,u*2+v*uSize*4,catalog,terrain,face,at,at+offset,cutoff);
+            detailFaces(fine,transition && fineSkirt,uSize*sampleStep,(u+v*uSize*sampleStep)*sampleStep,
+              catalog,terrain,face,at,at+offset,cutoff,children);
             continue;
           }
           if (cutoff || !value || liquid[value]) continue;
@@ -562,8 +604,10 @@ function makeChunkQuads(terrain, gx, gz, chunk, catalog, boundary, sampleStep) {
       if (refined) {
         emit(fine[0],1);
         if (transition) emit(fineSkirt,1,TRANSITION_FACE);
-        point[axis] -= direction;
-        emit(fine[1],1);
+        for (let step=1; step<sampleStep; step++) {
+          point[axis] -= direction;
+          emit(fine[step],1);
+        }
       }
     }
   }

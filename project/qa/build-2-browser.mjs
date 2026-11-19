@@ -327,18 +327,34 @@ try {
     await start();
     const local=await page.request.post(url+'api/session',{data:{}}).then(response=>response.json());
     const uid=local.access.uid;
-    let guest,guestUid,guestPublicId;
+    const guestName='Гость для проверки расы',offlineName='Аня для проверки';
+    let guest,guestUid,guestPublicId,guestInviteId,offlineInviteId,offlineUid;
     if (!solo) {
       const invite=await page.request.post(url+'api/admin/invites',{data:{kind:'player'}});
       assert.equal(invite.status(),200,await invite.text());
       guest=await browser.newPage({viewport:{width:390,height:730},isMobile:true,hasTouch:true,deviceScaleFactor:1});
       await guest.context().route(/\/api\/terrain-preload\?/,route=>route.fulfill({status:409}));
       guest.on('pageerror',error=>result.errors.push(error.message));
-      const redeemed=await guest.request.post(url+'api/session',{data:{invite:(await invite.json()).code,profileName:'Гость для проверки расы'}});
+      const guestInvitation=await invite.json();
+      guestInviteId=guestInvitation.invite.id;
+      const redeemed=await guest.request.post(url+'api/session',{data:{invite:guestInvitation.code,profileName:guestName},headers:{
+        'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1',
+      }});
       assert.equal(redeemed.status(),200,await redeemed.text());
       const invited=await redeemed.json();
       guestUid=invited.access.uid;
       guestPublicId=invited.profile.id;
+      const offlineInvite=await page.request.post(url+'api/admin/invites',{data:{kind:'player'}});
+      assert.equal(offlineInvite.status(),200,await offlineInvite.text());
+      const offlineInvitation=await offlineInvite.json();
+      offlineInviteId=offlineInvitation.invite.id;
+      const offlineLogin=await fetch(url+'api/session',{method:'POST',headers:{
+        'Content-Type':'application/json','Origin':new URL(url).origin,
+        'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+      },body:JSON.stringify({invite:offlineInvitation.code,profileName:offlineName})});
+      const offlineSession=await offlineLogin.json();
+      assert.equal(offlineLogin.status,200,JSON.stringify(offlineSession));
+      offlineUid=offlineSession.access.uid;
       await guest.goto(url,{waitUntil:'domcontentloaded'});
       await guest.waitForFunction(()=>globalThis.honeymoon?.stats().playable>0&&document.getElementById('game').classList.contains('playing'),undefined,{timeout:90_000});
       const forbidden=await guest.request.post(url+'api/admin/profiles/race',{data:{uid:guestUid,ponyType:'alicorn'}});
@@ -353,6 +369,33 @@ try {
     await management(uid).waitFor({state:'visible'});
     assert.equal(await page.locator('[data-player-management][open]').count(),0);
     assert.equal(await management(uid).locator('select[name="pony-race"]').isVisible(),false);
+    if (guest) {
+      assert.deepEqual(await page.locator('.admin-profile-name').allTextContents(),[offlineName,guestName,'Проверка игры']);
+      assert.equal(await management(guestUid).locator('.admin-profile-presence').textContent(),'В сети');
+      const listing=await page.request.get(url+'api/admin/access').then(response=>response.json());
+      const offline=listing.profiles.find(profile=>profile.uid===offlineUid);
+      assert.equal(offline.online,false);
+      const [date,time]=new Date(Math.max(...offline.devices.map(device=>device.lastSeen))+3*3600_000).toISOString().split('T');
+      const [year,month,day]=date.split('-');
+      assert.equal(await management(offlineUid).locator('.admin-profile-presence').textContent(),
+        `Последний раз был ${day}.${month}.${year.slice(2)} ${time.slice(0,5)}`);
+      const originalViewport=page.viewportSize();
+      for (const width of [originalViewport.width,390]) {
+        await page.setViewportSize({...originalViewport,width});
+        assert.ok(await management(offlineUid).locator('.admin-profile-summary').evaluate(summary=>{
+          const name=summary.querySelector('.admin-profile-name').getBoundingClientRect();
+          const status=summary.querySelector('.admin-profile-presence').getBoundingClientRect();
+          return name.width>0 && status.left>=name.right && Math.abs((name.top+name.bottom)-(status.top+status.bottom))<=2 &&
+            summary.scrollWidth<=summary.clientWidth;
+        }),`Profile name and Moscow timestamp must fit in one row at width ${width}`);
+      }
+      await page.setViewportSize(originalViewport);
+      await click('#admin-menu [data-admin-tab="invites"]');
+      const inviteAttribution=id=>page.locator(`[data-invite-id="${id}"] .admin-invite-used-by`).textContent();
+      assert.equal(await inviteAttribution(guestInviteId),`${guestName} · Safari · Мобильное устройство`);
+      assert.equal(await inviteAttribution(offlineInviteId),`${offlineName} · Microsoft Edge · ПК`);
+      await click('#admin-menu [data-admin-tab="profiles"]');
+    }
     async function openManagement(id) {
       const spoiler=management(id);
       if (!await spoiler.evaluate(details=>details.open)) await spoiler.locator(':scope > summary').click();
@@ -467,6 +510,19 @@ try {
         document.getElementById('health').childElementCount===13);
       await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.ponyType==='pegasus'&&
         player.size==='small'&&player.hasWings&&!player.hasHorn),guestPublicId);
+      const creativeMode=await page.request.post(url+'api/modes',{data:{target:guestUid,mode:'creative'}});
+      assert.equal(creativeMode.status(),200,await creativeMode.text());
+      const torch=await guest.request.post(url+'api/action',{data:{requestId:'qa-race-offhand-give',
+        type:'inventory_give',slot:0,key:'legacy:50:0',count:3}});
+      assert.equal(torch.status(),200,await torch.text());
+      await guest.locator('#touch-swap-hands').tap();
+      await guest.waitForFunction(()=>honeymoon.localAvatar()?.offhand?.key==='legacy:50:0');
+      await assign(guestUid,'earth');
+      await guest.waitForFunction(()=>honeymoon.stats().ponyType==='earth' && !honeymoon.localAvatar()?.offhand);
+      const dropped=app.game.droppedItemSnapshot(guestUid).filter(entity=>entity.item.key==='legacy:50:0');
+      assert.equal(dropped.length,1);
+      assert.equal(dropped[0].item.count,3);
+      assert.equal((await guest.request.get(url+'api/world').then(response=>response.json())).inventory.offhand,null);
       await guest.close();
     }
     const restored=await assign(uid,'');
@@ -486,7 +542,8 @@ try {
     }
     result.checks.push({self:true,other:Boolean(guest),skinOnlyVisuals:true,remoteVisuals:Boolean(guest),skinReset:Boolean(guest),manualReset:true,
       sizeOverride:true,adminOnHome:true,controlsInitiallyCollapsed:true,
-      remoteNightVision:Boolean(guest),personalNightVision:Boolean(guest)});
+      remoteNightVision:Boolean(guest),personalNightVision:Boolean(guest),
+      alphabeticalProfiles:Boolean(guest),singleRowMoscowLastSeen:Boolean(guest),usedInviteAttribution:Boolean(guest),offhandDropped:Boolean(guest)});
   } else if (raceQa) {
     await skipPreload();
     await start();
@@ -577,6 +634,17 @@ try {
       assert.equal((await health()).maxHealth,value);
       assert.equal((await health()).health,value);
     };
+    async function strafeYaw(code,side) {
+      await page.evaluate(()=>honeymoon.look(0,0));
+      await page.keyboard.down(code);
+      try {
+        const yaw=await page.waitForFunction(side=>{
+          const bodyYaw=honeymoon.localAvatar()?.yaw;
+          return side*bodyYaw>.235 && bodyYaw;
+        },side,{timeout:5000});
+        return await yaw.jsonValue();
+      } finally {await page.keyboard.up(code);}
+    }
     await ground();
     await expectHealth(12);
     const chargeDots=count=>page.waitForFunction(count=>{
@@ -587,22 +655,26 @@ try {
     await chargeDots(2);
     await noFlight();
     const normal=await sampleApex(24);
-    const charged=await sampleApex(275);
+    const released=await sampleApex(350);
+    assert.ok(Math.abs(normal-released)<.06,JSON.stringify({normal,released}));
+    assert.equal((await stat()).jumpCharges,2);
+    const charged=await sampleApex(650);
     assert.ok(normal>1.2 && normal<1.27 && Math.abs(normal+.5-charged)<.06,JSON.stringify({normal,charged}));
     await page.waitForFunction(()=>honeymoon.stats().jumpCharges===1);
     await chargeDots(1);
-    const second=await sampleApex(275);
+    const second=await sampleApex(650);
     assert.ok(Math.abs(second-charged)<.06);
     await page.waitForFunction(()=>honeymoon.stats().jumpCharges===0);
     await chargeDots(0);
     const beforeEmpty=await page.locator('#toast').textContent();
-    const empty=await sampleApex(275);
+    const empty=await sampleApex(650);
     assert.ok(Math.abs(normal-empty)<.06,JSON.stringify({normal,empty}));
     const afterEmpty=await page.locator('#toast').textContent();
     assert.ok(!afterEmpty || afterEmpty===beforeEmpty,'an empty jump charge produces no error message');
     await chargeDots(1);
     await chargeDots(2);
-    result.checks.push({earth:{normal,charged,second,empty,bothRecharged:true,chargeDots:true,health:12}});
+    result.checks.push({earth:{normal,released,charged,second,empty,bothRecharged:true,chargeDots:true,health:12}});
+    const groundStrafe=mobileQa ? null : [await strafeYaw('KeyA',1),await strafeYaw('KeyD',-1)];
 
     await uploadSkin('#88caf0','pegasus','large');
     await expectHealth(11);
@@ -684,6 +756,40 @@ try {
     assert.ok(await visible('#hud-offhand [data-slot="40"]'));
     await activate('#touch-flight','KeyF');
     await page.waitForFunction(()=>honeymoon.stats().flying);
+    if (groundStrafe) {
+      // Use open air so a nearby wall cannot end the horizontal movement during sampling.
+      await hop(-5,105,-20);
+      if (!(await stat()).flying) await activate('#touch-flight','KeyF');
+      await page.waitForFunction(()=>honeymoon.stats().flying);
+      const airStrafe=[await strafeYaw('KeyA',1),await strafeYaw('KeyD',-1)];
+      airStrafe.forEach((yaw,index)=>assert.ok(Math.abs(yaw-groundStrafe[index])<.055));
+      await page.waitForFunction(()=>Math.abs(honeymoon.localAvatar()?.yaw)<.04);
+      result.checks.push({flightStrafe:{groundYaw:groundStrafe,airYaw:airStrafe,recentered:true}});
+      const hover=()=>page.waitForFunction(()=>{
+        const avatar=honeymoon.localAvatar();
+        return avatar?.motion==='fly' && avatar.legAngles.every(angle=>Math.abs(angle)<.025);
+      });
+      await hover();
+      await page.keyboard.down('KeyW');
+      try {
+        await page.waitForFunction(()=>honeymoon.localAvatar()?.legAngles.every(angle=>angle<-.14&&angle>-.23));
+        const flightAngles=await page.evaluate(async()=>{
+          const frames=[];
+          for(let i=0;i<15;i++) {
+            await new Promise(resolve=>requestAnimationFrame(resolve));
+            frames.push(honeymoon.localAvatar().legAngles);
+          }
+          return frames;
+        });
+        const angleNoise=flightAngles[0].map((_,i)=>{
+          const angles=flightAngles.map(frame=>frame[i]);
+          return Math.max(...angles)-Math.min(...angles);
+        });
+        assert.ok(angleNoise.every(delta=>delta<.035),JSON.stringify(flightAngles));
+        result.checks.push({normalFlightLegs:{hover:true,travelling:flightAngles.at(-1),frameVariation:angleNoise}});
+      } finally {await page.keyboard.up('KeyW');}
+      await hover();
+    }
     if (mobileQa) await page.evaluate(()=>document.getElementById('game').classList.add('show-metrics'));
     if (mobileQa) for (const [width,height] of [[320,610],[390,730],[667,300],[800,370]]) {
       await page.setViewportSize({width,height});

@@ -7,6 +7,7 @@ import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {crc32,deflateSync} from 'node:zlib';
 import * as geometry from '../world/geometry.mjs';
+import {offhandSlot} from '../world/item-stack.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import {normalizeLegacyPlayerName} from './legacy-player.mjs';
 import {openStore} from './store.mjs';
@@ -192,12 +193,18 @@ test('invite consumption is atomic and device credentials retain name, UID and a
   const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
   const ownerUid=code(owner).access.uid;
   const admin=(path,body,cookie=owner.cookie)=>request(urls.owner,path,{body,cookie});
-  const join=(body,cookie)=>request(urls.public,'/api/session',{body,cookie,origin:external});
+  const join=(body,cookie,headers)=>request(urls.public,'/api/session',{body,cookie,origin:external,headers});
   const initial=code(await admin('/api/admin/invites',{kind:'player',label:'Alice'}));
   assert.equal(initial.invite.status,'active');
+  assert.equal(initial.invite.usedBy,undefined);
   assert.equal(new URL(initial.url).hash,`#invite=${initial.code}`);
   assert.equal(code(await join({invite:initial.code}),409).error,'profile_name_required');
-  const concurrent=await Promise.all([join({invite:initial.code,profileName:'Amy Person'}),join({invite:initial.code,profileName:'Amy Person'})]);
+  const input={invite:initial.code,profileName:'Amy Person'};
+  const concurrent=await Promise.all([
+    join(input,undefined,{'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0'}),
+    join(input,undefined,{'sec-ch-ua':'"Chromium";v="145", "Google Chrome";v="145"',
+      'sec-ch-ua-mobile':'?1','sec-ch-ua-platform':'"Android"'}),
+  ]);
   const winner=concurrent.find(reply=>reply.status===200), loser=concurrent.find(reply=>reply.status===409);
   assert.ok(winner&&loser,JSON.stringify(concurrent.map(reply=>reply.status)));
   assert.equal(loser.json.error,'invite_used');
@@ -238,7 +245,8 @@ test('invite consumption is atomic and device credentials retain name, UID and a
   assert.equal(viewer.status,200);
   try {
     const pair=code(await admin('/api/admin/invites',{kind:'device',profileUid:player.uid,label:'Phone'}));
-    const second=await join({invite:pair.code});
+    const second=await join({invite:pair.code},undefined,{'user-agent':
+      'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1'});
     assert.equal(code(second).access.uid,player.uid);
     assert.equal(second.json.access.activeElsewhere,true);
     const denied=await fetch(urls.public+'/api/events?presence=1',{headers:{Cookie:second.cookie}});
@@ -269,9 +277,41 @@ test('invite consumption is atomic and device credentials retain name, UID and a
     assert.equal(code(await request(urls.public,'/api/access',{cookie:delegated.cookie})).role,'admin');
     const audit=code(await admin('/api/admin/access'));
     assert.ok(audit.profiles.some(row=>row.uid===player.uid&&row.nickname==='New Nick'));
-    assert.ok(audit.invites.some(row=>row.id===initial.invite.id&&row.status==='used'));
+    const used=audit.invites.find(row=>row.id===initial.invite.id);
+    assert.equal(used.status,'used');
+    const device=winner===concurrent[0] ? {browser:'Firefox',deviceType:'desktop'} : {browser:'Google Chrome',deviceType:'mobile'};
+    assert.deepEqual(used.usedBy,{uid:player.uid,profileName:'Amy Person',...device});
+    assert.deepEqual(audit.invites.find(row=>row.id===pair.invite.id).usedBy,
+      {uid:player.uid,profileName:'Amy Person',browser:'Safari',deviceType:'tablet'});
     assert.ok(!JSON.stringify(audit).includes(initial.code));
+    assert.ok(!JSON.stringify(audit).includes('Mozilla/5.0'));
   } finally { await viewer.body.cancel(); }
+});
+
+test('used invitations from schema 10 only show information the old save actually recorded',async t=>{
+  const {state,start,close}=fixture(t);
+  let urls=await start();
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const uid=code(owner).access.uid;
+  const issue=body=>request(urls.owner,'/api/admin/invites',{body,cookie:owner.cookie});
+  const general=code(await issue({kind:'player'})).invite;
+  const device=code(await issue({kind:'device',profileUid:uid})).invite;
+  await close();
+  const old=new DatabaseSync(state);
+  old.exec(`UPDATE access_invites SET used_at=created_at;
+    ALTER TABLE access_invites DROP COLUMN used_by;
+    ALTER TABLE access_invites DROP COLUMN used_browser;
+    ALTER TABLE access_invites DROP COLUMN used_device_type;
+    PRAGMA user_version=10;`);
+  old.close();
+
+  urls=await start();
+  const {invites}=code(await request(urls.owner,'/api/admin/access',{cookie:owner.cookie}));
+  const unknown=invites.find(row=>row.id===general.id);
+  const known=invites.find(row=>row.id===device.id);
+  assert.equal(unknown.status,'used');
+  assert.equal(unknown.usedBy,undefined);
+  assert.deepEqual(known.usedBy,{uid,profileName:'Host Owner',browser:null,deviceType:null});
 });
 
 test('invitations can expire and revoke without consuming a profile',async t=>{
@@ -408,6 +448,52 @@ test('administrators set persistent races for themselves and other players until
   assert.deepEqual([largePegasus.size,largePegasus.gameMode.maxHealth],['large',11]);
   const tall=code(await player('/api/profile',{skin:unicornSkin('tall')}));
   assert.deepEqual([tall.ponyType,tall.size,tall.gameMode.maxHealth],['unicorn','tall',10]);
+});
+
+test('losing the offhand ability drops its stack once for both overrides and skin changes',async t=>{
+  const {state,start}=fixture(t);
+  const urls=await start();
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const host=(path,body)=>request(urls.owner,path,{body,cookie:owner.cookie});
+  const invite=code(await host('/api/admin/invites',{kind:'player'}));
+  const guest=await request(urls.public,'/api/session',{body:{invite:invite.code,profileName:'Cloud Watcher'},origin:external});
+  const uid=code(guest).access.uid;
+  const player=(path,body)=>request(urls.public,path,{body,cookie:guest.cookie,origin:external});
+  const race=async ponyType=>code(await host('/api/admin/profiles/race',{uid,ponyType}));
+  const world=async()=>code(await player('/api/world'));
+  const book={key:'creative:387:0',count:1,nbt:{title:'Saved pages',author:'Cloud Watcher',pages:['Original text'],
+    display:{Name:'Keepsake',Lore:['A letter from home']}}};
+  const publicText={title:book.nbt.title,author:book.nbt.author,display:book.nbt.display};
+  const store=openStore(state);
+  try {
+    store.putState('inventory',uid,'slots',3,{...guest.json.inventory,offhand:book});
+  } finally { store.close(); }
+
+  await race('alicorn');
+  await race('unicorn');
+  assert.deepEqual((await world()).inventory.offhand,book);
+  await eventReader(t,urls.public,guest.cookie);
+  code(await player('/api/presence',{yaw:Math.PI/2,pitch:0,motion:'idle'}));
+  await race('earth');
+  await race('earth');
+  const afterOverride=await world();
+  assert.equal(afterOverride.inventory.offhand,null);
+  assert.equal(afterOverride.droppedItems.length,1);
+  assert.ok(afterOverride.droppedItems[0].position[0]<8.5,'stack is thrown forward in the current heading');
+  assert.deepEqual(afterOverride.droppedItems[0].item.nbt,publicText);
+
+  const picked=code(await player('/api/action',{requestId:'offhand-book-pickup',type:'pickup_item'}));
+  assert.equal(picked.pickedItem,afterOverride.droppedItems[0].key);
+  assert.deepEqual(picked.inventory.slots[0],book);
+  await race('alicorn');
+  code(await player('/api/action',{requestId:'offhand-book-move',type:'inventory_move',from:0,to:offhandSlot}));
+  assert.equal(code(await player('/api/profile',{skin:null})).ponyType,'earth');
+  const afterSkin=await world();
+  assert.equal(afterSkin.inventory.offhand,null);
+  assert.equal(afterSkin.inventory.slots[0],null);
+  assert.equal(afterSkin.droppedItems.length,1);
+  assert.notEqual(afterSkin.droppedItems[0].key,picked.pickedItem);
+  assert.deepEqual(afterSkin.droppedItems[0].item.nbt,publicText);
 });
 
 test('administrators update pony size without changing race and both settings follow the selected profile',async t=>{

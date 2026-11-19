@@ -151,6 +151,10 @@ export function createPresence({store, profileFor = player => publicProfile(play
       const entry = players.get(player);
       return entry?.visible ? entry.confirmedPosition : undefined;
     },
+    heading(player) {
+      const entry = players.get(player);
+      return entry?.lookYaw ?? entry?.yaw ?? 0;
+    },
     connect(stream, entry) {
       listeners.add(stream);
       entry.connections++;

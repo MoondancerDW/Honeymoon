@@ -131,19 +131,42 @@ test('all races share Minecraft ascent and only winged jumps begin a constant gl
   }
 });
 
-test('a charged jump adds half a block for Earth and Alicorn ponies and a second press ends the glide', () => {
-  for (const type of ['earth','unicorn','pegasus','alicorn']) {
-    const movement=new Movement(worldFor(new Map()));
+test('only a continuous hold through a tenth of a second at the apex uses a charge', () => {
+  const sample = (type, holding, hasCharge = true, blocks = new Map()) => {
+    const movement=new Movement(worldFor(blocks));
     movement.ponyType=type;
     movement.grounded=true;
     const position={x:.5,y:1,z:.5};
-    let apex=position.y;
-    for (let i=0;i<35;i++) {
-      movement.update(position,0,0,i===0,.016,{chargedJump:i===0});
-      apex=Math.max(apex,position.y);
+    const heights=[];
+    let charges=0, boostAt;
+    for (let i=0;i<75;i++) {
+      movement.update(position,0,0,i===0,.01,{chargeHeld:holding(i),availableCharge:()=>hasCharge,
+        recordStep:(_position,boosted)=>{
+          if (boosted) {
+            charges++;
+            boostAt=i;
+          }
+        }});
+      heights.push(position.y-1);
     }
-    const charged=type==='earth'||type==='alicorn';
-    assert.ok(Math.abs(apex-1-(1.2522+(charged ? .5 : 0)))<.002);
+    return {movement,position,heights,charges,boostAt,apex:Math.max(...heights)};
+  };
+  for (const type of ['earth','unicorn','pegasus','alicorn']) {
+    const normal=sample(type,i=>i<3), earlyRelease=sample(type,i=>i<34),
+      held=sample(type,()=>true), empty=sample(type,()=>true,false);
+    const charged=type==='earth'||type==='alicorn', {movement,position}=held;
+    assert.equal(normal.charges,0);
+    assert.equal(earlyRelease.charges,0);
+    assert.deepEqual(empty.heights,normal.heights);
+    assert.deepEqual(held.heights.slice(0,30),normal.heights.slice(0,30));
+    assert.ok(Math.abs(earlyRelease.apex-normal.apex)<.002);
+    assert.ok(Math.abs(held.apex-normal.apex-(charged ? .5 : 0))<.002);
+    assert.equal(held.charges,Number(charged));
+    if (charged) {
+      assert.equal(held.boostAt,40);
+      assert.ok(held.heights.slice(30,40).every(y=>Math.abs(y-normal.apex)<.002));
+      assert.ok(earlyRelease.heights[34]<normal.apex);
+    }
     if (movement.gliding) {
       movement.cancelSlowFall();
       movement.update(position,0,0,false,.1);
@@ -151,6 +174,15 @@ test('a charged jump adds half a block for Earth and Alicorn ponies and a second
       assert.ok(movement.fall<-2.3);
     }
   }
+  const pressedAgain=sample('earth',i=>i<12 || i>=20);
+  assert.equal(pressedAgain.charges,0);
+  assert.ok(Math.abs(pressedAgain.apex-1.2522)<.002);
+  const lowRoof=sample('earth',()=>true,true,new Map([['0,3,0','legacy:1:0']]));
+  assert.equal(lowRoof.charges,0);
+  assert.ok(Math.abs(lowRoof.apex-.5)<.002);
+  const highRoof=sample('earth',()=>true,true,new Map([['0,4,0','legacy:1:0']]));
+  assert.equal(highRoof.charges,1);
+  assert.ok(Math.abs(highRoof.apex-1.5)<.002);
 });
 
 test('race multipliers affect ground sprint and only ordinary Pegasus flight below the overview', () => {

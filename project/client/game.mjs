@@ -125,7 +125,6 @@ const mobileFrameMs = 1000/32;
 let nextMobileFrame;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 let playing = false, jump = false, lastFrame = 0, physicsTime = 0, timer;
-let jumpHeldAt, jumpGrant;
 let profileSwapPending=false;
 let profileUid;
 let nightVisionRevision=0;
@@ -203,7 +202,7 @@ const pause = () => {
   repeatPlacement = false;
   keys.clear();
   jump = false;
-  jumpHeldAt = undefined;
+  movement?.releaseJumpCharge();
   stick.x = stick.z = 0;
   touchControls?.clear();
   if (document.pointerLockElement) document.exitPointerLock();
@@ -422,6 +421,7 @@ async function containerAction(type,target,fields={}) {
 
 function applyInventory(value) {
   if (!value || !Array.isArray(value.slots)) return;
+  if (value.offhand && profile.confirmed && !hasOffhand()) value = {...value,offhand:null};
   inventory = value;
   offhandProp = offhandAppearance(value.offhand);
   creative.setInventory(value);
@@ -883,7 +883,7 @@ function setPlaying(active) {
     repeatPlacement = false;
     keys.clear();
     jump = false;
-    jumpHeldAt = undefined;
+    movement?.releaseJumpCharge();
     button.textContent = 'Продолжить';
   }
 }
@@ -900,6 +900,7 @@ function applyPonyTraits(payload) {
   if (view.setLocalSkin(profile.confirmed.skin)) creative.refreshPreview();
   ponyUi.setTraits(ponyType,size);
   ponyUi.sync(payload);
+  if (inventory.offhand && !hasOffhand()) applyInventory({...inventory,offhand:null});
   refreshOffhand();
   element('touch-flight').hidden=!canFly();
   if (!canFly() && (flying || pendingFlight?.enabled)) stopFlight();
@@ -961,7 +962,6 @@ function setFlight(active) {
   movement.resetFall();
   movement.grounded = false;
   jump = false;
-  jumpHeldAt = undefined;
   element('flight-status').hidden = !active || spectator;
 }
 
@@ -1065,8 +1065,8 @@ async function toggleSpectator() {
   }
 }
 
-function recordPosition(feet) {
-  movementSync.record(feet,movement.stance,flying && !seat);
+function recordPosition(feet, chargedJump = false) {
+  movementSync.record(feet,movement.stance,flying && !seat,chargedJump);
 }
 
 function setAuthoritativePosition(feet, stance = 'stand') {
@@ -1076,7 +1076,6 @@ function setAuthoritativePosition(feet, stance = 'stand') {
   previousFramePosition=framePosition={...position};
   correctionOffset=undefined;
   physicsTime=0;
-  jumpHeldAt=undefined;
   jump=false;
   movement.stance = stance;
   crawlRequested = stance === 'crawl' && !seat;
@@ -1163,29 +1162,12 @@ function pressJump() {
     movement.cancelSlowFall();
     return;
   }
-  if (canUsePonyAbility() && movement.canChargeJump && ponyAbilities(movement.ponyType).chargedJump && ponyUi.chargeCount(performance.now())) {
-    if (!jumpGrant) jumpHeldAt=performance.now();
-  } else jump=true;
+  jump=true;
 }
 
-function chargeJump(now) {
-  if (jumpHeldAt===undefined || now-jumpHeldAt<150) return;
-  jumpHeldAt=undefined;
-  if (!canUsePonyAbility() || !movement.canChargeJump) return;
-  const type=movement.ponyType;
-  jumpGrant=(async()=>{
-    let granted=false;
-    try {
-      if (await flushPosition() && canUsePonyAbility() && movement.canChargeJump && movement.ponyType===type) {
-        const result=await post('charged-jump',{},AbortSignal.timeout(2200));
-        ponyUi.sync(result.body);
-        granted=result.ok;
-      }
-    } catch { /* A regular jump remains available. */ }
-    if (!flying && canUsePonyAbility() && movement.canChargeJump && movement.ponyType===type) {
-      jump=granted ? 'charged' : true;
-    }
-  })().finally(()=>{jumpGrant=undefined;});
+function chargeAvailable() {
+  return canUsePonyAbility() && movement.stance==='stand' && ponyAbilities(movement.ponyType).chargedJump &&
+    ponyUi.chargeCount(performance.now())>positionTrail.filter(step=>step[4]===true).length;
 }
 
 async function receiveNpcTeleport(body) {
@@ -1752,7 +1734,6 @@ function tick(now) {
     nextMobileFrame=Math.max(deadline+mobileFrameMs,now+mobileFrameMs/2);
   }
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
-  chargeJump(now);
   ponyUi.paint(now);
   const hasPredictionRoom=movementSync.canPredict(now);
   if (autoMovement && (stick.x || stick.z)) setAutoMovement(null);
@@ -1833,7 +1814,7 @@ function tick(now) {
         else movement.update(position, dx, dz, manualTravel && jump, physicsStep,
           {rise: manualTravel && jump || rising, descend: descending || travelling && movement.medium === 'ladder' && sprinting(),
             swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition, automatic:automaticTravel,
-            chargedJump:jump==='charged'});
+            chargeHeld:rising, availableCharge:chargeAvailable});
         jump=false;
       }
     }
@@ -2209,13 +2190,7 @@ function bindControls() {
   });
   document.addEventListener('keyup', event => {
     keys.delete(event.code);
-    if (event.code==='Space' && jumpHeldAt!==undefined) {
-      chargeJump(performance.now());
-      if (jumpHeldAt!==undefined) {
-        jumpHeldAt=undefined;
-        if (!flying && canUsePonyAbility()) jump=true;
-      }
-    }
+    if (event.code==='Space') movement?.releaseJumpCharge();
     social.keyup(event);
     if (event.code === 'Escape' && resumeOnEscape) {
       resumeOnEscape = false;
@@ -2229,7 +2204,7 @@ function bindControls() {
   window.addEventListener('blur', () => {
     nextAttack = Infinity;
     repeatPlacement = resumeOnEscape = resuming = false;
-    jumpHeldAt=undefined;
+    movement?.releaseJumpCharge();
     keys.clear();
     touchControls?.clear();
     social.blur();

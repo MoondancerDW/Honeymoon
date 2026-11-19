@@ -60,26 +60,38 @@ test('race changes preserve damage and only winged survival ponies may fly or ig
   assert.equal(survival.status(id).health,before);
 });
 
-test('grounded charged jump grants expire unspent and two consumed charges return on independent timers',t=>{
+test('only a second rise at the apex spends a charge and two charges replenish independently',t=>{
   const {id,spawn,game,open,advance}=scenario(t,'earth');
-  assert.deepEqual(game.grantChargedJump(id).jumpCharge,{charges:1,readyInMs:[3000]});
-  advance(3000);
+  let request=0;
+  function move(fromHeight, heights, charged = false) {
+    const from=[spawn.x,spawn.y+fromHeight,spawn.z,'stand'];
+    const trail=heights.map((height,i)=>[spawn.x,spawn.y+height,spawn.z,'stand',...(charged && i===0 ? [true] : [])]);
+    return game.position(id,{...spawn,y:trail.at(-1)[1],from,trail,page:'fixture',requestId:`jump-use-${++request}`});
+  }
+  assert.throws(()=>move(0,[.3],true),{code:'movement_blocked'});
+  move(0,[.3,.6,.9,1.25]);
+  move(1.25,[1.15]);
+  assert.throws(()=>move(1.15,[1.3],true),{code:'movement_blocked'});
   assert.equal(game.abilityState(id).jumpCharge.charges,2);
-  function spend(number) {
-    assert.equal(game.grantChargedJump(id).jumpCharge.charges,2-number);
+  game.teleport(id,spawn);
+  function spend() {
+    advance(100);
+    move(0,[.3,.6,.9,1.25]);
     advance(200);
-    const from=[spawn.x,spawn.y,spawn.z,'stand'];
-    const target={...spawn,y:spawn.y+.25};
-    game.position(id,{...target,from,trail:[[target.x,target.y,target.z,'stand']],page:'fixture',requestId:`jump-use-${number}`});
+    move(1.25,[1.31,1.5,1.75],true);
+    assert.throws(()=>move(1.75,[1.8],true),{code:'movement_blocked'});
     game.teleport(id,spawn);
   }
-  spend(1);
-  advance(1500);
-  spend(2);
+  spend();
+  assert.equal(game.abilityState(id).jumpCharge.charges,1);
+  advance(1400);
+  spend();
   assert.equal(game.abilityState(id).jumpCharge.charges,0);
-  assert.throws(()=>game.grantChargedJump(id),{code:'jump_cooldown'});
   assert.deepEqual(open().abilityState(id).jumpCharge,{charges:0,readyInMs:[4300,6000]});
-  advance(4300);
+  advance(100);
+  move(0,[.3,.6,.9,1.25]);
+  assert.throws(()=>move(1.25,[1.31],true),{code:'movement_blocked'});
+  advance(4200);
   assert.deepEqual(game.abilityState(id).jumpCharge,{charges:1,readyInMs:[1700]});
   advance(1700);
   assert.deepEqual(game.abilityState(id).jumpCharge,{charges:2,readyInMs:[]});

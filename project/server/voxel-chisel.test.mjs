@@ -122,7 +122,7 @@ test('voxel edits preserve ownership, material, revision and exact hit through s
   old.close();
   await restart();
   const upgraded = new DatabaseSync(state,{readOnly:true});
-  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version,10);
+  assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version,11);
   upgraded.close();
 
   const parentRevision = ordinary.body.worldRevision;

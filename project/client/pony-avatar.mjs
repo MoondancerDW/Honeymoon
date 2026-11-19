@@ -103,9 +103,9 @@ export function createPonyFacing() {
         forward *= 1 - mix;
         strafe *= 1 - mix;
       }
-      const suspended = motion === 'fly' || motion === 'swim';
-      if (suspended || travel > .001) {
-        const heading = lookYaw - (suspended ? 0 : .30 * strafe);
+      const swimming = motion === 'swim';
+      if (motion === 'fly' || swimming || travel > .001) {
+        const heading = lookYaw - (swimming ? 0 : .30 * strafe);
         bodyYaw += angleBetween(bodyYaw,heading) * mix;
       }
       const turn = angleBetween(bodyYaw, lookYaw);
@@ -332,6 +332,7 @@ export function createPonyAvatar(isAir) {
   let skinUrl = null, skinReady = true, pending, revision = 0, disposed = false;
   let lightColor = 0xffffff;
   let time = 0, limbSwing = 0, swing = 0, flight = 0, boost = 0, bank = 0, sitting = 0, motion = 'idle';
+  let airGlide = 0, flightSpeed = 0;
   let stance = 'stand', crouching = 0, crawling = 0, swimming = 0;
   let swimStroke = 0;
   let leapTop, previousFallDistance = 0, gliding = false;
@@ -451,6 +452,11 @@ export function createPonyAvatar(isAir) {
     const extended = flying || airborne;
     flight += (Number(extended) - flight) * fade;
     boost += (Number(flying && flightBoost) - boost) * fade;
+    airGlide += (Number(airborne && !flying) - airGlide) * fade;
+    // Filter speed before clamping the lean so physics ticks and remote movement updates cannot drive a leg cycle.
+    flightSpeed += ((flying ? speed : 0) - flightSpeed) * (1 - Math.exp(-elapsed * 8));
+    const travel = THREE.MathUtils.smoothstep(flightSpeed, .12, 1.8);
+    const cruise = flight - airGlide - boost;
     sitting += (Number(motion === 'sit' && stance !== 'crawl') - sitting) * fade;
     const immersed = motion === 'swim';
     swimming += (Number(immersed) - swimming) * fade;
@@ -474,11 +480,12 @@ export function createPonyAvatar(isAir) {
     const gait = Math.PI * swing ** 16;
     const phase = limbSwing * .6662;
     const cycle = [phase + Math.PI + gait * .5, phase + gait, phase + gait * .2, phase + Math.PI - gait * .4];
-    const flyPitch = Math.sin(swing * .35);
+    const glidePitch = Math.sin(swing * .35) * airGlide + Math.PI / 2 * boost;
+    const cruisePitch = -.18 * travel * cruise;
     for (let i = 0; i < rig.legs.length; i++) {
       const direction = i < 2 ? -1 : 1;
       const step = Math.cos(cycle[i]) * .45 * swing * (1 - flight);
-      const glide = direction * (flyPitch * (flight - boost) + Math.PI / 2 * boost);
+      const glide = cruisePitch + direction * glidePitch;
       const lateral = Math.sin(cycle[i]) * .27 * swing * strafe * (1 - flight);
       rig.legs[i].rotation.set(step*(forward + (1-Math.abs(forward))*.24) + glide,
         flightLegYaw[i] * flight,lateral);
@@ -493,7 +500,7 @@ export function createPonyAvatar(isAir) {
     hoof.x -= Math.min(strike * hoofStrike,Math.max(0,1.94 + hoof.x));
     hoof.z += strikeTurn * hoofStrike;
     const hipSwing = swing ** 16 > .5 ? .05 : .03;
-    const hipFlight = Math.sin(swing * .05) * (flight - boost) + .2 * boost;
+    const hipFlight = Math.sin(swing * .05) * airGlide + Math.sin(travel * .05) * cruise + .2 * boost;
     for (let i = 0; i < rig.hips.length; i++) {
       rig.hips[i].rotation.x = Math.cos(cycle[i + 2]) * hipSwing * swing * (1 - flight) + hipFlight;
     }
@@ -532,9 +539,10 @@ export function createPonyAvatar(isAir) {
         leg.position.z += 5 * part - boost / 32;
       }
     }
+    const hipGlide = .5 * (swing * airGlide + travel * cruise);
     for (const hip of rig.hips) {
-      hip.position.y = (8 + height) * part + 7 * sneak + (swing * .5 * (flight - boost) + 2.5 * boost) / 16;
-      hip.position.z = -4 * sneak - (swing * .5 * (flight - boost) + 2 * boost) / 16;
+      hip.position.y = (8 + height) * part + 7 * sneak + (hipGlide + 2.5 * boost) / 16;
+      hip.position.z = -4 * sneak - (hipGlide + 2 * boost) / 16;
       hip.rotation.x += .4 * crouching;
     }
     if (rig.tail) {

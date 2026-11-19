@@ -188,10 +188,11 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
       return time-samples.get(queued[0]).at<predictionMs &&
         Math.hypot(step[0]-confirmed[0],step[1]-confirmed[1],step[2]-confirmed[2])<predictionBlocks;
     },
-    record(position, stance, flying=false) {
+    record(position, stance, flying=false, chargedJump=false) {
       const step=[...pointTuple(position),stance];
       const previous=queued.at(-1)??confirmed;
       if (previous && step.some((coord,index)=>coord!==previous[index])) {
+        if (chargedJump) step.push(true);
         samples.set(step,{at:now(),flying});
         queued.push(step);
       }

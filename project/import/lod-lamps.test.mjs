@@ -91,7 +91,7 @@ test('lantern matching and both LOD tiers work across chunk boundaries', () => {
     const actual = sampleChunk(chunk,catalog,chunks.filter(other=>other!==chunk));
     const expected = sampleChunk(stripped,catalog);
     assert.deepEqual(actual,expected);
-    assert.deepEqual(outerChunk(actual),outerChunk(expected));
+    assert.deepEqual(outerChunk(actual,catalog),outerChunk(expected,catalog));
   }
   assert.equal(matches,29);
 });

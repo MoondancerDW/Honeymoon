@@ -87,7 +87,7 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
         if (source) neighbors.push(source);
       }
       const inner = sampleChunk(sourceAt(x,z),catalog,neighbors);
-      sampled.set(key,{z,inner,outer:outerChunk(inner)});
+      sampled.set(key,{z,inner,outer:outerChunk(inner,catalog)});
     }
     return sampled.get(key);
   }

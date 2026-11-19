@@ -28,7 +28,7 @@ import { createWorldEdit } from './world-edit.mjs';
 import { createSurvival } from './survival.mjs';
 import {accessCookie,createAccess,legacyClearCookie,legacyCookieName,readAccessCookie} from './access.mjs';
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
-import {ponyMaxHealth} from '../world/pony-abilities.mjs';
+import {ponyAbilities,ponyMaxHealth} from '../world/pony-abilities.mjs';
 import { readBuildNumber } from './build-version.mjs';
 import { openLocalJournal } from './local-journal.mjs';
 import { loadSoloDistribution } from './solo-distribution.mjs';
@@ -498,7 +498,17 @@ export function createHoneymoonServer({
       flight,flightAllowed,jumpCharge,magicCooldownMs,...(survival.enabled&&{gameMode:playerMode(player)})};
   }
 
-  function reconcilePonyTraits(player,previous,traits) {
+  function prepareRaceDrop(player,previousRace,nextRace) {
+    if (ponyAbilities(previousRace).horn && !ponyAbilities(nextRace).horn) {
+      return game.prepareOffhandDrop(player,presence.heading(player));
+    }
+  }
+
+  function reconcilePonyTraits(player,previous,traits,drop) {
+    if (drop) {
+      drop.publish();
+      broadcastDroppedItems(true);
+    }
     if (traits.ponyType!==previous.ponyType) game.reconcileRace(player);
     if (traits.size!==previous.size) return game.reconcileProfile(player);
   }
@@ -717,7 +727,7 @@ export function createHoneymoonServer({
       if (path === '/api/session' && method === 'POST') {
         const input=await readInput();
         const {credential:joined,token}=access.signIn(input,{credential,ownerBootstrap:accessView(undefined,owner).ownerBootstrap,
-          legacy:!inviteRequired?readAccessCookie(request,legacyCookieName):undefined});
+          legacy:!inviteRequired?readAccessCookie(request,legacyCookieName):undefined,headers:request.headers});
         restoreSoloPosition(joined.uid);
         return json(response,200,session(joined,owner),token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
       }
@@ -812,9 +822,10 @@ export function createHoneymoonServer({
         const previous=playerTraits(uid);
         if (previous[field]===value) return json(response,200,raceSnapshot(uid));
         if (changingSize && previous.size!==(value??previous.skinSize)) game.initializePosition(uid);
-        store.setPonyTraits(uid,{[field]:value});
+        const drop=changingSize ? undefined : prepareRaceDrop(uid,previous.ponyType,value??previous.skinPonyType);
+        store.setPonyTraits(uid,{[field]:value},drop?.writeInventory);
         const traits=rememberTraits(uid,{size:previous.skinSize,ponyType:previous.skinPonyType});
-        const relocation=reconcilePonyTraits(uid,previous,traits);
+        const relocation=reconcilePonyTraits(uid,previous,traits,drop);
         const profile=profileFor(uid);
         const snapshot=raceSnapshot(uid,profile);
         presence.profile(uid,avatarProfile(profile));
@@ -965,13 +976,14 @@ export function createHoneymoonServer({
         if (updates.skin !== undefined && (updates.skin?.hash ?? null) === (saved?.skinHash ?? null)) delete updates.skin;
         if (submittedSkin !== undefined) updates.ponyTraits={raceOverride:null,sizeOverride:null};
         const different = updates.nickname !== undefined || submittedSkin !== undefined;
+        const drop=previousTraits && prepareRaceDrop(player,previousTraits.ponyType,nextSkinTraits.ponyType);
         const renamed = different && store.updateProfile(player, updates,
-          saved?.nickname ?? presence.onlineProfile(player)?.nickname);
+          saved?.nickname ?? presence.onlineProfile(player)?.nickname,drop?.writeInventory);
         let relocation, movementState;
         if (submittedSkin !== undefined) {
           const traits=rememberTraits(player,nextSkinTraits);
           const {size,ponyType}=traits;
-          relocation=reconcilePonyTraits(player,previousTraits,traits);
+          relocation=reconcilePonyTraits(player,previousTraits,traits,drop);
           if (!relocation && (size!==previousTraits.size || ponyType!==previousTraits.ponyType)) {
             const {position,seat,stance}=game.session(player);
             movementState={position,seat,stance};
@@ -1031,11 +1043,6 @@ export function createHoneymoonServer({
       if (path === '/api/flight' && method === 'POST') {
         const flight=game.setFlight(player,credential.deviceId,await readMovementInput());
         return json(response,200,{flight});
-      }
-      if (path==='/api/charged-jump' && method==='POST') {
-        await readMovementInput();
-        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
-        return json(response,200,game.grantChargedJump(player));
       }
       if (path==='/api/magic-teleport' && method==='POST') {
         const body=await readMovementInput();

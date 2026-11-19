@@ -2,6 +2,7 @@ import * as geometry from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {fluidAt,fluidCurrent,movementMedium} from '../world/block-movement.mjs';
 import {CRAWL_SPEED, FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, HIGH_FLIGHT_Y, HIGH_FLIGHT_SPEED,
+  MINECRAFT_JUMP_HEIGHT,
   HIGH_FLIGHT_SPRINT_SPEED, PLAYER, POSITION_STEP_LIMIT, POSITION_VERTICAL_STEP_LIMIT, WALK_SPEED, WORLD_GRAVITY,
   isPlayerStance, playerBody} from '../world/player-body.mjs';
 import {intersectSelection} from '../world/selection.mjs';
@@ -11,7 +12,7 @@ import {isRideableBoat,boatHit} from '../world/boats.mjs';
 import {itemFrameHit} from '../world/item-frames.mjs';
 import {isChiselMaterial, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
-import {JUMP_CHARGE_BONUS,ponyAbilities} from '../world/pony-abilities.mjs';
+import {JUMP_CHARGE_BONUS,JUMP_CHARGE_HOVER_SECONDS,ponyAbilities} from '../world/pony-abilities.mjs';
 
 const {height: HEIGHT, eye: EYE} = PLAYER;
 const {collisionFor} = geometry;
@@ -23,7 +24,7 @@ const JUMP_ASCENT_GRAVITY = 20;
 const MINECRAFT_TICK = .05;
 const MINECRAFT_JUMP_SPEED = .42 / MINECRAFT_TICK;
 const nextMinecraftJumpSpeed = speed => (speed - .08 / MINECRAFT_TICK) * .98;
-const MINECRAFT_JUMP_HEIGHT = 1.252203352512;
+const CHARGED_JUMP_SPEED = Math.sqrt(2 * JUMP_ASCENT_GRAVITY * JUMP_CHARGE_BONUS);
 const WINGED_DESCENT_SPEED = 1.4;
 const VERTICAL_STEP = POSITION_VERTICAL_STEP_LIMIT - .01;
 const cartsByChunk = new WeakMap();
@@ -281,13 +282,13 @@ export class Movement {
     }
   }
 
-  startJump(y, charged = false) {
+  startJump(y, holdingCharge = false) {
     const regular = this.stance !== 'crawl';
     const race = ponyAbilities(this.ponyType);
-    const scale = charged && race.chargedJump ? 1 + JUMP_CHARGE_BONUS / MINECRAFT_JUMP_HEIGHT : 1;
-    this.jumpArc = regular ? {y, tickLeft:MINECRAFT_TICK, slowDescent:race.winged, scale} : undefined;
+    this.jumpArc = regular ? {y, tickLeft:MINECRAFT_TICK, slowDescent:race.winged,
+      chargeable:holdingCharge && race.chargedJump} : undefined;
     this.gliding = false;
-    this.fall = regular ? MINECRAFT_JUMP_SPEED * scale : Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
+    this.fall = regular ? MINECRAFT_JUMP_SPEED : Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
     this.grounded = false;
   }
 
@@ -302,10 +303,58 @@ export class Movement {
     this.gliding = false;
   }
 
-  dryVerticalDelta(y, remaining) {
+  beginJumpDescent(arc) {
+    if (arc.slowDescent) {
+      this.jumpArc = undefined;
+      this.gliding = true;
+    }
+  }
+
+  releaseJumpCharge() {
+    const arc = this.jumpArc;
+    if (!arc?.chargeable) return;
+    arc.chargeable = false;
+    if (arc.hoverLeft !== undefined) {
+      arc.hoverLeft = undefined;
+      this.fall = arc.descentSpeed;
+      this.beginJumpDescent(arc);
+    }
+  }
+
+  dryVerticalDelta(y, remaining, availableCharge) {
     let delta = 0;
     while (this.jumpArc && remaining > 0) {
       const arc = this.jumpArc;
+      if (arc.hoverLeft !== undefined) {
+        const step = Math.min(remaining,arc.hoverLeft);
+        remaining -= step;
+        arc.hoverLeft -= step;
+        if (arc.hoverLeft > 0) break;
+        arc.hoverLeft = undefined;
+        arc.chargeable = false;
+        if (availableCharge?.()) {
+          arc.boosting = true;
+          arc.beginBoost = true;
+          this.fall = CHARGED_JUMP_SPEED;
+        } else {
+          this.fall = arc.descentSpeed;
+          this.beginJumpDescent(arc);
+        }
+        continue;
+      }
+      if (arc.boosting) {
+        const step = Math.min(remaining,this.fall / JUMP_ASCENT_GRAVITY);
+        const next = Math.max(0,this.fall - JUMP_ASCENT_GRAVITY * step);
+        delta += (this.fall + next) * .5 * step;
+        remaining -= step;
+        this.fall = next;
+        if (next <= EPSILON) {
+          arc.boosting = false;
+          this.fall = arc.descentSpeed;
+          this.beginJumpDescent(arc);
+        }
+        continue;
+      }
       const step = Math.min(remaining,arc.tickLeft);
       // Only the jump above takeoff uses Minecraft ticks. Continue with world gravity below it.
       const toTakeoff = this.fall < 0 ? Math.max(0,y + delta - arc.y) / -this.fall : Infinity;
@@ -319,13 +368,15 @@ export class Movement {
       remaining -= step;
       arc.tickLeft -= step;
       if (arc.tickLeft <= 0) {
-        this.fall = nextMinecraftJumpSpeed(this.fall / arc.scale) * arc.scale;
-        if (arc.slowDescent && this.fall < 0) {
-          this.jumpArc = undefined;
-          this.gliding = true;
-          break;
-        }
+        this.fall = nextMinecraftJumpSpeed(this.fall);
         arc.tickLeft = MINECRAFT_TICK;
+        if (this.fall < 0) {
+          if (arc.chargeable && availableCharge?.()) {
+            arc.hoverLeft = JUMP_CHARGE_HOVER_SECONDS;
+            arc.descentSpeed = this.fall;
+            this.fall = 0;
+          } else this.beginJumpDescent(arc);
+        }
       }
     }
     if (this.gliding) {
@@ -344,9 +395,12 @@ export class Movement {
   }
 
   update(position, dx, dz, jump, dt, {descend = false, rise = jump, swimPitch = 0, recordStep, automatic = false,
-    chargedJump = false} = {}) {
+    chargeHeld = false, availableCharge} = {}) {
     this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
-    if (!this.medium && jump && this.grounded) this.startJump(position.y, chargedJump);
+    if (!chargeHeld) this.releaseJumpCharge();
+    if (!this.medium && jump && this.grounded) {
+      this.startJump(position.y,chargeHeld && this.canChargeJump && availableCharge?.());
+    }
     const fastestDrop = (Math.max(0,-this.fall) + WORLD_GRAVITY * dt) * dt;
     const n = Math.max(1, Math.ceil(dt / .016), Math.ceil(fastestDrop / VERTICAL_STEP));
     const step = dt / n;
@@ -355,6 +409,8 @@ export class Movement {
       const submerged = startMedium === 'water' || startMedium === 'lava';
       const swimming = this.stance === 'swim' && startMedium === 'water';
       const current = submerged ? fluidCurrent(this.cellAt,position.x,position.y,position.z,startMedium) : [0,0,0];
+      const startY = position.y;
+      const arc = this.jumpArc;
       let deltaY;
       if (startMedium) {
         this.jumpArc = undefined;
@@ -367,11 +423,13 @@ export class Movement {
       } else if (startMedium === 'lava') {
         this.fall = descend ? -1.04 : rise ? 1.15 : Math.max(-.63,this.fall-3.5*step);
       } else {
-        deltaY = this.dryVerticalDelta(position.y,step);
+        deltaY = this.dryVerticalDelta(position.y,step,availableCharge);
       }
       // Resolve Y before X and Z, including when leaving a ledge or climbing
       // past a ceiling. Contact with a wall can start ascent on the next step.
       this.vertical(position,(deltaY ?? this.fall*step)+current[1]*step);
+      const chargedJump = !startMedium && arc?.beginBoost === true && position.y>startY;
+      if (chargedJump) arc.beginBoost = false;
       const drag = swimming ? .88 : startMedium === 'water' ? .48 : startMedium === 'lava' ? .29 : startMedium === 'ladder' ? .62 : 1;
       const swimOut = submerged && rise && !descend;
       const wallX = this.horizontal(position, 'x',(dx*drag+current[0])*step,swimOut);
@@ -391,7 +449,7 @@ export class Movement {
           this.startJump(y);
         }
       }
-      recordStep?.(position);
+      recordStep?.(position,chargedJump);
     }
   }
 

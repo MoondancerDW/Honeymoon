@@ -19,7 +19,7 @@ import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { BED_SURFACE_HEIGHT, chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
-import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_FLIGHT_DROP_LIMIT, POSITION_STEP_LIMIT,
+import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, MINECRAFT_JUMP_HEIGHT, POSITION_BATCH_LIMIT, POSITION_FLIGHT_DROP_LIMIT, POSITION_STEP_LIMIT,
   POSITION_TRAIL_LIMIT, POSITION_VERTICAL_STEP_LIMIT, WORLD_GRAVITY, flightPositionCost, isPlayerStance,
   playerBody } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
@@ -63,7 +63,6 @@ const REQUEST_ID = /^[A-Za-z0-9_-]{8,100}$/;
 const actionRate = {player:24,playerBurst:48,total:192,totalBurst:384};
 const receiptCleanupInterval=60_000;
 const lavaDamageInterval=1000;
-const jumpGrantMs=3000;
 const jumpValidationHeight=1.4; // The regular tick-based jump reaches 1.252 blocks.
 const magicRetryMs=500;
 
@@ -74,10 +73,11 @@ function point(input, integers = false) {
 }
 
 function trailPoint(input) {
-  if (!Array.isArray(input) || ![3,4].includes(input.length) || input.length === 4 && !isPlayerStance(input[3])) {
+  if (!Array.isArray(input) || ![3,4,5].includes(input.length) || input.length >= 4 && !isPlayerStance(input[3]) ||
+      input.length === 5 && input[4] !== true) {
     throw new RequestError(400, 'invalid_position_trail');
   }
-  return {...point({x:input[0], y:input[1], z:input[2]}), stance:input[3]};
+  return {...point({x:input[0], y:input[1], z:input[2]}), stance:input[3], chargedJump:input[4]};
 }
 
 const samePoint = (left, right) => axes.every(axis => left[axis] === right[axis]);
@@ -255,7 +255,6 @@ export function createGame(base, store, geometry, {
 } = {}) {
   const positions = new Map();
   const flightPreferences = new Map();
-  const jumpGrants = new Map();
   const jumpReadyAt = new Map();
   const magicReadyAt = new Map();
   const magicAttempts = new Map();
@@ -447,7 +446,6 @@ export function createGame(base, store, geometry, {
   }
 
   function reconcileRace(player) {
-    jumpGrants.delete(player);
     if (abilitiesFor(player).winged) survival?.clearFall(player);
     reconcileFlight(player);
     movementChannel.invalidate(player);
@@ -463,17 +461,8 @@ export function createGame(base, store, geometry, {
     }
     if (previous.deviceId===deviceId && sequence<=previous.sequence) return activeFlight(player);
     writeFlight(player,{enabled,deviceId,sequence});
-    if (enabled) {
-      survival?.clearFall(player);
-      jumpGrants.delete(player);
-    }
+    if (enabled) survival?.clearFall(player);
     return enabled;
-  }
-
-  function jumpGrant(player,now) {
-    const grant=jumpGrants.get(player);
-    if (grant?.expires<=now) jumpGrants.delete(player);
-    else return grant;
   }
 
   function spentJumps(player,now) {
@@ -484,8 +473,6 @@ export function createGame(base, store, geometry, {
   function jumpCharge(player,now) {
     if (!abilitiesFor(player).chargedJump) return {charges:0,readyInMs:[]};
     const ready=spentJumps(player,now);
-    const grant=jumpGrant(player,now);
-    if (grant) ready.push(grant.expires);
     return {charges:Math.max(0,JUMP_CHARGE_LIMIT-ready.length),readyInMs:ready.sort((a,b)=>a-b).map(at=>Math.ceil(at-now))};
   }
 
@@ -499,20 +486,6 @@ export function createGame(base, store, geometry, {
     const now=clock();
     return {flight:activeFlight(player),flightAllowed:flightAllowed(player),jumpCharge:jumpCharge(player,now),
       magicCooldownMs:magicCooldownMs(player,now)};
-  }
-
-  function grantChargedJump(player) {
-    const now=clock(),position=playerAt(player),body=bodyFor(player);
-    const jumpChargeState=jumpCharge(player,now);
-    if (!abilitiesFor(player).chargedJump || activeFlight(player) || spectators.has(player) ||
-        publicSeat(player) || survival?.dead(player) || stanceFor(player)==='crawl' ||
-        !physical.supported(position,body,.04) || movementMedium(cellAt,position.x,position.y,position.z,models)) {
-      throw new RequestError(409,'jump_unavailable',{jumpCharge:jumpChargeState});
-    }
-    if (jumpGrant(player,now)) return {jumpCharge:jumpChargeState};
-    if (!jumpChargeState.charges) throw new RequestError(409,'jump_cooldown',{jumpCharge:jumpChargeState});
-    jumpGrants.set(player,{expires:now+jumpGrantMs});
-    return {jumpCharge:jumpCharge(player,now)};
   }
 
   function playerSight(player,eye=eyes.get(player)) {
@@ -548,6 +521,17 @@ export function createGame(base, store, geometry, {
   function offhandPose(player,state) {
     if (spectators.has(player) || !abilitiesFor(player).horn) return null;
     return offhandAppearance((state ?? inventory.read(player)).offhand);
+  }
+
+  function prepareOffhandDrop(player,yaw) {
+    const state = inventory.read(player);
+    if (!state.offhand) return;
+    const entity = drops.drop(state.offhand,playerAt(player),playerSight(player),yaw);
+    state.offhand = null;
+    return {
+      writeInventory: () => inventory.replace(player,state),
+      publish: () => drops.accept(entity),
+    };
   }
 
   function poseFor(player, pose) {
@@ -1858,7 +1842,7 @@ export function createGame(base, store, geometry, {
     const validateJump=survival?.enabled && !flight && !observing && !groundSeat;
     // Retain the takeoff across transport batches. Clamp rises that have no flight or jump capacity.
     let ascent=old?.ascent??{y:previous.y,charged:false};
-    let spentGrant;
+    let chargesSpent=0;
     let leftLava=false;
     const wasInLava=lavaDamageAt.has(player);
     const validateSegment = () => {
@@ -1888,15 +1872,23 @@ export function createGame(base, store, geometry, {
           Math.abs(vertical) > POSITION_VERTICAL_STEP_LIMIT)) reject();
       if (stance === 'crouch' && planar > 0 && vertical <= .02 && physical.supported(from,dimensions) &&
           !physical.supported({...step,y:from.y},dimensions,.5)) reject();
+      if (step.chargedJump && (!validateJump || vertical<=0)) reject();
       if (validateJump) {
         const medium=movementMedium(cellAt,from.x,from.y,from.z,models);
         if (!medium) groundDistance+=planar;
+        if (step.chargedJump && medium) reject();
         if (medium) ascent={y:step.y,charged:false};
+        else if (vertical<0 && ascent.chargeable) ascent={...ascent,chargeable:false};
         else if (vertical>0) {
           if (physical.supported(from,dimensions,.04)) {
-            const granted=race.chargedJump && !spentGrant && vertical>.14 && jumpGrant(player,now);
-            if (granted) spentGrant=granted;
-            ascent={y:from.y,charged:Boolean(granted)};
+            ascent={y:from.y,charged:false,chargeable:stance==='stand'};
+          }
+          if (step.chargedJump) {
+            // Only a new ascent at the apex of the current grounded jump may spend a charge.
+            if (!race.chargedJump || !ascent.chargeable || ascent.charged || from.y-ascent.y<MINECRAFT_JUMP_HEIGHT-.04 ||
+                spentJumps(player,now).length+chargesSpent>=JUMP_CHARGE_LIMIT) reject();
+            ascent={...ascent,charged:true,chargeable:false};
+            chargesSpent++;
           }
           const maximumJump=jumpValidationHeight+(ascent.charged ? JUMP_CHARGE_BONUS : 0);
           if (step.y>ascent.y+maximumJump) reject();
@@ -1925,11 +1917,11 @@ export function createGame(base, store, geometry, {
       return {...passivePosition(target),seat,stance};
     }
     const entry = observing ? passivePosition(target) : enterPosition(player, target, previous,stance);
-    if (spentGrant) {
-      const ready=[...spentJumps(player,now),now+JUMP_CHARGE_RECHARGE_MS];
+    if (chargesSpent) {
+      const ready=spentJumps(player,now);
+      for (let i=0;i<chargesSpent;i++) ready.push(now+JUMP_CHARGE_RECHARGE_MS);
       store.putState('pony-abilities',player,'jumps',1,ready);
       jumpReadyAt.set(player,ready);
-      jumpGrants.delete(player);
     }
     positions.set(player, {position:target, stance, updated:now, seen:now, budget:budget-distance, requestId,
       ...(gravityDrop && {fallBudget:dropBudget-drop}), ...(validateJump && {ascent,groundBudget:groundBudget-groundDistance})});
@@ -1951,7 +1943,6 @@ export function createGame(base, store, geometry, {
       store.pruneReceipts(now);
       for (const [uid,budget] of actionBudgets) if (now-budget.at>=receiptCleanupInterval) actionBudgets.delete(uid);
       for (const [uid,after] of magicAttempts) if (now>=after) magicAttempts.delete(uid);
-      for (const [uid,grant] of jumpGrants) if (now>=grant.expires) jumpGrants.delete(uid);
       nextReceiptCleanup=now+receiptCleanupInterval;
     }
     const plans = mechanics.flatMap(module => {
@@ -2085,7 +2076,6 @@ export function createGame(base, store, geometry, {
     position,
     movementChannel,
     abilityState,
-    grantChargedJump,
     magicTeleport,
     teleport,
     teleportNear,
@@ -2189,6 +2179,7 @@ export function createGame(base, store, geometry, {
     leaveSeat,
     poseFor,
     offhandPose,
+    prepareOffhandDrop,
     initializePosition,
     reconcileProfile,
     reconcileFlight,

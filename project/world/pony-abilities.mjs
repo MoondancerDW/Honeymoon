@@ -1,6 +1,7 @@
 export const JUMP_CHARGE_LIMIT = 2;
 export const JUMP_CHARGE_RECHARGE_MS = 6_000;
 export const JUMP_CHARGE_BONUS = .5;
+export const JUMP_CHARGE_HOVER_SECONDS = .1;
 export const MAGIC_TELEPORT_COOLDOWN_MS = 20_000;
 export const MAGIC_TELEPORT_HORIZONTAL = 50;
 export const MAGIC_TELEPORT_VERTICAL = 30;

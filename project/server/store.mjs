@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { publicMicroPart } from '../world/microblocks.mjs';
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 const chatHistoryLimit = 100;
 const MiB = 1024 * 1024;
 export const receiptLimits = Object.freeze({age:15*60_000,entryBytes:256*1024,
@@ -171,6 +171,13 @@ function migrate(db) {
       `);
     }
     if (version < 10) migrateReceipts(db);
+    if (version < 11) {
+      const columns=new Set(db.prepare('PRAGMA table_info(access_invites)').all().map(column=>column.name));
+      if (!columns.has('used_by')) db.exec('ALTER TABLE access_invites ADD COLUMN used_by TEXT REFERENCES players(id);');
+      if (!columns.has('used_browser')) db.exec('ALTER TABLE access_invites ADD COLUMN used_browser TEXT;');
+      if (!columns.has('used_device_type')) db.exec(`ALTER TABLE access_invites ADD COLUMN used_device_type TEXT
+        CHECK (used_device_type IN ('desktop','mobile','tablet'));`);
+    }
     db.exec(`
       CREATE TABLE IF NOT EXISTS player_profiles (
         player TEXT PRIMARY KEY REFERENCES players(id),
@@ -333,7 +340,13 @@ export function openStore(filename) {
       return readProfile.get(player);
     },
     getPonyTraits: readPonyTraits,
-    setPonyTraits: (player, updates) => transaction(db,()=>writePonyTraits(player,updates)),
+    setPonyTraits(player, updates, writeInventory) {
+      return transaction(db, () => {
+        const traits = writePonyTraits(player, updates);
+        writeInventory?.();
+        return traits;
+      });
+    },
     getNightVision: readNightVision,
     setNightVision(player,enabled,initialize=false) {
       return transaction(db,()=>{
@@ -344,11 +357,12 @@ export function openStore(filename) {
         return {setting,changed:true};
       });
     },
-    updateProfile(player, { nickname, skin, ponyTraits }, previousNickname) {
+    updateProfile(player, { nickname, skin, ponyTraits }, previousNickname, writeInventory) {
       return transaction(db, () => {
         if (nickname !== undefined) writeNickname.run(player, nickname);
         if (skin !== undefined) writeSkin.run(player, skin?.hash ?? null, skin?.png ?? null);
         if (ponyTraits) writePonyTraits(player,ponyTraits);
+        writeInventory?.();
         if (nickname !== undefined && previousNickname && nickname !== previousNickname) {
           return appendChat({kind:'rename', nickname:previousNickname, newNickname:nickname, channel:'global'});
         }

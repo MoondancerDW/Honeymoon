@@ -47,6 +47,7 @@
 }
 #admin-menu .admin-record { display: grid; gap: .42rem; min-width: 0; padding: .65rem 0; border-top: 1px solid var(--line); }
 #admin-menu .admin-summary { display: flex; justify-content: space-between; align-items: start; gap: .55rem; flex-wrap: wrap; }
+#admin-menu .admin-profile-record { padding: 0; border: 0; }
 :is(.admin-player-management, .mode-player-management) {
   min-width: 0; border: 1px solid var(--line); border-radius: .4rem; background: #172e3a;
 }
@@ -56,7 +57,20 @@
 :is(.admin-player-management, .mode-player-management) > summary:focus-visible {
   outline: 2px solid var(--gold); outline-offset: -2px;
 }
+#admin-menu .admin-profile-summary {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto .5rem; align-items: center;
+  gap: .45rem; line-height: 1.2;
+}
+#admin-menu .admin-profile-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#admin-menu [open] > .admin-profile-summary .admin-profile-name { white-space: normal; }
+#admin-menu .admin-profile-summary .admin-profile-presence { white-space: nowrap; font-weight: 400; }
+#admin-menu .admin-profile-summary::after {
+  content: ''; width: .35rem; height: .35rem; border: solid currentColor; border-width: 0 1px 1px 0;
+  transform: rotate(45deg); margin-bottom: .2rem; justify-self: center;
+}
+#admin-menu [open] > .admin-profile-summary::after { transform: rotate(225deg); margin-bottom: -.2rem; }
 #admin-menu .admin-player-actions { display: grid; gap: .5rem; padding: .15rem .6rem .6rem; }
+#admin-menu .admin-profile-details { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .6rem; }
 #mode-players .mode-player-management > label { flex-wrap: wrap; padding: .15rem .6rem .6rem; }
 #admin-menu .admin-device { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .4rem; align-items: center; }
 #admin-menu .admin-subtle, #admin-menu small { color: #cbdcde; font-size: .82rem; overflow-wrap: anywhere; }
@@ -75,6 +89,8 @@
   #admin-menu input, #access-form input { font-size: 1rem; }
 }
 @media (max-width: 520px) {
+  #admin-menu .admin-profile-summary { gap: .35rem; padding-inline: .45rem; }
+  #admin-menu .admin-profile-summary .admin-profile-presence { font-size: .74rem; }
   #admin-menu .admin-device { grid-template-columns: 1fr; }
   #admin-menu .admin-device button { justify-self: start; }
   #admin-menu .admin-tabs > button { flex: 1; padding-inline: .35rem; }
