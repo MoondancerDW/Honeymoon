@@ -30,7 +30,7 @@ const continuousUntil = Date.parse('9999-12-31T00:00:00Z');
 const plain = value=>value && typeof value==='object' && !Array.isArray(value);
 const within = (value,min,max)=>Number.isSafeInteger(value) && value>=min && value<=max;
 
-export function loadPlayerDiagnostics(state,{now=Date.now,onError=error=>console.error('Honeymoon player diagnostics:',error.message)}={}) {
+export function loadPlayerDiagnostics(state,{now=Date.now,onError=error=>console.error('Lilium Moonlight player diagnostics:',error.message)}={}) {
   if (state===':memory:') return;
   try {
     const settings=JSON.parse(readFileSync(join(dirname(state),'player-diagnostics.json'),'utf8'));

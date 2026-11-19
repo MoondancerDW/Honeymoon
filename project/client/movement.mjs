@@ -11,6 +11,7 @@ import {isRideableBoat,boatHit} from '../world/boats.mjs';
 import {itemFrameHit} from '../world/item-frames.mjs';
 import {isChiselMaterial, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
+import {JUMP_CHARGE_BONUS,ponyAbilities} from '../world/pony-abilities.mjs';
 
 const {height: HEIGHT, eye: EYE} = PLAYER;
 const {collisionFor} = geometry;
@@ -23,20 +24,22 @@ const MINECRAFT_TICK = .05;
 const MINECRAFT_JUMP_SPEED = .42 / MINECRAFT_TICK;
 const nextMinecraftJumpSpeed = speed => (speed - .08 / MINECRAFT_TICK) * .98;
 const MINECRAFT_JUMP_HEIGHT = 1.252203352512;
+const WINGED_DESCENT_SPEED = 1.4;
 const VERTICAL_STEP = POSITION_VERTICAL_STEP_LIMIT - .01;
 const cartsByChunk = new WeakMap();
 const framesByChunk = new WeakMap();
 
-export function movementSpeed({flying = false, sprint = false, stance = 'stand', y = -Infinity} = {}) {
+export function movementSpeed({flying = false, sprint = false, stance = 'stand', y = -Infinity, ponyType} = {}) {
+  const race = ponyType && ponyAbilities(ponyType);
   if (flying) {
-    const speed = sprint ? FLIGHT_SPRINT_SPEED : FLIGHT_SPEED;
+    const speed = sprint ? FLIGHT_SPRINT_SPEED : FLIGHT_SPEED * (y<HIGH_FLIGHT_Y ? race?.lowFlightMultiplier ?? 1 : 1);
     const highSpeed = sprint ? HIGH_FLIGHT_SPRINT_SPEED : HIGH_FLIGHT_SPEED;
     const blend = Math.max(0,Math.min(1,(y-HIGH_FLIGHT_Y)/1.5));
     return speed + (highSpeed-speed)*blend;
   }
   if (stance === 'swim') return WALK_SPEED;
   if (stance !== 'stand') return stance === 'crawl' ? CRAWL_SPEED : WALK_SPEED * .3;
-  return sprint ? GROUND_SPRINT_SPEED : WALK_SPEED;
+  return sprint ? GROUND_SPRINT_SPEED * (race?.sprintMultiplier ?? 1) : WALK_SPEED;
 }
 
 export function cameraClearance(world, origin, direction, distance = CAMERA_OFFSET) {
@@ -152,6 +155,7 @@ export class Movement {
   }
 
   get body() { return playerBody(this.size, this.stance); }
+  get canChargeJump() { return this.stance === 'stand' && this.grounded && !this.medium && !this.waitingForTerrain; }
 
   setStance({x,y,z}, stance) {
     if (stance === this.stance || !isPlayerStance(stance)) return this.stance;
@@ -276,17 +280,25 @@ export class Movement {
     }
   }
 
-  startJump(y) {
+  startJump(y, charged = false) {
     const regular = this.stance !== 'crawl';
-    this.jumpArc = regular ? {y, tickLeft:MINECRAFT_TICK,
-      slowDescent:this.ponyType === 'pegasus' || this.ponyType === 'alicorn'} : undefined;
-    this.fall = regular ? MINECRAFT_JUMP_SPEED : Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
+    const race = ponyAbilities(this.ponyType);
+    const scale = charged && race.chargedJump ? 1 + JUMP_CHARGE_BONUS / MINECRAFT_JUMP_HEIGHT : 1;
+    this.jumpArc = regular ? {y, tickLeft:MINECRAFT_TICK, slowDescent:race.winged, scale} : undefined;
+    this.gliding = false;
+    this.fall = regular ? MINECRAFT_JUMP_SPEED * scale : Math.sqrt(2 * JUMP_ASCENT_GRAVITY * this.body.jumpHeight);
     this.grounded = false;
   }
 
   resetFall() {
     this.fall = 0;
     this.jumpArc = undefined;
+    this.gliding = false;
+  }
+
+  cancelSlowFall() {
+    if (this.jumpArc) this.jumpArc.slowDescent = false;
+    this.gliding = false;
   }
 
   dryVerticalDelta(y, remaining) {
@@ -306,14 +318,18 @@ export class Movement {
       remaining -= step;
       arc.tickLeft -= step;
       if (arc.tickLeft <= 0) {
-        this.fall = nextMinecraftJumpSpeed(this.fall);
+        this.fall = nextMinecraftJumpSpeed(this.fall / arc.scale) * arc.scale;
         if (arc.slowDescent && this.fall < 0) {
-          // Winged ponies share the same ascent, then fall from rest at the apex.
-          this.resetFall();
+          this.jumpArc = undefined;
+          this.gliding = true;
           break;
         }
         arc.tickLeft = MINECRAFT_TICK;
       }
+    }
+    if (this.gliding) {
+      this.fall = -WINGED_DESCENT_SPEED;
+      return delta + this.fall * remaining;
     }
     if (remaining <= 0) return delta;
     const initial = this.fall;
@@ -326,9 +342,10 @@ export class Movement {
     return delta + (initial + this.fall) * .5 * remaining;
   }
 
-  update(position, dx, dz, jump, dt, {descend = false, rise = jump, swimPitch = 0, recordStep, automatic = false} = {}) {
+  update(position, dx, dz, jump, dt, {descend = false, rise = jump, swimPitch = 0, recordStep, automatic = false,
+    chargedJump = false} = {}) {
     this.medium = movementMedium(this.cellAt, position.x, position.y, position.z, this.world.models);
-    if (!this.medium && jump && this.grounded) this.startJump(position.y);
+    if (!this.medium && jump && this.grounded) this.startJump(position.y, chargedJump);
     const fastestDrop = (Math.max(0,-this.fall) + WORLD_GRAVITY * dt) * dt;
     const n = Math.max(1, Math.ceil(dt / .016), Math.ceil(fastestDrop / VERTICAL_STEP));
     const step = dt / n;
@@ -338,7 +355,10 @@ export class Movement {
       const swimming = this.stance === 'swim' && startMedium === 'water';
       const current = submerged ? fluidCurrent(this.cellAt,position.x,position.y,position.z,startMedium) : [0,0,0];
       let deltaY;
-      if (startMedium) this.jumpArc = undefined;
+      if (startMedium) {
+        this.jumpArc = undefined;
+        this.gliding = false;
+      }
       if (startMedium === 'ladder') {
         this.fall = descend ? -1.8 : rise ? 2.4 : Math.max(-1.8, this.fall - 12 * step);
       } else if (startMedium === 'water') {
@@ -412,7 +432,11 @@ export class Movement {
     let hit = false;
     for (let i = 0; i < segments && !hit; i++) hit = this.axis(position, 'y', amount / segments);
     this.grounded = hit && amount < 0;
-    if (hit) this.resetFall();
+    if (hit) {
+      const slowed = amount > 0 && this.jumpArc?.slowDescent;
+      this.resetFall();
+      if (slowed) this.gliding = true;
+    }
   }
 }
 

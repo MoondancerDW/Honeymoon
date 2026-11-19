@@ -95,16 +95,17 @@ export function physics(base, geometry, getCell, models) {
     return movePathClear(start, corner, body) && movePathClear(corner, end, body);
   }
 
-  function movementTrailAllowed(start, trail, {height,halfWidth} = PLAYER) {
+  function bodySweep({height,halfWidth}) {
     const cached = new Map();
-    function clear(from, to) {
+    return (from, to, stopAtFirst = false) => {
       const delta = axisNames.map(axis => to[axis] - from[axis]);
-      if (delta.every(amount => amount === 0)) return true;
+      if (delta.every(amount => amount === 0)) return Infinity;
       const origin = axisNames.map(axis => from[axis]);
       const low = axisNames.map(axis => Math.floor(Math.min(from[axis], to[axis])));
       const highX = Math.floor(Math.max(from.x, to.x)) + 1;
       const highY = Math.floor(Math.max(from.y, to.y) + height);
       const highZ = Math.floor(Math.max(from.z, to.z)) + 1;
+      let nearest = Infinity;
       for (let y = low[1] - 1; y <= highY; y++) {
         for (let z = low[2] - 1; z <= highZ; z++) {
           for (let x = low[0] - 1; x <= highX; x++) {
@@ -114,14 +115,20 @@ export function physics(base, geometry, getCell, models) {
               [x + box.x1 + halfWidth - epsilon, y + box.y1 - epsilon, z + box.z1 + halfWidth - epsilon],
             ]));
             for (const [min, max] of cached.get(key)) {
-              if (rayBox(origin, delta, min, max, true) !== Infinity) return false;
+              const hit = rayBox(origin, delta, min, max, true);
+              if (stopAtFirst && hit !== Infinity) return hit;
+              nearest = Math.min(nearest,hit);
             }
           }
         }
       }
-      return true;
-    }
+      return nearest;
+    };
+  }
 
+  function movementTrailAllowed(start, trail, body = PLAYER) {
+    const sweep = bodySweep(body);
+    const clear = (from,to) => sweep(from,to,true) === Infinity;
     for (const end of trail) {
       // The browser resolves Y, then X, then Z. Stepping off an edge may
       // instead settle to its final Y after the horizontal step.
@@ -135,6 +142,22 @@ export function physics(base, geometry, getCell, models) {
       start = end;
     }
     return true;
+  }
+
+  function unobstructedDistance(origin,direction,distance,body,insideMap) {
+    const sweep=bodySweep(body);
+    let previous=origin;
+    let traversed=0;
+    while (traversed<distance) {
+      const next=Math.min(distance,traversed+.4);
+      const candidate=Object.fromEntries(axisNames.map((axis,index)=>[axis,origin[axis]+direction[index]*next]));
+      if (!insideMap(candidate,body)) break;
+      const hit=sweep(previous,candidate);
+      if (hit!==Infinity) return Math.max(0,traversed+(next-traversed)*hit-.015);
+      traversed=next;
+      previous=candidate;
+    }
+    return traversed;
   }
 
   function firstHit(origin, target, solidOnly = false) {
@@ -231,6 +254,7 @@ export function physics(base, geometry, getCell, models) {
     standAbove,
     movementAllowed,
     movementTrailAllowed,
+    unobstructedDistance,
     visible,
     visiblePoint,
     visiblePart,

@@ -19,12 +19,13 @@ const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
 const controlsQa=test==='controls-update'||test==='controls-update-mobile';
 const touchGameplayQa=test==='touch-gameplay';
 const pauseQa=test==='pause-desktop'||test==='pause-mobile';
-const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile'].includes(test);
+const raceQa=test==='races-desktop'||test==='races-mobile';
+const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
-const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa?'game':'creative',
+const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
   ...((onlineCacheQa||preloadQa)&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
@@ -84,7 +85,224 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (iphoneQa) {
+  if (raceQa) {
+    await skipPreload();
+    await start();
+    assert.match(await page.title(),/^Lilium Moonlight\b/);
+    const cdp=mobileQa ? await page.context().newCDPSession(page) : null;
+    const down=async id=>{
+      const {x,y,width,height}=await page.locator(id).boundingBox();
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:x+width/2,y:y+height/2}]});
+    };
+    const up=()=>cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    const activate=(id,key)=>mobileQa ? page.locator(id).tap() : page.keyboard.press(key);
+    const activeGame=()=>page.waitForFunction(mobile=>document.getElementById('game').classList.contains('playing') &&
+      (mobile||Boolean(document.pointerLockElement)),mobileQa);
+    const ground=()=>page.waitForFunction(()=>{
+      const stats=honeymoon.stats();
+      return stats.grounded&&stats.movementSync.status==='ready';
+    },undefined,{timeout:10_000});
+    async function pauseGame() {
+      if (mobileQa) await page.locator('#touch-pause').tap();
+      else await page.evaluate(()=>document.exitPointerLock());
+      await page.locator('#pause-home').waitFor({state:'visible'});
+    }
+    async function changeMode(mode) {
+      await pauseGame();
+      await pauseSection('world');
+      await click('#self-mode-toggle');
+      await page.waitForFunction(want=>honeymoon.health().mode===want,mode);
+      await click('#play');
+      await activeGame();
+    }
+    async function uploadSkin(marker,type,size) {
+      const encoded=await page.evaluate(({marker,size})=>{
+        const canvas=document.createElement('canvas');
+        canvas.width=64;
+        canvas.height=32;
+        const context=canvas.getContext('2d');
+        context.fillStyle='#dc9262';
+        context.fillRect(0,0,64,32);
+        context.fillStyle=marker;
+        context.fillRect(0,0,1,1);
+        if (size==='large') {
+          context.fillStyle='#ce3254';
+          context.fillRect(3,0,1,1);
+        }
+        return canvas.toDataURL('image/png').split(',')[1];
+      },{marker,size});
+      await pauseGame();
+      await pauseSection('profile');
+      await page.locator('#pony-skin').setInputFiles({name:`${type}.png`,mimeType:'image/png',buffer:Buffer.from(encoded,'base64')});
+      await page.waitForFunction(type=>document.getElementById('skin-status').textContent.includes(type+'.png'),type);
+      await click('#play');
+      await page.waitForFunction(type=>honeymoon.stats().ponyType===type,type);
+      await ground();
+      assert.equal((await stat()).body.size,size);
+    }
+    async function pressSpace(ms=25) {
+      if (mobileQa) await down('#jump');
+      else await page.keyboard.down('Space');
+      try { await page.waitForTimeout(ms); }
+      finally { if (mobileQa) await up(); else await page.keyboard.up('Space'); }
+    }
+    async function sampleApex(ms) {
+      await ground();
+      await page.evaluate(()=>{
+        const floor=honeymoon.stats().position.y;
+        globalThis.raceSample=new Promise(resolve=>{
+          const begun=performance.now();
+          let apex=0;
+          function sample(now) {
+            const state=honeymoon.stats();
+            apex=Math.max(apex,state.position.y-floor);
+            if (apex>.1&&state.grounded || now-begun>4600) resolve(apex);
+            else requestAnimationFrame(sample);
+          }
+          requestAnimationFrame(sample);
+        });
+      });
+      await pressSpace(ms);
+      return page.evaluate(()=>raceSample);
+    }
+    const noFlight=async()=>{
+      if (mobileQa) assert.equal(await visible('#touch-flight'),false);
+      else await page.keyboard.press('KeyF');
+      assert.equal((await stat()).flying,false);
+    };
+    const health=()=>page.evaluate(()=>honeymoon.health());
+    const expectHealth=async value=>{
+      assert.equal((await health()).maxHealth,value);
+      assert.equal((await health()).health,value);
+    };
+    await ground();
+    await expectHealth(15);
+    await noFlight();
+    const normal=await sampleApex(24);
+    const charged=await sampleApex(275);
+    assert.ok(normal>1.2 && normal<1.27 && Math.abs(normal+.5-charged)<.06,JSON.stringify({normal,charged}));
+    await page.waitForFunction(()=>honeymoon.stats().jumpCharges===1);
+    const second=await sampleApex(275);
+    assert.ok(Math.abs(second-charged)<.06);
+    await page.waitForFunction(()=>honeymoon.stats().jumpCharges===0);
+    const empty=await sampleApex(275);
+    assert.ok(Math.abs(normal-empty)<.06,JSON.stringify({normal,empty}));
+    await page.waitForFunction(()=>honeymoon.stats().jumpCharges===1,undefined,{timeout:8_000});
+    await page.waitForFunction(()=>honeymoon.stats().jumpCharges===2,undefined,{timeout:4_000});
+    result.checks.push({earth:{normal,charged,second,empty,bothRecharged:true,health:15}});
+
+    await uploadSkin('#88caf0','pegasus','large');
+    await expectHealth(10);
+    await pressSpace();
+    await page.waitForFunction(()=>honeymoon.stats().gliding);
+    assert.equal((await stat()).fallSpeed,-1.4);
+    await pressSpace();
+    await page.waitForFunction(()=>!honeymoon.stats().gliding&&honeymoon.stats().fallSpeed<-2);
+    await ground();
+    await activate('#touch-flight','KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    const takeoff=(await stat()).position.y;
+    await pressSpace(2200);
+    await page.waitForFunction(y=>honeymoon.stats().position.y>y+8,takeoff);
+    await activate('#touch-flight','KeyF');
+    await page.waitForFunction(()=>!honeymoon.stats().flying&&honeymoon.stats().fallSpeed<-3);
+    assert.equal((await stat()).gliding,false);
+    await ground();
+    await expectHealth(10);
+    result.checks.push({pegasus:{health:10,height:'large',glideCanceled:true,fallDamage:0}});
+
+    await uploadSkin('#d19fe4','unicorn','normal');
+    await expectHealth(10);
+    await noFlight();
+    await changeMode('creative');
+    await activate('#touch-flight','KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await activate('#touch-flight','KeyF');
+    await ground();
+    if (mobileQa) {await click('#touch-more'); await click('#touch-catalog');}
+    else await page.keyboard.press('KeyI');
+    await click('#creative-tabs [data-tab="all"]');
+    await page.locator('#creative-search').fill('legacy:50:0');
+    await click('#creative-grid [data-key="legacy:50:0"]');
+    const [given]=await Promise.all([
+      page.waitForResponse(response=>response.url().endsWith('/api/action') &&
+        response.request().postDataJSON()?.type==='inventory_give'),
+      click('#inventory-hotbar [data-slot="0"]'),
+    ]);
+    assert.equal(given.status(),200,await given.text());
+    await click('#creative-close');
+    await page.locator('#creative-menu').waitFor({state:'hidden'});
+    await activeGame();
+    await changeMode('game');
+    await activate('#touch-swap-hands','KeyN');
+    await page.waitForFunction(()=>honeymoon.localAvatar()?.offhand?.key==='legacy:50:0'&&honeymoon.stats().heldLights.active>=1);
+    assert.ok(await visible('#hud-offhand [data-slot="40"]'));
+    if (mobileQa) {await click('#touch-more'); await click('#touch-inventory');}
+    else await page.keyboard.press('KeyJ');
+    await page.locator('#inventory-offhand [data-slot="40"]').waitFor({state:'visible'});
+    await click('#creative-close');
+    if (await visible('#play')) await click('#play');
+    await activeGame();
+    await page.evaluate(()=>honeymoon.look(-Math.PI/2,-.22));
+    const before=(await stat()).position;
+    const [spell]=await Promise.all([
+      page.waitForResponse(response=>response.url().endsWith('/api/magic-teleport'),{timeout:15_000}),
+      activate('#touch-magic','KeyM'),
+    ]);
+    assert.equal(spell.status(),200,await spell.text());
+    const {position:after,magicCooldownMs}=await spell.json();
+    assert.ok(Math.hypot(after.x-before.x,after.z-before.z)>1);
+    assert.ok(Math.hypot(after.x-before.x,after.z-before.z)<=50 && Math.abs(after.y-before.y)<=30);
+    assert.ok(magicCooldownMs>19_000);
+    await page.waitForFunction(()=>honeymoon.stats().magicCooldown>0,undefined,{timeout:4000});
+    const repeat=await page.request.post(url+'api/magic-teleport',{data:{yaw:0,pitch:-.3}});
+    assert.equal(repeat.status(),409);
+    assert.equal((await repeat.json()).error,'magic_cooldown');
+    await page.waitForFunction(({x,y,z})=>{
+      const at=honeymoon.stats().position;
+      return Math.hypot(at.x-x,at.y-y,at.z-z)<.15 && document.getElementById('teleport-loading').hidden;
+    },after,{timeout:45_000});
+    result.checks.push({unicorn:{health:10,offhandTorch:true,magicDestination:after,cooldown:true}});
+
+    await uploadSkin('#fef9fc','alicorn','normal');
+    await expectHealth(15);
+    assert.ok(await visible('#hud-offhand [data-slot="40"]'));
+    await activate('#touch-flight','KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    if (mobileQa) await page.evaluate(()=>document.getElementById('game').classList.add('show-metrics'));
+    if (mobileQa) for (const [width,height] of [[320,610],[390,730],[667,300],[800,370]]) {
+      await page.setViewportSize({width,height});
+      const controls=['#jump','#touch-remove','#touch-use','#touch-lower','#touch-sprint','#touch-flight','#touch-magic',
+        '#touch-swap-hands','#touch-chat','#stick','#touch-build','#touch-more','#touch-pause','#fullscreen-toggle'];
+      const boxes=await Promise.all(controls.map(selector=>page.locator(selector).boundingBox()));
+      for (const [index,box] of boxes.entries()) {
+        assert.ok(box&&box.width>=44&&box.height>=44&&box.x>=0&&box.y>=0&&box.x+box.width<=width&&box.y+box.height<=height, controls[index]);
+        for(const [j,other] of boxes.entries()) {
+          if (index>=j||!other) continue;
+          assert.ok(box.x+box.width<=other.x || other.x+other.width<=box.x || box.y+box.height<=other.y || other.y+other.height<=box.y,
+            `${width}×${height}: ${controls[index]} covers ${controls[j]}`);
+        }
+      }
+      for (const selector of controls) {
+        assert.ok(await page.locator(selector).evaluate(button=>{
+          const {left,top,width,height}=button.getBoundingClientRect();
+          const target=document.elementFromPoint(left+width/2,top+height/2);
+          return button.contains(target);
+        }),`${width}×${height}: ${selector} is reachable by touch`);
+      }
+      const hud=await page.locator('#health, #connection-metrics, #pony-abilities, #selected:not(:empty)').evaluateAll(elements=>
+        elements.map(element=>{
+          const {left,right,top,bottom}=element.getBoundingClientRect();
+          return {id:element.id,left,right,top,bottom};
+        }).filter(box=>box.right>box.left&&box.bottom>box.top));
+      for (const [index,box] of hud.entries()) for (const other of hud.slice(index+1)) {
+        assert.ok(box.right<=other.left || other.right<=box.left || box.bottom<=other.top || other.bottom<=box.top,
+          `${width}×${height}: ${box.id} overlaps ${other.id}`);
+      }
+      await shot(`races-mobile-${width}`);
+    } else await shot('races-desktop');
+    result.checks.push({alicorn:{health:15,flight:true,offhand:true,mobileLayouts:mobileQa?4:0}});
+  } else if (iphoneQa) {
     await skipPreload();
     await page.addInitScript(()=>{
       Object.defineProperties(document,{fullscreenEnabled:{value:false},webkitFullscreenEnabled:{value:false}});
@@ -398,7 +616,7 @@ try {
     await hop(3359.4,72,1467.5);
     await page.waitForFunction(()=>Boolean(document.pointerLockElement));
     await page.evaluate(()=>honeymoon.look(-Math.PI/2,0));
-    app.game.damageFromNpc(playerId,8);
+    app.game.damageFromNpc(playerId,13);
     await page.waitForFunction(()=>honeymoon.health().health===2);
     await page.evaluate(()=>{
       const health=document.getElementById('health');
@@ -440,7 +658,7 @@ try {
     ]);
     const respawn=await revive.json();
     assert.deepEqual(respawn.position,{x:spawn[0],y:spawn[1],z:spawn[2]});
-    await page.waitForFunction(()=>honeymoon.health().health===10&&!honeymoon.health().death&&
+    await page.waitForFunction(()=>honeymoon.health().health===15&&!honeymoon.health().death&&
       !honeymoon.localAvatar()?.lavaDeath&&!honeymoon.stats().lavaDeathParticles&&
       document.getElementById('teleport-loading').hidden,undefined,{timeout:20000});
     assert.equal(await visible('#death-screen'),false);
@@ -1120,8 +1338,9 @@ try {
     await soloEntry.click();
     const dialog=page.getByRole('dialog',{name:'Одиночная игра'});
     assert.equal(await dialog.isVisible(),true);
+    const archiveName=expectedBuild>=19?'Lilium-Moonlight':'Honeymoon';
     assert.match(await dialog.getByRole('link',{name:'Скачать для Windows'}).getAttribute('href'),
-      new RegExp(`/build-${expectedBuild}/Honeymoon-Build-${expectedBuild}-SinglePlayer\\.zip$`));
+      new RegExp(`/build-${expectedBuild}/${archiveName}-Build-${expectedBuild}-SinglePlayer\\.zip$`));
     assert.equal(await dialog.getByRole('link',{name:'Открыть запущенную игру'}).getAttribute('href'),'http://127.0.0.1:4180/');
     await shot('solo-entry');
     await dialog.getByRole('button',{name:'Закрыть'}).click();

@@ -195,7 +195,7 @@ async function main() {
   const portable = new URL('../single-instance.mjs',import.meta.url);
   const {acquireInstance} = await import(existsSync(portable) ? portable : new URL('../portable/single-instance.mjs',import.meta.url));
   const lock = await acquireInstance(project);
-  if (!lock.primary) throw new Error('Stop Honeymoon before restoring the original map.');
+  if (!lock.primary) throw new Error('Stop Lilium Moonlight before restoring the original map.');
   try {
     console.log(JSON.stringify(await restoreFromBackup(resolve(values['backup-world']),world,state,stateBackup),null,2));
   } finally { await lock.close(); }

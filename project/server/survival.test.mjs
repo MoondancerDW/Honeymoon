@@ -17,7 +17,7 @@ test('game mode damage, recovery, death and personal creative overrides follow t
   const mode=createSurvival(store,'game',{now:()=>time});
   const {id}=store.createPlayer();
   const point={x:3,y:70,z:4};
-  assert.deepEqual(mode.status(id),{mode:'game',health:10,death:null});
+  assert.deepEqual(mode.status(id),{mode:'game',health:10,maxHealth:10,death:null});
   assert.equal(mode.damage(id,1,point,70).health,9);
   assert.ok(mode.canStrike(id));
   assert.ok(!mode.canStrike(id));
@@ -74,9 +74,7 @@ test('continuous lava contact deals one point per second and a lava death revive
   assert.equal(tick(999),6);
   assert.equal(tick(1),5);
 
-  game.setSpectator(id,{enabled:true});
-  assert.equal(tick(5000),5);
-  game.setSpectator(id,{enabled:false});
+  assert.throws(()=>game.setSpectator(id,{enabled:true}),{code:'creative_required'});
   game.teleport(id,lava);
   assert.equal(tick(4900),1);
   assert.equal(tick(100),0);

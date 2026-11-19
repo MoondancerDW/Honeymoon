@@ -235,6 +235,10 @@ test('independent cookies share profiles and only confirmed movement, and retain
   assert.equal(chosen.data.nicknameChosen,true);
   assert.equal(chosen.data.size,'small');
   assert.equal(chosen.data.ponyType,'pegasus');
+  const withoutMovement=({position,seat,stance,...profile})=>profile;
+  const ownFields=({flight,flightAllowed,jumpCharge,magicCooldownMs,...profile})=>withoutMovement(profile);
+  assert.deepEqual(chosen.data.position,point);
+  assert.equal(chosen.data.stance,'stand');
   assert.equal((await post('session',{},a.cookie)).data.profile.nicknameChosen,false);
   assert.match(chosen.data.skin, /^\/skins\/[a-f0-9]{64}\.png$/);
   const image = await fetch(url + chosen.data.skin);
@@ -250,14 +254,14 @@ test('independent cookies share profiles and only confirmed movement, and retain
   const joined = await post('presence',{...options,x:25,y:25,z:25},b.cookie);
   assert.equal(joined.status,200);
   const entered = await observer.next('presence');
-  assert.deepEqual(entered, {revision:undefined,data:{players:[{...chosen.data,position:point,...options,stance:'stand'}],selfOnline:false}});
+  assert.deepEqual(entered, {revision:undefined,data:{players:[{...ownFields(chosen.data),position:point,...options,stance:'stand'}],selfOnline:false}});
   assert.equal((await post('position',{...point,x:100,pose:{...options,motion:'fly'}},b.cookie)).status,409);
   assert.equal((await post('position',{...point,z:8.75,pose:{...options,motion:'walk'}},b.cookie)).status,200);
   const moved = await observer.next('presence-motion');
   assert.deepEqual(moved, {revision:undefined,data:{players:[{id:chosen.data.id,position:{...point,z:8.75},...options,motion:'walk',stance:'stand'}]}});
   const renamed = await post('profile',{nickname:'Другой ник'}, b.cookie);
   assert.equal(renamed.status,200);
-  assert.deepEqual(renamed.data, {...chosen.data,nickname:'Другой ник'});
+  assert.deepEqual(renamed.data, {...withoutMovement(chosen.data),nickname:'Другой ник'});
   const rename = (await observer.next('chat', entry => entry.kind === 'rename')).data;
   assert.deepEqual(rename, {id:rename.id,kind:'rename',nickname:'Лунный Ветер',newNickname:'Другой ник',channel:'global'});
   assert.equal((await post('profile',{nickname:'Другой ник'}, b.cookie)).status,200);
@@ -269,7 +273,7 @@ test('independent cookies share profiles and only confirmed movement, and retain
   app = undefined;
   await start();
   const reloaded = await post('session',{},b.cookie);
-  assert.deepEqual(reloaded.data.profile,renamed.data);
+  assert.deepEqual(reloaded.data.profile,ownFields(renamed.data));
   const history = await eventFeed(url,a.cookie,signal,true);
   assert.deepEqual((await history.next('chat-history')).data.entries.filter(entry => entry.kind === 'rename'), [rename]);
   await history.close();

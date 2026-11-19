@@ -1,6 +1,6 @@
 import {arrangeCreativeCatalog} from './creative-layout.mjs';
 import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
-import {itemStackLimit} from '../world/item-stack.mjs';
+import {itemStackLimit,offhandSlot} from '../world/item-stack.mjs';
 import {bookType,itemTooltip,stackType,writtenBookInfo} from '../world/item-text.mjs';
 import {iconSignature,inventoryItemEntry,pendingItemIcon} from './creative-icons.mjs';
 
@@ -17,7 +17,7 @@ function cardData({entry,icon,code}) {
     search:normalized([name,entry.english,entry.mod,entry.key,icon.name,icon.key,code,entry.variant].filter(Boolean).join(' '))};
 }
 
-export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pause,resume,notice,icon,preview,editItem,readBook,canCopy=()=>true}) {
+export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pause,resume,notice,icon,preview,editItem,readBook,swap,canCopy=()=>true}) {
   const byId = id => document.getElementById(id);
   const dialog = byId('creative-menu');
   const toggle = byId('creative-toggle');
@@ -28,11 +28,13 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   const trashTarget = byId('inventory-trash'), carried = byId('inventory-carried');
   const editingTarget=byId('inventory-edit');
   const hotbar = byId('hotbar'), equipmentPanel = byId('inventory-equipment');
+  const hudOffhand = byId('hud-offhand'), menuOffhand = byId('inventory-offhand');
   const slotsPanel = byId('inventory-slots'), previewCanvas = byId('inventory-preview');
   const storageMode = () => active === 'inventory';
   let catalog, allCards, pending, active = 'buildingBlocks', tabPage = 0;
   let matches = [], firstRow = -1, dragging, picked, requestedSlot, underCursor, openedFromPause;
-  let state = {slots:Array(inventorySize).fill(null), selected:0, equipment:Array(equipmentLabels.length).fill(null)};
+  let state = {slots:Array(inventorySize).fill(null), selected:0, equipment:Array(equipmentLabels.length).fill(null), offhand:null};
+  let offhandAvailable = false;
   let queued = Promise.resolve();
 
   function request(callback,...args) {
@@ -48,7 +50,9 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
 
   const draw = entry => pendingItemIcon(entry,icon);
 
-  function stackAt(slot) { return slot < inventorySize ? state.slots[slot] : state.equipment[slot-inventorySize]; }
+  function stackAt(slot) {
+    return slot === offhandSlot ? state.offhand : slot < inventorySize ? state.slots[slot] : state.equipment[slot-inventorySize];
+  }
 
   const entryFor = stack => inventoryItemEntry(stack,catalog?.byKey.get(stack?.key));
 
@@ -88,8 +92,9 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   }
 
   function mayMove(source,slot) {
+    if ((slot === offhandSlot || source.slot === offhandSlot) && !offhandAvailable) return false;
     const entry = source.entry ?? entryFor(stackAt(source.slot));
-    return slot < inventorySize || ponyArmor(entry?.key)?.slot === slot - inventorySize;
+    return slot < inventorySize || slot === offhandSlot || ponyArmor(entry?.key)?.slot === slot - inventorySize;
   }
 
   async function transferTo(source,destination,single = false) {
@@ -204,7 +209,11 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
     button.type = 'button';
     button.className = 'inventory-slot';
     button.dataset.slot = slot;
-    button.addEventListener('click',event=>inWorld ? void selectSlot(slot) : clickSlot(slot,event,false));
+    button.addEventListener('click',event=>{
+      if (!inWorld) clickSlot(slot,event,false);
+      else if (slot === offhandSlot) void request(swap);
+      else void selectSlot(slot);
+    });
     if (!inWorld) {
       button.addEventListener('pointerenter',()=>{ underCursor = {slot}; });
       button.addEventListener('pointerleave',()=>{ if (underCursor?.slot === slot) underCursor = null; });
@@ -228,11 +237,16 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   }
 
   const worldSlots = Array.from({length:columns},(_,i)=>makeSlot(i,true));
-  const menuSlots = Array.from({length:inventorySize+equipmentLabels.length},(_,i)=>makeSlot(i,false));
+  const menuSlots = Array.from({length:offhandSlot+1},(_,i)=>makeSlot(i,false));
+  const hudOffhandSlot = makeSlot(offhandSlot,true);
+  const menuOffhandSlot = menuSlots[offhandSlot];
+  for (const button of [hudOffhandSlot,menuOffhandSlot]) button.classList.add('offhand-slot');
+  hudOffhand.replaceChildren(hudOffhandSlot);
+  menuOffhand.replaceChildren(menuOffhandSlot);
   hotbar.replaceChildren(...worldSlots);
   byId('inventory-hotbar').replaceChildren(...menuSlots.slice(0,columns));
   slotsPanel.replaceChildren(...menuSlots.slice(columns,inventorySize));
-  equipmentPanel.replaceChildren(...menuSlots.slice(inventorySize));
+  equipmentPanel.replaceChildren(...menuSlots.slice(inventorySize,offhandSlot));
   for (let i=0;i<equipmentLabels.length;i++) {
     const button = menuSlots[inventorySize+i];
     button.style.setProperty('--equipment-index',i);
@@ -245,24 +259,28 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
       const stack = stackAt(slot);
       const entry = entryFor(stack);
       const visible = slot===picked?.slot&&!picked.clone ? Math.max(0,(stack?.count??0)-countAt(picked)) : stack?.count??0;
-      const renditions = slot < columns ? [menuSlots[slot],worldSlots[slot]] : [menuSlots[slot]];
+      const hud = slot === offhandSlot ? hudOffhandSlot : worldSlots[slot];
+      const renditions = hud ? [menuSlots[slot],hud] : [menuSlots[slot]];
       for (const button of renditions) {
-        const world = button === worldSlots[slot];
+        const world = button === hud;
         const count = world ? stack?.count ?? 0 : visible;
-        if (world) {
+        if (world && slot < columns) {
           button.classList.toggle('selected-slot', state.selected === slot);
           button.setAttribute('aria-pressed',String(state.selected === slot));
         }
         button.draggable = Boolean(stack) && !world;
-        const title = slot < inventorySize ? `Ячейка ${slot+1}` : equipmentLabels[slot-inventorySize];
+        const title = slot === offhandSlot ? 'Вторая рука' : slot < inventorySize ?
+          `Ячейка ${slot+1}` : equipmentLabels[slot-inventorySize];
         const label = `${title} · ${entry?.name ?? 'Пусто'}${count > 1 ? ' ×'+count : ''}`;
-        button.title = itemTooltip(stack,label,{withLore:true});
-        button.setAttribute('aria-label',label);
+        if (slot === offhandSlot) button.classList.toggle('offhand-empty', !count);
+        const swapHint = world && slot === offhandSlot;
+        button.title = itemTooltip(stack,swapHint ? label + ' · Сменить руки (N)' : label,{withLore:true});
+        button.setAttribute('aria-label',swapHint ? label + ' · Сменить руки' : label);
         const signature = count && entry ? `${iconSignature(entry)}:${count}` : '';
         if (button.dataset.image === signature) continue;
         button.dataset.image = signature;
         paintStack(button,count ? entry : null,count);
-        if (!entry && slot >= inventorySize) {
+        if (!entry && slot >= inventorySize && slot < offhandSlot) {
           const outline = document.createElement('div');
           outline.className = 'equipment-empty';
           button.append(outline);
@@ -281,13 +299,20 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   function setInventory(next) {
     if (!Array.isArray(next?.slots) || next.slots.length !== inventorySize ||
         !Number.isInteger(next.selected) || next.selected < 0 || next.selected >= columns) return false;
-    state = {...next,equipment:next.equipment ?? Array(equipmentLabels.length).fill(null)};
+    state = {...next,equipment:next.equipment ?? Array(equipmentLabels.length).fill(null),offhand:next.offhand ?? null};
     if (picked?.slot !== undefined && !stackAt(picked.slot)) picked = null;
     hotbar.hidden = false;
     paintInventory();
     updateCarried();
-    if (!catalog && next.slots.some(Boolean)) fetchCatalog();
+    if (!catalog && (state.offhand || next.slots.some(Boolean))) fetchCatalog();
     return true;
+  }
+
+  function setOffhandAvailable(available) {
+    offhandAvailable = available;
+    hudOffhand.hidden = !available;
+    menuOffhand.hidden = !available || !storageMode();
+    if (!available && picked?.slot === offhandSlot) setPicked(null);
   }
 
   const discard = source => { if (source?.slot!==undefined && !source.clone && stackAt(source.slot)) void request(trash,source.slot); };
@@ -356,6 +381,7 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
     dialog.classList.toggle('inventory-only',storage);
     dialog.classList.toggle('search-tab',active === 'all');
     previewCanvas.hidden = equipmentPanel.hidden = slotsPanel.hidden = trashTarget.hidden = storage === false;
+    menuOffhand.hidden = !storage || !offhandAvailable;
     list.hidden = scrollbar.hidden = storage;
     search.hidden = active !== 'all';
     if (!catalog) { paintInventory(); return; }
@@ -526,12 +552,17 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   paintInventory();
 
   return {
-    open:()=>open(), openInventory:()=>open(true), close, isOpen:()=>dialog.open, setInventory, selectSlot,
+    open:()=>open(), openInventory:()=>open(true), close, isOpen:()=>dialog.open, setInventory, setOffhandAvailable, selectSlot,
     scrollHotbar(direction) {
       if (direction) return selectSlot(((requestedSlot ?? state.selected)+Math.sign(direction)+columns)%columns);
     },
     keydown(event) {
       if (!dialog.open) return false;
+      if (event.code === 'KeyN' && storageMode() && offhandAvailable && !event.ctrlKey&&!event.altKey&&!event.metaKey) {
+        event.preventDefault();
+        if (!event.repeat) { setPicked(null); void request(swap,true); }
+        return true;
+      }
       if (event.code === 'Escape' || ['KeyI','KeyB'].includes(event.code) && event.target !== search) {
         event.preventDefault();
         close();

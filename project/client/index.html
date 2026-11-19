@@ -4,11 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
-  <meta name="honeymoon-build" content="18">
+  <meta name="apple-mobile-web-app-title" content="Lilium Moonlight">
+  <meta name="honeymoon-build" content="19">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
-  <title>Honeymoon — Equestria</title>
+  <title>Lilium Moonlight — Equestria</title>
   <link rel="stylesheet" href="/game.css">
   <link rel="stylesheet" href="/npc-menu.css">
   <link rel="stylesheet" href="/access-menu.css">
@@ -16,24 +17,26 @@
   <link rel="stylesheet" href="/mobile-ui.css">
   <link rel="stylesheet" href="/altitude-map.css">
   <link rel="stylesheet" href="/pause-ui.css">
+  <link rel="stylesheet" href="/pony-abilities.css">
+  <link rel="stylesheet" href="/offhand.css">
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.mjs',{type:'module'}).catch(()=>{});
   </script>
 </head>
 <body>
-  <main id="game" aria-label="Игровой мир Honeymoon">
+  <main id="game" aria-label="Игровой мир Lilium Moonlight">
     <div id="build-outdated" role="alert" hidden>Ваша версия игры устарела, пожалуйста обновите страницу</div>
     <div id="scene"></div>
     <button id="altitude-map-back" type="button" hidden>Вернуться</button>
     <button id="fullscreen-toggle" class="icon-button fullscreen-toggle" type="button" aria-label="На весь экран" title="На весь экран" aria-pressed="false" hidden><i aria-hidden="true"></i></button>
     <dialog id="fullscreen-help" aria-labelledby="fullscreen-help-title" aria-describedby="fullscreen-help-instructions">
       <h2 id="fullscreen-help-title">Игра без строки адреса</h2>
-      <p id="fullscreen-help-instructions">В меню браузера выберите «Установить приложение» или «Добавить на главный экран». Затем запустите Honeymoon с новой иконки.</p>
+      <p id="fullscreen-help-instructions">В меню браузера выберите «Установить приложение» или «Добавить на главный экран». Затем запустите Lilium Moonlight с новой иконки.</p>
       <form method="dialog"><button type="submit" autofocus>Понятно</button></form>
     </dialog>
     <section id="access-gate" aria-labelledby="access-title" hidden>
       <form id="access-form">
-        <h1 id="access-title">Вход в Honeymoon</h1>
+        <h1 id="access-title">Вход в Lilium Moonlight</h1>
         <label id="access-name-row" for="access-name" hidden>
           Имя профиля
           <input id="access-name" type="text" maxlength="48" autocomplete="nickname">
@@ -48,6 +51,10 @@
       </form>
     </section>
     <div id="health" role="meter" aria-label="Здоровье" aria-valuemin="0" aria-valuemax="10" hidden></div>
+    <div id="pony-abilities" aria-label="Расовые способности" hidden>
+      <span id="jump-charge-status" hidden></span>
+      <span id="magic-cooldown-status" hidden></span>
+    </div>
     <section id="connection-alert" aria-label="Соединение с сервером" hidden>
       <span id="connection-message" role="status"></span>
       <button id="connection-retry" type="button" hidden>Повторить подключение</button>
@@ -73,7 +80,7 @@
     <section id="entry" class="entry">
       <div class="panel">
         <div id="entry-start">
-          <h1>Honeymoon</h1>
+          <h1>Lilium Moonlight</h1>
           <p id="loading" role="status">Загружаем район Equestria…</p>
           <div class="profile">
             <p id="access-profile" hidden></p>
@@ -85,6 +92,7 @@
               <button id="clear-skin" type="button" hidden>Сбросить</button>
             </div>
             <span id="skin-status" class="skin-status" role="status"></span>
+            <span id="pony-traits-label" class="skin-status" hidden></span>
           </div>
           <button id="play" type="button" disabled>Войти в мир</button>
           <button class="solo-entry-button" type="button" aria-haspopup="dialog" aria-controls="solo-entry" hidden>Одиночная игра</button>
@@ -188,11 +196,13 @@
                     <dl>
                       <dt>Стик / свайп по миру</dt><dd>Движение / поворот камеры</dd>
                       <dt>Тап по миру</dt><dd>Поставить выбранный блок или взаимодействовать с тем, на что наведён прицел.</dd>
-                      <dt>Стрелки / приседание</dt><dd>Прыгнуть или переключить приседание. В полёте удерживайте стрелки для подъёма или спуска.</dd>
+                      <dt>Стрелки / приседание</dt><dd>Прыгнуть или присесть. Удерживайте прыжок для заряда, если доступен. Повторное касание в воздухе прерывает планирование.</dd>
                       <dt>Ботинок / крыло</dt><dd>Включить или выключить ускорение / полёт.</dd>
+                      <dt>Магическая вспышка</dt><dd>Телепортироваться по прицелу за единорога или аликорна.</dd>
                       <dt>Ладонь / меч</dt><dd>Взаимодействовать / ударить или сломать блок. Удерживайте меч для повторных ударов.</dd>
                       <dt>Строительство</dt><dd>Открыть кнопки установки и копирования блока.</dd>
                       <dt>Панель предметов / ячейка</dt><dd>Развернуть или свернуть панель, выбрать предмет нажатием на ячейку</dd>
+                      <dt>Стрелки рядом с чатом</dt><dd>Поменять местами предметы в руках у единорогов и аликорнов.</dd>
                       <dt>Чат / Пауза / На весь экран</dt><dd>Открыть чат, меню паузы или полноэкранный режим</dd>
                       <dt>Ещё</dt><dd>Другое действие, ползти, сесть или встать, сменить вид, свободный обзор, наблюдатель, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
                       <dt data-admin-control-hint hidden>Телепорт</dt><dd data-admin-control-hint hidden>Открыть ввод координат из меню «Ещё»</dd>
@@ -202,11 +212,12 @@
                   <dl>
                     <dt>WASD / стрелки</dt><dd>Движение</dd>
                     <dt>Мышь</dt><dd>Повернуть камеру</dd>
-                    <dt>Пробел</dt><dd>Прыжок или подъём в полёте</dd>
+                    <dt>Пробел</dt><dd>Прыжок или подъём в полёте. Удержание расходует заряд прыжка, если он доступен. Повторное нажатие прерывает планирование.</dd>
                     <dt>Ctrl / C</dt><dd>Спуститься в полёте</dd>
                     <dt>Shift</dt><dd>Ускориться</dd>
                     <dt>H / Shift+H</dt><dd>Автодвижение / автоспринт. H или ручное движение отключают режим.</dd>
-                    <dt>F / P</dt><dd>Полёт / режим наблюдателя</dd>
+                    <dt>F / P</dt><dd>Полёт крылатых пони или в креативе / режим наблюдателя в креативе</dd>
+                    <dt>M</dt><dd>Магический телепорт по прицелу за единорога или аликорна</dd>
                     <dt>C / V / X</dt><dd>Присесть или подобрать предмет / ползти / сесть или встать</dd>
                     <dt>F5 или Y / U</dt><dd>Сменить вид / свободный обзор</dd>
                     <dt>ЛКМ / ПКМ</dt><dd>Ударить или сломать / поставить. Удерживайте ЛКМ для повторных ударов.</dd>
@@ -215,6 +226,7 @@
                     <dt>K / Shift+K</dt><dd>Резец / размер резца</dd>
                     <dt>E / Shift+E</dt><dd>Действие / альтернативное действие</dd>
                     <dt>Q / Ctrl+Q</dt><dd>Выбросить один предмет / всю стопку</dd>
+                    <dt>N</dt><dd>Поменять предметы в руках у единорогов и аликорнов</dd>
                     <dt>1–9 / колесо</dt><dd>Выбрать ячейку</dd>
                     <dt>I / J</dt><dd>Предметы / инвентарь</dd>
                     <dt>B / Z</dt><dd>Помахать копытом / танцевать</dd>
@@ -325,6 +337,7 @@
         <h3 id="inventory-title">Инвентарь</h3>
         <canvas id="inventory-preview" width="96" height="130" aria-label="Пони в экипировке"></canvas>
         <div id="inventory-equipment" role="group" aria-label="Броня"></div>
+        <div id="inventory-offhand" role="group" aria-label="Вторая рука" hidden></div>
         <div id="inventory-slots" class="inventory-grid" role="group" aria-label="Основной инвентарь"></div>
         <div id="inventory-hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа"></div>
         <button id="inventory-trash" type="button" aria-label="Корзина" title="Перетащить сюда, чтобы удалить"><span aria-hidden="true"></span></button>
@@ -384,7 +397,7 @@
     </dialog>
     <dialog id="solo-entry" aria-labelledby="solo-entry-title">
       <h2 id="solo-entry-title">Одиночная игра</h2>
-      <p>Скачайте архив для Windows, распакуйте его и запустите <strong>Start-Honeymoon.cmd</strong>. При первом запуске нужен интернет. Карта будет сохраняться на вашем компьютере по мере игры.</p>
+      <p>Скачайте архив для Windows, распакуйте его и запустите <strong>Start-Lilium-Moonlight.cmd</strong>. При первом запуске нужен интернет. Карта будет сохраняться на вашем компьютере по мере игры.</p>
       <div class="solo-download-actions">
         <a id="solo-entry-download">Скачать для Windows</a>
         <a href="http://127.0.0.1:4180/" target="_blank" rel="noopener noreferrer">Открыть запущенную игру</a>
@@ -480,12 +493,18 @@
     <div id="touch" aria-label="Сенсорное управление">
       <div id="stick"><i></i></div>
       <button id="touch-chat" type="button" class="icon-button" aria-label="Открыть чат" title="Чат"><i aria-hidden="true"></i><span id="chat-unread" aria-hidden="true" hidden></span></button>
+      <button id="touch-swap-hands" type="button" class="icon-button touch-control" aria-label="Поменять предметы в руках" title="Поменять предметы в руках" hidden>
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 8h15m-4-4 4 4-4 4M20 16H5m4-4-4 4 4 4"/></svg>
+      </button>
       <div class="touch-actions" role="group" aria-label="Движение и действия">
         <button id="touch-sprint" type="button" class="icon-button touch-control" aria-label="Ускорение" title="Ускорение" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 8H4v8l-2 2v3h11a2 2 0 0 0 0-4h-2l-1-9Zm2-3h9m-3-3 3 3-3 3"/></svg>
         </button>
         <button id="touch-flight" type="button" class="icon-button touch-control" aria-label="Полёт" title="Полёт" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19c1-5 3-8 8-10 4-1 7-3 10-6 0 5-2 7-5 9l4-1c-1 4-4 6-8 6h3c-2 3-7 4-12 2Z"/></svg>
+        </button>
+        <button id="touch-magic" type="button" class="icon-button touch-control" aria-label="Магический телепорт" title="Магический телепорт" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3ZM19 3v4m-2-2h4M5 17v4m-2-2h4"/></svg>
         </button>
         <button id="jump" type="button" class="icon-button touch-control" aria-label="Прыжок" title="Прыжок">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7m-14 7 7-7 7 7"/></svg>
@@ -544,7 +563,10 @@
     <footer class="bottom">
       <div class="hud-hotbar-row">
         <button id="touch-hotbar" type="button" aria-label="Показать панель предметов" aria-expanded="false" aria-controls="hotbar"><span aria-hidden="true"></span></button>
-        <div id="hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа" hidden></div>
+        <div class="hud-item-slots">
+          <div id="hud-offhand" role="group" aria-label="Вторая рука" hidden></div>
+          <div id="hotbar" class="inventory-hotbar" role="group" aria-label="Панель быстрого доступа" hidden></div>
+        </div>
       </div>
       <span id="coords" aria-label="Координаты"></span>
     </footer>

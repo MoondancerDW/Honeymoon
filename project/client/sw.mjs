@@ -20,7 +20,7 @@ async function navigate(request) {
     if (![502,503,504].includes(response.status)) return response;
     return (await caches.match(fallback,{cacheName}))??response;
   } catch {
-    return (await caches.match(fallback,{cacheName}))??new Response('Сервер Honeymoon недоступен.',
+    return (await caches.match(fallback,{cacheName}))??new Response('Сервер Lilium Moonlight недоступен.',
       {status:503,headers:{'Content-Type':'text/plain; charset=utf-8'}});
   }
 }

@@ -604,7 +604,7 @@ export class Display {
     object.rotation.y = facing.bodyYaw;
     this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion, stance:pose.stance, boost:pose.boost,
       yawOffset:facing.yawOffset, forward:facing.forward, strafe:facing.strafe,
-      position, groundSeat:pose.groundSeat || seat?.kind === 'ground', swing:pose.swing, held:pose.held,
+      position, groundSeat:pose.groundSeat || seat?.kind === 'ground', swing:pose.swing, held:pose.held, offhand:pose.offhand,
       equipment:pose.equipment, itemAssets:this.heldItemAssets(), emote:pose.emote});
     this.localAvatar.ragdoll(death?.cause==='lava'?null:death,dt);
     const ash=this.localAvatar.lavaDeath(death,now);

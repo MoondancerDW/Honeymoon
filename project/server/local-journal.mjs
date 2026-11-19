@@ -11,7 +11,7 @@ export function openLocalJournal(state) {
     const saved=JSON.parse(readFileSync(file,'utf8'));
     if (Array.isArray(saved)) entries=saved.slice(-maxEntries);
   } catch (error) {
-    if (error.code!=='ENOENT') console.warn('Honeymoon local diagnostics:',error.message);
+    if (error.code!=='ENOENT') console.warn('Lilium Moonlight local diagnostics:',error.message);
   }
   return {
     read:()=>entries,
@@ -22,7 +22,7 @@ export function openLocalJournal(state) {
         mkdirSync(dirname(file),{recursive:true});
         writeFileSync(file+'.tmp',JSON.stringify(entries,null,2)+'\n');
         renameSync(file+'.tmp',file);
-      } catch (error) { console.warn('Honeymoon local diagnostics:',error.message); }
+      } catch (error) { console.warn('Lilium Moonlight local diagnostics:',error.message); }
     },
   };
 }

@@ -19,13 +19,18 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
   const selfMode=element('self-mode-toggle');
   const defaultRow=element('mode-default'), craftMenu=element('craft-menu'), craftToggle=element('craft-toggle');
   const right=element('mode-error'), craftError=element('craft-error');
-  const cells=Array.from({length:10},()=>document.createElement('span'));
-  health.append(...cells);
+  let cells=[];
   let state, deathTime, retry, selfUid, pending=false;
   function update(next) {
     if (!next) return;
     state=next;
     health.hidden=next.mode!=='game'||Boolean(next.death);
+    const maxHealth=next.maxHealth===15?15:10;
+    if (cells.length!==maxHealth) {
+      cells=Array.from({length:maxHealth},()=>document.createElement('span'));
+      health.setAttribute('aria-valuemax',String(maxHealth));
+      health.replaceChildren(...cells);
+    }
     health.setAttribute('aria-valuenow',String(next.health));
     cells.forEach((cell,index)=>cell.classList.toggle('filled',index<next.health));
     administrator.hidden=!next.admin;

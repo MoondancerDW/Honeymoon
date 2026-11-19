@@ -115,21 +115,23 @@ export class HeldLights {
     const candidates = [];
     for (const {object,avatar} of ponies) {
       if ((!object.visible && avatar !== player) || object.position.distanceToSquared(camera) > range ** 2) continue;
-      const level = avatar.heldLight(this.probe);
-      if (!level) continue;
-      candidates.push({avatar,level,point:this.probe.clone(), distance:this.probe.distanceToSquared(camera)});
+      for (const offhand of [false,true]) {
+        const level = avatar.heldLight(this.probe,offhand);
+        if (level) candidates.push({avatar,offhand,level,point:this.probe.clone(),distance:this.probe.distanceToSquared(camera)});
+      }
     }
-    candidates.sort((a,b) => a.distance - b.distance);
+    candidates.sort((a,b) => Number(b.avatar===player) - Number(a.avatar===player) || a.distance - b.distance);
     const wanted = candidates.slice(0,limit);
     for (const slot of this.slots) {
-      if (wanted.some(light => light.avatar === slot.owner)) continue;
+      if (wanted.some(light => light.avatar === slot.owner && light.offhand === slot.offhand)) continue;
       slot.owner = null;
       slot.source.w = 0;
     }
     let upload = false;
     let active = 0;
-    for (const {avatar,level,point} of wanted) {
-      const slot = this.slots.find(entry => entry.owner === avatar) ?? this.slots.find(entry => !entry.owner);
+    for (const {avatar,offhand,level,point} of wanted) {
+      const previous = this.slots.find(entry => entry.owner === avatar && entry.offhand === offhand);
+      const slot = previous ?? this.slots.find(entry => !entry.owner);
       let x = Math.floor(point.x), y = Math.floor(point.y), z = Math.floor(point.z);
       if ((this.opacityAt(x,y,z) & 15) === 15) {
         const feet = avatar.object.position;
@@ -141,11 +143,11 @@ export class HeldLights {
         }
         point.set(feet.x,feet.y + .35,feet.z);
       }
-      if (slot.owner !== avatar || slot.level !== level || slot.cell.x !== x + .5 || slot.cell.y !== y + .5 ||
+      if (!previous || slot.level !== level || slot.cell.x !== x + .5 || slot.cell.y !== y + .5 ||
           slot.cell.z !== z + .5 || slot.dirty) {
         if (upload) {
           // At most one rebuild per frame. Safely defer other moving emitters.
-          if (slot.owner === avatar && slot.level === level && slot.source.w) active++;
+          if (previous && slot.level === level && slot.source.w) active++;
           else slot.source.w = 0;
           continue;
         }
@@ -154,6 +156,7 @@ export class HeldLights {
         this.rebuildMs += performance.now() - start;
         this.rebuilds++;
         slot.owner = avatar;
+        slot.offhand = offhand;
         slot.level = level;
         slot.cell.set(x + .5,y + .5,z + .5);
         slot.dirty = false;

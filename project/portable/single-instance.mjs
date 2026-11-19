@@ -29,17 +29,17 @@ export async function acquireInstance(project) {
       const socket = createConnection(address);
       let data = '';
       const fail = error => { socket.destroy(); reject(error); };
-      socket.setTimeout(readyTimeout, () => fail(new Error('The running Honeymoon instance did not become ready in 30 seconds.')));
+      socket.setTimeout(readyTimeout, () => fail(new Error('The running Lilium Moonlight instance did not become ready in 30 seconds.')));
       socket.on('error',fail);
       socket.on('data',chunk => {
         data += chunk;
-        if (data.length > 2048) fail(new Error('Invalid Honeymoon instance response.'));
+        if (data.length > 2048) fail(new Error('Invalid Lilium Moonlight instance response.'));
       });
       socket.on('end',() => {
         try {
           const info = JSON.parse(data);
           if (info.projectKey !== projectKey || !['local','lan','tailscale','internet','single-player'].includes(info.mode) ||
-              !/^http:\/\/127\.0\.0\.1:\d+\/$/.test(info.url)) throw new Error('Invalid Honeymoon instance response.');
+              !/^http:\/\/127\.0\.0\.1:\d+\/$/.test(info.url)) throw new Error('Invalid Lilium Moonlight instance response.');
           resolve(info);
         } catch (error) { fail(error); }
       });

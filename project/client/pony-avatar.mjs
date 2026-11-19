@@ -335,6 +335,7 @@ export function createPonyAvatar(isAir) {
   let swimStroke = 0;
   let leapTop, previousFallDistance = 0, gliding = false;
   let previousSwing, strikeTime = Infinity, activeProp, heldItem, hornGlow, firstPerson = false;
+  let activeOffhand, offhandItem;
   let activeEmote, emoteStrength = 0;
   let bodyFall;
   let burn;
@@ -427,7 +428,7 @@ export function createPonyAvatar(isAir) {
 
   function animate({time: now = time, dt = 1 / 60, speed = 0, yawOffset = 0, pitch = 0, forward = 1, strafe = 0,
     motion: nextMotion = 'idle', stance: nextStance = 'stand', boost: flightBoost = false,
-    position, groundSeat = false, swing: swingId = 0, held = null, equipment, itemAssets, emote} = {}) {
+    position, groundSeat = false, swing: swingId = 0, held = null, offhand = null, equipment, itemAssets, emote} = {}) {
     time = now;
     motion = nextMotion === 'air' ? 'jump' : nextMotion;
     stance = nextStance;
@@ -578,6 +579,7 @@ export function createPonyAvatar(isAir) {
       leg.position.addScaledVector(shoulder,anchorWeight).addScaledVector(shoulderOffset,-anchorWeight);
     }
     activeProp = held;
+    activeOffhand = rig.horn ? offhand : null;
     heldAssets = itemAssets;
     worn = equipment;
     armor.update(worn);
@@ -679,8 +681,21 @@ export function createPonyAvatar(isAir) {
     }
   }
 
+  function floatItem(item, mirror, swingAmount) {
+    const {object:prop,pose} = item;
+    if (prop.parent !== visual) visual.add(prop);
+    magicPosition.set(mirror * (-.45 - .09 * swingAmount),.29 + .035 * Math.sin(time*3) - .11 * swingAmount,
+      -.82 - .19 * swingAmount);
+    prop.position.copy(visual.worldToLocal(rig.head.localToWorld(magicPosition)));
+    const turn = (pose === 'block' ? .55 : .16) + .14 * Math.sin(time * 1.4);
+    prop.rotation.set(pose === 'tool' ? -.66 : .05,mirror * turn,Math.PI);
+  }
+
+  const heldScale = pose => pose === 'block' ? .25 : pose === 'tool' ? .42 : .38;
+
   function updateHeldItem() {
     if (!heldItem && activeProp && heldAssets) heldItem = createPonyHeldItem();
+    if (!offhandItem && activeOffhand && heldAssets) offhandItem = createPonyHeldItem();
     const magic = rig.horn ? skin.glowColor : null;
     heldItem?.show(activeProp, heldAssets, magic);
     if (heldItem?.object.visible) {
@@ -699,16 +714,17 @@ export function createPonyAvatar(isAir) {
           prop.position.set(.043,.91,-.23);
           prop.rotation.set(-.48,.34,Math.PI - .27);
         }
-      } else {
-        if (prop.parent !== visual) visual.add(prop);
-        magicPosition.set(-.45 - .09 * strike,.29 + .035 * Math.sin(time*3) - .11 * strike,-.82 - .19 * strike);
-        prop.position.copy(visual.worldToLocal(rig.head.localToWorld(magicPosition)));
-        const turn = (pose === 'block' ? .55 : .16) + .14 * Math.sin(time * 1.4);
-        prop.rotation.set(pose === 'tool' ? -.66 : .05,turn,Math.PI);
-      }
-      prop.scale.setScalar(pose === 'block' ? .25 : pose === 'tool' ? .42 : .38);
+      } else floatItem(heldItem,1,strike);
+      prop.scale.setScalar(heldScale(pose));
     }
-    if (rig.horn && activeProp && !hornGlow) {
+    offhandItem?.show(activeOffhand,heldAssets,magic);
+    if (offhandItem?.object.visible) {
+      offhandItem.setLight(lightColor);
+      floatItem(offhandItem,-1,0);
+      offhandItem.object.scale.setScalar(heldScale(offhandItem.pose));
+    }
+    const magicActive = Boolean(activeProp || activeOffhand);
+    if (rig.horn && magicActive && !hornGlow) {
       const geometry = rig.horn.geometry;
       geometry.computeBoundingBox();
       const center = geometry.boundingBox.getCenter(new THREE.Vector3());
@@ -719,7 +735,7 @@ export function createPonyAvatar(isAir) {
       rig.horn.add(hornGlow);
     }
     if (hornGlow) {
-      hornGlow.visible = Boolean(activeProp);
+      hornGlow.visible = magicActive;
       hornGlow.material.color.setHex(skin.glowColor);
       hornGlow.material.opacity = .3 + strike * .11;
     }
@@ -736,11 +752,12 @@ export function createPonyAvatar(isAir) {
     return rig.eyes.getWorldPosition(eyePosition);
   }
 
-  function heldLight(target) {
-    if (!heldItem?.object.visible) return 0;
-    const level = heldLightLevel(activeProp);
+  function heldLight(target, offhand = false) {
+    const item = offhand ? offhandItem : heldItem;
+    if (!item?.object.visible) return 0;
+    const level = heldLightLevel(offhand ? activeOffhand : activeProp);
     if (level) {
-      heldItem.object.getWorldPosition(target);
+      item.object.getWorldPosition(target);
       target.y += .17;
     }
     return level;
@@ -755,6 +772,8 @@ export function createPonyAvatar(isAir) {
       held:activeProp, strike, emote:activeEmote?.id ?? null, magicGlow:hornGlow?.visible ? skin.glowColor : null,
       shoulder:visual.worldToLocal(rig.legs[0].localToWorld(shoulderOffset.copy(shoulder))).toArray(),
       heldGrip:heldItem?.object.visible ? heldItem.object.getWorldPosition(shoulderOffset).toArray() : null,
+      offhand:activeOffhand, offhandGrip:offhandItem?.object.visible ?
+        offhandItem.object.getWorldPosition(shoulderOffset).toArray() : null,
       firstPersonHooves:firstPerson ? rig.legs.slice(0, 2).map(hoof => hoof.rotation.x) : null,
       firstPersonBody:firstPerson, eyes:eyesWorldPosition().toArray(),
       ragdoll:bodyFall ? {roll:bodyFall.roll,drop:bodyFall.drop} : null,
@@ -798,6 +817,7 @@ export function createPonyAvatar(isAir) {
       rig.legs[i].rotation.z=(i%2?.16:-.13)*ratio;
     }
     if (heldItem) heldItem.object.visible=false;
+    if (offhandItem) offhandItem.object.visible=false;
   }
 
   function lavaDeath(death,now) {
@@ -815,6 +835,7 @@ export function createPonyAvatar(isAir) {
       applyLight();
     }
     if (heldItem) heldItem.object.visible=false;
+    if (offhandItem) offhandItem.object.visible=false;
     if (hornGlow) hornGlow.visible=false;
     if (burn.shattered || now-burn.now<330) return null;
     burn.shattered=true;
@@ -843,6 +864,7 @@ export function createPonyAvatar(isAir) {
     for (const material of materials) material.dispose();
     hornGlow?.material.dispose();
     heldItem?.dispose();
+    offhandItem?.dispose();
     armor.dispose();
     visual.clear();
     object.removeFromParent();

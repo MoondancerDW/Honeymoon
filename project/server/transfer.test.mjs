@@ -115,7 +115,7 @@ test('closed-install transfer restores a browser device, pending invite, owner, 
   lease=await acquireInstance(source);
   assert.equal(lease.primary,true);
   lease.publish({mode:'local',url:app.owner+'/'});
-  await assert.rejects(transfer('export',source,snapshot),/Close the Honeymoon server/);
+  await assert.rejects(transfer('export',source,snapshot),/Close the Lilium Moonlight server/);
   await app.close();
   app=null;
   await lease.close();

@@ -2,6 +2,21 @@ import {ATLAS_GRID, TILE_SIZE, coverBoxes, creativeIcon, itemShapeFor, sourceAtl
 import {extractedModel} from './extracted-models.mjs';
 import {heldLamp} from './held-light.mjs';
 import {blockFaceVertices} from './block-faces.mjs';
+import {isMicroPart,publicMicroPart} from './microblocks.mjs';
+
+export function offhandAppearance(stack) {
+  if (!stack) return null;
+  if (isMicroPart(stack.part)) {
+    return {kind:'block',key:`cover-material:${stack.part.material}`,part:publicMicroPart(stack.part)};
+  }
+  const {key,cell} = stack;
+  const block = heldLamp(key) ? key : cell;
+  if (typeof block === 'string' && /^(?:legacy|creative|cover|voxel):[a-z0-9:_-]+$/.test(block)) {
+    return {kind:'block',key:block};
+  }
+  const item = /^creative:(\d+:\d+)$/.exec(key);
+  return item ? {kind:'item',key:item[1]} : null;
+}
 
 const faceShade = [.8,.8,.55,1,.88,.88];
 const fullUV = [[0,1],[1,1],[1,0],[0,0]];

@@ -137,7 +137,7 @@ try {
   const load = path => import(pathToFileURL(join(installed,path)).href);
   const {acquireInstance} = await load('single-instance.mjs');
   const lease = await acquireInstance(installed);
-  if (!lease.primary) throw new Error('Close the Honeymoon server on this computer before transferring its save');
+  if (!lease.primary) throw new Error('Close the Lilium Moonlight server on this computer before transferring its save');
   try {
     const {loadBase} = await load('server/base.mjs');
     const worldHash = loadBase(join(installed,'generated','world')).hash;

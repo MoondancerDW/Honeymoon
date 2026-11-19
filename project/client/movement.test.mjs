@@ -99,7 +99,7 @@ test('crouching stops at the edge and jumps clear a full block at every pony siz
   }
 });
 
-test('all species share Minecraft ascent and only winged ponies descend more slowly', () => {
+test('all races share Minecraft ascent and only winged jumps begin a constant glide', () => {
   let referenceAscent;
   for (const ponyType of ['earth','unicorn','pegasus','alicorn']) {
     for (const size of ['small','normal','large','tall']) {
@@ -108,12 +108,16 @@ test('all species share Minecraft ascent and only winged ponies descend more slo
       movement.size=size;
       movement.grounded=true;
       const position={x:.5,y:1,z:.5};
-      let elapsed=0, apex=position.y;
+      let elapsed=0, apex=position.y, glideFrames=0;
       const ascent=[];
       for (let step=0;step<80;step++) {
         movement.update(position,0,0,step===0,.016);
         elapsed+=.016;
         apex=Math.max(apex,position.y);
+        if (movement.gliding) {
+          glideFrames++;
+          assert.equal(movement.fall,-1.4);
+        }
         if (elapsed<.3) ascent.push(position.y);
         if (movement.grounded) break;
       }
@@ -121,7 +125,41 @@ test('all species share Minecraft ascent and only winged ponies descend more slo
       assert.deepEqual(ascent,referenceAscent);
       const winged=ponyType==='pegasus' || ponyType==='alicorn';
       assert.ok(Math.abs(apex-1-1.2522)<.001);
-      assert.ok(Math.abs(elapsed-(winged ? .816 : .576))<.001);
+      if (winged) assert.ok(glideFrames>45 && elapsed>1 && elapsed<1.28);
+      else assert.ok(glideFrames===0 && Math.abs(elapsed-.576)<.001);
+    }
+  }
+});
+
+test('a charged jump adds half a block for Earth and Alicorn ponies and a second press ends the glide', () => {
+  for (const type of ['earth','unicorn','pegasus','alicorn']) {
+    const movement=new Movement(worldFor(new Map()));
+    movement.ponyType=type;
+    movement.grounded=true;
+    const position={x:.5,y:1,z:.5};
+    let apex=position.y;
+    for (let i=0;i<35;i++) {
+      movement.update(position,0,0,i===0,.016,{chargedJump:i===0});
+      apex=Math.max(apex,position.y);
+    }
+    const charged=type==='earth'||type==='alicorn';
+    assert.ok(Math.abs(apex-1-(1.2522+(charged ? .5 : 0)))<.002);
+    if (movement.gliding) {
+      movement.cancelSlowFall();
+      movement.update(position,0,0,false,.1);
+      assert.equal(movement.gliding,false);
+      assert.ok(movement.fall<-2.3);
+    }
+  }
+});
+
+test('race multipliers affect ground sprint and only ordinary Pegasus flight below the overview', () => {
+  const sprint=movementSpeed({sprint:true});
+  for (const [ponyType,ratio] of [['earth',1.3],['pegasus',.7],['unicorn',.85],['alicorn',1.3]]) {
+    assert.equal(movementSpeed({sprint:true,ponyType}),sprint*ratio);
+    for (const y of [64,255.9,256,258,500]) {
+      assert.equal(movementSpeed({flying:true,y,ponyType}),movementSpeed({flying:true,y})*(ponyType==='pegasus'&&y<256?.8:1));
+      assert.equal(movementSpeed({flying:true,sprint:true,y,ponyType}),movementSpeed({flying:true,sprint:true,y}));
     }
   }
 });

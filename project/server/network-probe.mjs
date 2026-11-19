@@ -126,7 +126,7 @@ export function startNetworkProbe({port,publicOrigin,record}) {
       ]);
       if (!shutdown.signal.aborted) record({at,local,internet,...ingress,scheduleDelayMs:Math.round(Math.max(0,start-due))});
     } catch (error) {
-      if (!shutdown.signal.aborted) console.warn('Honeymoon network probe:',failureCode(error));
+      if (!shutdown.signal.aborted) console.warn('Lilium Moonlight network probe:',failureCode(error));
     } finally {
       if (!shutdown.signal.aborted) schedule(Math.max(0,intervalMs-(performance.now()-start)));
     }

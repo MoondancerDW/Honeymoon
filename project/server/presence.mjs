@@ -66,9 +66,10 @@ export function createPresence({store, profileFor = player => publicProfile(play
     return players.get(player);
   }
 
-  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, spectator, stance, boost,equipment,groundSeat,emote,death}) => ({
+  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, offhand, spectator, stance, boost,equipment,groundSeat,emote,death}) => ({
     id:profile.id, position, yaw, pitch, motion, lookYaw,
     ...(typing !== undefined && {typing}), ...(swing !== undefined && {swing}), ...(held !== undefined && {held}),
+    ...(offhand && {offhand}),
     ...(spectator !== undefined && {spectator}), ...(stance !== undefined && {stance}), ...(boost !== undefined && {boost}),
     ...(equipment !== undefined && {equipment}), ...(groundSeat !== undefined && {groundSeat}),
     ...(emote !== undefined && {emote}),...(death !== undefined && {death})});
@@ -106,6 +107,12 @@ export function createPresence({store, profileFor = player => publicProfile(play
     if (pose?.equipment !== undefined && (!entry.equipment ||
         pose.equipment.some((stack,index)=>stack?.key !== entry.equipment[index]?.key))) {
       entry.equipment = pose.equipment.map(stack=>stack ? {key:stack.key} : null);
+      dirty = true;
+    }
+    if (pose?.offhand !== undefined &&
+        (entry.offhand?.key !== pose.offhand?.key || entry.offhand?.kind !== pose.offhand?.kind ||
+          JSON.stringify(entry.offhand?.part) !== JSON.stringify(pose.offhand?.part))) {
+      entry.offhand = pose.offhand;
       dirty = true;
     }
     if (pose && (pose.seq === undefined || entry.seq === undefined || pose.seq >= entry.seq)) {
@@ -172,7 +179,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
         entry.pitch = 0;
         entry.motion = 'idle';
         entry.typing = entry.swing = entry.held = entry.spectator = entry.stance = entry.boost = entry.equipment = entry.groundSeat = undefined;
-        entry.emote = undefined;
+        entry.emote = entry.offhand = undefined;
       }
       if (entry.connections) visibility(player, entry, true);
       update(player, position, pose);

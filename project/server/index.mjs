@@ -28,6 +28,7 @@ import { createWorldEdit } from './world-edit.mjs';
 import { createSurvival } from './survival.mjs';
 import {accessCookie,createAccess,legacyClearCookie,legacyCookieName,readAccessCookie} from './access.mjs';
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
+import {ponyAbilities} from '../world/pony-abilities.mjs';
 import { readBuildNumber } from './build-version.mjs';
 import { openLocalJournal } from './local-journal.mjs';
 import { loadSoloDistribution } from './solo-distribution.mjs';
@@ -294,7 +295,7 @@ export function createHoneymoonServer({
   let soloDistribution;
   if (!singlePlayer) {
     try { soloDistribution=loadSoloDistribution(generated); }
-    catch (error) { console.error('Honeymoon solo download index:',error.message); }
+    catch (error) { console.error('Lilium Moonlight solo download index:',error.message); }
   }
   const localJournal=singlePlayer ? openLocalJournal(state) : undefined;
   const models = {};
@@ -322,7 +323,6 @@ export function createHoneymoonServer({
   const manifest = {...publicWorld, chunkCacheVersion, ...(lod && {lod:lod.descriptor}), ...(vista && {vista:vista.descriptor})};
   if (state !== ':memory:') mkdirSync(dirname(state), { recursive: true });
   const store = openStore(state);
-  const survival = createSurvival(store,initialMode,clock ? {now:clock} : undefined);
   const savedTraits = new Map();
   function rememberTraits(player,{size,ponyType}) {
     if (!savedTraits.has(player) && savedTraits.size >= 512) savedTraits.delete(savedTraits.keys().next().value);
@@ -336,6 +336,8 @@ export function createHoneymoonServer({
     return rememberTraits(player,savedSkinTraits(saved?.skinHash && store.getSkin(saved.skinHash)));
   }
   const playerSize=(player,saved)=>playerTraits(player,saved).size;
+  const playerPonyType=player=>playerTraits(player).ponyType;
+  const survival=createSurvival(store,initialMode,{now:clock,healthLimit:player=>ponyAbilities(playerPonyType(player)).maxHealth});
   function profileFor(player, saved = store.getProfile(player)) {
     const {size,ponyType}=playerTraits(player,saved);
     return publicProfile(player,saved,size,ponyType);
@@ -343,7 +345,7 @@ export function createHoneymoonServer({
   let game;
   try {
     game = createGame(base, store, withExtractedModels(geometry, models),
-      {clock, allowRemoval, models, creativeBlocks:creative?.placeable, creativeItems:creative?.items, playerSize,
+      {clock, allowRemoval, models, creativeBlocks:creative?.placeable, creativeItems:creative?.items, playerSize,playerPonyType,
         survival,survivalChanged,persistPositions:!singlePlayer&&state!==':memory:'});
   } catch (error) {
     store.close();
@@ -475,11 +477,13 @@ export function createHoneymoonServer({
   }
 
   function playerMode(player) {
-    return {...survival.status(player),admin:npcs.isAdmin(player)};
+    const {flight,flightAllowed}=game.abilityState(player);
+    return {...survival.status(player),admin:npcs.isAdmin(player),flight,flightAllowed};
   }
 
   function survivalChanged(player,state) {
-    sendSocial('game-mode',{...state,admin:npcs.isAdmin(player)},id=>id===player);
+    const {flight,flightAllowed}=game.abilityState(player);
+    sendSocial('game-mode',{...state,admin:npcs.isAdmin(player),flight,flightAllowed},id=>id===player);
     const position=presence.onlinePosition(player);
     if (position) presence.update(player,game.session(player).position,{death:survival.avatarDeath(player)});
     if (state.death) chat.playerDeath(profileFor(player),state.death.cause);
@@ -530,8 +534,8 @@ export function createHoneymoonServer({
     for (const stream of streams) if (stream.social && receives(stream.player)) writeEvent(stream.response, name, data);
   }
 
-  function publishTeleport(player,result) {
-    presence.update(player,result.position,game.poseFor(player,{yaw:0,pitch:0,motion:'idle'}));
+  function publishTeleport(player,result,yaw=0,pitch=0) {
+    presence.update(player,result.position,game.poseFor(player,{yaw,pitch,motion:'idle'}));
     if (result.changes.length || result.effects.length) broadcast(player,result);
     return result;
   }
@@ -641,7 +645,7 @@ export function createHoneymoonServer({
       }
       if (singlePlayer && path==='/api/local-diagnostics') {
         if (method==='GET') return json(response,200,localJournal?.read()??[],{
-          'Content-Disposition':'attachment; filename="Honeymoon-diagnostics.json"',
+          'Content-Disposition':'attachment; filename="Lilium-Moonlight-diagnostics.json"',
         });
         if (method==='POST') {
           const {kind,position,mesh,chunks,lastChunk,message}=await readBody(request);
@@ -828,9 +832,10 @@ export function createHoneymoonServer({
           for (const id of member?[member]:new Set([...streams].map(stream=>stream.player))) {
             if (!survival.isGame(id)) game.clearLavaContact(id);
             if (!survival.isGame(id)&&survival.status(id).death) survival.reset(id);
+            game.reconcileFlight(id);
             sendSocial('game-mode',playerMode(id),recipient=>recipient===id);
             const position=presence.onlinePosition(id);
-            if (position) presence.update(id,position,{death:survival.avatarDeath(id)});
+            if (position) presence.update(id,game.session(id).position,{death:survival.avatarDeath(id)});
           }
         }
         return json(response,200,{...modeAdministration(),selfMode:playerMode(player)});
@@ -875,20 +880,30 @@ export function createHoneymoonServer({
         const saved = store.getProfile(player);
         if (updates.nickname === saved?.nickname) delete updates.nickname;
         if (updates.skin !== undefined && (updates.skin?.hash ?? null) === (saved?.skinHash ?? null)) delete updates.skin;
-        const previousSize = updates.skin === undefined ? undefined : playerSize(player,saved);
+        const previousTraits = updates.skin === undefined ? undefined : playerTraits(player,saved);
         const different = updates.nickname !== undefined || updates.skin !== undefined;
         const renamed = different && store.updateProfile(player, updates,
           saved?.nickname ?? presence.onlineProfile(player)?.nickname);
-        let relocation;
+        let relocation, movementState;
         if (updates.skin !== undefined) {
-          const {size}=rememberTraits(player,updates.skin ?? {size:'normal',ponyType:'earth'});
-          if (size !== previousSize) relocation = game.reconcileProfile(player);
+          const {size,ponyType}=rememberTraits(player,updates.skin ?? {size:'normal',ponyType:'earth'});
+          if (ponyType!==previousTraits.ponyType) game.reconcileRace(player);
+          if (size!==previousTraits.size) relocation = game.reconcileProfile(player);
+          if (!relocation && (size!==previousTraits.size || ponyType!==previousTraits.ponyType)) {
+            const {position,seat,stance}=game.session(player);
+            movementState={position,seat,stance};
+          }
         }
         const profile = profileFor(player, different ? store.getProfile(player) : saved);
         if (different) presence.profile(player, profile);
         if (relocation) presence.update(player,relocation.position,game.poseFor(player,{motion:'idle'}));
+        if (updates.skin!==undefined) {
+          const position=presence.onlinePosition(player);
+          if (position) presence.update(player,position,{offhand:game.offhandPose(player)});
+        }
         if (renamed) chat.publishRecorded(renamed);
-        return json(response, 200, {...profile,...relocation});
+        return json(response, 200, {...profile,...relocation,...movementState,...game.abilityState(player),
+          ...(survival.enabled && {gameMode:playerMode(player)})});
       }
       if (path === '/api/presence') {
         if (method === 'POST') {
@@ -932,6 +947,17 @@ export function createHoneymoonServer({
       if (path === '/api/flight' && method === 'POST') {
         const flight=game.setFlight(player,credential.deviceId,await readMovementInput());
         return json(response,200,{flight});
+      }
+      if (path==='/api/charged-jump' && method==='POST') {
+        await readMovementInput();
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        return json(response,200,game.grantChargedJump(player));
+      }
+      if (path==='/api/magic-teleport' && method==='POST') {
+        const body=await readMovementInput();
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        const result=game.magicTeleport(player,body);
+        return json(response,200,publishTeleport(player,result,body.yaw%(2*Math.PI),body.pitch));
       }
       if (path === '/api/position-state' && method === 'POST') {
         const {page,start,restart}=await readMovementInput();
@@ -1017,7 +1043,8 @@ export function createHoneymoonServer({
           broadcast(player, result.output);
           if (result.output.inventory) {
             const online=presence.onlinePosition(player);
-            if (online) presence.update(player,online,{equipment:result.output.inventory.equipment});
+            if (online) presence.update(player,online,{equipment:result.output.inventory.equipment,
+              offhand:game.offhandPose(player,result.output.inventory)});
           }
           if (result.output.minecart || result.output.removedMinecart || result.output.boat || result.output.removedBoat) broadcastMinecarts();
           if (result.output.droppedItem || result.output.pickedItem) broadcastDroppedItems(true);
@@ -1301,7 +1328,7 @@ async function main() {
   });
   if (app.game.conflicts.length) console.log(JSON.stringify({ rebaseConflicts: app.game.conflicts }, null, 2));
   const port = Number(process.env.PORT ?? 4173);
-  app.server.listen(port, host, () => console.log(`Honeymoon http://${host}:${app.server.address().port}`));
+  app.server.listen(port, host, () => console.log(`Lilium Moonlight http://${host}:${app.server.address().port}`));
   if (remote) app.ownerServer.listen(0,'127.0.0.1',()=>console.log(`Owner http://127.0.0.1:${app.ownerServer.address().port}/`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => { await app.close(); });
 }

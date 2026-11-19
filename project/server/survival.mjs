@@ -6,7 +6,7 @@ const scope='player-mode';
 const recoveryMs=5000;
 const strikeMs=450;
 
-export function createSurvival(store,initialMode,{now=Date.now}={}) {
+export function createSurvival(store,initialMode,{now=Date.now,healthLimit=()=>healthCells}={}) {
   if (initialMode!==undefined && !modes.has(initialMode)) throw new TypeError('Unknown initial game mode');
   const states=new Map(),falling=new Map(),strikes=new Map();
   const defaultMode=()=>store.getState(scope,'','default')?.value??initialMode??'creative';
@@ -17,19 +17,26 @@ export function createSurvival(store,initialMode,{now=Date.now}={}) {
     let status=states.get(player);
     if (!status) {
       const saved=store.getState(scope,player,'health')?.value;
-      status={health:saved?.health??healthCells,death:saved?.death??null,recoverAt:now()+recoveryMs};
+      const limit=saved?.maxHealth??(saved ? healthCells : healthLimit(player));
+      status={health:Math.max(0,Math.min(limit,saved?.health??limit)), maxHealth:limit,
+        death:saved?.death??null,recoverAt:now()+recoveryMs};
       states.set(player,status);
+    }
+    const limit=healthLimit(player);
+    if (status.maxHealth!==limit) {
+      status.health=status.health/status.maxHealth*limit;
+      status.maxHealth=limit;
     }
     return status;
   }
   const status=player=>{
-    const {health,death}=record(player);
-    return {mode:mode(player),health,death};
+    const {health,maxHealth,death}=record(player);
+    return {mode:mode(player),health:health===0 ? 0 : Math.ceil(health-1e-9),maxHealth,death};
   };
   const dead=player=>isGame(player)&&Boolean(record(player).death);
   function save(player,state) {
-    const {health,death}=state;
-    store.putState(scope,player,'health',1,{health,death});
+    const {health,maxHealth,death}=state;
+    store.putState(scope,player,'health',1,{health,maxHealth,death});
     return status(player);
   }
   function damage(player,amount,point,floor,cause) {
@@ -37,20 +44,24 @@ export function createSurvival(store,initialMode,{now=Date.now}={}) {
     const state=record(player);
     state.health=Math.max(0,state.health-Math.floor(amount));
     state.recoverAt=now()+recoveryMs;
-    if (state.health===0) state.death={at:now(),position:point,floor,...(cause&&{cause})};
+    if (state.health<1e-9) {
+      state.health=0;
+      state.death={at:now(),position:point,floor,...(cause&&{cause})};
+    }
     return save(player,state);
   }
-  function heal(player,amount=healthCells) {
-    if (!isGame(player)||dead(player)||record(player).health===healthCells) return;
+  function heal(player,amount=Infinity) {
+    if (!isGame(player)||dead(player)) return;
     const state=record(player);
-    state.health=Math.min(healthCells,state.health+amount);
+    if (state.health===state.maxHealth) return;
+    state.health=Math.min(state.maxHealth,state.health+amount);
     state.recoverAt=now()+recoveryMs;
     return save(player,state);
   }
   function reset(player) {
     falling.delete(player);
     const state=record(player);
-    state.health=healthCells;
+    state.health=state.maxHealth;
     state.death=null;
     state.recoverAt=now()+recoveryMs;
     return save(player,state);
@@ -79,8 +90,8 @@ export function createSurvival(store,initialMode,{now=Date.now}={}) {
     for (const player of players) {
       if (!isGame(player)) continue;
       const state=record(player);
-      if (state.death||state.health>=healthCells||time<state.recoverAt) continue;
-      state.health++;
+      if (state.death||state.health>=state.maxHealth||time<state.recoverAt) continue;
+      state.health=Math.min(state.health+1,state.maxHealth);
       state.recoverAt=time+recoveryMs;
       emit(player,save(player,state));
     }

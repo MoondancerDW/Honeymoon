@@ -1,4 +1,4 @@
-# Перенос сервера Honeymoon на другой Windows-ПК
+# Перенос сервера Lilium Moonlight на другой Windows-ПК
 
 Установщик скачивает проверенную сборку Windows x64 с картой и Node.js, затем накладывает клиент и сервер из выбранного коммита. Сохранение переносится отдельной папкой. В ней находятся база игроков и мира, ключ владельца, журналы и резервные копии из `state/backups`. Передавайте её через доверенный носитель или закрытое хранилище.
 
@@ -23,7 +23,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -Revision $re
 
 ```powershell
 $oldGame = Join-Path ([Environment]::GetFolderPath('Desktop')) 'hnm'
-$snapshot = Join-Path ([Environment]::GetFolderPath('Desktop')) ('Honeymoon-transfer-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$snapshot = Join-Path ([Environment]::GetFolderPath('Desktop')) ('Lilium-Moonlight-transfer-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $repo = 'MoondancerDW/Honeymoon'
 $revision = (Invoke-RestMethod "https://api.github.com/repos/$repo/commits/main").sha
 $transfer = Join-Path $env:TEMP 'Transfer-Honeymoon.mjs'
@@ -34,7 +34,7 @@ Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/$repo/$rev
 Скопируйте получившуюся папку на новый ПК. Импортируйте её до первого запуска игры. Скрипт проверит целостность базы, контрольные суммы и соответствие карты. Существующая папка `state` блокирует импорт, чтобы защитить уже начатую игру.
 
 ```powershell
-$snapshot = 'C:\Transfer\Honeymoon-transfer'
+$snapshot = 'C:\Transfer\Lilium-Moonlight-transfer'
 & (Join-Path $newGame 'runtime\node.exe') (Join-Path $newGame 'Transfer-Honeymoon.mjs') import $newGame $snapshot
 ```
 
@@ -42,7 +42,7 @@ $snapshot = 'C:\Transfer\Honeymoon-transfer'
 
 Для сохранения входа в прежних браузерах и всех действующих ссылок нужны перенесённая база и точный прежний URL с `https`, тем же DNS-именем и портом 443.
 
-1. В панели Tailscale переименуйте старый ПК, чтобы освободить имя Honeymoon. При необходимости сохраните старый ПК в tailnet под другим именем. Если сторонний сервис использует прежнее DNS-имя, согласуйте перенос имени до этого шага.
+1. В панели Tailscale переименуйте старый ПК, чтобы освободить прежнее имя сервера. При необходимости сохраните старый ПК в tailnet под другим именем. Если сторонний сервис использует прежнее DNS-имя, согласуйте перенос имени до этого шага.
 2. Присвойте новому ПК точное старое имя. Отключите автогенерацию имени, если она включена. Проверьте полное имя в `tailscale status --json`, поле `Self.DNSName`.
 3. На новом ПК запустите `Start-Internet.cmd` и оставьте консоль открытой. Проверьте адрес из сети без Tailscale. При временной ошибке TLS дайте публичному Funnel до 10 минут на восстановление.
 4. Проверьте вход игрока в уже зарегистрированном браузере и вход по отдельному тестовому приглашению. Старые ссылки сохраняют прежний статус и срок действия. Для входа владельца с нового браузера используйте локальный адрес из консоли и перенесённый `state/npc-admin.key`.

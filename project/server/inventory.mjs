@@ -1,23 +1,23 @@
 import {RequestError} from './errors.mjs';
 import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
-import {itemStackLimit} from '../world/item-stack.mjs';
+import {itemStackLimit,offhandSlot} from '../world/item-stack.mjs';
 import {bookPageLimit,bookPages,bookPagesLimit,bookTitleLimit,bookType,itemNameLimit,loreLimit,loreLineLimit,
   stackRevision,stackType,writtenBook} from '../world/item-text.mjs';
 
 const inventorySize = 36;
 const hotbarSize = 9;
 const stackLimit = 64;
-const version = 2;
+const version = 3;
 const moduleName = 'inventory';
 const itemSlot = slot => Number.isInteger(slot) && slot >= 0 && slot < inventorySize;
-const anySlot = slot => itemSlot(slot) || Number.isInteger(slot) && slot >= inventorySize &&
-  slot < inventorySize + equipmentLabels.length;
+const anySlot = slot => Number.isInteger(slot) && slot >= 0 && slot <= offhandSlot;
+const equipmentSlot = slot => slot >= inventorySize && slot < offhandSlot;
 const quantity = count => Number.isInteger(count) && count >= 1 && count <= stackLimit;
 const inventoryKey = key => typeof key === 'string' && key.length > 0 && key.length <= 128;
 
 const documentActions=new Set(['inventory_annotate','inventory_book_page','inventory_book_sign']);
 const inventoryTypes = new Set(['inventory_select','inventory_give','inventory_move','inventory_trash','inventory_copy',
-  'inventory_clone',...documentActions]);
+  'inventory_clone','inventory_swap_hands',...documentActions]);
 const transportTypes = new Set(['drop_item','pickup_item']);
 export const isInventoryAction = type => inventoryTypes.has(type) || transportTypes.has(type);
 
@@ -31,7 +31,7 @@ export function inventoryInput(body, input) {
     }
     return {...input, yaw:yaw % (2 * Math.PI), all, slot, key, count,clone};
   }
-  if (type === 'pickup_item') return input;
+  if (type === 'pickup_item' || type === 'inventory_swap_hands') return input;
   if (type === 'inventory_move' || type === 'inventory_clone') {
     if (!anySlot(from) || !anySlot(to)) throw new RequestError(400, 'invalid_inventory_slot');
     if (count !== undefined && !quantity(count)) throw new RequestError(400, 'invalid_inventory_count');
@@ -65,11 +65,11 @@ export function inventoryInput(body, input) {
   return {...input, slot, key, count:count ?? 1};
 }
 
-export function createInventory(store, creativeBlocks, creativeItems) {
+export function createInventory(store, creativeBlocks, creativeItems, {canOffhand = () => false} = {}) {
   const read = player => {
     const stored = player && store.getState(moduleName, player, 'slots')?.value;
     return {slots:stored?.slots ?? Array(inventorySize).fill(null), selected:stored?.selected ?? 0,
-      equipment:stored?.equipment ?? Array(equipmentLabels.length).fill(null)};
+      equipment:stored?.equipment ?? Array(equipmentLabels.length).fill(null), offhand:stored?.offhand ?? null};
   };
   const write = (player, state) => {
     store.putState(moduleName, player, 'slots', version, state);
@@ -115,14 +115,21 @@ export function createInventory(store, creativeBlocks, creativeItems) {
     return {inventory:write(player,state), copiedToBackpack:true};
   }
 
-  const stackAt = (state, slot) => itemSlot(slot) ? state.slots[slot] : state.equipment[slot-inventorySize];
+  function requireOffhand(player, {type,slot,from,to}) {
+    if ((type === 'inventory_swap_hands' || slot === offhandSlot || from === offhandSlot || to === offhandSlot) &&
+        !canOffhand(player)) throw new RequestError(403,'offhand_unavailable');
+  }
+
+  const stackAt = (state, slot) => slot === offhandSlot ? state.offhand :
+    itemSlot(slot) ? state.slots[slot] : state.equipment[slot-inventorySize];
   function setStack(state, slot, stack) {
-    if (itemSlot(slot)) state.slots[slot] = stack;
+    if (slot === offhandSlot) state.offhand = stack;
+    else if (itemSlot(slot)) state.slots[slot] = stack;
     else state.equipment[slot-inventorySize] = stack;
   }
 
   function accepts(slot, stack) {
-    return !stack || itemSlot(slot) || ponyArmor(stack.key)?.slot === slot-inventorySize;
+    return !stack || itemSlot(slot) || slot === offhandSlot || ponyArmor(stack.key)?.slot === slot-inventorySize;
   }
 
   function move(state, {from, to, count}) {
@@ -132,7 +139,7 @@ export function createInventory(store, creativeBlocks, creativeItems) {
     const transfer = Math.min(count ?? source.count, source.count);
     if (target && stackType(source) !== stackType(target)) {
       if (transfer < source.count || !accepts(from,target)) throw new RequestError(409, 'occupied_inventory_slot');
-      if (!itemSlot(to) && source.count > 1) throw new RequestError(409,'occupied_inventory_slot');
+      if (equipmentSlot(to) && source.count > 1) throw new RequestError(409,'occupied_inventory_slot');
       setStack(state,from,target);
       setStack(state,to,source);
       return;
@@ -182,10 +189,16 @@ export function createInventory(store, creativeBlocks, creativeItems) {
   }
 
   function edit(player, input) {
+    requireOffhand(player,input);
     const state = read(player);
     const {type, slot, key, count} = input;
     if (type === 'inventory_copy') return copyToFreeSlot(player,slot).inventory;
     if (type === 'inventory_select') state.selected = slot;
+    else if (type === 'inventory_swap_hands') {
+      const main = stackAt(state,state.selected);
+      setStack(state,state.selected,state.offhand);
+      state.offhand = main;
+    }
     else if (type === 'inventory_move') move(state, input);
     else if (type === 'inventory_clone') cloneStack(state,input);
     else if (documentActions.has(type)) updateDocument(player,state,input);
@@ -201,6 +214,7 @@ export function createInventory(store, creativeBlocks, creativeItems) {
   function take(player, input) {
     const state = read(player);
     const {slot = state.selected, all, key, count,clone} = typeof input === 'object' && input !== null ? input : {all:input};
+    requireOffhand(player,{slot});
     if (key !== undefined) {
       return {stack:creativeStack(key,count ?? (all ? stackLimit : 1)), inventory:state};
     }

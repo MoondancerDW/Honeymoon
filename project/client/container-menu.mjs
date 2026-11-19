@@ -86,7 +86,7 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
         button.addEventListener('dragstart',event=>{
           if (!ready()||!at(position)) {event.preventDefault();return;}
           dragged=position;
-          event.dataTransfer.setData('text/plain','Honeymoon');
+          event.dataTransfer.setData('text/plain','Lilium Moonlight');
           event.dataTransfer.effectAllowed='move';
         });
         button.addEventListener('dragend',()=>{dragged=null;});

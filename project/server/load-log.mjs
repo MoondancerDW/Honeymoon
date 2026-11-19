@@ -84,7 +84,7 @@ function percentile(counts,total) {
 
 export function createLoadLog({directory,onlineStreams=()=>0,now=Date.now,monotonic=()=>performance.now(),
   timeZone,intervalMs=sampleIntervalMs,cpuUsage=process.cpuUsage,memoryUsage=process.memoryUsage,studyUntil,
-  onError=error=>console.error('Honeymoon load log:',error)}) {
+  onError=error=>console.error('Lilium Moonlight load log:',error)}) {
   directory=resolve(directory);
   const format=new Intl.DateTimeFormat('en-GB',{timeZone,hourCycle:'h23',year:'numeric',month:'2-digit',day:'2-digit',
     hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:3,timeZoneName:'longOffset'});

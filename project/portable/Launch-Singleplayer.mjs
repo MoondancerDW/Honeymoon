@@ -57,7 +57,7 @@ function savedRegionFiles(manifest) {
 }
 
 function show(url) {
-  console.log(`Honeymoon — одиночная карта: ${url}`);
+  console.log(`Lilium Moonlight — одиночная карта: ${url}`);
   if (values['no-browser']) return;
   const browser = spawn('explorer.exe', [url], { stdio: 'ignore', windowsHide: true });
   browser.on('error', () => console.log(`Откройте в браузере ${url}`));
@@ -95,7 +95,7 @@ if (!instance.primary) {
     finally { await instance.close(); }
   })();
   function openTestRange() {
-    if (closing) throw new Error('Honeymoon is closing');
+    if (closing) throw new Error('Lilium Moonlight is closing');
     return openingTestRange ??= (async () => {
       const candidate=createHoneymoonServer({
         geometry,base:preparedBase,generated:cache?.directory,soloCache:cache,singlePlayer:true,

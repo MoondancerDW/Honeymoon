@@ -10,6 +10,7 @@ import { createMinecarts } from './minecarts.mjs';
 import { createDroppedItems } from './dropped-items.mjs';
 import { createFluidSimulation } from './fluids.mjs';
 import { createInventory, inventoryInput, isInventoryAction } from './inventory.mjs';
+import {offhandAppearance} from '../world/item-appearance.mjs';
 import { containerActions, containerInput, createContainers } from './containers.mjs';
 import { withoutContainerContents } from '../world/containers.mjs';
 import { basicRecipes,classifyTool,harvestRule } from '../world/survival-tools.mjs';
@@ -18,7 +19,7 @@ import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
-import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_FLIGHT_DROP_LIMIT, POSITION_STEP_LIMIT,
+import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_FLIGHT_DROP_LIMIT, POSITION_STEP_LIMIT,
   POSITION_TRAIL_LIMIT, POSITION_VERTICAL_STEP_LIMIT, WORLD_GRAVITY, flightPositionCost, isPlayerStance,
   playerBody } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
@@ -35,6 +36,8 @@ import { FAKE_WATER, bucketKeys, fluidState, fluidSurface, plantBlock } from '..
 import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, voxelSelectionBoxes,
   VOXEL_COUNT, VOXEL_MATERIAL_LIMIT, writeVoxelBrush } from '../world/voxel-chisel.mjs';
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
+import {JUMP_CHARGE_BONUS,JUMP_CHARGE_LIMIT,JUMP_CHARGE_RECHARGE_MS,MAGIC_TELEPORT_COOLDOWN_MS,MAGIC_TELEPORT_HORIZONTAL,
+  MAGIC_TELEPORT_VERTICAL,ponyAbilities} from '../world/pony-abilities.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
@@ -60,6 +63,9 @@ const REQUEST_ID = /^[A-Za-z0-9_-]{8,100}$/;
 const actionRate = {player:24,playerBurst:48,total:192,totalBurst:384};
 const receiptCleanupInterval=60_000;
 const lavaDamageInterval=1000;
+const jumpGrantMs=3000;
+const jumpValidationHeight=1.4; // The regular tick-based jump reaches 1.252 blocks.
+const magicRetryMs=500;
 
 function point(input, integers = false) {
   const valid = integers ? Number.isSafeInteger : Number.isFinite;
@@ -243,13 +249,18 @@ export function newCreativeObject(key, position, input, item) {
 
 export function createGame(base, store, geometry, {
   clock = () => performance.timeOrigin + performance.now(), modules, allowRemoval = false, models, creativeBlocks = new Set(),
-  creativeItems = new Map(), playerSize = () => 'normal',
+  creativeItems = new Map(), playerSize = () => 'normal', playerPonyType = () => 'earth',
   survival, survivalChanged, persistPositions = false,
 } = {}) {
   const positions = new Map();
   const flightPreferences = new Map();
+  const jumpGrants = new Map();
+  const jumpReadyAt = new Map();
+  const magicReadyAt = new Map();
+  const magicAttempts = new Map();
   const movementChannel = createMovementChannel(player=>({
     position:playerAt(player), stance:stanceFor(player), seat:publicSeat(player),
+    ...abilityState(player),
   }));
   const eyes = new Map();
   const spectators = new Set();
@@ -335,7 +346,7 @@ export function createGame(base, store, geometry, {
     return current.cell === null ? null : cellView(current);
   };
   const physical = physics(base, geometry, cellAt, models);
-  const inventory = createInventory(store, creativeBlocks, creativeItems);
+  const inventory = createInventory(store, creativeBlocks, creativeItems,{canOffhand:player=>abilitiesFor(player).horn});
   const containers=createContainers({store,inventory,getCell:getCurrent,getOriginalCell:base.getCell,creativeBlocks,creativeItems});
   const drops = createDroppedItems({base, store, clock, collides:physical.collides, visible:physical.visiblePoint,
     liquidAt:(x,y,z)=>fluidAt(cellAt,x,y,z,models),
@@ -398,6 +409,7 @@ export function createGame(base, store, geometry, {
   }
 
   const stanceFor = player => positions.get(player)?.stance ?? 'stand';
+  const abilitiesFor = player => ponyAbilities(playerPonyType(player));
   const bodyFor = (player, stance = stanceFor(player)) => playerBody(playerSize(player), stance);
   const bodyAtSeat = (player, anchor) => anchor.bed ? bodyFor(player,'crawl') :
     {halfWidth:.3, height:Math.min(bodyFor(player,'stand').height,SEATED_HEIGHT)};
@@ -419,15 +431,87 @@ export function createGame(base, store, geometry, {
     if (previous.enabled!==enabled) writeFlight(player,{...previous,enabled});
   }
 
+  const creativeMode = player => !survival?.enabled || !survival.isGame(player);
+  const flightAllowed = player => creativeMode(player) || abilitiesFor(player).winged;
+  const activeFlight = player => flightAllowed(player) && flightPreference(player).enabled &&
+    !publicSeat(player) && !survival?.dead(player);
+
+  function reconcileFlight(player) {
+    if (!creativeMode(player) && spectators.has(player)) setSpectator(player,{enabled:false});
+    if (flightAllowed(player)) return;
+    if (flightPreference(player).enabled) {
+      forceFlight(player,false);
+      movementChannel.invalidate(player);
+    }
+  }
+
+  function reconcileRace(player) {
+    jumpGrants.delete(player);
+    if (abilitiesFor(player).winged) survival?.clearFall(player);
+    reconcileFlight(player);
+    movementChannel.invalidate(player);
+  }
+
   function setFlight(player,deviceId,{enabled,sequence}) {
     if (typeof enabled!=='boolean' || !Number.isSafeInteger(sequence) || sequence<1) {
       throw new RequestError(400,'invalid_flight');
     }
     const previous=flightPreference(player);
-    if (previous.deviceId===deviceId && sequence<=previous.sequence) return previous.enabled;
-    if (enabled && (publicSeat(player) || survival?.dead(player))) throw new RequestError(409,'flight_unavailable');
+    if (enabled && (!flightAllowed(player) || publicSeat(player) || survival?.dead(player))) {
+      throw new RequestError(409,'flight_unavailable',{flight:activeFlight(player),flightAllowed:flightAllowed(player)});
+    }
+    if (previous.deviceId===deviceId && sequence<=previous.sequence) return activeFlight(player);
     writeFlight(player,{enabled,deviceId,sequence});
+    if (enabled) {
+      survival?.clearFall(player);
+      jumpGrants.delete(player);
+    }
     return enabled;
+  }
+
+  function jumpGrant(player,now) {
+    const grant=jumpGrants.get(player);
+    if (grant?.expires<=now) jumpGrants.delete(player);
+    else return grant;
+  }
+
+  function spentJumps(player,now) {
+    if (!jumpReadyAt.has(player)) jumpReadyAt.set(player,store.getState('pony-abilities',player,'jumps')?.value ?? []);
+    return jumpReadyAt.get(player).filter(ready=>ready>now);
+  }
+
+  function jumpCharge(player,now) {
+    if (!abilitiesFor(player).chargedJump) return {charges:0,readyInMs:[]};
+    const ready=spentJumps(player,now);
+    const grant=jumpGrant(player,now);
+    if (grant) ready.push(grant.expires);
+    return {charges:Math.max(0,JUMP_CHARGE_LIMIT-ready.length),readyInMs:ready.sort((a,b)=>a-b).map(at=>Math.ceil(at-now))};
+  }
+
+  function magicCooldownMs(player,now) {
+    if (!abilitiesFor(player).horn) return 0;
+    if (!magicReadyAt.has(player)) magicReadyAt.set(player,store.getState('pony-abilities',player,'magic')?.value ?? 0);
+    return Math.max(0,Math.ceil(magicReadyAt.get(player)-now));
+  }
+
+  function abilityState(player) {
+    const now=clock();
+    return {flight:activeFlight(player),flightAllowed:flightAllowed(player),jumpCharge:jumpCharge(player,now),
+      magicCooldownMs:magicCooldownMs(player,now)};
+  }
+
+  function grantChargedJump(player) {
+    const now=clock(),position=playerAt(player),body=bodyFor(player);
+    const jumpChargeState=jumpCharge(player,now);
+    if (!abilitiesFor(player).chargedJump || activeFlight(player) || spectators.has(player) ||
+        publicSeat(player) || survival?.dead(player) || stanceFor(player)==='crawl' ||
+        !physical.supported(position,body,.04) || movementMedium(cellAt,position.x,position.y,position.z,models)) {
+      throw new RequestError(409,'jump_unavailable',{jumpCharge:jumpChargeState});
+    }
+    if (jumpGrant(player,now)) return {jumpCharge:jumpChargeState};
+    if (!jumpChargeState.charges) throw new RequestError(409,'jump_cooldown',{jumpCharge:jumpChargeState});
+    jumpGrants.set(player,{expires:now+jumpGrantMs});
+    return {jumpCharge:jumpCharge(player,now)};
   }
 
   function playerSight(player,eye=eyes.get(player)) {
@@ -460,15 +544,22 @@ export function createGame(base, store, geometry, {
     return seat ? seat.anchor : null;
   }
 
+  function offhandPose(player,state) {
+    if (spectators.has(player) || !abilitiesFor(player).horn) return null;
+    return offhandAppearance((state ?? inventory.read(player)).offhand);
+  }
+
   function poseFor(player, pose) {
     if (pose?.eye) eyes.set(player,pose.eye);
     else if (pose) eyes.delete(player);
-    const armor = inventory.read(player).equipment;
+    const state = inventory.read(player);
+    const armor = state.equipment;
     const equipment = armor?.some(Boolean) ? armor : undefined;
-    if (spectators.has(player)) return {...pose, equipment, spectator:true, stance:'stand'};
+    const offhand = offhandPose(player,state);
+    if (spectators.has(player)) return {...pose, equipment, offhand, spectator:true, stance:'stand'};
     const seat = publicSeat(player);
-    if (!seat) return {...pose, equipment, stance:stanceFor(player), ...(pose?.motion === 'sit' && {motion:'idle'})};
-    return {...pose, equipment, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit', groundSeat:seat.kind === 'ground',
+    if (!seat) return {...pose, equipment, offhand, stance:stanceFor(player), ...(pose?.motion === 'sit' && {motion:'idle'})};
+    return {...pose, equipment, offhand, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit', groundSeat:seat.kind === 'ground',
       stance:seat.bed ? 'crawl' : 'stand', boost:false};
   }
 
@@ -1585,6 +1676,49 @@ export function createGame(base, store, geometry, {
     return {...entry, seat:null, stance:'stand'};
   }
 
+  function magicTeleport(player,{yaw,pitch}) {
+    if (!Number.isFinite(yaw) || !Number.isFinite(pitch) || Math.abs(pitch)>Math.PI/2) {
+      throw new RequestError(400,'invalid_heading');
+    }
+    if (!abilitiesFor(player).horn || spectators.has(player) || publicSeat(player) || survival?.dead(player)) {
+      throw new RequestError(409,'magic_unavailable');
+    }
+    const now=clock(), remaining=magicCooldownMs(player,now);
+    if (remaining) throw new RequestError(409,'magic_cooldown',{magicCooldownMs:remaining});
+    if (now<(magicAttempts.get(player)??0)) throw new RequestError(429,'magic_retry');
+    magicAttempts.set(player,now+magicRetryMs);
+
+    const origin=playerAt(player), body=bodyFor(player,'stand');
+    const planar=Math.cos(pitch), vertical=Math.sin(pitch);
+    const direction=[-Math.sin(yaw)*planar,vertical,-Math.cos(yaw)*planar];
+    const length=Math.min(MAGIC_TELEPORT_HORIZONTAL/Math.abs(planar),MAGIC_TELEPORT_VERTICAL/Math.abs(vertical));
+    // Looking toward the ground traces from eye height so the starting floor isn't a wall.
+    const eyeOffset=vertical<0 ? Math.min(body.eye,playerSight(player).eye??body.eye) : 0;
+    const surveyOrigin={...origin,y:origin.y+eyeOffset};
+    const surveyBody={...body,height:Math.max(.02,Math.max(body.height,body.eye)-eyeOffset)};
+    const distance=physical.unobstructedDistance(surveyOrigin,direction,length,surveyBody,bodyWithinMap);
+    for (let offset=distance; offset>Math.max(.2,distance-2); offset-=.2) {
+      const approximate={x:origin.x+direction[0]*offset,y:origin.y+direction[1]*offset,z:origin.z+direction[2]*offset};
+      let position=physical.standAbove({...approximate,y:Math.max(origin.y-MAGIC_TELEPORT_VERTICAL,approximate.y-.5)},
+        Math.min(origin.y+MAGIC_TELEPORT_VERTICAL,approximate.y+eyeOffset+.02),body) ?? approximate;
+      if (eyeOffset && !physical.movementAllowed(origin,position,body)) {
+        const delta=[position.x-origin.x,position.y-origin.y,position.z-origin.z];
+        const range=Math.hypot(...delta);
+        if (range<.15) continue;
+        const clear=physical.unobstructedDistance(origin,delta.map(value=>value/range),range,body,bodyWithinMap)/range;
+        position={x:origin.x+delta[0]*clear,y:origin.y+delta[1]*clear,z:origin.z+delta[2]*clear};
+      }
+      if (!bodyWithinMap(position,body) || physical.collides(position,body) || touchesLava(position,body)) continue;
+      if (Math.hypot(position.x-origin.x,position.y-origin.y,position.z-origin.z)<.15) continue;
+      const result=teleport(player,position);
+      const ready=now+MAGIC_TELEPORT_COOLDOWN_MS;
+      store.putState('pony-abilities',player,'magic',1,ready);
+      magicReadyAt.set(player,ready);
+      return {...result,...abilityState(player)};
+    }
+    throw new RequestError(409,'teleport_blocked');
+  }
+
   function teleportNear(player, anchorPlayer) {
     const origin=playerAt(anchorPlayer);
     const body=bodyFor(player,'stand');
@@ -1612,8 +1746,9 @@ export function createGame(base, store, geometry, {
     const air=flight.find(clear);
     if (air) {
       const result=teleport(player,air);
-      if (!spectators.has(player)) forceFlight(player,true);
-      return {...result,flight:true};
+      const canHover=spectators.has(player) || flightAllowed(player);
+      if (!spectators.has(player)) forceFlight(player,canHover);
+      return {...result,flight:canHover};
     }
     throw new RequestError(409,'teleport_blocked');
   }
@@ -1624,6 +1759,7 @@ export function createGame(base, store, geometry, {
 
   function setSpectator(player, body) {
     if (typeof body?.enabled !== 'boolean') throw new RequestError(400, 'invalid_spectator');
+    if (body.enabled && !creativeMode(player)) throw new RequestError(403,'creative_required');
     const previous = playerAt(player);
     if (spectators.has(player) === body.enabled) {
       return {...passivePosition(previous), seat:publicSeat(player), stance:stanceFor(player), spectator:body.enabled, relocated:false};
@@ -1676,7 +1812,10 @@ export function createGame(base, store, geometry, {
     const now = clock();
     const old = positions.get(player);
     const sequenced = body.page !== undefined;
-    const flight = body.pose?.motion === 'fly' && stanceFor(player) === 'stand';
+    const race=abilitiesFor(player), observing=spectators.has(player);
+    // Movement and flight-preference requests can arrive out of order. Entitlement comes
+    // from the saved race/mode, while the preference controls what a reconnect resumes.
+    const flight = body.pose?.motion === 'fly' && stanceFor(player) === 'stand' && (observing || flightAllowed(player));
     const elapsed = Math.min(sequenced && !groundSeat ? 1.5 : .65, (now - (old?.updated ?? now - 100)) / 1000);
     const limit = sequenced ? RUN_SPEED * 1.5 : POSITION_BATCH_LIMIT + .4;
     const gravityDrop = sequenced && !flight && !groundSeat;
@@ -1685,6 +1824,8 @@ export function createGame(base, store, geometry, {
     const seatedLimit = .65 * CRAWL_SPEED + .14;
     const budget = groundSeat ? Math.min(seatedLimit,Math.min(sequenced ? seatedLimit : .14,old?.budget ?? 0) + elapsed * CRAWL_SPEED) :
       Math.min(limit, (old?.budget ?? 1) + elapsed * RUN_SPEED);
+    const groundRate=GROUND_SPRINT_SPEED*race.sprintMultiplier+.35;
+    const groundBudget=Math.min(groundRate*1.5,(old?.groundBudget??.75)+elapsed*groundRate);
     const hasTrail = body.trail !== undefined || body.from !== undefined;
     const reject = () => {
       throw new RequestError(409, 'movement_blocked', {position:previous, stance:stanceFor(player), ...(groundSeat && {seat})});
@@ -1708,12 +1849,15 @@ export function createGame(base, store, geometry, {
       if (!samePoint(previous, from) || from.stance !== undefined && from.stance !== stanceFor(player)) reject();
     }
 
-    let distance = 0, drop = 0, from = previous;
+    let distance = 0, groundDistance=0, drop = 0, from = previous;
     let stance = stanceFor(player);
     const size = playerSize(player);
     let dimensions = groundSeat ? bodyAtSeat(player,seat) : playerBody(size,stance);
     let segmentStart = previous, segment = [];
-    const observing = spectators.has(player);
+    const validateJump=survival?.enabled && !flight && !observing && !groundSeat;
+    // Retain the takeoff across transport batches. Clamp rises that have no flight or jump capacity.
+    let ascent=old?.ascent??{y:previous.y,charged:false};
+    let spentGrant;
     let leftLava=false;
     const wasInLava=lavaDamageAt.has(player);
     const validateSegment = () => {
@@ -1743,10 +1887,25 @@ export function createGame(base, store, geometry, {
           Math.abs(vertical) > POSITION_VERTICAL_STEP_LIMIT)) reject();
       if (stance === 'crouch' && planar > 0 && vertical <= .02 && physical.supported(from,dimensions) &&
           !physical.supported({...step,y:from.y},dimensions,.5)) reject();
+      if (validateJump) {
+        const medium=movementMedium(cellAt,from.x,from.y,from.z,models);
+        if (!medium) groundDistance+=planar;
+        if (medium) ascent={y:step.y,charged:false};
+        else if (vertical>0) {
+          if (physical.supported(from,dimensions,.04)) {
+            const granted=race.chargedJump && !spentGrant && vertical>.14 && jumpGrant(player,now);
+            if (granted) spentGrant=granted;
+            ascent={y:from.y,charged:Boolean(granted)};
+          }
+          const maximumJump=jumpValidationHeight+(ascent.charged ? JUMP_CHARGE_BONUS : 0);
+          if (step.y>ascent.y+maximumJump) reject();
+        }
+      }
       distance += flightPositionCost(planar,from.y,step.y,flight && nextStance === 'stand');
       drop += Math.max(-vertical, 0);
       if (distance > budget + (groundSeat ? .035 : MOVEMENT_GRACE) ||
-          drop > dropBudget + (gravityDrop ? MOVEMENT_GRACE : 0)) reject();
+          drop > dropBudget + (gravityDrop ? MOVEMENT_GRACE : 0) ||
+          groundDistance > groundBudget+MOVEMENT_GRACE) reject();
       if (wasInLava && !leftLava && !touchesLava(step,dimensions)) leftLava=true;
       segment.push(step);
       from = step;
@@ -1765,15 +1924,21 @@ export function createGame(base, store, geometry, {
       return {...passivePosition(target),seat,stance};
     }
     const entry = observing ? passivePosition(target) : enterPosition(player, target, previous,stance);
+    if (spentGrant) {
+      const ready=[...spentJumps(player,now),now+JUMP_CHARGE_RECHARGE_MS];
+      store.putState('pony-abilities',player,'jumps',1,ready);
+      jumpReadyAt.set(player,ready);
+      jumpGrants.delete(player);
+    }
     positions.set(player, {position:target, stance, updated:now, seen:now, budget:budget-distance, requestId,
-      ...(gravityDrop && {fallBudget:dropBudget-drop})});
+      ...(gravityDrop && {fallBudget:dropBudget-drop}), ...(validateJump && {ascent,groundBudget:groundBudget-groundDistance})});
     if (!sequenced) movementChannel.invalidate(player);
     if (survival?.enabled&&survival.isGame(player)) {
       const medium=movementMedium(cellAt,target.x,target.y,target.z,models);
       trackLava(player,target,dimensions,now);
       const fall=survival.observe(player,previous,target,{grounded:physical.supported(target,dimensions,.08),
-        protectedFall:observing||Boolean(medium)||body.pose?.motion==='fly'});
-      if (fall) damagePlayer(player,fall);
+        protectedFall:observing||Boolean(medium)||flight||race.winged});
+      if (fall) damagePlayer(player,fall,'fall');
     }
     if (!observing) carts.pushAlongPath(previous,steps.map(step => ({...step,body:playerBody(size,step.stance ?? stance)})));
     return {...entry, stance};
@@ -1784,6 +1949,8 @@ export function createGame(base, store, geometry, {
     if (now>=nextReceiptCleanup) {
       store.pruneReceipts(now);
       for (const [uid,budget] of actionBudgets) if (now-budget.at>=receiptCleanupInterval) actionBudgets.delete(uid);
+      for (const [uid,after] of magicAttempts) if (now>=after) magicAttempts.delete(uid);
+      for (const [uid,grant] of jumpGrants) if (now>=grant.expires) jumpGrants.delete(uid);
       nextReceiptCleanup=now+receiptCleanupInterval;
     }
     const plans = mechanics.flatMap(module => {
@@ -1908,6 +2075,9 @@ export function createGame(base, store, geometry, {
     },
     position,
     movementChannel,
+    abilityState,
+    grantChargedJump,
+    magicTeleport,
     teleport,
     teleportNear,
     setSpectator,
@@ -2001,7 +2171,10 @@ export function createGame(base, store, geometry, {
     sit,
     leaveSeat,
     poseFor,
+    offhandPose,
     reconcileProfile,
+    reconcileFlight,
+    reconcileRace,
     setFlight,
     touch(player) {
       const entry = positions.get(player);
@@ -2032,7 +2205,7 @@ export function createGame(base, store, geometry, {
         playerId, spawn: base.manifest.spawn, position: playerAt(playerId), worldRevision: store.worldRevision(),
         catalogVersion: base.manifest.catalogVersion ?? 1, importVersion: base.manifest.importVersion, contentHash: base.hash,
         mechanics: descriptions(playerId), seat:publicSeat(playerId), spectator:spectators.has(playerId),
-        flight:flightPreference(playerId).enabled && !publicSeat(playerId) && !survival?.dead(playerId),
+        ...abilityState(playerId),
         stance:publicSeat(playerId)?.bed ? 'crawl' : stanceFor(playerId),
         inventory:inventory.read(playerId),
       };

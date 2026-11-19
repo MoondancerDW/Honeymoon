@@ -1,8 +1,8 @@
-# Клиент Minecraft из комплекта Honeymoon
+# Исходный клиент Minecraft для Lilium Moonlight
 
 [Архив браузерного клиента](https://github.com/MoondancerDW/Honeymoon/releases/download/equestria-source/honeymoon-browser-client.zip)
 содержит игру, сервер и инструменты импорта. Для повторного создания исходного
-визуала нужны пять архивов из локального комплекта Honeymoon.
+визуала нужны пять архивов из локального комплекта Minecraft.
 
 | Путь под sources/Honeymoon/ | Ресурс |
 | --- | --- |

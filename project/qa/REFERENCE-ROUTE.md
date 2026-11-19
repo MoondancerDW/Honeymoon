@@ -1,4 +1,4 @@
-# Сверка Honeymoon с Minecraft 1.4.7
+# Сверка Lilium Moonlight с Minecraft 1.4.7
 
 ## Обход района на ПК
 

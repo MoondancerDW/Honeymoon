@@ -1,7 +1,7 @@
 # Реестр блоков для креатива
 
 `world/creative-catalog.json` содержит каталог блоков из Minecraft 1.4.7 и
-Forge 6.6.2.534 с установленными модами Honeymoon. `creative-registry.mjs`
+Forge 6.6.2.534 с модами исходного клиента Minecraft. `creative-registry.mjs`
 строит каталог из реестра запущенного клиента и сверяет номера блоков с
 палитрой карты. Локальная версия `generated/creative/catalog.json` хранит
 также исходные грани, текстуры и размеры для проверки конвертации.
@@ -35,7 +35,7 @@ $classes = New-Item -ItemType Directory -Force (Join-Path $capture.FullName 'cla
 
 Для англоязычного поиска можно извлечь `lang/en_US.lang` из чистого JAR
 Minecraft Java 1.4.7 в `work/creative-registry/english.lang`. В клиенте
-Honeymoon этот язык содержит русские переводы. Затем обновите каталог.
+исходного клиента этот язык содержит русские переводы. Затем обновите каталог.
 
 ```powershell
 node world/creative-registry.mjs --compact world/creative-catalog.json

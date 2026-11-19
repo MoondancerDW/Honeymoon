@@ -5,11 +5,15 @@ import {WorldAudio,audioDefaults} from './audio.mjs';
 import {bindAltitudeMusic} from './altitude-music-settings.mjs';
 import {createAltitudeMap} from './altitude-map.mjs';
 import {createPauseMenu} from './pause-ui.mjs';
+import {createPonyAbilityUi} from './pony-ability-ui.mjs';
+import {ponyAbilities} from '../world/pony-abilities.mjs';
 import {createSoloDownloadUi} from './solo-download-ui.mjs';
 import {windAt} from './wind.mjs';
 import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
 import {createSocialHud} from './social-hud.mjs';
 import {createCreativeMenu} from './creative-menu.mjs';
+import {offhandAppearance} from '../world/item-appearance.mjs';
+import {offhandSlot} from '../world/item-stack.mjs';
 import {createItemDocuments} from './item-documents.mjs';
 import {createContainerMenu} from './container-menu.mjs';
 import {createAccessUi} from './access-ui.mjs';
@@ -80,6 +84,7 @@ const keys = new Set();
 const movementKeys=new Set(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowLeft','ArrowDown','ArrowRight']);
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const pauseMenu = createPauseMenu(game,touchMode);
+const ponyUi = createPonyAbilityUi(element);
 const detailPreference=touchMode?'honeymoon-touch-detail-distance':'honeymoon-detail-distance';
 const lowDevicePreference='honeymoon-low-device';
 const altitudeBuild=Number(document.querySelector('meta[name="honeymoon-build"]').content);
@@ -98,7 +103,7 @@ let creativeAvailable = false;
 const creativeNames = new Map();
 const creativeEntries = new Map();
 let catalogRequest, inventoryRequest = Promise.resolve();
-let inventory = {slots:Array(36).fill(null),selected:0};
+let inventory = {slots:Array(36).fill(null),selected:0}, offhandProp = null;
 let emote=null;
 let heldSignature = '';
 let selectionInputs, selectionRevision = 0;
@@ -114,6 +119,8 @@ const mobileFrameMs = 1000/32;
 let nextMobileFrame;
 const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 let playing = false, jump = false, lastFrame = 0, physicsTime = 0, timer;
+let jumpHeldAt, jumpGrant;
+let profileSwapPending=false;
 let autoMovement=null;
 let previousFramePosition, framePosition, correctionOffset;
 let feedReopenAt=-Infinity;
@@ -162,9 +169,10 @@ const movementSync=createMovementSync({
       stream();
     }
   },
-  onAck(pose) {
+  onAck(pose,state) {
     diagnostics.positionAck();
     if (pose && (!lastSentPose || pose.seq>=lastSentPose.seq)) lastSentPose=pose;
+    ponyUi.sync(state);
   },
   report:connectionReport, metrics:positionMetrics,
 });
@@ -186,6 +194,7 @@ const pause = () => {
   repeatPlacement = false;
   keys.clear();
   jump = false;
+  jumpHeldAt = undefined;
   stick.x = stick.z = 0;
   touchControls?.clear();
   if (document.pointerLockElement) document.exitPointerLock();
@@ -209,7 +218,8 @@ function resume() {
 const social = createSocialHud({post, notice, pause, resume, teleport, placeWarp,weatherChanged:updateWeather,
   worldEditCommand:command=>worldEdit.command(command),
   loadWarps:()=>json('/api/warps',{signal:AbortSignal.timeout(5000)})});
-const inventoryStackAt=slot=>slot<36 ? inventory.slots[slot] : inventory.equipment?.[slot-36];
+const inventoryStackAt=slot=>slot===offhandSlot ? inventory.offhand :
+  slot<36 ? inventory.slots[slot] : inventory.equipment?.[slot-36];
 const itemDocuments=createItemDocuments({stackAt:inventoryStackAt,act:inventoryAction,pause,resume});
 const storage=createContainerMenu({action:containerAction,entryFor:entryForInventoryStack,
   draw:drawCreativeIcon,inventory:()=>inventory,pause,resume});
@@ -260,6 +270,7 @@ const creative = createCreativeMenu({load:loadCreative,
   drop:fields=>inventoryAction('drop_item',{...fields,yaw:heading.yaw,eye:view.eyeOffset()}),
   preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin),
   editItem:itemDocuments.openItem,readBook:itemDocuments.openBook,
+  swap:swapHands,
   canCopy:()=>modeUi.creative,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
 const soloDownloadUi=createSoloDownloadUi({element});
@@ -273,10 +284,14 @@ function updateGameMode(next) {
   creativeToggle.hidden=modeUi.active&&!modeUi.creative;
   element('touch-catalog').hidden=modeUi.active&&!modeUi.creative;
   element('touch-copy').hidden=modeUi.active&&!modeUi.creative;
+  element('touch-spectator').hidden=!modeUi.creative;
   element('weather').disabled=!next.admin;
   social.setAdmin(next.admin);
   game.classList.toggle('dead',Boolean(next.death));
   if (!view) return;
+  element('touch-flight').hidden=!canFly();
+  if (!modeUi.creative && spectator) setSpectator(false);
+  if (!canFly() && (flying || pendingFlight?.enabled)) stopFlight();
   if (next.death&&!deathOrbit) {
     deathOrbit={perspective:view.perspective,heading:orbitHeading};
     orbitHeading={...heading,pitch:-.22};
@@ -392,6 +407,7 @@ async function containerAction(type,target,fields={}) {
 function applyInventory(value) {
   if (!value || !Array.isArray(value.slots)) return;
   inventory = value;
+  offhandProp = offhandAppearance(value.offhand);
   creative.setInventory(value);
   const stack = value.slots[value.selected];
   const signature = `${stackRevision(stack)}:${Boolean(stack?.copied)}`;
@@ -410,6 +426,20 @@ function applyInventory(value) {
   setHeldPart(entry?.kind === 'microblock' && !stack.copied ? creativeMicroblock(entry) :
     stack?.part ? {...stack.part,pattern:stack.pattern} : null);
   presenceDirty = true;
+}
+
+const hasOffhand = () => ponyAbilities(profile.confirmed.ponyType).horn;
+
+function refreshOffhand() {
+  const available = hasOffhand();
+  creative.setOffhandAvailable(available);
+  element('touch-swap-hands').hidden = !available;
+}
+
+function swapHands(fromInventory = false) {
+  if (!hasOffhand() || spectator || modeUi.death || resetting || orbitHeading ||
+      !teleportLoading.hidden || (!fromInventory && (!playing || menuOpen()))) return false;
+  return inventoryAction('inventory_swap_hands');
 }
 
 async function drawCreativeIcon(entry, canvas) {
@@ -438,6 +468,9 @@ const messages = {
   reserved: 'Это часть контрольной механики', nothing_to_copy: 'Сначала скопируйте блок',
   empty_cell: 'В ячейке нет блока', cannot_interact: 'С этим объектом нельзя взаимодействовать',
   movement_blocked: 'Позиция скорректирована сервером', outside_reach: 'Цель вне досягаемости',
+  teleport_blocked: 'У цели нет свободного места для телепорта',
+  magic_unavailable: 'Магический телепорт сейчас недоступен',
+  magic_cooldown: 'Магия ещё восстанавливается',
   block_not_owned: 'Исходный блок карты защищён', part_not_owned: 'Исходные детали карты защищены',
   part_missing: 'Деталь уже убрана', invalid_part: 'Эта форма или материал недоступны',
   part_required: 'Наведите прицел на отдельную деталь',
@@ -477,6 +510,7 @@ const messages = {
   incompatible_liquid: 'Здесь нет места для жидкости',
   liquid_missing: 'Здесь больше нет жидкости',
   invalid_equipment: 'Этот предмет нельзя надеть в эту ячейку',
+  offhand_unavailable:'Вторая рука доступна единорогам и аликорнам',
   missing_support: 'Для этого блока нужна твёрдая опора',
   empty_inventory_slot: 'Активная ячейка пуста',
   inventory_full: 'В инвентаре нет места',
@@ -691,13 +725,14 @@ function playerPose() {
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
     stance:seat?.bed ? 'crawl' : movement.stance, boost:!seat && flying && moving && sprinting(), eye:view.eyeOffset(),
     typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(), groundSeat:seat?.kind === 'ground',
+    offhand:hasOffhand() ? offhandProp : null,
     equipment:inventory.equipment,emote,
     seq:Math.round(performance.timeOrigin + performance.now())};
 }
 
 function sendPresence(now) {
   if (!entered || presenceRequest || now < nextPresence || feed?.readyState !== EventSource.OPEN) return;
-  const pose = playerPose();
+  const {offhand,...pose} = playerPose();
   if (seat?.kind === 'boat') {
     pose.boatDrive = playing && !menuOpen() ? [Math.sign(forwardInput()),Math.sign(turnInput())] : [0,0];
   } else if (seat?.entity) {
@@ -825,11 +860,29 @@ function setPlaying(active) {
     repeatPlacement = false;
     keys.clear();
     jump = false;
+    jumpHeldAt = undefined;
     button.textContent = 'Продолжить';
   }
 }
 
+function canFly() {
+  return modeUi.creative || ponyAbilities(movement?.ponyType).winged;
+}
+
+function applyPonyTraits(payload) {
+  const {size='normal',ponyType='earth'} = profile.confirmed;
+  movement.size=size;
+  if (movement.ponyType!==ponyType) movement.cancelSlowFall();
+  movement.ponyType=ponyType;
+  ponyUi.setTraits(ponyType,size);
+  ponyUi.sync(payload);
+  refreshOffhand();
+  element('touch-flight').hidden=!canFly();
+  if (!canFly() && (flying || pendingFlight?.enabled)) stopFlight();
+}
+
 function setFlight(active) {
+  if (active && !spectator && !canFly()) return;
   if (active && !spectator && movement.stance !== 'stand') {
     const stance = movement.setStance(position,'stand');
     if (stance !== 'stand') return;
@@ -841,6 +894,7 @@ function setFlight(active) {
   movement.resetFall();
   movement.grounded = false;
   jump = false;
+  jumpHeldAt = undefined;
   element('flight-status').hidden = !active || spectator;
 }
 
@@ -860,7 +914,10 @@ function flushFlightPreference() {
       if (spectator) spectatorReturn.flying=body.flight;
       else if (!seat && !modeUi.death) setFlight(body.flight);
     }
-    if (ok || body.error==='flight_unavailable') finishFlightPreference(update);
+    if (ok || body.error==='flight_unavailable' || body.error==='flight_forbidden') {
+      if (!ok && pendingFlight===update && update.enabled && !spectator) setFlight(false);
+      finishFlightPreference(update);
+    }
   }).catch(()=>{}).finally(()=>{
     flightRequest=undefined;
     if (pendingFlight && pendingFlight!==update) flushFlightPreference();
@@ -885,12 +942,12 @@ function restoreFlight(session) {
       flightSequence=saved.sequence;
     }
   } catch {}
-  if (seat || modeUi.death) {
+  if (seat || modeUi.death || !canFly()) {
     if (pendingFlight) finishFlightPreference(pendingFlight);
   } else {
     setFlight(pendingFlight?.enabled ?? session.flight===true);
   }
-  if (session.spectator) setSpectator(true);
+  if (session.spectator && modeUi.creative) setSpectator(true);
   flushFlightPreference();
 }
 
@@ -921,7 +978,7 @@ function setSpectator(active) {
 }
 
 async function toggleSpectator() {
-  if (resetting || acting || seatPending) return;
+  if (!modeUi.creative || resetting || acting || seatPending) return;
   resetting = true;
   try {
     await flushPosition();
@@ -952,6 +1009,8 @@ function setAuthoritativePosition(feet, stance = 'stand') {
   previousFramePosition=framePosition={...position};
   correctionOffset=undefined;
   physicsTime=0;
+  jumpHeldAt=undefined;
+  jump=false;
   movement.stance = stance;
   crawlRequested = stance === 'crawl' && !seat;
   touchCrouching = touchMode && stance === 'crouch' && !seat;
@@ -993,9 +1052,9 @@ async function teleport(coordinates) {
 
 async function acceptTeleport(body) {
   const arriving=arriveAt(body.position,body.stance);
-  if (body.flight===true) {
-    setFlight(true);
-    if (!spectator && pendingFlight?.enabled===false) rememberFlight(true);
+  if (!spectator && typeof body.flight==='boolean') {
+    if (body.flight!==flying) setFlight(body.flight);
+    if (pendingFlight && pendingFlight.enabled!==body.flight) rememberFlight(body.flight);
   }
   changes(body.changes,body.worldRevision,body.frames);
   effects(body);
@@ -1003,6 +1062,54 @@ async function acceptTeleport(body) {
   selectionInputs=null;
   placementKey='';
   await arriving;
+}
+
+const canUsePonyAbility = () => playing && !menuOpen() && !spectator && !orbitHeading && !modeUi.death &&
+  !seat && !seatPending && !resetting && !acting && !profileSwapPending && teleportLoading.hidden;
+
+async function magicTeleport() {
+  if (!canUsePonyAbility() || !ponyAbilities(movement.ponyType).horn || ponyUi.cooldown(performance.now())) return;
+  const {yaw,pitch}=heading;
+  resetting=true;
+  try {
+    if (!await flushPosition()) { notice(messages.movement_blocked); return; }
+    const result=await post('magic-teleport',{yaw,pitch},AbortSignal.timeout(5000));
+    ponyUi.sync(result.body);
+    if (result.ok) await acceptTeleport(result.body);
+    else notice(messages[result.body.error] ?? 'Не удалось телепортироваться');
+  } catch { notice('Связь с сервером прервалась'); }
+  finally { resetting=false; }
+}
+
+function pressJump() {
+  if (flying || seat || resetting || modeUi.death || profileSwapPending) return;
+  if (!movement.grounded) {
+    movement.cancelSlowFall();
+    return;
+  }
+  if (canUsePonyAbility() && movement.canChargeJump && ponyAbilities(movement.ponyType).chargedJump && ponyUi.chargeCount(performance.now())) {
+    if (!jumpGrant) jumpHeldAt=performance.now();
+  } else jump=true;
+}
+
+function chargeJump(now) {
+  if (jumpHeldAt===undefined || now-jumpHeldAt<150) return;
+  jumpHeldAt=undefined;
+  if (!canUsePonyAbility() || !movement.canChargeJump) return;
+  const type=movement.ponyType;
+  jumpGrant=(async()=>{
+    let granted=false;
+    try {
+      if (await flushPosition() && canUsePonyAbility() && movement.canChargeJump && movement.ponyType===type) {
+        const result=await post('charged-jump',{},AbortSignal.timeout(2200));
+        ponyUi.sync(result.body);
+        granted=result.ok;
+      }
+    } catch { /* A regular jump remains available. */ }
+    if (!flying && canUsePonyAbility() && movement.canChargeJump && movement.ponyType===type) {
+      jump=granted ? 'charged' : true;
+    }
+  })().finally(()=>{jumpGrant=undefined;});
 }
 
 async function receiveNpcTeleport(body) {
@@ -1544,11 +1651,13 @@ function tick(now) {
     nextMobileFrame=Math.max(deadline+mobileFrameMs,now+mobileFrameMs/2);
   }
   const dt = Math.min(.05, (now - (lastFrame || now)) / 1000);
+  chargeJump(now);
+  ponyUi.paint(now);
   const hasPredictionRoom=movementSync.canPredict(now);
   if (autoMovement && (stick.x || stick.z)) setAutoMovement(null);
   const openMenu=menuOpen();
-  const manualTravel=playing && !openMenu && !orbitHeading;
-  const automaticTravel=automaticTravelEnabled(openMenu);
+  const manualTravel=playing && !openMenu && !orbitHeading && !profileSwapPending;
+  const automaticTravel=!profileSwapPending && automaticTravelEnabled(openMenu);
   const travelling=manualTravel || automaticTravel;
   movement.waitingForTerrain=false;
   physicsTime=travelling && !resetting && hasPredictionRoom ? Math.min(physicsTime+dt,.064) : 0;
@@ -1611,13 +1720,15 @@ function tick(now) {
       while (physicsTime>=physicsStep && movementSync.canPredict(now)) {
         previousFramePosition={...position};
         physicsTime-=physicsStep;
-        const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance,y:position.y}) / inputSize;
+        const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance,y:position.y,
+          ponyType:spectator ? undefined : movement.ponyType}) / inputSize;
         const dx = (-sin * forward + cos * strafe) * speed;
         const dz = (-cos * forward - sin * strafe) * speed;
         if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, physicsStep, recordPosition, spectator, automaticTravel);
         else movement.update(position, dx, dz, manualTravel && jump, physicsStep,
           {rise: manualTravel && jump || rising, descend: descending || movement.medium === 'ladder' && sprinting(),
-            swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition, automatic:automaticTravel});
+            swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition, automatic:automaticTravel,
+            chargedJump:jump==='charged'});
         jump=false;
       }
     }
@@ -1637,7 +1748,7 @@ function tick(now) {
   if (!hasPredictionRoom || resetting || !travelling || seat?.entity) {
     previousFramePosition={...position};
     physicsTime=0;
-    if (!hasPredictionRoom) jump=false;
+    if (!hasPredictionRoom && movementSync.inspect().status!=='binding') jump=false;
   }
   const blend=Math.min(1,physicsTime/physicsStep);
   const previous=previousFramePosition??position;
@@ -1798,14 +1909,22 @@ function bindControls() {
       if (button.disabled) return;
       button.disabled = true;
       profile.setSaving(true);
-      post('profile', pending, AbortSignal.timeout(5000)).then(({ok, body}) => {
+      profileSwapPending=pending.skin!==undefined;
+      const save=async()=>{
+        if (profileSwapPending && !await flushPosition()) throw new Error(messages.movement_blocked);
+        return post('profile',pending,AbortSignal.timeout(5000));
+      };
+      save().then(({ok, body}) => {
         if (!ok) {
           throw new Error(messages[body.error] || 'Не удалось сохранить профиль');
         }
+        const changedTraits=movement.size!==body.size || movement.ponyType!==body.ponyType;
         profile.saved(body, pending);
-        movement.size = body.size ?? 'normal';
-        movement.ponyType = body.ponyType ?? 'earth';
+        if (body.gameMode) modeUi.update(body.gameMode);
+        applyPonyTraits(body);
         if (body.position) setSeat(body.seat,body.position,body.stance);
+        else if (changedTraits) movementSync.reset(position,movement.stance);
+        if (!spectator && !seat && typeof body.flight==='boolean' && body.flight!==flying) setFlight(body.flight);
         social.profileUpdated(profile.confirmed);
         view.setLocalSkin(profile.confirmed.skin);
         if (playing && !entered) enterWorld();
@@ -1815,6 +1934,7 @@ function bindControls() {
         else if (document.pointerLockElement === canvas) document.exitPointerLock();
         notice(error.message);
       }).finally(() => {
+        profileSwapPending=false;
         button.disabled = false;
         profile.setSaving(false);
       });
@@ -1913,13 +2033,15 @@ function bindControls() {
     if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.code)) event.preventDefault();
     keys.add(event.code);
     if (event.repeat) return;
-    if (event.code === 'Space') jump = true;
+    if (event.code === 'Space') pressJump();
     if (spectator) return;
     if (event.code === 'KeyF' && !resetting && !seat) {
+      if (!canFly()) { notice('В игровом режиме для полёта нужны крылья'); return; }
       const previous=flying;
       setFlight(!previous);
       if (flying!==previous) rememberFlight(flying);
     }
+    if (event.code === 'KeyM') { event.preventDefault(); void magicTeleport(); }
     if (event.code === 'KeyV' && !resetting && !acting && !flying && !seat) {
       if (crawlRequested) crawlRequested = false;
       else if (movement.setStance(position,'crawl') === 'crawl') {
@@ -1935,6 +2057,10 @@ function bindControls() {
       return;
     }
     if (event.code === 'KeyJ') creative.openInventory();
+    if (event.code === 'KeyN' && !event.ctrlKey&&!event.altKey&&!event.metaKey && hasOffhand()) {
+      event.preventDefault();
+      void swapHands();
+    }
     if (['KeyB','KeyZ'].includes(event.code)&&!flying&&!seat&&movement.grounded&&movement.stance==='stand') {
       const id=event.code==='KeyB'?'wave':'dance';
       emote=emote?.id===id ? null : {id,started:Date.now()};
@@ -1961,6 +2087,13 @@ function bindControls() {
   });
   document.addEventListener('keyup', event => {
     keys.delete(event.code);
+    if (event.code==='Space' && jumpHeldAt!==undefined) {
+      chargeJump(performance.now());
+      if (jumpHeldAt!==undefined) {
+        jumpHeldAt=undefined;
+        if (!flying && canUsePonyAbility()) jump=true;
+      }
+    }
     social.keyup(event);
     if (event.code === 'Escape' && resumeOnEscape) {
       resumeOnEscape = false;
@@ -1974,6 +2107,7 @@ function bindControls() {
   window.addEventListener('blur', () => {
     nextAttack = Infinity;
     repeatPlacement = resumeOnEscape = resuming = false;
+    jumpHeldAt=undefined;
     keys.clear();
     touchControls?.clear();
     social.blur();
@@ -2001,8 +2135,10 @@ function bindControls() {
     creative.scrollHotbar(Math.sign(event.deltaY));
   },{passive:false});
   element('teleport-reload').addEventListener('click', () => location.reload());
+  element('touch-magic').addEventListener('click',()=>void magicTeleport());
   element('sign-form').addEventListener('submit', saveSign);
   element('sign-cancel').addEventListener('click', closeSign);
+  element('touch-swap-hands').addEventListener('click',()=>void swapHands());
   signEditor.addEventListener('cancel', event => { event.preventDefault(); closeSign(); });
 
   bindTouchLook(canvas,{
@@ -2298,7 +2434,7 @@ function bindSoloWorld(kind) {
   if (kind==='test-range') {
     toggle.textContent='Вернуться в Эквестрию';
     loading.textContent='Загружаем тестовый полигон…';
-    document.title='Honeymoon — Тестовый полигон';
+    document.title='Lilium Moonlight — Тестовый полигон';
     heading.yaw=Math.PI;
   }
   toggle.hidden=false;
@@ -2367,8 +2503,6 @@ async function start() {
   const [x, y, z] = session.body.spawn || manifest.spawn;
   position = p ? {...p} : {x, y, z};
   movement = new Movement(world);
-  movement.size = profile.confirmed.size ?? 'normal';
-  movement.ponyType = profile.confirmed.ponyType ?? 'earth';
   movement.stance = session.body.stance ?? 'stand';
   movementSync.reset(position,movement.stance);
   crawlRequested = movement.stance === 'crawl';
@@ -2376,6 +2510,7 @@ async function start() {
   view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
     lowDevice,terrainNetwork,persistentTerrain:Boolean(worldCheckpoint),altitudeBuild});
   modeUi.update(session.body.gameMode);
+  applyPonyTraits(session.body);
   view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
   if (session.body.seat) setSeat(session.body.seat, p,session.body.stance);
@@ -2413,6 +2548,8 @@ async function start() {
       terrainPreload:terrainPreload?.status(),
       terrainNetwork:terrainNetwork.status(),
       flying, spectator, autoMovement, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
+      ponyType:movement.ponyType, fallSpeed:movement.fall, gliding:Boolean(movement.gliding), grounded:movement.grounded,
+      jumpCharges:ponyUi.chargeCount(performance.now()), magicCooldown:ponyUi.cooldown(performance.now()),
       movementSync: {...positionMetrics,...movementSync.inspect(),queued:positionTrail.length,confirmed:movementSync.inspect().pos},
       renderer: view.renderer.getContext().getParameter(view.renderer.getContext().RENDERER)}),
     look: (yaw, pitch = 0) => { heading.yaw = yaw; heading.pitch = pitch; updateCamera(); },
@@ -2421,7 +2558,8 @@ async function start() {
     setOcclusion: enabled => view.setOcclusion(enabled),
     target: () => selection && {...selection},
     targetNpc: () => npcTarget,
-    health: () => ({mode:modeUi.creative?'creative':'game',death:modeUi.death,health:Number(element('health').getAttribute('aria-valuenow'))}),
+    health: () => ({mode:modeUi.creative?'creative':'game',death:modeUi.death,
+      health:Number(element('health').getAttribute('aria-valuenow')),maxHealth:Number(element('health').getAttribute('aria-valuemax'))}),
     placement: () => placement && {...placement},
     setDistance: distance => view.setDistance(distance),
     setDetailedDistance: distance => view.setDetailedLodDistance(distance),

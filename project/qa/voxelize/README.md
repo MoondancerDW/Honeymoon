@@ -1,4 +1,4 @@
-# Проверка Voxelize 3.0.0 на составном блоке Honeymoon
+# Проверка Voxelize 3.0.0 на составном блоке Lilium Moonlight
 
 Из каталога `project/` с Node.js 24, `curl` и `tar`
 

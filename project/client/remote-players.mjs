@@ -82,6 +82,7 @@ function setPose(player, pose) {
   player.typing = pose.typing === true;
   player.swing = pose.swing ?? 0;
   player.held = pose.held;
+  player.offhand = pose.offhand;
   player.equipment = pose.equipment;
   player.emote = pose.emote;
   player.death = pose.death;
@@ -189,7 +190,8 @@ export class RemotePlayers {
         yawOffset:facing.yawOffset, forward:facing.forward, strafe:facing.strafe,
         motion:player.motion, stance:player.stance, boost:player.boost, groundSeat:player.groundSeat,
         position:object.position,
-        swing:player.swing, held:player.held, equipment:player.equipment, itemAssets:this.itemAssets?.(), emote:player.emote});
+        swing:player.swing, held:player.held, offhand:player.offhand,
+        equipment:player.equipment, itemAssets:this.itemAssets?.(), emote:player.emote});
       player.avatar.ragdoll(player.death?.cause==='lava'?null:player.death,dt);
       const ash=player.avatar.lavaDeath(player.death,now);
       if (ash) this.burnPlayer?.(ash,object.position,now);

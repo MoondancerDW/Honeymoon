@@ -69,10 +69,10 @@ const instance = await acquireInstance(root);
 if (!instance.primary) {
   const {info} = instance;
   if (mode !== 'local' && mode !== info.mode) {
-    console.error(`Honeymoon is already running in ${info.mode} mode at ${info.url} Close that instance before starting ${mode} mode.`);
+    console.error(`Lilium Moonlight is already running in ${info.mode} mode at ${info.url} Close that instance before starting ${mode} mode.`);
     process.exitCode = 1;
   } else {
-    console.log(`Honeymoon is already running at ${info.url}`);
+    console.log(`Lilium Moonlight is already running at ${info.url}`);
     if (info.publicUrl) console.log(`Public address: ${info.publicUrl}`);
     if (!values['no-browser']) openBrowser(info.url);
   }
@@ -142,7 +142,7 @@ if (!instance.primary) {
       await close();
       if (code) process.exitCode = code;
     } else {
-      console.log(`Honeymoon ${url}`);
+      console.log(`Lilium Moonlight ${url}`);
       for (const {name,address} of lanAddresses) {
         console.log(`${name} http://${address}:${gamePort}/ (invitation required)`);
       }

@@ -14,7 +14,7 @@ const fullscreenMethod = () => (document.fullscreenEnabled && root.requestFullsc
 if (touchFullscreen) byId('touch-pause').before(fullscreen);
 if (ios) {
   byId('fullscreen-help-instructions').textContent =
-    'В Safari нажмите «Поделиться», выберите «На экран „Домой“» и включите «Открывать как веб-приложение». Затем запустите Honeymoon с экрана «Домой».';
+    'В Safari нажмите «Поделиться», выберите «На экран „Домой“» и включите «Открывать как веб-приложение». Затем запустите Lilium Moonlight с экрана «Домой».';
 }
 
 function updateFullscreen() {

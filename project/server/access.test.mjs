@@ -71,7 +71,7 @@ function stageLegacy(store,uid,nickname,stack,{selected=7,ender=null}={}) {
   const inventory={slots:legacyStack(36,selected,stack),selected,equipment:Array(4).fill(null)};
   store.putState('legacy-player',normalizeLegacyPlayerName(nickname),'import',1,
     {uid,nickname,inventory,enderItems:legacyStack(27,12,ender)});
-  return inventory;
+  return {...inventory,offhand:null};
 }
 
 test('an imported UID and original inventory can be claimed only once across aliases',async t=>{
@@ -415,8 +415,12 @@ test('administrators teleport online players privately and bans persist without 
   code(await moderator('/api/teleport',{x:7.5,y:8,z:7.5}));
   const flight=code(await host(teleport,{target:adminUid,direction:'to'}));
   assert.equal(flight.teleport.position.y,8);
-  assert.equal(flight.teleport.flight,true);
+  assert.equal(flight.teleport.flight,false);
   assert.deepEqual(await hostEvent('admin-teleport'),flight.teleport);
+  code(await host('/api/modes',{mode:'creative',target:hostUid}));
+  const hover=code(await host(teleport,{target:adminUid,direction:'to'}));
+  assert.equal(hover.teleport.flight,true);
+  assert.deepEqual(await hostEvent('admin-teleport'),hover.teleport);
 
   const reason='Rule violation';
   const blocked=code(await moderator(ban,{uid:guestUid,reason}));

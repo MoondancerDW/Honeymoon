@@ -291,7 +291,7 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
       next.disabled=start+pageSize>=rows.length;
       list.replaceChildren(...visible.map(row=>{
         const entry=node('div','admin-uid-entry');
-        const origin=row.source==='original' ? (row.claimed?'Из мира · привязан':'Из мира · свободен') : 'Профиль Honeymoon';
+        const origin=row.source==='original' ? (row.claimed?'Из мира · привязан':'Из мира · свободен') : 'Профиль Lilium Moonlight';
         entry.append(node('strong',null,row.names.join(', ')||'Профиль без имени'),node('code',null,row.uid),
           node('small','admin-subtle',origin));
         return entry;

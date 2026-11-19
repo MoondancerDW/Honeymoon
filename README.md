@@ -1,13 +1,14 @@
-# Honeymoon
+# Lilium Moonlight
 
 Карта Equestria и самостоятельная браузерная игра на основе сборки
-Honeymoon. Здесь можно ходить, летать, строить из блоков и микроблоков RedPower
+Minecraft. Здесь можно ходить, летать, строить из блоков и микроблоков RedPower
 и редактировать постройки резцом. Исходные блоки тоже доступны для разрушения.
 Отдельная копия карты позволяет восстановить оригинальные постройки.
 Правки сохраняются и видны другим игрокам. Сборка для Windows поддерживает
 вход по приглашениям и подключение через браузер с телефона.
 
 - [Подготовка и запуск](project/README.md)
+- [Последняя сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/latest)
 - [Перенос действующего сервера на другой Windows-ПК](project/portable/MIGRATION.md)
 - [Веб-альфа для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/tag/alpha-2026-11-16)
 - [Предыдущая сборка для Windows x64](https://github.com/MoondancerDW/Honeymoon/releases/download/pc-test-inventory-weather/Honeymoon-Creative-Weather-Windows-x64.zip)
@@ -20,7 +21,7 @@ Honeymoon. Здесь можно ходить, летать, строить из
 
 Архивы мира распаковываются в один каталог, чтобы объединить регионы.
 Для извлечения оригинального визуала понадобятся пять архивов
-из локального комплекта Honeymoon.
+из локального комплекта исходной карты.
 
 Первичный анализ карты хранится в [analysis](analysis). Скрипты
 из [tools](tools/README_TOOLS_RU.txt) читают исходное сохранение и записывают

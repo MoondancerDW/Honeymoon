@@ -1,4 +1,4 @@
-"""Build the private Windows test bundle from a prepared Honeymoon world."""
+"""Build the private Windows test bundle from a prepared Lilium Moonlight world."""
 
 import argparse
 import json
@@ -36,7 +36,7 @@ def build(output, node, node_license, generated, state=None, single_player=False
     temporary = output.with_suffix(".zip.part")
     try:
         with ZipFile(temporary, "w", compression=ZIP_DEFLATED, compresslevel=3) as archive:
-            for name in ("Start-Honeymoon.cmd", "single-instance.mjs"):
+            for name in ("Start-Lilium-Moonlight.cmd", "Start-Honeymoon.cmd", "single-instance.mjs"):
                 archive.write(PROJECT / "portable" / name, name)
             help_file = "SINGLEPLAYER.txt" if single_player else "ЧИТАЙ-МЕНЯ.txt"
             archive.write(PROJECT / "portable" / help_file, "ЧИТАЙ-МЕНЯ.txt")

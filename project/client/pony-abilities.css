@@ -1,0 +1,82 @@
+#pony-abilities:not([hidden]) {
+  position: absolute;
+  z-index: 2;
+  top: calc(max(.5rem, env(safe-area-inset-top)) + 6.2rem);
+  left: max(.55rem, env(safe-area-inset-left));
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  pointer-events: none;
+  font-size: .74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+#pony-abilities span:not([hidden]) {
+  padding: .25rem .45rem;
+  border: 1px solid var(--line);
+  border-radius: .4rem;
+  color: var(--gold);
+  background: var(--glass);
+}
+
+#game:not(.playing) #pony-abilities, #game.dead #pony-abilities { display: none; }
+
+#touch .touch-actions {
+  grid-template-areas: "sprint flight jump" "attack use lower";
+  pointer-events: none;
+}
+
+#touch .touch-actions button:not([hidden]) { pointer-events: auto; }
+#touch-sprint { grid-area: sprint; }
+#touch-flight { grid-area: flight; }
+#jump { grid-area: jump; }
+#touch-remove { grid-area: attack; }
+#touch-use { grid-area: use; }
+#touch-lower { grid-area: lower; }
+#touch-magic { grid-area: magic; color: #e2bbff; }
+
+#touch .touch-actions:has(#touch-flight[hidden]):has(#touch-magic:not([hidden])) {
+  grid-template-areas: "sprint magic jump" "attack use lower";
+}
+
+#touch .touch-actions:has(#touch-flight:not([hidden])):has(#touch-magic:not([hidden])) {
+  grid-template-areas: ". magic ." "sprint flight jump" "attack use lower";
+}
+
+@media (orientation: portrait) {
+  #game.touch.playing:has(#health:not([hidden])) .target-tag:not(:empty) {
+    top: calc(max(.5rem, env(safe-area-inset-top)) + 89px);
+    margin-top: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #game.touch #connection-metrics { top: 49px; }
+  .touch #health:not([hidden]) { gap: 2px; }
+  .touch #health span { width: clamp(7px, 2.1vw, 10px); }
+
+  #game.touch:has(#health:not([hidden])) #pony-abilities:not([hidden]) {
+    top: calc(max(.5rem, env(safe-area-inset-top)) + 130px);
+  }
+
+  .touch #touch:has(#touch-flight:not([hidden])):has(#touch-magic:not([hidden])) #touch-build-panel:not([hidden]) {
+    bottom: calc(max(.4rem, env(safe-area-inset-bottom)) + 195px);
+  }
+}
+
+@media (orientation: landscape) and (max-height: 400px) {
+  #game.touch.playing:has(#health:not([hidden])) .target-tag:not(:empty) {
+    max-width: max(6rem, calc(100vw - 415px - 2 * max(env(safe-area-inset-left), env(safe-area-inset-right))));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .touch #pony-abilities:not([hidden]) {
+    top: calc(max(.5rem, env(safe-area-inset-top)) + 4.8rem);
+    display: flex;
+    flex-wrap: wrap;
+    max-width: min(44%, 15rem);
+  }
+}

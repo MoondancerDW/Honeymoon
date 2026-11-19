@@ -16,7 +16,7 @@ $partHashes = [ordered]@{
     'Honeymoon-Alpha-Windows-x64.zip.002' = 'de38ac4f03f939261a37970283a93abf206b4a43f87dc0e47657059683310ba2'
 }
 $portableFiles = @(
-    'Start-Honeymoon.cmd', 'Start-Server.cmd', 'Start-Tailscale.cmd', 'Start-Internet.cmd',
+    'Start-Lilium-Moonlight.cmd', 'Start-Honeymoon.cmd', 'Start-Server.cmd', 'Start-Tailscale.cmd', 'Start-Internet.cmd',
     'Launch-Honeymoon.mjs', 'single-instance.mjs', 'Transfer-Honeymoon.mjs', 'Install-Honeymoon.ps1',
     'MIGRATION.md', 'ЧИТАЙ-МЕНЯ.txt', 'Review-PlayerNetwork.mjs', 'Watch-PlayerNetwork.mjs', 'solo-cache.mjs'
 )
@@ -168,7 +168,12 @@ try {
         if (![IO.File]::Exists((Join-Path $staging $required))) { throw "Missing installation file: $required" }
     }
     [IO.Directory]::Move($staging, $Destination)
-    Write-Host "Installed at $Destination. Run Start-Honeymoon.cmd there."
+    $launcher = if (Test-Path -LiteralPath (Join-Path $Destination 'Start-Lilium-Moonlight.cmd')) {
+        'Start-Lilium-Moonlight.cmd'
+    } else {
+        'Start-Honeymoon.cmd'
+    }
+    Write-Host "Lilium Moonlight installed at $Destination. Run $launcher there."
 } catch {
     if ([IO.Directory]::Exists($staging)) { Write-Warning "The incomplete staging directory remains at $staging" }
     throw

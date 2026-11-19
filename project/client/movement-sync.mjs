@@ -81,7 +81,7 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     lastProgress=now();
     failures=0;
     report.recover('movement');
-    onAck?.(lastPose);
+    onAck?.(lastPose,state);
     return true;
   }
 

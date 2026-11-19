@@ -23,7 +23,7 @@ function bumpBuildNumber(project) {
   const html = readFileSync(file, 'utf8');
   const current = Number(buildMarker.exec(html)?.[2]);
   if (!Number.isSafeInteger(current) || current >= Number.MAX_SAFE_INTEGER) {
-    throw new Error('Missing or invalid Honeymoon build number.');
+    throw new Error('Missing or invalid Lilium Moonlight build number.');
   }
   const next = current + 1;
   const temporary = file + '.' + randomUUID() + '.tmp';
@@ -41,5 +41,5 @@ function bumpBuildNumber(project) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  console.log('Honeymoon build ' + bumpBuildNumber(process.argv[2] ? resolve(process.argv[2]) : projectRoot));
+  console.log('Lilium Moonlight build ' + bumpBuildNumber(process.argv[2] ? resolve(process.argv[2]) : projectRoot));
 }

@@ -1,0 +1,61 @@
+.hud-item-slots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  --hud-hand-scale: clamp(1.15px, calc(100vw / 212), 2.5px);
+}
+
+#touch-swap-hands {
+  position: absolute;
+  z-index: 3;
+  top: max(.5rem, env(safe-area-inset-top));
+  left: calc(max(.5rem, env(safe-area-inset-left)) + 49px);
+}
+
+.hud-item-slots:has(#hud-offhand:not([hidden])) #hotbar { --gui-px: var(--hud-hand-scale); }
+#hud-offhand:not([hidden]) {
+  --gui-px: var(--hud-hand-scale);
+  --slot-size: calc(16 * var(--gui-px));
+  display: grid;
+  place-items: center;
+  width: calc(22 * var(--gui-px));
+  height: calc(22 * var(--gui-px));
+  background: #8ab6c6;
+  box-shadow: inset 0 0 0 1px #cde6ed, inset 0 0 0 3px #6095af;
+  border: 2px solid #abd3dd;
+}
+
+#hud-offhand .offhand-slot { width: 100%; height: 100%; padding: 12%; }
+#hud-offhand .offhand-slot:hover { background: #dff5ff35; }
+#hud-offhand .offhand-slot:focus-visible { outline-offset: 0; }
+.offhand-slot.offhand-empty::after {
+  content: '⇄';
+  color: #305368;
+  font: 700 calc(10 * var(--gui-px)) / 1 system-ui, sans-serif;
+  opacity: .7;
+}
+
+#inventory-offhand {
+  position: absolute;
+  left: calc(87 * var(--gui-px));
+  top: calc(22.5 * var(--gui-px));
+  background: #99b9cc;
+  box-shadow: inset 1px 1px #4f6d85, inset -1px -1px #e8f5fc;
+}
+
+.inventory-only #creative-inventory:has(#inventory-offhand:not([hidden])) #inventory-edit {
+  left: calc(109 * var(--gui-px));
+  width: calc(76 * var(--gui-px));
+}
+
+@media (orientation: landscape) and (max-height: 460px) {
+  .touch .hud-item-slots { --hud-hand-scale: clamp(1.25px, 4dvh / 6, 1.85px); }
+}
+
+@media (orientation: portrait) {
+  .touch #hud-offhand:not([hidden]) { border-radius: .45rem; }
+  .touch:not(.hotbar-expanded) #hud-offhand:not([hidden]) {
+    width: 44px;
+    height: 44px;
+  }
+}

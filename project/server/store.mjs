@@ -100,7 +100,7 @@ function migrate(db) {
   if (readVersion.get().user_version === SCHEMA_VERSION) return;
   transaction(db, () => {
     const version = readVersion.get().user_version;
-    if (version > SCHEMA_VERSION) throw new Error(`Save schema ${version} requires a newer Honeymoon server.`);
+    if (version > SCHEMA_VERSION) throw new Error(`Save schema ${version} requires a newer Lilium Moonlight server.`);
     if (version === SCHEMA_VERSION) return;
     if (version === 0) db.exec(initialSchema);
     if (version < 2) {

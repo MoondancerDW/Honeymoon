@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createInventory,inventoryInput} from './inventory.mjs';
 import {bucketKeys} from '../world/fluid-state.mjs';
+import {offhandSlot} from '../world/item-stack.mjs';
+import {offhandAppearance} from '../world/item-appearance.mjs';
+import {heldLightLevel} from '../world/held-light.mjs';
 
 test('older inventories gain equipment and armor only moves to the matching slot',()=>{
   const helmet = 'creative:306:0', leggings = 'creative:308:0', stone = 'legacy:1:0';
@@ -25,7 +28,39 @@ test('older inventories gain equipment and armor only moves to the matching slot
   assert.equal(inventory.read(player).equipment[0],null);
   assert.equal(inventory.take(player,{key:leggings,count:1}).stack.key,leggings);
   assert.equal(inventory.read(player).slots[0].count,2);
-  assert.throws(()=>inventoryInput({type:'drop_item',slot:40,yaw:0},{}),error=>error.code === 'invalid_drop');
+  assert.throws(()=>inventoryInput({type:'drop_item',slot:offhandSlot+1,yaw:0},{}),error=>error.code === 'invalid_drop');
+});
+
+test('the second hand stores full stacks and hides access when the player loses the horn',()=>{
+  const torch={key:'legacy:50:0',cell:'legacy:50:0',count:32};
+  const book={key:'creative:387:0',count:1,damage:2,nbt:{pages:['Текст'],title:'Журнал',author:'Пони'}};
+  let value={slots:Array(36).fill(null),selected:3};
+  value.slots[3]=book;
+  value.slots[12]=torch;
+  let horn = false;
+  const store = {getState:()=>({value:structuredClone(value)}),
+    putState(_module,_player,_record,_version,state) { value=structuredClone(state); }};
+  const inventory=createInventory(store,new Set(),new Map(),{canOffhand:()=>horn});
+  const move={type:'inventory_move',from:12,to:offhandSlot};
+  const swap={type:'inventory_swap_hands'};
+  assert.equal(inventory.read('pony').offhand,null);
+  assert.throws(()=>inventory.edit('pony',move),{code:'offhand_unavailable'});
+  assert.throws(()=>inventory.edit('pony',swap),{code:'offhand_unavailable'});
+  horn = true;
+  const equipped=inventory.edit('pony',move);
+  assert.deepEqual(equipped.offhand,torch);
+  assert.equal(heldLightLevel(offhandAppearance(equipped.offhand)),14);
+  assert.equal(equipped.slots[12],null);
+  const swapped=inventory.edit('pony',swap);
+  assert.equal(swapped.selected,3);
+  assert.deepEqual(swapped.slots[3],torch);
+  assert.deepEqual(swapped.offhand,book);
+  horn = false;
+  assert.throws(()=>inventory.take('pony',{slot:offhandSlot,all:true}),{code:'offhand_unavailable'});
+  assert.throws(()=>inventory.edit('pony',{type:'inventory_trash',slot:offhandSlot}),{code:'offhand_unavailable'});
+  assert.deepEqual(inventory.read('pony').offhand,book);
+  horn = true;
+  assert.deepEqual(inventory.edit('pony',swap).slots[3],book);
 });
 
 test('filling a bucket preserves the remaining empty buckets and rejects a full inventory atomically',()=>{
