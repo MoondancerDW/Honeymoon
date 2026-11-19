@@ -7,7 +7,7 @@
   background: var(--glass);
   touch-action: manipulation;
 }
-.icon-button[hidden], #chat-header[hidden], #chat-unread[hidden], #fullscreen-help[hidden] { display: none; }
+.icon-button[hidden], #chat-header[hidden], #chat-unread[hidden] { display: none; }
 .fullscreen-toggle {
   position: absolute;
   z-index: 5;
@@ -34,6 +34,22 @@
 #game:not(.touch).playing #connection-metrics { margin-right: 3rem; }
 #game:not(.touch).paused .top { right: calc(max(1rem, env(safe-area-inset-right)) + 3rem); }
 #game:has(dialog[open]) .fullscreen-toggle, #game:has(#chat.expanded) .fullscreen-toggle { visibility: hidden; }
+#fullscreen-help {
+  width: min(24rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 1.1rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: .7rem;
+  background: #1d2e37;
+  color: inherit;
+}
+#fullscreen-help::backdrop { background: #0c151cb0; }
+#fullscreen-help h2 { margin: 0; font-size: 1.2rem; }
+#fullscreen-help p { line-height: 1.45; }
+#fullscreen-help form { display: flex; justify-content: flex-end; }
+#fullscreen-help button { min-height: 44px; }
 
 #chat-header:not([hidden]) {
   display: flex;
@@ -222,7 +238,6 @@
 }
 #mobile-settings .tools .audio-menu-controls { align-items: stretch; }
 .touch #audio-mute-toggle { flex-basis: 44px; width: 44px; }
-#fullscreen-help { font-size: .82rem; margin: .35rem 0; }
 #game.touch.paused .pause-inventory button { min-height: 44px; }
 #game.touch.paused #npc-editor-toggle:disabled { display: none; }
 

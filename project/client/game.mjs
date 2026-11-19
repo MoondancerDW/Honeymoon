@@ -43,8 +43,9 @@ import {createConnectionStatus} from './connection-status.mjs';
 import {connectionFailure,createConnectionReport} from './connection-report.mjs';
 import {createPlayerDiagnostics} from './player-diagnostics.mjs';
 import {createTerrainNetwork} from './terrain-network.mjs';
-import {pruneTerrainCache,readTerrain} from './terrain-cache.mjs';
-import {createWorldCheckpoint} from './world-checkpoint.mjs';
+import {configureTerrainCache,readTerrain,terrainCacheUsage} from './terrain-cache.mjs';
+import {createTerrainPreload} from './terrain-preload.mjs';
+import {createWorldCheckpoint,worldCheckpointUsage} from './world-checkpoint.mjs';
 
 const element = id => document.getElementById(id);
 const game = element('game');
@@ -72,17 +73,19 @@ const signFields = [...element('sign-form').querySelectorAll('input')];
 const signStatus = element('sign-status');
 const signSave = element('sign-save');
 const audioSettings = element('audio-settings');
+const fullscreenHelp=element('fullscreen-help');
 const teleportLoading = element('teleport-loading');
 const keys = new Set();
 const movementKeys=new Set(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowLeft','ArrowDown','ArrowRight']);
 const touchMode = matchMedia('(pointer: coarse)').matches;
 const detailPreference=touchMode?'honeymoon-touch-detail-distance':'honeymoon-detail-distance';
 const lowDevicePreference='honeymoon-low-device';
+const altitudeBuild=Number(document.querySelector('meta[name="honeymoon-build"]').content);
 const heading = {yaw: 0, pitch: -.045};
 let orbitHeading = null, orbitReturn = 0;
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
-let worldCheckpoint;
+let worldCheckpoint, terrainPreload;
 let heldPart = null, heldPonyPart, partRotation = 0, placement = null, placementKey = '';
 let heldSofa = null, sofaTurns = 0;
 let chiseling = false, chiselMaterial = null, chiselSize = 1;
@@ -259,7 +262,7 @@ const creative = createCreativeMenu({load:loadCreative,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
 const soloDownloadUi=createSoloDownloadUi({element});
 let soloStreaming=false, unavailableSoloTerrainUntil=0, switchingSoloWorld=false;
-const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open || audioSettings?.open ||
+const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open || audioSettings?.open || fullscreenHelp.open ||
   itemDocuments.isOpen() || storage.isOpen() || npcUi.isOpen() || modeUi.isOpen() || adminUi.isOpen() ||
   soloDownloadUi.isOpen() || switchingSoloWorld;
 
@@ -1708,6 +1711,33 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 
+function bindCacheStatus() {
+  if (!worldCheckpoint) return;
+  const output=element('game-cache-usage');
+  const numbers=new Intl.NumberFormat('ru',{maximumFractionDigits:1});
+  const size=bytes=>numbers.format(bytes/1024/1024);
+  output.hidden=false;
+  let pending=false;
+  async function update() {
+    if (pending || !game.classList.contains('paused')) return;
+    pending=true;
+    try {
+      const [terrain,edits]=await Promise.all([terrainCacheUsage(),worldCheckpointUsage()]);
+      const job=terrainPreload?.status();
+      const detail=job?.phase==='loading'? ` · загрузка карты ${job.loaded}/${job.total}` :
+        job?.phase==='storage'?' · не хватает места':'';
+      const summary=terrain&&edits ?
+        `Кэш игры · ${size(terrain.bytes+edits.bytes)} из ${size(terrain.maxBytes+edits.maxBytes)} МиБ${detail}` :
+        'Кэш игры · недоступен';
+      if (summary!==output.textContent) output.textContent=summary;
+    } finally {
+      pending=false;
+    }
+  }
+  new MutationObserver(()=>void update()).observe(game,{attributes:true,attributeFilter:['class']});
+  setInterval(()=>void update(),2500);
+}
+
 function bindControls() {
   const canvas = view.renderer.domElement;
   const pickUpNearbyItem = () => {
@@ -1996,11 +2026,15 @@ function bindControls() {
     detail.disabled=view.farTerrain?.lod.maxDistance!==32 || view.lowDevice;
   };
   paintLowDevice();
+  bindCacheStatus();
   lowDevice.addEventListener('click',async()=>{
     lowDevice.disabled=true;
     try {
-      await view.setLowDevice(!view.lowDevice);
-      localStorage.setItem(lowDevicePreference,view.lowDevice?'1':'0');
+      const enabled=!view.lowDevice;
+      localStorage.setItem(lowDevicePreference,enabled?'1':'0');
+      const budget=worldCheckpoint ? configureTerrainCache({mobile:touchMode,lowDevice:enabled,altitudeBuild})
+        .then(()=>terrainPreload?.setMode(enabled)) : undefined;
+      await Promise.all([view.setLowDevice(enabled),budget]);
       nearbyStream?.update();
     } catch (error) {notice(error.message);}
     finally {paintLowDevice(); lowDevice.disabled=false;}
@@ -2119,11 +2153,13 @@ async function addChunk([x, z], visualOnly = false, isNeeded, signal, highOnly=f
   const directory = version ? `/generated/world/chunks/${version}` : '/generated/world/chunks';
   metrics.lastChunk=[x,z,highOnly];
   const url=`${directory}/${x}.${z}.json${highOnly ? '?height=upper' : ''}`;
-  const chunk = await readTerrain(url,{signal,priority:urgent?'high':'low'},Boolean(worldCheckpoint),async response=>{
-    const data=await readJson(url,response);
-    if (data?.x!==x || data.z!==z || !Array.isArray(data.sections)) throw new Error('Invalid terrain chunk');
-    return data;
-  });
+  const chunk = highOnly && world.manifest.upperChunksEmpty
+    ? {x,z,sections:[],palette:['air'],objects:[],entities:[],highOnly:true}
+    : await readTerrain(url,{signal,priority:urgent?'high':'low'},Boolean(worldCheckpoint),async response=>{
+      const data=await readJson(url,response);
+      if (data?.x!==x || data.z!==z || !Array.isArray(data.sections)) throw new Error('Invalid terrain chunk');
+      return data;
+    });
   if (isNeeded && !isNeeded()) return;
   if (highOnly && world.chunks.has(chunkKey(x,z))) return;
   view.addChunk(world.addChunk(chunk, visualOnly));
@@ -2204,7 +2240,8 @@ function streamNearby(scenery) {
       updateArea();
       const now = performance.now();
       const available = ({key}) => !ready(key) && (retryAt.get(key) ?? 0) <= now;
-      const next = planned.find(entry => !inFlight.has(entry.key) && available(entry));
+      const preloadFirst=touchMode && terrainPreload?.prioritizing();
+      const next = planned.find(entry => (!preloadFirst || entry.distance<=2) && !inFlight.has(entry.key) && available(entry));
       terrainNetwork.urgent = planned.some(entry => entry.distance <= 2 && available(entry));
       if (!next || terrainNetwork.constrained(now) &&
           (inFlight.size > 0 || next.distance > 2 && now - lastBackgroundRequest < 200)) {
@@ -2298,9 +2335,10 @@ async function start() {
   social.setAdmin(sessionBody.access?.role==='admin');
   if (sessionBody.access?.role==='admin') npcUi.setAccess(true);
   const manifest = await json('/generated/world/world.json');
+  const lowDevice=localStorage.getItem(lowDevicePreference)==='1';
   if (!sessionBody.access?.singlePlayer && manifest.chunkCacheVersion) {
+    await configureTerrainCache({mobile:touchMode,lowDevice,altitudeBuild});
     worldCheckpoint=createWorldCheckpoint(manifest.chunkCacheVersion);
-    void pruneTerrainCache();
   }
   creativeAvailable = session.body.creative;
   profile.initialize(session.body.profile);
@@ -2320,7 +2358,7 @@ async function start() {
   crawlRequested = movement.stance === 'crawl';
   touchCrouching = touchMode && movement.stance === 'crouch';
   view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
-    lowDevice:localStorage.getItem(lowDevicePreference)==='1',terrainNetwork,persistentTerrain:Boolean(worldCheckpoint)});
+    lowDevice,terrainNetwork,persistentTerrain:Boolean(worldCheckpoint),altitudeBuild});
   modeUi.update(session.body.gameMode);
   view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
@@ -2356,6 +2394,7 @@ async function start() {
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
       revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
+      terrainPreload:terrainPreload?.status(),
       terrainNetwork:terrainNetwork.status(),
       flying, spectator, autoMovement, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
       movementSync: {...positionMetrics,...movementSync.inspect(),queued:positionTrail.length,confirmed:movementSync.inspect().pos},
@@ -2393,6 +2432,11 @@ async function start() {
   button.disabled = false;
   const horizon = farSupported ? view.setDetailedLodDistance(Number(distance.value)) : view.setDistance(4);
   horizon.catch(console.error);
+  if (worldCheckpoint && (manifest.vista || manifest.lod)) {
+    terrainPreload=createTerrainPreload({manifest,build:altitudeBuild,mobile:touchMode,
+      backgroundBusy:()=>document.hidden || terrainNetwork.urgent || terrainNetwork.constrained()});
+    terrainPreload.setMode(lowDevice);
+  }
   if (manifest.chunkPalettes) nearbyStream = streamNearby(manifest.visualChunks ?? []);
   const pending = nearbyStream?.done ?? streamChunks(manifest.chunks.filter(chunk => !buffered.includes(chunk)), manifest.visualChunks ?? []);
   pending.catch(console.error);

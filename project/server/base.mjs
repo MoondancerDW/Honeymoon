@@ -144,6 +144,7 @@ export function loadBase(directory, {cleanSnow = true, partial} = {}) {
   const cleanup = cleanSnow ? loadSnowCleanup(directory,originalHash) : null;
   const hash = cleanup?.hash ?? originalHash;
   const publicManifest = publicWorld({...manifest,bounds}, hash);
+  if (!partial && manifest.bounds.maxY<256) publicManifest.upperChunksEmpty=true;
   if (fullDetail) {
     publicManifest.fullChunks=fullDetail.descriptor;
     publicManifest.fullWorldPlayable=true;

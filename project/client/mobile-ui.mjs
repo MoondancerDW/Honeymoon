@@ -4,19 +4,40 @@ const fullscreen = byId('fullscreen-toggle');
 const fullscreenHelp = byId('fullscreen-help');
 const root = document.documentElement;
 const standalone = matchMedia('(display-mode: standalone)');
+const touchFullscreen = matchMedia('(pointer: coarse)').matches;
+const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
 const isFullscreen = () => Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+const fullscreenMethod = () => (document.fullscreenEnabled && root.requestFullscreen) ||
+  (document.webkitFullscreenEnabled && root.webkitRequestFullscreen);
 
-if (matchMedia('(pointer: coarse)').matches) byId('touch-pause').before(fullscreen);
+if (touchFullscreen) byId('touch-pause').before(fullscreen);
+if (ios) {
+  byId('fullscreen-help-instructions').textContent =
+    'В Safari нажмите «Поделиться», выберите «На экран „Домой“» и включите «Открывать как веб-приложение». Затем запустите Honeymoon с экрана «Домой».';
+}
 
 function updateFullscreen() {
   const active = isFullscreen();
-  const supported = Boolean(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+  const supported = typeof fullscreenMethod() === 'function';
   const installed = standalone.matches || navigator.standalone === true;
-  fullscreen.hidden = !active && (!supported || installed);
-  fullscreenHelp.hidden = active || supported || installed;
-  fullscreen.setAttribute('aria-pressed', String(active));
+  const opensHelp = !active && !supported && touchFullscreen;
+  fullscreen.hidden = !active && (installed || (!supported && !opensHelp));
+  if (opensHelp) {
+    fullscreen.removeAttribute('aria-pressed');
+    fullscreen.setAttribute('aria-haspopup','dialog');
+    fullscreen.setAttribute('aria-controls',fullscreenHelp.id);
+  } else {
+    fullscreen.setAttribute('aria-pressed',String(active));
+    fullscreen.removeAttribute('aria-haspopup');
+    fullscreen.removeAttribute('aria-controls');
+  }
   fullscreen.setAttribute('aria-label', active ? 'Выйти из полного экрана' : 'На весь экран');
   fullscreen.title = fullscreen.getAttribute('aria-label');
+}
+
+function showFullscreenHelp() {
+  if (!fullscreenHelp.open) fullscreenHelp.showModal();
 }
 
 fullscreen.addEventListener('click', async () => {
@@ -25,13 +46,16 @@ fullscreen.addEventListener('click', async () => {
       const exit = document.exitFullscreen ?? document.webkitExitFullscreen;
       await exit?.call(document);
     } else {
-      const enter = root.requestFullscreen ?? root.webkitRequestFullscreen;
-      await enter?.call(root);
+      const enter = fullscreenMethod();
+      if (typeof enter === 'function') await enter.call(root);
+      else showFullscreenHelp();
     }
   } catch {
-    fullscreenHelp.hidden = false;
+    showFullscreenHelp();
   }
 });
+fullscreenHelp.addEventListener('keydown',event=>event.stopPropagation());
+fullscreenHelp.addEventListener('close',()=>fullscreen.focus({preventScroll:true}));
 for (const event of ['fullscreenchange','webkitfullscreenchange']) document.addEventListener(event,updateFullscreen);
 standalone.addEventListener?.('change',updateFullscreen);
 updateFullscreen();

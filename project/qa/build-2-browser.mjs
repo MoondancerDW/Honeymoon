@@ -13,16 +13,18 @@ const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 2);
 const output=resolve(outputArg);
 await mkdir(output,{recursive:true});
 const solo=test==='solo';
+const iphoneQa=test==='iphone-fullscreen';
+const preloadQa=test==='terrain-preload-mobile'||test==='terrain-preload-desktop';
 const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
 const controlsQa=test==='controls-update'||test==='controls-update-mobile';
-const mobileQa=['mobile','online-cache-mobile','controls-update-mobile'].includes(test);
+const mobileQa=iphoneQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
 const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
-  ...(onlineCacheQa&&{inviteRequired:true,ownerOnPrimary:true}),
+  ...((onlineCacheQa||preloadQa)&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
 app.server.listen(0,'127.0.0.1');
 await once(app.server,'listening');
@@ -32,7 +34,7 @@ const browser=await chromium.launch({channel:'msedge',args:['--enable-unsafe-swi
 const page=await browser.newPage({
   ...(mobileQa?{viewport:{width:390,height:730},isMobile:true,hasTouch:true}:{viewport:{width:1000,height:640}}),
   deviceScaleFactor:1,
-  ...(onlineCacheQa&&{serviceWorkers:'block'}),
+  ...((onlineCacheQa||preloadQa||iphoneQa)&&{serviceWorkers:'block'}),
 });
 page.on('pageerror',error=>result.errors.push(error.message));
 page.on('console',message=>{
@@ -50,6 +52,7 @@ const click=selector=>page.locator(selector).click({timeout:15000});
 const visible=selector=>page.locator(selector).isVisible();
 const shot=name=>page.screenshot({path:join(output,name+'.png'),timeout:15_000});
 const ready=()=>page.waitForFunction(()=>globalThis.honeymoon?.stats().playable>0,undefined,{timeout:90_000});
+const skipPreload=()=>page.context().route(/\/api\/terrain-preload\?/,route=>route.fulfill({status:409}));
 async function start(admin=!solo) {
   if (admin) {
     const response=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка игры'}});
@@ -77,7 +80,123 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (controlsQa) {
+  if (iphoneQa) {
+    await skipPreload();
+    await page.addInitScript(()=>{
+      Object.defineProperties(document,{fullscreenEnabled:{value:false},webkitFullscreenEnabled:{value:false}});
+      Object.defineProperties(navigator,{platform:{value:'iPhone'},userAgent:{value:'Mozilla/5.0 (iPhone) Safari/605.1.15'}});
+    });
+    await start();
+    const fullscreen=page.locator('#touch #fullscreen-toggle');
+    const dialog=page.locator('#fullscreen-help');
+    for (const [width,height] of [[390,730],[800,370]]) {
+      await page.setViewportSize({width,height});
+      assert.ok(await fullscreen.isVisible());
+      assert.equal(await fullscreen.getAttribute('aria-haspopup'),'dialog');
+      await fullscreen.tap();
+      await dialog.waitFor({state:'visible'});
+      assert.match(await dialog.locator('#fullscreen-help-instructions').textContent(),/Поделиться.*На экран.*веб-приложение/);
+      assert.equal(await page.locator('#game').evaluate(game=>game.classList.contains('playing')&&!game.classList.contains('paused')),true);
+      await shot('iphone-fullscreen-'+width);
+      await dialog.getByRole('button',{name:'Понятно'}).tap();
+      await dialog.waitFor({state:'hidden'});
+      assert.equal(await fullscreen.evaluate(button=>document.activeElement===button),true);
+    }
+    result.checks.push({iphoneFullscreenFallback:true});
+  } else if (preloadQa) {
+    const requests=[];
+    app.server.on('request',request=>{
+      const address=new URL(request.url,url);
+      if (address.pathname==='/api/terrain-preload') requests.push(address.searchParams.get('layer'));
+    });
+    await start();
+    const response=await page.request.get(url+'generated/world/world.json');
+    assert.equal(response.status(),200);
+    const manifest=await response.json();
+    assert.equal(manifest.upperChunksEmpty,true);
+    const expected={altitude:4,primitive:manifest.lod.regions.length,vista:manifest.vista.regions.length,
+      ...(mobileQa?{}:{simplified:manifest.lod.regions.length})};
+    const expectedTotal=Object.values(expected).reduce((total,count)=>total+count,0);
+    const readyPreload=()=>page.waitForFunction(()=>honeymoon.stats().terrainPreload?.phase==='ready',
+      undefined,{polling:250,timeout:120_000});
+    const usage=()=>page.evaluate(async()=>{
+      const {terrainCacheUsage}=await import('/terrain-cache.mjs');
+      const {worldCheckpointUsage}=await import('/world-checkpoint.mjs');
+      return {terrain:await terrainCacheUsage(),edits:await worldCheckpointUsage()};
+    });
+    const MiB=1024*1024;
+    const normalCap=mobileQa?782:2462, lowCap=mobileQa?300:512;
+    await readyPreload();
+    const preload=(await stat()).terrainPreload;
+    assert.equal(preload.loaded,expectedTotal);
+    const cold=await usage();
+    for (const [layer,count] of Object.entries(expected)) assert.equal(cold.terrain.buckets[layer].entries,count,layer);
+    assert.equal(cold.terrain.buckets.detailed.maxBytes,(mobileQa?512:2048)*MiB);
+    assert.equal(cold.terrain.buckets.simplified.maxBytes,(mobileQa?80:224)*MiB);
+    assert.equal(cold.edits.maxBytes,64*MiB);
+    assert.ok(requests.includes('primitive')&&requests.includes('vista'));
+    assert.equal(requests.includes('simplified'),!mobileQa);
+    const firstRequestCount=requests.length;
+    await page.goto('about:blank');
+    await start(false);
+    await readyPreload();
+    assert.equal(requests.length,firstRequestCount,'a repeat visit reuses the prefetched layers');
+    if (mobileQa) {
+      await page.evaluate(async version=>{
+        const {storePrefetchedTerrain}=await import('/terrain-cache.mjs');
+        const tile=new Blob([new Uint8Array(45*1024*1024)]);
+        for (const n of [7000,7001]) {
+          if (!await storePrefetchedTerrain(`/generated/world/chunks/${version}/${n}.${n}.json`,tile)) {
+            throw new Error('Could not seed the detailed cache');
+          }
+        }
+      },manifest.chunkCacheVersion);
+      assert.ok((await usage()).terrain.buckets.detailed.bytes>=90*MiB);
+      await page.locator('#touch-pause').tap();
+      await page.locator('[data-pause-section="settings"]').tap();
+    } else {
+      await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+      await page.keyboard.press('Escape');
+    }
+    const output=page.locator('#game-cache-usage');
+    await output.waitFor({state:'visible'});
+    const expectLimit=limit=>page.waitForFunction(limit=>
+      document.getElementById('game-cache-usage').textContent.replace(/\s+/g,'').includes(`из${limit}МиБ`),limit);
+    await expectLimit(normalCap);
+    await click('#low-device');
+    await expectLimit(lowCap);
+    const pruned=await usage();
+    assert.equal(pruned.terrain.maxBytes+pruned.edits.maxBytes,lowCap*MiB);
+    assert.ok(pruned.terrain.bytes+pruned.edits.bytes<=lowCap*MiB);
+    assert.ok(pruned.terrain.buckets.detailed.bytes<=(mobileQa?76:226)*MiB);
+    for (const layer of ['altitude','primitive','vista']) assert.equal(pruned.terrain.buckets[layer].entries,expected[layer]);
+    await shot('terrain-cache-limit');
+    await click('#low-device');
+    await expectLimit(normalCap);
+    const restored=await usage();
+    assert.equal(restored.terrain.maxBytes+restored.edits.maxBytes,normalCap*MiB);
+    result.checks.push({preload,requests:firstRequestCount,hadWarmCache:true,normalCap,lowCap,cold,pruned,restored});
+  } else if (test==='upper-with-cache') {
+    await skipPreload();
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка верхних чанков'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await owner.json();
+    const upperRequests=[];
+    page.on('request',request=>{
+      if (new URL(request.url()).searchParams.get('height')==='upper') upperRequests.push(request.url());
+    });
+    const marker={x:-1101,y:329,z:-501,cell:'legacy:1:0',object:null};
+    app.game.worldEdit.write(playerId,[marker]);
+    await start(false);
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-1100.5,340,-500.5);
+    await page.waitForFunction(({x,y,z,cell})=>honeymoon.stats().overviewVisible&&honeymoon.getCell(x,y,z)===cell,
+      marker,{timeout:30000});
+    assert.deepEqual(upperRequests,[]);
+    result.checks.push({marker,upperRequests:upperRequests.length,overviewVisible:true});
+    await shot('upper-with-cache');
+  } else if (controlsQa) {
     await start();
     if (mobileQa) {
       const fullscreen=page.locator('#touch #fullscreen-toggle');
@@ -177,6 +296,7 @@ try {
     assert.equal(await visible('#death-screen'),false);
     result.checks.push({interval,particles,respawn:respawn.position});
   } else if (onlineCacheQa) {
+    await skipPreload();
     const cdp=await page.context().newCDPSession(page);
     await cdp.send('Network.enable');
     await cdp.send('Network.setCacheDisabled',{cacheDisabled:true});
@@ -255,11 +375,8 @@ try {
     const downloadedWarmChunks=chunkRequests.length;
     const spawnPath=chunkPaths.find(path=>path.endsWith(currentChunk));
     const recoveredChunk=await page.evaluate(async path=>{
-      const {createPersistentCache}=await import('/persistent-cache.mjs');
-      const {readTerrain}=await import('/terrain-cache.mjs');
-      const terrain=createPersistentCache({name:'honeymoon-terrain-v1',maxBytes:160*1024*1024,
-        maxEntries:2400,maxAgeMs:45*24*60*60_000});
-      if (!await terrain.put(path,new Blob(['corrupt']))) throw new Error('Could not write the cache fixture');
+      const {readTerrain,storePrefetchedTerrain}=await import('/terrain-cache.mjs');
+      if (!await storePrefetchedTerrain(path,new Blob(['corrupt']))) throw new Error('Could not write the cache fixture');
       return readTerrain(path,{},true,response=>response.json());
     },spawnPath);
     assert.deepEqual([recoveredChunk.x,recoveredChunk.z],[x>>4,z>>4]);

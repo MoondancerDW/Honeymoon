@@ -1,6 +1,8 @@
 import * as THREE from '/vendor/three/three.module.js';
 import map from './altitude-map-data.mjs';
 import {shapeFor} from '../world/geometry.mjs';
+import {altitudeAssetUrl,altitudeLandmarkPayload,loadAltitudeImage} from './altitude-assets.mjs';
+import {readTerrain} from './terrain-cache.mjs';
 
 const highOverlayDistance=2304;
 const detailFadeDistance=384;
@@ -29,9 +31,10 @@ export class AltitudeOverview {
     if (!this.supported || this.mesh || now<(this.retryAt ?? 0)) return;
     const images=new THREE.ImageLoader();
     const colorLoader=new THREE.TextureLoader();
+    const load=(path,loader)=>loadAltitudeImage(path,this.display.altitudeBuild,this.display.persistentTerrain,loader);
     void this.loadLandmarks();
     // Keep the assets independent of the active chunk and scenery downloads.
-    this.loading=Promise.allSettled([images.loadAsync('/altitude-heights.png'),colorLoader.loadAsync('/altitude-colors.webp')]).then(results=>{
+    this.loading=Promise.allSettled([load('/altitude-heights.png',images),load('/altitude-colors.webp',colorLoader)]).then(results=>{
       const [height,color]=results;
       if (height.status!=='fulfilled' || color.status!=='fulfilled') {
         if (color.status==='fulfilled') color.value.dispose();
@@ -39,7 +42,7 @@ export class AltitudeOverview {
       }
       this.build(height.value,color.value);
       if (map.detail && !this.display.lowDevice) {
-        colorLoader.loadAsync('/altitude-detail.webp').then(texture=>this.useDetailTexture(texture)).catch(error=>{
+        load('/altitude-detail.webp',colorLoader).then(texture=>this.useDetailTexture(texture)).catch(error=>{
           console.warn('Nearby altitude map detail could not be loaded',error);
         });
       }
@@ -54,7 +57,13 @@ export class AltitudeOverview {
     if (this.landmarkLoading || this.landmarks) return;
     this.landmarkLoading=true;
     try {
-      const {default:packed}=await import('./altitude-landmark-data.mjs');
+      const url=altitudeAssetUrl('/altitude-landmark-data.mjs',this.display.altitudeBuild);
+      const packed=this.display.persistentTerrain
+        ? await readTerrain(url,{priority:'low'},true,async response=>{
+          if (!response.ok) throw new Error('Altitude landmarks returned '+response.status);
+          return altitudeLandmarkPayload(await response.text());
+        })
+        : (await import('./altitude-landmark-data.mjs')).default;
       const compressed=Uint8Array.from(atob(packed),value=>value.charCodeAt(0));
       const stream=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
       const groups=await new Response(stream).json();

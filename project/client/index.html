@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
-  <meta name="honeymoon-build" content="16">
+  <meta name="honeymoon-build" content="17">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -25,6 +25,11 @@
     <div id="scene"></div>
     <button id="altitude-map-back" type="button" hidden>Вернуться</button>
     <button id="fullscreen-toggle" class="icon-button fullscreen-toggle" type="button" aria-label="На весь экран" title="На весь экран" aria-pressed="false" hidden><i aria-hidden="true"></i></button>
+    <dialog id="fullscreen-help" aria-labelledby="fullscreen-help-title" aria-describedby="fullscreen-help-instructions">
+      <h2 id="fullscreen-help-title">Игра без строки адреса</h2>
+      <p id="fullscreen-help-instructions">В меню браузера выберите «Установить приложение» или «Добавить на главный экран». Затем запустите Honeymoon с новой иконки.</p>
+      <form method="dialog"><button type="submit" autofocus>Понятно</button></form>
+    </dialog>
     <section id="access-gate" aria-labelledby="access-title" hidden>
       <form id="access-form">
         <h1 id="access-title">Вход в Honeymoon</h1>
@@ -75,6 +80,7 @@
         </div>
         <button id="night-vision" type="button" aria-pressed="false">Ночное зрение выкл.</button>
         <button id="low-device" type="button" aria-pressed="false">Слабое устройство: выкл.</button>
+        <output id="game-cache-usage" class="cache-usage" title="Данные рельефа и правок мира на устройстве" hidden>Кэш игры</output>
         <button id="self-mode-toggle" type="button" title="Переключить режим для себя" hidden>Режим: Игровой</button>
         <label class="distance" for="weather">Погода
           <select id="weather" disabled>
@@ -118,7 +124,6 @@
         <section id="mobile-settings" class="mobile-pause-section" aria-label="Настройки" hidden>
           <label><input id="show-coordinates" type="checkbox"> Координаты</label>
           <label><input id="show-metrics" type="checkbox"> FPS и пинг</label>
-          <p id="fullscreen-help" hidden>В меню браузера выберите «Добавить на главный экран» и откройте игру с новой иконки.</p>
         </section>
         <div class="pause-inventory">
           <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>

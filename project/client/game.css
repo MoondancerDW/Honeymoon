@@ -62,6 +62,7 @@ button:disabled { cursor: wait; opacity: .45; }
 .paused .tools > :not([hidden]) { display: inline-flex; }
 .playing .tools { padding: 0; border: 0; background: none; box-shadow: none; }
 .paused .tools { flex-wrap: wrap; justify-content: flex-end; }
+.cache-usage { align-items: center; padding: .3rem .55rem; color: var(--gold); font-variant-numeric: tabular-nums; }
 #connection-metrics {
   display: none; gap: .6rem; align-items: center; white-space: nowrap; font-variant-numeric: tabular-nums;
   background: #14242dcc; color: #edf2f1; padding: .35rem .5rem; border-radius: .38rem; font-size: .74rem;

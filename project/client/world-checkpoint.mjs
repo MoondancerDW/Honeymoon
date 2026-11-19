@@ -1,8 +1,10 @@
 import {createPersistentCache} from './persistent-cache.mjs';
 import {cellKey,json} from './world-data.mjs';
 
-const cache = createPersistentCache({name:'honeymoon-world-checkpoints-v1',maxBytes:12*1024*1024,maxEntries:4,
+const cache = createPersistentCache({name:'honeymoon-world-checkpoints-v1',maxBytes:64*1024*1024,maxEntries:4,
   maxAgeMs:30*24*60*60_000});
+
+export const worldCheckpointUsage=()=>cache.usage();
 
 function editMap(edits) {
   return new Map(edits.map(edit=>[cellKey(edit.x,edit.y,edit.z),edit]));

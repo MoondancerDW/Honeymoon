@@ -16,6 +16,7 @@ import { startNetworkProbe } from './network-probe.mjs';
 import {diagnosticPagePattern,diagnosticTracePattern,loadPlayerDiagnostics,parsePlayerDiagnostics,
   playerDiagnosticsBodyLimit} from './player-diagnostics.mjs';
 import {loadLodAssets,loadVistaAssets,serveClimateMap,serveLodTile,serveVistaTile} from './lod-assets.mjs';
+import { createTerrainPreload } from './terrain-prefetch.mjs';
 import { readCreativeCatalog } from './creative-catalog.mjs';
 import { createPresence, readPose } from './presence.mjs';
 import { MAX_PROFILE_BODY, profileChanges, publicProfile, savedSkinTraits } from './presence-profile.mjs';
@@ -313,6 +314,7 @@ export function createHoneymoonServer({
   const testNpcSource=testRange ? createTestRangeNpc(base) : undefined;
   const lod = !testRange && base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
   const vista = lod ? loadVistaAssets(generated) : null;
+  const terrainPreload = !singlePlayer && createTerrainPreload(lod,vista);
   const publicWorld = base.publicManifest ?? base.manifest;
   const chunkCacheVersion = createHash('sha256').update(JSON.stringify([
     CHUNK_CACHE_FORMAT, base.hash, publicWorld.fullChunks?.hash,
@@ -689,6 +691,10 @@ export function createHoneymoonServer({
         return json(response,200,legacyRoute?{...body,editor:true}:body,token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
       }
       if (!player) throw new RequestError(401, 'session_required');
+      if (terrainPreload && path==='/api/terrain-preload' && method==='GET') {
+        requireSameOrigin(request,requestSecure,requestOrigin);
+        return terrainPreload(response,url.searchParams,player);
+      }
       if (path==='/api/altitude-music' && (method==='GET' || method==='HEAD')) {
         requireSameOrigin(request,requestSecure,requestOrigin);
         const file=altitudeTrackFile();
