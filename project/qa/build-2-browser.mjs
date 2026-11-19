@@ -70,7 +70,65 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (test==='copy-corner') {
+  if (test==='hold-attack') {
+    const y=73, z=1467;
+    const blocks=Array.from({length:6},(_,i)=>3361+i).concat([3357,3358,3359]);
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка удержания ЛКМ'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await owner.json();
+    app.game.worldEdit.write(playerId,blocks.map(x=>({x,y,z,cell:'legacy:1:0',object:null})));
+    await start(false);
+    await hop(3360.5,72,1467.51);
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+    await page.mouse.move(500,320);
+    const aim=async (x,yaw)=>{
+      await page.evaluate(yaw=>honeymoon.look(yaw,0),yaw);
+      await page.waitForFunction(([x,y,z])=>{
+        const target=honeymoon.target();
+        return target?.x===x && target.y===y && target.z===z;
+      },[x,y,z]);
+    };
+    const removed=x=>page.waitForFunction(([x,y,z])=>!honeymoon.getCell(x,y,z),[x,y,z],{timeout:10000});
+    await aim(3361,-Math.PI/2);
+    await page.evaluate(()=>{
+      performance.clearResourceTimings();
+      performance.setResourceTimingBufferSize(2000);
+      globalThis.qaAttackInput=[];
+      for (const type of ['mousedown','mouseup']) document.addEventListener(type,event=>{
+        if (event.button===0) qaAttackInput.push({type,at:performance.now()});
+      },true);
+    });
+    const timing=()=>page.evaluate(()=>({
+      presses:qaAttackInput.filter(event=>event.type==='mousedown').map(event=>event.at),
+      releases:qaAttackInput.filter(event=>event.type==='mouseup').map(event=>event.at),
+      hits:performance.getEntriesByName(location.origin+'/api/action').map(entry=>entry.startTime)
+        .filter(start=>start>=qaAttackInput[0].at),
+    }));
+
+    await page.mouse.click(500,320);
+    await removed(3361);
+    await page.waitForTimeout(400);
+    assert.equal((await timing()).hits.length,1,'a short click sends exactly one attack');
+
+    await page.mouse.down();
+    try {
+      await removed(3364);
+    } finally {
+      await page.mouse.up();
+    }
+    await aim(3359,Math.PI/2);
+    await page.waitForTimeout(400);
+    const {presses,releases,hits}=await timing();
+    const [first,repeat]=hits.slice(1);
+    assert.ok(first-presses[1]<300,'the first held attack starts without the 300 ms delay');
+    assert.ok(repeat-presses[1]>=299,'the first repeat waits for the 300 ms hold');
+    assert.ok(hits.length>=4,'holding breaks at least three blocks after the initial click');
+    assert.ok(hits.every(time=>time<=releases[1]),'releasing stops attacks even when another block is targeted');
+    const repeatIntervalsMs=hits.slice(3).map((time,index)=>time-hits[index+2]);
+    result.checks.push({shortClickHits:1,heldHits:hits.length-1,firstHitMs:first-presses[1],
+      firstRepeatMs:repeat-presses[1],repeatIntervalsMs});
+    await shot('hold-attack');
+  } else if (test==='copy-corner') {
     await start();
     await hop(3360.5,72,1467.51);
     await page.waitForFunction(()=>Boolean(document.pointerLockElement));

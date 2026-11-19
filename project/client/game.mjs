@@ -162,6 +162,7 @@ const movementSync=createMovementSync({
 const positionTrail=movementSync.queued;
 let crouchUntil = 0;
 let hoofSwing = 0;
+let nextAttack = Infinity;
 let repeatPlacement = false, nextPlacement = 0, resumeOnEscape = false, resuming = false;
 let pointerReleasedAt = -Infinity;
 let touchControls;
@@ -172,6 +173,7 @@ const profile = new PlayerProfile({nickname:element('nickname'), skin:element('p
   clear:element('clear-skin'), label:element('player-name')}, notice);
 const accessUi=createAccessUi({element,post});
 const pause = () => {
+  nextAttack = Infinity;
   repeatPlacement = false;
   keys.clear();
   jump = false;
@@ -1329,10 +1331,11 @@ async function action(type, sneaking = false, tapTool = false) {
       acting=true;
       try {
         const result=await npcCommand(npcTarget.id,'attack');
-        if (!result.ok) notice(messages[result.body.error]??'Не удалось атаковать NPC');
-        else {
+        if (result.ok) {
           hoofSwing=(hoofSwing+1)&0x7fffffff;
           presenceDirty=true;
+        } else if (result.body.error!=='npc_attack_cooldown') {
+          notice(messages[result.body.error]??'Не удалось атаковать NPC');
         }
       } catch {notice('Связь с сервером прервалась');}
       finally {acting=false;}
@@ -1648,6 +1651,15 @@ function tick(now) {
   updateSelection();
   worldEdit.frame();
   updatePlacement(npcTarget||hitPlayer?null:selection);
+  if (nextAttack !== Infinity) {
+    if (!manualTravel || spectator || modeUi.death || resetting || !teleportLoading.hidden ||
+        document.pointerLockElement !== view.renderer.domElement || wieldWorldEdit()) {
+      nextAttack = Infinity;
+    } else if (liveActionsReady && now >= nextAttack && !acting) {
+      nextAttack = now + (npcTarget ? 325 : hitPlayer ? 450 : 175);
+      void action('remove');
+    }
+  }
   if (repeatPlacement && liveActionsReady && now >= nextPlacement && !acting && !resetting && !menuOpen() && playing &&
       !spectator && !orbitHeading && (touchMode || document.pointerLockElement === view.renderer.domElement)) {
     nextPlacement = now + 150;
@@ -1741,6 +1753,7 @@ function bindControls() {
   });
   document.addEventListener('pointerlockchange', () => {
     resuming = false;
+    if (document.pointerLockElement !== canvas) nextAttack = Infinity;
     if (!document.pointerLockElement) pointerReleasedAt = performance.now();
     if (!touchMode && !menuOpen() && !modeUi.death) setPlaying(document.pointerLockElement === canvas);
   });
@@ -1876,8 +1889,12 @@ function bindControls() {
       resume();
     }
   });
-  document.addEventListener('mouseup', event => { if (event.button === 2) repeatPlacement = false; });
+  document.addEventListener('mouseup', event => {
+    if (event.button === 0) nextAttack = Infinity;
+    if (event.button === 2) repeatPlacement = false;
+  }, {capture:true});
   window.addEventListener('blur', () => {
+    nextAttack = Infinity;
     repeatPlacement = resumeOnEscape = resuming = false;
     keys.clear();
     touchControls?.clear();
@@ -1896,7 +1913,10 @@ function bindControls() {
       nextPlacement = performance.now() + 350;
       action('place');
     }
-    if (event.button === 0) action('remove');
+    if (event.button === 0) {
+      if (!spectator && !wieldWorldEdit()) nextAttack = performance.now() + 300;
+      void action('remove');
+    }
     if (event.button === 1) action('copy',false,true);
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
