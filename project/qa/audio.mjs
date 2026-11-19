@@ -75,7 +75,14 @@ try {
   const manifest = await (await fetch(`${origin}/generated/sounds/sounds.json`)).json();
   await page.goto(origin);
   const master=page.locator('#audio-master');
-  const openAudio=()=>page.locator('#audio-settings-toggle').click();
+  const openAudio=async()=>{
+    if (await page.locator('[data-pause-section="world"]').isVisible()) await page.locator('#pause-back').click();
+    if (await page.locator('[data-pause-section="settings"]').isVisible()) {
+      await page.locator('[data-pause-section="settings"]').click();
+    }
+    await page.locator('[data-pause-tab="audio"]').click();
+    await page.locator('#audio-settings-toggle').click();
+  };
   const closeAudio=()=>page.locator('#audio-settings-close').click();
   const musicVolume=page.locator('#music-volume');
   const setMusicVolume=value=>musicVolume.evaluate((input,value)=>{
@@ -105,6 +112,7 @@ try {
   assert.ok(audioFiles.some(entry => steps.some(file => entry.url.endsWith(file))));
 
   await page.evaluate(() => document.exitPointerLock());
+  await page.locator('[data-pause-section="world"]').click();
   await page.locator('#reset').click();
   await page.waitForFunction(() => honeymoon.stats().position.z === -57.5);
   await openAudio();

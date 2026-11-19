@@ -46,22 +46,14 @@ button:disabled { cursor: wait; opacity: .45; }
 }
 .top { z-index: 2; top: max(1rem, env(safe-area-inset-top)); }
 .bottom { bottom: max(1rem, env(safe-area-inset-bottom)); flex-wrap: wrap; }
-.brand, .bottom > span, .tools {
+.bottom > span {
   background: var(--glass);
   border: 1px solid var(--line);
   border-radius: .55rem;
   padding: .48rem .72rem;
   box-shadow: 0 2px 12px #14202740;
 }
-.brand { display: grid; line-height: 1.1; gap: .18rem; }
-.brand strong { font-size: 1.04rem; }
-.brand span { font-size: .73rem; color: var(--gold); }
-.tools { display: flex; align-items: center; gap: .55rem; pointer-events: auto; font-size: .83rem; }
-#game:not(.paused) .top .brand, #game:not(.paused) .tools > :not(#clock-toggle) { display: none; }
-.paused .top .brand { display: grid; }
-.paused .tools > :not([hidden]) { display: inline-flex; }
-.playing .tools { padding: 0; border: 0; background: none; box-shadow: none; }
-.paused .tools { flex-wrap: wrap; justify-content: flex-end; }
+.tools { display: flex; align-items: center; pointer-events: auto; font-size: .83rem; }
 .cache-usage { align-items: center; padding: .3rem .55rem; color: var(--gold); font-variant-numeric: tabular-nums; }
 #connection-metrics {
   display: none; gap: .6rem; align-items: center; white-space: nowrap; font-variant-numeric: tabular-nums;
@@ -78,7 +70,6 @@ button:disabled { cursor: wait; opacity: .45; }
 #game.touch #connection-alert { top: calc(max(.5rem,env(safe-area-inset-top)) + 5.75rem); }
 @media (orientation: portrait) { #game.touch #connection-metrics { top: .55rem; } }
 #resume-help { margin-top: .5rem; line-height: 1.4; }
-.distance { display: flex; gap: .45rem; align-items: center; }
 .bottom { font-size: .77rem; }
 #coords { font-variant-numeric: tabular-nums; }
 #clock-toggle { min-width: 4.6rem; font-variant-numeric: tabular-nums; }
@@ -133,23 +124,6 @@ button:disabled { cursor: wait; opacity: .45; }
 #aim::after { width: 1px; height: 13px; }
 .entry { position: absolute; inset: 0; display: grid; place-items: center; background: #12232c61; }
 .entry[hidden] { display: none; }
-#game.paused .entry {
-  inset: clamp(4.25rem, 20vh, 9rem) auto auto max(.75rem, env(safe-area-inset-left));
-  display: block;
-  background: none;
-}
-#game.paused .entry[hidden] { display: none; }
-#game.paused .panel {
-  width: min(17rem, calc(100vw - 1.5rem));
-  padding: .95rem 1rem;
-  text-align: left;
-  max-height: 72vh;
-  overflow-y: auto;
-}
-#game.paused .panel h1, #game.paused #entry-help { display: none; }
-#game.paused #loading { min-height: 0; margin: 0 0 .75rem; font-weight: 600; }
-#game.paused .profile { margin-bottom: .75rem; }
-#game.paused #play { min-width: 0; width: 100%; }
 .panel {
   width: min(92vw, 28rem);
   padding: 2rem 1.7rem 1.55rem;
@@ -163,10 +137,8 @@ button:disabled { cursor: wait; opacity: .45; }
 .panel p { min-height: 1.5rem; margin: .55rem 0 1rem; }
 .panel button { color: #212929; background: var(--gold); font-weight: 600; min-width: 10rem; }
 .panel .solo-entry-button:not([hidden]) { display: block; margin: .65rem auto 0; }
-#game.paused .panel .solo-entry-button { display: none; }
 .panel .solo-entry-button, #access-form .solo-entry-button, .panel #solo-world-switch { color: var(--gold); background: #193640; }
 #solo-world-switch:not([hidden]) { display: block; margin: .65rem auto 0; }
-#game.paused #solo-world-switch { min-width: 0; width: 100%; }
 .touch #solo-world-switch { min-height: 44px; }
 .panel small { display: block; margin-top: 1rem; color: #d7e4e3; }
 .panel small[hidden] { display: none; }
@@ -179,7 +151,6 @@ button:disabled { cursor: wait; opacity: .45; }
 .skin-picker { cursor: pointer; padding: .38rem .54rem; border-bottom: 1px solid var(--line); font-size: .83rem; color: var(--gold); }
 .skin-option button { background: transparent; color: #d7e4e3; padding: .27rem .45rem; min-width: 0; font-size: .8rem; }
 .skin-status { font-size: .76rem; color: #d7e4e3; overflow-wrap: anywhere; }
-#player-name { max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gold); }
 #toast { position: absolute; inset: auto 10% 16%; text-align: center; pointer-events: none; }
 #toast span { display: inline-block; background: var(--glass); border: 1px solid var(--line); border-radius: .6rem; padding: .55rem .8rem; }
 #touch { display: none; }
@@ -216,20 +187,15 @@ button:disabled { cursor: wait; opacity: .45; }
 .mode-row { padding-bottom: .55rem; border-bottom: 1px solid var(--line); margin-bottom: .55rem; }
 #craft-list button { display: grid; gap: .17rem; text-align: start; min-height: 44px; }
 #craft-list small { opacity: .8; }
-.touch .tools { max-height: 34dvh; overflow-y: auto; }
 @media (orientation: portrait) {
   .touch .touch-quick { top: calc(max(.5rem,env(safe-area-inset-top)) + 2.75rem); }
   .touch #touch-more-panel:not([hidden]), .touch.playing .target-tag { top: calc(max(.5rem,env(safe-area-inset-top)) + 5.75rem); }
-  #game.touch.paused .panel { max-width: min(92vw,30rem); }
   .touch #health:not([hidden]) { top: calc(max(.5rem,env(safe-area-inset-top)) + 5.75rem); }
   .touch.playing .target-tag { margin-top: 2.15rem; }
 }
 @media (max-width: 640px) {
   .top, .bottom { left: max(.5rem, env(safe-area-inset-left)); right: max(.5rem, env(safe-area-inset-right)); }
-  .tools, .brand { padding: .3rem .5rem; }
-  .tools button, .tools select { padding: .42rem .38rem; }
-  .distance { font-size: 0; }
-  .distance select { font-size: .74rem; }
+  .tools button { padding: .42rem .38rem; }
 }
 
 #creative-toggle, #inventory-toggle, #warp-toggle { pointer-events: auto; background: var(--glass); padding: .42rem .65rem; font-size: inherit; }
@@ -459,34 +425,13 @@ button:disabled { cursor: wait; opacity: .45; }
   padding: .38rem .65rem; border: 1px solid var(--line); background: var(--glass); border-radius: .4rem;
   pointer-events: none;
 }
-#game.paused .target-tag, #keys { display: none; }
+#game.paused .target-tag { display: none; }
 #auto-move-status:not([hidden]) {
   position: absolute; right: max(.75rem,env(safe-area-inset-right)); bottom: max(.65rem,env(safe-area-inset-bottom));
   z-index: 5; padding: .38rem .6rem; border-radius: .4rem; background: var(--glass);
   border: 1px solid var(--line); color: var(--gold); font-size: .8rem; pointer-events: none;
 }
 .touch #auto-move-status { bottom: calc(max(.65rem,env(safe-area-inset-bottom)) + 3.5rem); }
-#game.paused #keys {
-  display: block; margin-top: .6rem; font-size: .82rem;
-  border: 1px solid var(--line); border-radius: .45rem; background: #193640;
-}
-#keys > summary { padding: .65rem .6rem; cursor: pointer; font-weight: 600; }
-#keys > summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
-#keys[open] { padding-bottom: .6rem; }
-#keys h2 { font-size: .88rem; margin: .65rem .6rem .35rem; }
-#keys dl { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: .32rem .55rem; margin: 0 .6rem; }
-#keys dt { color: var(--gold); }
-#keys dd { margin: 0; }
-#keys .touch-guide { display: none; }
-.touch #keys .touch-guide { display: block; }
-.touch #keys > summary { min-height: 44px; scroll-margin-top: 3.25rem; }
-#keys .context-keys:has(span:not([hidden])) {
-  display: grid; gap: .35rem; border-top: 1px solid var(--line);
-  margin-top: .5rem; padding-top: .45rem; max-width: 15rem;
-}
-.pause-inventory { display: none; }
-#game.paused .pause-inventory { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .55rem; }
-#game.paused .pause-inventory button { color: #e7edec; min-width: 0; flex: 1 0 auto; }
 #game:not(.touch) #entry-help { display: none; }
 .touch.playing .hud-hotbar-row { bottom: max(0px, env(safe-area-inset-bottom)); }
 #solo-entry, #solo-download {
@@ -520,5 +465,4 @@ button:disabled { cursor: wait; opacity: .45; }
   #creative-close { right: calc(16 * var(--gui-px)); }
   .bottom { bottom: calc(3.3rem + env(safe-area-inset-bottom)); }
   .bottom > span { padding: .4rem .48rem; }
-  #game.paused .panel { max-width: 58vw; }
 }

@@ -60,76 +60,10 @@ for (const event of ['fullscreenchange','webkitfullscreenchange']) document.addE
 standalone.addEventListener?.('change',updateFullscreen);
 updateFullscreen();
 
-const pauseSections = byId('mobile-pause-sections');
-const sectionButtons = [...pauseSections.querySelectorAll('button')];
-const pauseProfile = byId('mobile-profile'), pauseSettings = byId('mobile-settings');
-const profile = document.querySelector('#entry .profile'), tools = document.querySelector('.top .tools');
-const entry = document.querySelector('#entry .panel');
-const top = document.querySelector('.top');
 const chat = byId('chat');
 const hotbar = byId('hotbar');
 const hotbarToggle = byId('touch-hotbar');
-const play = byId('play');
-const focusEntry = () => play.focus({preventScroll:true});
-let pauseSection, pauseWatcher, chatWatcher, showingPause = false;
-
-function showSection(section) {
-  pauseSection = section;
-  pauseProfile.hidden = section !== 'profile';
-  pauseSettings.hidden = section !== 'settings';
-  for (const button of sectionButtons) button.setAttribute('aria-expanded',String(button.dataset.pauseSection===section));
-}
-
-function closePause() {
-  if (pauseSection) {
-    const trigger = sectionButtons.find(button=>button.dataset.pauseSection===pauseSection);
-    showSection(null);
-    trigger?.focus({preventScroll:true});
-  } else play.click();
-}
-
-function watchPauseClose() {
-  if (typeof CloseWatcher !== 'function') return;
-  pauseWatcher = new CloseWatcher();
-  pauseWatcher.addEventListener('close',()=>{
-    pauseWatcher = undefined;
-    if (!showingPause || chat.classList.contains('expanded')) return;
-    closePause();
-    if (game.classList.contains('paused')) watchPauseClose();
-  });
-}
-
-function refreshPause() {
-  const paused = game.classList.contains('touch') && game.classList.contains('paused');
-  if (paused === showingPause) return;
-  showingPause = paused;
-  pauseSections.hidden = !paused;
-  if (paused) {
-    pauseProfile.append(profile);
-    pauseSettings.prepend(tools);
-    focusEntry();
-    watchPauseClose();
-  } else {
-    entry.insertBefore(profile,play);
-    top.insertBefore(tools,byId('connection-metrics'));
-    showSection(null);
-    pauseWatcher?.destroy();
-    pauseWatcher = undefined;
-  }
-}
-for (const button of sectionButtons) button.addEventListener('click',()=>{
-  const section = button.dataset.pauseSection;
-  showSection(pauseSection === section ? null : section);
-});
-new MutationObserver(refreshPause).observe(game,{attributes:true,attributeFilter:['class']});
-refreshPause();
-
-document.addEventListener('keydown',event=>{
-  if (event.code !== 'Escape' || !showingPause || document.querySelector('dialog[open], #chat.expanded, .social-panel:not([hidden])')) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  if (!event.repeat) closePause();
-},true);
+let chatWatcher;
 
 new MutationObserver(()=>{
   if (typeof CloseWatcher !== 'function' || !game.classList.contains('touch')) return;
@@ -152,17 +86,6 @@ function updateViewport() {
 window.visualViewport?.addEventListener('resize',updateViewport);
 window.visualViewport?.addEventListener('scroll',updateViewport);
 updateViewport();
-
-for (const [id,flag] of [['show-coordinates','show-coordinates'],['show-metrics','show-metrics']]) {
-  const input = byId(id);
-  const key = 'honeymoon-' + flag;
-  try { input.checked = localStorage.getItem(key) === 'true'; } catch { /* Storage can be disabled. */ }
-  game.classList.toggle(flag,input.checked);
-  input.addEventListener('change',()=>{
-    game.classList.toggle(flag,input.checked);
-    try { localStorage.setItem(key,String(input.checked)); } catch { /* The setting applies to this page. */ }
-  });
-}
 
 function toggleHotbar() {
   const expanded = game.classList.toggle('hotbar-expanded');

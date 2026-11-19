@@ -5,12 +5,13 @@ const keyActions = {
   'touch-teleport':'KeyG','touch-clock':'KeyL','touch-chisel':'KeyK','touch-chisel-size':'KeyK',
 };
 
-export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,block,repeat,pause}) {
+export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,block,attack,repeat,pause}) {
   const panel = element('touch-more-panel');
   const toggle = element('touch-more');
   const build = element('touch-build');
   const buildPanel = element('touch-build-panel');
   const useButton = element('touch-use');
+  const jumpButton = element('jump');
   const lowerButton = element('touch-lower');
   const pad = element('stick'), nub = pad.querySelector('i');
   const captured = new Map();
@@ -18,7 +19,6 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
   let sprint = false;
   let flying = false;
   let previous;
-  let removeTimer;
   let previousAction;
   const sprintButton=element('touch-sprint');
 
@@ -87,17 +87,7 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
     repeat(pressed);
     if (pressed) block('place');
   });
-  hold('touch-remove',pressed=>{
-    clearTimeout(removeTimer);
-    if (!pressed) return;
-    block('remove');
-    const remove = () => {
-      if (!enabled()) return;
-      block('remove');
-      removeTimer=setTimeout(remove,175);
-    };
-    removeTimer=setTimeout(remove,350);
-  });
+  hold('touch-remove',attack);
 
   for (const [id,code] of Object.entries(keyActions)) element(id).addEventListener('click',()=>{
     if (!enabled()) return;
@@ -122,11 +112,10 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
     if (!enabled()) return;
     sprint=!sprint;
     sprintButton.setAttribute('aria-pressed',String(sprint));
-    sendKey('ShiftLeft',sprint);
   });
 
   function clear() {
-    clearTimeout(removeTimer);
+    attack(false);
     if (joystick!==undefined && pad.hasPointerCapture(joystick)) pad.releasePointerCapture(joystick);
     joystick=undefined;
     stick.x=stick.z=0;
@@ -141,15 +130,20 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
     sprintButton.setAttribute('aria-pressed','false');
     extra(false);
   }
-  return {clear,update({flying:inFlight,spectator,stance,crawlRequested,touchCrouching,seated,orbit,chisel,actionLabel='Действие'}) {
+  function label(button,text) {
+    button.title=text;
+    button.setAttribute('aria-label',text);
+  }
+  return {clear,get sprinting(){return sprint;},update({flying:inFlight,spectator,stance,crawlRequested,touchCrouching,seated,orbit,chisel,actionLabel='Действие'}) {
     flying=inFlight;
-    if (actionLabel!==previousAction) useButton.textContent=previousAction=actionLabel;
+    if (actionLabel!==previousAction) label(useButton,previousAction=actionLabel);
     const state=Number(flying)+2*Number(spectator)+4*Number(crawlRequested || stance==='crawl')+
       8*Number(seated)+16*Number(orbit)+32*Number(chisel)+64*Number(touchCrouching);
     if (state===previous) return;
     previous=state;
-    element('jump').textContent=flying?'Вверх':'Прыжок';
-    lowerButton.textContent=flying?'Вниз':'Пригнуться';
+    label(jumpButton,flying?'Подняться':'Прыжок');
+    label(lowerButton,flying?'Спуститься':'Пригнуться');
+    lowerButton.toggleAttribute('data-flight',flying);
     if (flying) lowerButton.removeAttribute('aria-pressed');
     else lowerButton.setAttribute('aria-pressed',String(touchCrouching));
     for (const [id,active] of [['touch-flight',flying&&!spectator],['touch-spectator',spectator],
@@ -157,4 +151,45 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
       element(id).setAttribute('aria-pressed',String(active));
     }
   }};
+}
+
+export function bindTouchLook(canvas,{enabled,look,tap}) {
+  const dragThreshold=7;
+  const tapDuration=300;
+  let finger;
+
+  canvas.addEventListener('pointerdown',event=>{
+    if (event.button!==0 || !enabled()) return;
+    if (finger) {
+      finger.canTap=false;
+      return;
+    }
+    canvas.setPointerCapture(event.pointerId);
+    finger={id:event.pointerId,x:event.clientX,y:event.clientY,started:event.timeStamp,dragging:false,canTap:true};
+  });
+  canvas.addEventListener('pointermove',event=>{
+    if (finger?.id!==event.pointerId) return;
+    if (!enabled()) {
+      finger.canTap=false;
+      return;
+    }
+    const dx=event.clientX-finger.x, dy=event.clientY-finger.y;
+    if (!finger.dragging && Math.hypot(dx,dy)<dragThreshold) return;
+    finger.dragging=true;
+    finger.x=event.clientX;
+    finger.y=event.clientY;
+    look(dx,dy);
+  });
+  canvas.addEventListener('pointerup',event=>{
+    if (finger?.id!==event.pointerId) return;
+    const active=finger;
+    finger=undefined;
+    if (tap && enabled() && active.canTap && !active.dragging && event.timeStamp-active.started<=tapDuration &&
+        Math.hypot(event.clientX-active.x,event.clientY-active.y)<dragThreshold &&
+        document.elementFromPoint(event.clientX,event.clientY)===canvas) tap();
+  });
+  for (const name of ['pointercancel','lostpointercapture']) canvas.addEventListener(name,event=>{
+    if (finger?.id===event.pointerId) finger=undefined;
+  });
+  window.addEventListener('blur',()=>{finger=undefined;});
 }

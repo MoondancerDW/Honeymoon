@@ -32,7 +32,6 @@
   background-position: 3px 7px, 10px 7px, 3px 10px, 10px 10px, 7px 3px, 10px 3px, 7px 10px, 10px 10px;
 }
 #game:not(.touch).playing #connection-metrics { margin-right: 3rem; }
-#game:not(.touch).paused .top { right: calc(max(1rem, env(safe-area-inset-right)) + 3rem); }
 #game:has(dialog[open]) .fullscreen-toggle, #game:has(#chat.expanded) .fullscreen-toggle { visibility: hidden; }
 #fullscreen-help {
   width: min(24rem, calc(100% - 2rem));
@@ -106,8 +105,6 @@
 }
 .touch .touch-quick .fullscreen-toggle { position: static; }
 #touch .touch-quick button { width: 44px; height: 44px; line-height: 1; padding: .15rem; }
-#touch .touch-quick #touch-pause { font-size: 1.25rem; }
-#touch #touch-build { font-size: 1.25rem; }
 #touch-chat {
   position: absolute;
   z-index: 3;
@@ -147,14 +144,27 @@
   right: max(.55rem, env(safe-area-inset-right));
   bottom: calc(max(.4rem, env(safe-area-inset-bottom)) + 48px);
   display: grid;
-  gap: .3rem;
-  grid-template-columns: repeat(2, minmax(44px, 1fr));
-  width: 7.5rem;
+  gap: 5px;
+  grid-template-columns: repeat(3, 44px);
   touch-action: none;
 }
-.touch #touch-use { grid-column: 1 / -1; }
-.touch #touch-build-panel:not([hidden]) { bottom: calc(max(.4rem, env(safe-area-inset-bottom)) + 48px); right: calc(max(.55rem, env(safe-area-inset-right)) + 7.9rem); width: auto; }
-.touch #touch-copy { grid-column: 1 / -1; }
+#touch .touch-control { padding: 0; }
+.touch-control svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+#touch-lower:not([data-flight]) .touch-descend-icon,
+#touch-lower[data-flight] .touch-crouch-icon { display: none; }
+.touch #touch-build-panel:not([hidden]) {
+  right: calc(max(.55rem, env(safe-area-inset-right)) + 150px);
+  grid-template-columns: repeat(2, 44px);
+}
 .touch #stick {
   bottom: calc(max(.4rem, env(safe-area-inset-bottom)) + 48px);
   left: max(.55rem, env(safe-area-inset-left));
@@ -163,8 +173,8 @@
 }
 .touch #health:not([hidden]) { top: calc(max(.5rem, env(safe-area-inset-top)) + 49px); }
 #game.touch #connection-metrics { top: calc(max(.5rem, env(safe-area-inset-top)) + 41px); right: 0; }
-.touch:not(.show-metrics) #connection-metrics, .touch:not(.show-coordinates) #coords,
-.touch .top .brand, .touch .top .tools, .touch #resume-help, .touch.paused .bottom { display: none !important; }
+#game:not(.show-metrics) #connection-metrics, #game:not(.show-coordinates) #coords,
+.touch .top .tools { display: none; }
 .touch.playing #chat:not(.expanded) {
   top: calc(max(.5rem, env(safe-area-inset-top)) + 74px);
   left: max(.5rem, env(safe-area-inset-left));
@@ -174,49 +184,6 @@
 .touch.playing #selected:not(:empty) { top: calc(max(.5rem, env(safe-area-inset-top)) + 50px); margin-top: 0; }
 .touch #touch-more-panel:not([hidden]) { top: calc(max(.5rem, env(safe-area-inset-top)) + 50px); }
 
-#game.touch.paused .entry:not([hidden]) {
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: max(.7rem, env(safe-area-inset-top)) max(.7rem, env(safe-area-inset-right)) max(.7rem, env(safe-area-inset-bottom)) max(.7rem, env(safe-area-inset-left));
-  background: #101b24af;
-}
-#game.touch.paused .entry .panel {
-  width: min(100%, 27rem);
-  max-width: none;
-  max-height: 100%;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: .75rem;
-}
-#game.touch.paused #play { position: sticky; top: 0; z-index: 1; min-height: 44px; }
-#game.touch.paused #mobile-pause-sections:not([hidden]) { display: flex; gap: .4rem; margin-top: .55rem; }
-#mobile-pause-sections button, .touch.paused .tools button, #mobile-settings select {
-  min-width: 0;
-  min-height: 44px;
-  color: inherit;
-  background: #253a43;
-}
-#mobile-pause-sections button { flex: 1 1 0; }
-#mobile-pause-sections button[aria-expanded="true"] { border-color: var(--gold); }
-.mobile-pause-section:not([hidden]) { margin-top: .6rem; }
-#mobile-profile .profile { max-width: none; margin: 0; }
-#mobile-settings > label { display: inline-flex; align-items: center; min-height: 44px; padding: 0 .5rem; gap: .3rem; }
-#mobile-settings input { accent-color: var(--gold); }
-#mobile-settings .tools {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
-  gap: .4rem;
-  max-height: none;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  overflow: visible;
-}
-#mobile-settings .tools > :not([hidden]) { min-height: 44px; align-items: center; justify-content: center; }
-#mobile-settings .tools .distance { flex-wrap: wrap; font-size: .77rem; }
-.audio-menu-controls { gap: .35rem; }
 #audio-settings-toggle { flex: 1 1 auto; }
 #audio-mute-toggle { flex: 0 0 32px; width: 32px; height: auto; }
 #audio-mute-toggle i { position: relative; width: 18px; height: 18px; }
@@ -236,10 +203,6 @@
   background: currentColor;
   rotate: 34deg;
 }
-#mobile-settings .tools .audio-menu-controls { align-items: stretch; }
-.touch #audio-mute-toggle { flex-basis: 44px; width: 44px; }
-#game.touch.paused .pause-inventory button { min-height: 44px; }
-#game.touch.paused #npc-editor-toggle:disabled { display: none; }
 
 #creative-menu {
   --gui-px: clamp(.95px, min(calc((100vw - 30px) / 195), calc((100dvh - 62px) / 196)), 3px);
@@ -302,6 +265,10 @@
 #item-document .document-actions button, #container-close { min-height: 44px; }
 
 @media (orientation: portrait) {
+  .touch #touch-build-panel:not([hidden]) {
+    bottom: calc(max(.4rem, env(safe-area-inset-bottom)) + 146px);
+    right: max(.55rem, env(safe-area-inset-right));
+  }
   .touch .hud-hotbar-row { align-items: center; gap: 3px; }
   .touch .hud-hotbar-row:has(#hotbar:not([hidden])) #touch-hotbar {
     display: grid;
@@ -339,12 +306,9 @@
   #game.touch.hotbar-expanded #stick { margin-bottom: 45px; }
 }
 @media (orientation: landscape) and (max-height: 460px) {
-  #game.touch.paused .entry .panel { width: min(100%, 33rem); }
-  #game.touch.paused .pause-inventory { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
   .touch .hud-hotbar-row #hotbar { --gui-px: clamp(1.25px, 4dvh / 6, 1.85px); }
 }
 @media (max-width: 375px) {
   #touch .touch-quick { gap: .16rem; }
   #touch .touch-quick button { width: 44px; }
-  .touch #touch-build-panel:not([hidden]) { bottom: calc(max(.4rem, env(safe-area-inset-bottom)) + 145px); right: max(.55rem, env(safe-area-inset-right)); }
 }

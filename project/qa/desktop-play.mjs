@@ -240,6 +240,7 @@ try {
     await page.screenshot({path:join(output, 'spawn.png')});
 
     await page.evaluate(() => document.exitPointerLock());
+    await page.locator('[data-pause-section="world"]').click();
     await page.locator('#reset').click();
     await page.waitForFunction(z => honeymoon.stats().position.z === z, base.manifest.spawn[2]);
     await page.locator('#play').click();

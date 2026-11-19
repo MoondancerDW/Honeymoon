@@ -4,6 +4,7 @@ import {World, chunkKey, json,readJson} from './world-data.mjs';
 import {WorldAudio,audioDefaults} from './audio.mjs';
 import {bindAltitudeMusic} from './altitude-music-settings.mjs';
 import {createAltitudeMap} from './altitude-map.mjs';
+import {createPauseMenu} from './pause-ui.mjs';
 import {createSoloDownloadUi} from './solo-download-ui.mjs';
 import {windAt} from './wind.mjs';
 import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs';
@@ -37,7 +38,7 @@ import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBru
 import {chiselMaterialKey, chiselPlacementAtHit, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 import {createMovementSync} from './movement-sync.mjs';
 import {supportsFarTerrain} from './far-terrain.mjs';
-import {bindTouchControls} from './touch-controls.mjs';
+import {bindTouchControls,bindTouchLook} from './touch-controls.mjs';
 import {createPlayerModeUi} from './player-mode-ui.mjs';
 import {createConnectionStatus} from './connection-status.mjs';
 import {connectionFailure,createConnectionReport} from './connection-report.mjs';
@@ -78,6 +79,7 @@ const teleportLoading = element('teleport-loading');
 const keys = new Set();
 const movementKeys=new Set(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowLeft','ArrowDown','ArrowRight']);
 const touchMode = matchMedia('(pointer: coarse)').matches;
+const pauseMenu = createPauseMenu(game,touchMode);
 const detailPreference=touchMode?'honeymoon-touch-detail-distance':'honeymoon-detail-distance';
 const lowDevicePreference='honeymoon-low-device';
 const altitudeBuild=Number(document.querySelector('meta[name="honeymoon-build"]').content);
@@ -416,7 +418,7 @@ async function drawCreativeIcon(entry, canvas) {
 
 if (touchMode) {
   game.classList.add('touch');
-  element('entry-help').textContent = 'Стик — ходьба · Проведите по экрану, чтобы осмотреться';
+  element('entry-help').textContent = 'Стик — движение · Смахивание — обзор · Тап — поставить или взаимодействовать';
 }
 
 function notice(message) {
@@ -772,7 +774,7 @@ function automaticTravelEnabled(openMenu) {
 }
 
 function sprinting() {
-  return autoMovement ? autoMovement==='sprint' : keys.has('ShiftLeft') || keys.has('ShiftRight');
+  return autoMovement ? autoMovement==='sprint' : Boolean(touchControls?.sprinting || keys.has('ShiftLeft') || keys.has('ShiftRight'));
 }
 
 function forwardInput() {
@@ -818,12 +820,12 @@ function setPlaying(active) {
     element('resume-help').hidden=true;
   }
   entry.hidden = active;
+  pauseMenu.show(!active && entered);
   if (!active) {
     repeatPlacement = false;
     keys.clear();
     jump = false;
     button.textContent = 'Продолжить';
-    loading.textContent = 'Пауза';
   }
 }
 
@@ -1088,6 +1090,19 @@ function interact(sneaking = false) {
   if (!sign) return action('interact', sneaking);
   const {x, y, z, hit} = selection;
   showSignEditor({x,y,z,hit},sign.lines);
+}
+
+function tapWorld() {
+  if (!playing || menuOpen() || modeUi.death || spectator || orbitHeading || resetting || !teleportLoading.hidden) return;
+  updateSelection();
+  const item = heldCreativeItem;
+  const rightClickItem = item?.kind === 'item-frame' || item?.kind === 'minecart' || item?.kind === 'boat' ||
+    (item?.key === bucketKeys.empty && fluidState(selection?.cell)) || (frameTarget && item) ||
+    bookType(inventoryStackAt(inventory.selected));
+  const canPlace = chiseling ? chiselMaterial : heldPart || clipboard || rightClickItem;
+  if (!seat && (wieldWorldEdit() || canPlace)) {
+    void action('place');
+  } else interact();
 }
 
 function showSignEditor({x,y,z,hit},lines) {
@@ -1667,7 +1682,7 @@ function tick(now) {
   updatePlacement(npcTarget||hitPlayer?null:selection);
   if (nextAttack !== Infinity) {
     if (!manualTravel || spectator || modeUi.death || resetting || !teleportLoading.hidden ||
-        document.pointerLockElement !== view.renderer.domElement || wieldWorldEdit()) {
+        (!touchMode && document.pointerLockElement !== view.renderer.domElement) || wieldWorldEdit()) {
       nextAttack = Infinity;
     } else if (liveActionsReady && now >= nextAttack && !acting) {
       nextAttack = now + (npcTarget ? 325 : hitPlayer ? 450 : 175);
@@ -1679,15 +1694,18 @@ function tick(now) {
     nextPlacement = now + 150;
     if ((clipboard || heldPart || chiseling) && !frameTarget && !seatTarget && !npcTarget) void action('place');
   }
-  const selected = hitPlayer ? hitPlayer.name : npcTarget ? plainMinecraftText(npcTarget.entity?.name??'NPC') : frameTarget ? 'Рамка · ПКМ — вложить предмет · E — повернуть' :
-    seatTarget ? (seatTarget.kind === 'boat' ? 'Лодка · E — сесть' : 'Вагонетка · E — сесть') :
+  const useHint = touchMode ? 'Ладонь' : 'E';
+  const attackHint = touchMode ? 'Меч' : 'ЛКМ';
+  const selected = hitPlayer ? hitPlayer.name : npcTarget ? plainMinecraftText(npcTarget.entity?.name??'NPC') :
+    frameTarget ? `Рамка · ${touchMode?'Тап':'ПКМ'} — вложить предмет · ${useHint} — повернуть` :
+    seatTarget ? `${seatTarget.kind === 'boat' ? 'Лодка' : 'Вагонетка'} · ${useHint} — сесть` :
     selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
   const targetSeat = !npcTarget && !seat && !seatTarget && !frameTarget && seatFor(selection?.cell,world.models);
-  const interaction = npcTarget ? (touchMode?'Действие — разговор':'E — разговор') : targetSeat ? targetSeat.bed ? 'E — лечь' : 'E — сесть' :
-    !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) ? 'E — редактировать' : '';
-  const fluidHint = npcTarget?'':selection?.cell?.fluid === 'water' ? 'ЛКМ — убрать воду' :
-    selection?.cell?.fluid === 'lava' ? 'ЛКМ — убрать лаву' : '';
+  const interaction = npcTarget ? `${useHint} — разговор` : targetSeat ? `${useHint} — ${targetSeat.bed?'лечь':'сесть'}` :
+    !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) ? `${useHint} — редактировать` : '';
+  const fluidHint = npcTarget?'':selection?.cell?.fluid === 'water' ? `${attackHint} — убрать воду` :
+    selection?.cell?.fluid === 'lava' ? `${attackHint} — убрать лаву` : '';
   const status = wieldWorldEdit() ? worldEdit.hint(touchMode) : [selected,interaction,fluidHint].filter(Boolean).join('  /  ');
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
   const coordinates = `X ${position.x.toFixed(2)}  Y ${position.y.toFixed(2)}  Z ${position.z.toFixed(2)}`;
@@ -1709,6 +1727,17 @@ function tick(now) {
     diagnostics.frame(now,intended,reason,positionTrail.length,position);
   }
   requestAnimationFrame(tick);
+}
+
+function holdAttack(held) {
+  if (!held) {
+    nextAttack=Infinity;
+    return;
+  }
+  if (spectator || orbitHeading || resetting || modeUi.death || !teleportLoading.hidden) return;
+  if (touchMode) updateSelection();
+  if (!wieldWorldEdit()) nextAttack=performance.now()+300;
+  void action('remove');
 }
 
 function bindCacheStatus() {
@@ -1761,6 +1790,7 @@ function bindControls() {
     try {
       pending = profile.changes();
     } catch (error) {
+      pauseMenu.focusProfile();
       notice(error.message);
       return;
     }
@@ -1817,7 +1847,7 @@ function bindControls() {
     }
   });
   document.addEventListener('keydown', event => {
-    if (['Enter','Space'].includes(event.code) && event.target?.closest?.('#keys > summary')) return;
+    if (event.code === 'Enter' && event.target?.closest?.('#pause-menu :is(button,input,select,summary)')) return;
     const editable=event.target?.isContentEditable || event.target?.closest?.('input, textarea, select');
     if (entered && !modeUi.death && !editable && !event.defaultPrevented && !event.ctrlKey && !event.altKey && !event.metaKey) {
       const movementHotkeys=teleportLoading.hidden && (!menuOpen() || social.isChatOpen());
@@ -1961,10 +1991,7 @@ function bindControls() {
       nextPlacement = performance.now() + 350;
       action('place');
     }
-    if (event.button === 0) {
-      if (!spectator && !wieldWorldEdit()) nextAttack = performance.now() + 300;
-      void action('remove');
-    }
+    if (event.button === 0) holdAttack(true);
     if (event.button === 1) action('copy',false,true);
   });
   canvas.addEventListener('contextmenu', event => event.preventDefault());
@@ -1978,21 +2005,11 @@ function bindControls() {
   element('sign-cancel').addEventListener('click', closeSign);
   signEditor.addEventListener('cancel', event => { event.preventDefault(); closeSign(); });
 
-  let finger, fingerX, fingerY;
-  canvas.addEventListener('pointerdown', event => {
-    if ((!touchMode&&!modeUi.death) || !playing || menuOpen() || finger !== undefined) return;
-    finger = event.pointerId;
-    fingerX = event.clientX;
-    fingerY = event.clientY;
-    canvas.setPointerCapture(finger);
+  bindTouchLook(canvas,{
+    enabled:()=>Boolean((touchMode||modeUi.death) && playing && !menuOpen()),
+    look:(dx,dy)=>look(dx,dy,.006),
+    tap:touchMode?tapWorld:undefined,
   });
-  canvas.addEventListener('pointermove', event => {
-    if (event.pointerId !== finger || menuOpen()) return;
-    look(event.clientX - fingerX, event.clientY - fingerY, .006);
-    fingerX = event.clientX;
-    fingerY = event.clientY;
-  });
-  canvas.addEventListener('lostpointercapture', () => { finger = undefined; });
   if (touchMode) touchControls=bindTouchControls({element,stick,
     enabled:()=>playing&&!menuOpen()&&teleportLoading.hidden&&!modeUi.death,
     sendKey:(code,pressed,modifiers)=>document.dispatchEvent(new KeyboardEvent(pressed?'keydown':'keyup',
@@ -2003,8 +2020,9 @@ function bindControls() {
       if (touchCrouching) crawlRequested=false;
       pickUpNearbyItem();
     },
-    use:interact,
+    use(sneaking) { updateSelection(); interact(sneaking); },
     block(type) { if (type==='rotate') cyclePlacement(); else void action(type,false,true); },
+    attack:holdAttack,
     repeat(held) {
       repeatPlacement=held&&!spectator;
       if (held) nextPlacement=performance.now()+350;
@@ -2021,7 +2039,6 @@ function bindControls() {
   const lowDevice = element('low-device');
   const detail = element('detail-distance');
   const paintLowDevice = ()=>{
-    lowDevice.textContent=view.lowDevice?'Слабое устройство: вкл.':'Слабое устройство: выкл.';
     lowDevice.setAttribute('aria-pressed',String(view.lowDevice));
     detail.disabled=view.farTerrain?.lod.maxDistance!==32 || view.lowDevice;
   };
@@ -2041,7 +2058,6 @@ function bindControls() {
   });
   const showVision = enabled=>{
     view.setNightVision(enabled);
-    night.textContent = enabled ? 'Ночное зрение вкл.' : 'Ночное зрение выкл.';
     night.setAttribute('aria-pressed',String(enabled));
   };
   showVision(localStorage.getItem('honeymoon-night-vision') === '1');

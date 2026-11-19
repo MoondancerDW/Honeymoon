@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
-  <meta name="honeymoon-build" content="17">
+  <meta name="honeymoon-build" content="18">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/build-version.css">
   <link rel="stylesheet" href="/mobile-ui.css">
   <link rel="stylesheet" href="/altitude-map.css">
+  <link rel="stylesheet" href="/pause-ui.css">
   <script>
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.mjs',{type:'module'}).catch(()=>{});
   </script>
@@ -61,35 +62,8 @@
     </section>
     <div id="aim" aria-hidden="true"></div>
     <header class="top">
-      <div class="brand"><strong>Honeymoon</strong><span id="build-caption">Equestria</span></div>
       <div class="tools">
-        <span id="player-name" hidden></span>
         <button id="clock-toggle" type="button" aria-label="Игровое время (L)" disabled>12:00</button>
-        <button id="chat-toggle" type="button" title="Чат · T / Enter" disabled>Чат</button>
-        <label class="distance" for="detail-distance">Подробный дальний вид
-          <select id="detail-distance">
-            <option value="8">8 чанков</option><option value="12">12 чанков</option>
-            <option value="16">16 чанков</option><option value="20" selected>20 чанков</option>
-            <option value="24">24 чанка</option><option value="28">28 чанков</option>
-          </select>
-        </label>
-        <button id="altitude-map" type="button" hidden>Вся карта</button>
-        <div class="audio-menu-controls">
-          <button id="audio-settings-toggle" type="button" aria-haspopup="dialog" aria-controls="audio-settings">Громкость и окружение</button>
-          <button id="audio-mute-toggle" class="icon-button" type="button" aria-label="Без звука" aria-pressed="false" title="Выключить весь звук"><i aria-hidden="true"></i></button>
-        </div>
-        <button id="night-vision" type="button" aria-pressed="false">Ночное зрение выкл.</button>
-        <button id="low-device" type="button" aria-pressed="false">Слабое устройство: выкл.</button>
-        <output id="game-cache-usage" class="cache-usage" title="Данные рельефа и правок мира на устройстве" hidden>Кэш игры</output>
-        <button id="self-mode-toggle" type="button" title="Переключить режим для себя" hidden>Режим: Игровой</button>
-        <label class="distance" for="weather">Погода
-          <select id="weather" disabled>
-            <option value="clear">Ясно</option><option value="cloudy">Облачно</option><option value="rain">Дождь</option>
-            <option value="snow">Снег</option>
-          </select>
-        </label>
-        <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled hidden>Телепорт</button>
-        <button id="reset" type="button" title="Вернуться к точке появления">К спавну</button>
       </div>
       <aside id="connection-metrics" aria-label="Производительность и задержка">
         <span id="connection-fps" title="Отрисованных кадров в секунду">— FPS</span>
@@ -98,103 +72,183 @@
     </header>
     <section id="entry" class="entry">
       <div class="panel">
-        <h1>Honeymoon</h1>
-        <p id="loading" role="status">Загружаем район Equestria…</p>
-        <div class="profile">
-          <p id="access-profile" hidden></p>
-          <label for="nickname">Ник</label>
-          <input id="nickname" type="text" autocomplete="nickname" spellcheck="false" disabled>
-          <div class="skin-option">
-            <label class="skin-picker" for="pony-skin">Выбрать скин пони</label>
-            <input id="pony-skin" type="file" accept="image/png,.png" disabled>
-            <button id="clear-skin" type="button" hidden>Сбросить</button>
+        <div id="entry-start">
+          <h1>Honeymoon</h1>
+          <p id="loading" role="status">Загружаем район Equestria…</p>
+          <div class="profile">
+            <p id="access-profile" hidden></p>
+            <label for="nickname">Ник</label>
+            <input id="nickname" type="text" autocomplete="nickname" spellcheck="false" disabled>
+            <div class="skin-option">
+              <label class="skin-picker" for="pony-skin">Выбрать скин пони</label>
+              <input id="pony-skin" type="file" accept="image/png,.png" disabled>
+              <button id="clear-skin" type="button" hidden>Сбросить</button>
+            </div>
+            <span id="skin-status" class="skin-status" role="status"></span>
           </div>
-          <span id="skin-status" class="skin-status" role="status"></span>
+          <button id="play" type="button" disabled>Войти в мир</button>
+          <button class="solo-entry-button" type="button" aria-haspopup="dialog" aria-controls="solo-entry" hidden>Одиночная игра</button>
+          <div id="entry-world-switch">
+            <button id="solo-world-switch" type="button" aria-describedby="solo-world-status" hidden>Тестовый полигон</button>
+            <small id="solo-world-status" role="status" hidden></small>
+          </div>
+          <small id="entry-help" hidden></small>
         </div>
-        <button id="play" type="button" disabled>Войти в мир</button>
-        <button class="solo-entry-button" type="button" aria-haspopup="dialog" aria-controls="solo-entry" hidden>Одиночная игра</button>
-        <button id="solo-world-switch" type="button" aria-describedby="solo-world-status" hidden>Тестовый полигон</button>
-        <small id="solo-world-status" role="status" hidden></small>
-        <small id="resume-help" role="status" hidden></small>
-        <div id="mobile-pause-sections" hidden>
-          <button type="button" data-pause-section="profile" aria-controls="mobile-profile" aria-expanded="false">Профиль</button>
-          <button type="button" data-pause-section="settings" aria-controls="mobile-settings" aria-expanded="false">Настройки</button>
-        </div>
-        <section id="mobile-profile" class="mobile-pause-section" aria-label="Профиль" hidden></section>
-        <section id="mobile-settings" class="mobile-pause-section" aria-label="Настройки" hidden>
-          <label><input id="show-coordinates" type="checkbox"> Координаты</label>
-          <label><input id="show-metrics" type="checkbox"> FPS и пинг</label>
+        <section id="pause-menu" aria-labelledby="pause-heading" hidden>
+          <header class="pause-header">
+            <button id="pause-back" type="button" aria-label="Назад в меню паузы" title="Назад" hidden>‹</button>
+            <h2 id="pause-heading" tabindex="-1">Пауза</h2>
+            <div class="pause-identity">
+              <span id="player-name" hidden></span>
+              <span id="build-caption">Equestria</span>
+            </div>
+          </header>
+          <div class="pause-content">
+            <div id="pause-home">
+              <div class="pause-destinations">
+                <button type="button" data-pause-section="settings" aria-controls="pause-settings">Настройки</button>
+                <button type="button" data-pause-section="profile" aria-controls="pause-profile">Профиль</button>
+                <button type="button" data-pause-section="world" aria-controls="pause-world">Мир</button>
+              </div>
+              <div class="pause-actions">
+                <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="J" disabled>Инвентарь</button>
+                <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>
+                <button id="altitude-map" type="button" hidden>Карта</button>
+                <button id="chat-toggle" type="button" title="Чат · T / Enter" disabled>Чат</button>
+                <button id="craft-toggle" type="button" aria-controls="craft-menu" hidden>Изготовить</button>
+              </div>
+            </div>
+            <div id="pause-profile" hidden>
+              <p class="pause-profile-note">Ник и скин сохранятся при возвращении в игру.</p>
+            </div>
+            <div id="pause-world" hidden>
+              <div class="pause-actions">
+                <button id="reset" type="button">Вернуться на спаун</button>
+                <button id="solo-download-toggle" type="button" aria-haspopup="dialog" aria-controls="solo-download" hidden>Загрузка карты</button>
+              </div>
+              <div id="pause-world-switch"></div>
+              <div class="pause-world-admin">
+                <h3>Управление миром</h3>
+                <div class="pause-actions">
+                  <button id="pause-clock" type="button" aria-controls="clock-form" hidden disabled>Игровое время</button>
+                  <button id="warp-toggle" type="button" aria-controls="warps-menu" aria-expanded="false" disabled hidden>Варпы</button>
+                  <button id="teleport-toggle" type="button" aria-keyshortcuts="G" title="Телепорт по координатам · G" disabled hidden>Телепорт</button>
+                  <button id="self-mode-toggle" type="button" title="Переключить режим для себя" hidden>Режим: Игровой</button>
+                  <button id="mode-toggle" type="button" aria-controls="mode-menu" hidden>Режимы игроков</button>
+                  <button id="npc-editor-toggle" type="button" aria-haspopup="dialog" aria-controls="npc-menu" disabled>Редактор NPC</button>
+                  <button id="admin-toggle" type="button" aria-haspopup="dialog" aria-controls="admin-menu" hidden>Администрирование</button>
+                </div>
+                <label class="pause-setting" for="weather">Погода
+                  <select id="weather" disabled>
+                    <option value="clear">Ясно</option><option value="cloudy">Облачно</option>
+                    <option value="rain">Дождь</option><option value="snow">Снег</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div id="pause-settings" hidden>
+              <div class="pause-tabs" role="tablist" aria-label="Разделы настроек">
+                <button id="pause-graphics-tab" type="button" role="tab" data-pause-tab="graphics" aria-controls="pause-graphics" aria-selected="true">Графика</button>
+                <button id="pause-audio-tab" type="button" role="tab" data-pause-tab="audio" aria-controls="pause-audio" aria-selected="false" tabindex="-1">Звук</button>
+                <button id="pause-controls-tab" type="button" role="tab" data-pause-tab="controls" aria-controls="pause-controls" aria-selected="false" tabindex="-1">Управление</button>
+              </div>
+              <section id="pause-graphics" role="tabpanel" aria-labelledby="pause-graphics-tab">
+                <div class="pause-settings-list">
+                  <label class="pause-setting" for="detail-distance">Подробный рендер
+                    <select id="detail-distance">
+                      <option value="8">8 чанков</option><option value="12">12 чанков</option>
+                      <option value="16">16 чанков</option><option value="20" selected>20 чанков</option>
+                      <option value="24">24 чанка</option><option value="28">28 чанков</option>
+                    </select>
+                  </label>
+                  <button id="low-device" class="pause-setting" type="button" aria-pressed="false">Упрощённая графика<span class="pause-switch-state" aria-hidden="true"></span></button>
+                  <button id="night-vision" class="pause-setting" type="button" aria-pressed="false">Ночное зрение<span class="pause-switch-state" aria-hidden="true"></span></button>
+                  <output id="game-cache-usage" class="cache-usage" title="Данные рельефа и правок мира на устройстве" hidden>Кэш игры</output>
+                </div>
+              </section>
+              <section id="pause-audio" role="tabpanel" aria-labelledby="pause-audio-tab" hidden>
+                <div class="pause-settings-list">
+                  <label class="pause-setting">Звуки <input id="audio-volume" type="range" min="0" max="100" value="100"></label>
+                  <label class="pause-setting">Музыка <input id="music-volume" type="range" min="0" max="100" value="50"></label>
+                  <div class="audio-menu-controls">
+                    <button id="audio-settings-toggle" type="button" aria-haspopup="dialog" aria-controls="audio-settings">Окружение и музыка высоты</button>
+                    <button id="audio-mute-toggle" class="icon-button" type="button" aria-label="Без звука" aria-pressed="false" title="Выключить весь звук"><i aria-hidden="true"></i></button>
+                  </div>
+                </div>
+              </section>
+              <section id="pause-controls" role="tabpanel" aria-labelledby="pause-controls-tab" hidden>
+                <div class="pause-settings-list">
+                  <label class="pause-setting"><span>Показывать координаты</span><input id="show-coordinates" type="checkbox"></label>
+                  <label class="pause-setting"><span>Показывать FPS и пинг</span><input id="show-metrics" type="checkbox"></label>
+                </div>
+                <details id="keys">
+                  <summary>Все команды управления</summary>
+                  <section class="touch-guide" aria-label="Сенсорное управление">
+                    <h2>На экране</h2>
+                    <dl>
+                      <dt>Стик / свайп по миру</dt><dd>Движение / поворот камеры</dd>
+                      <dt>Тап по миру</dt><dd>Поставить выбранный блок или взаимодействовать с тем, на что наведён прицел.</dd>
+                      <dt>Стрелки / приседание</dt><dd>Прыгнуть или переключить приседание. В полёте удерживайте стрелки для подъёма или спуска.</dd>
+                      <dt>Ботинок / крыло</dt><dd>Включить или выключить ускорение / полёт.</dd>
+                      <dt>Ладонь / меч</dt><dd>Взаимодействовать / ударить или сломать блок. Удерживайте меч для повторных ударов.</dd>
+                      <dt>Строительство</dt><dd>Открыть кнопки установки и копирования блока.</dd>
+                      <dt>Панель предметов / ячейка</dt><dd>Развернуть или свернуть панель, выбрать предмет нажатием на ячейку</dd>
+                      <dt>Чат / Пауза / На весь экран</dt><dd>Открыть чат, меню паузы или полноэкранный режим</dd>
+                      <dt>Ещё</dt><dd>Другое действие, ползти, сесть или встать, сменить вид, свободный обзор, наблюдатель, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
+                      <dt data-admin-control-hint hidden>Телепорт</dt><dd data-admin-control-hint hidden>Открыть ввод координат из меню «Ещё»</dd>
+                    </dl>
+                  </section>
+                  <h2>Клавиатура и мышь</h2>
+                  <dl>
+                    <dt>WASD / стрелки</dt><dd>Движение</dd>
+                    <dt>Мышь</dt><dd>Повернуть камеру</dd>
+                    <dt>Пробел</dt><dd>Прыжок или подъём в полёте</dd>
+                    <dt>Ctrl / C</dt><dd>Спуститься в полёте</dd>
+                    <dt>Shift</dt><dd>Ускориться</dd>
+                    <dt>H / Shift+H</dt><dd>Автодвижение / автоспринт. H или ручное движение отключают режим.</dd>
+                    <dt>F / P</dt><dd>Полёт / режим наблюдателя</dd>
+                    <dt>C / V / X</dt><dd>Присесть или подобрать предмет / ползти / сесть или встать</dd>
+                    <dt>F5 или Y / U</dt><dd>Сменить вид / свободный обзор</dd>
+                    <dt>ЛКМ / ПКМ</dt><dd>Ударить или сломать / поставить. Удерживайте ЛКМ для повторных ударов.</dd>
+                    <dt>СКМ / O</dt><dd>Копировать блок</dd>
+                    <dt>R</dt><dd>Перебрать положение блока при установке</dd>
+                    <dt>K / Shift+K</dt><dd>Резец / размер резца</dd>
+                    <dt>E / Shift+E</dt><dd>Действие / альтернативное действие</dd>
+                    <dt>Q / Ctrl+Q</dt><dd>Выбросить один предмет / всю стопку</dd>
+                    <dt>1–9 / колесо</dt><dd>Выбрать ячейку</dd>
+                    <dt>I / J</dt><dd>Предметы / инвентарь</dd>
+                    <dt>B / Z</dt><dd>Помахать копытом / танцевать</dd>
+                    <dt>T / Enter</dt><dd>Открыть чат в игре</dd>
+                    <dt>Tab</dt><dd>Показать список игроков, пока клавиша нажата</dd>
+                    <dt data-admin-control-hint hidden>G / L</dt><dd data-admin-control-hint hidden>Телепорт / настройка игрового времени</dd>
+                    <dt>Esc / Enter</dt><dd>Пауза, закрытие меню или возврат к игре</dd>
+                  </dl>
+                  <h2>Инвентарь и карта</h2>
+                  <dl>
+                    <dt>Shift+клик</dt><dd>Переложить стопку или взять полную стопку из каталога</dd>
+                    <dt>1–9 / Q / Delete</dt><dd>Перенести выбранную стопку на панель, выбросить или удалить</dd>
+                    <dt>Стрелки / Home / End</dt><dd>Перейти между вкладками каталога, к первой или последней</dd>
+                    <dt>↓ / Enter в поиске</dt><dd>Перейти к первому результату или выбрать его</dd>
+                    <dt>Перетаскивание / стрелки</dt><dd>Переместить карту</dd>
+                    <dt>Колесо / двойной клик</dt><dd>Изменить масштаб карты</dd>
+                    <dt>+ / − / 0</dt><dd>Приблизить, отдалить или показать всю карту. На телефоне масштаб меняется двумя пальцами.</dd>
+                  </dl>
+                  <div class="context-keys">
+                    <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
+                    <span id="chisel-hint" role="status" hidden>Резец 1/8 · Shift+K — сменить размер · ЛКМ — убрать · ПКМ — добавить · O/СКМ — взять материал</span>
+                    <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift — ускориться</span>
+                    <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
+                    <span id="orbit-status" role="status" hidden>Свободный обзор · U — выйти</span>
+                    <span id="spectator-status" role="status" hidden>Наблюдатель · Пробел вверх · Ctrl/C вниз · P — выйти</span>
+                  </div>
+                </details>
+              </section>
+            </div>
+          </div>
+          <footer class="pause-footer">
+            <small id="resume-help" role="status" hidden></small>
+          </footer>
         </section>
-        <div class="pause-inventory">
-          <button id="creative-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="I" disabled>Предметы</button>
-          <button id="inventory-toggle" type="button" aria-haspopup="dialog" aria-controls="creative-menu" aria-keyshortcuts="J" disabled>Инвентарь</button>
-          <button id="solo-download-toggle" type="button" aria-haspopup="dialog" aria-controls="solo-download" hidden>Загрузка карты</button>
-          <button id="warp-toggle" type="button" aria-controls="warps-menu" aria-expanded="false" disabled hidden>Варпы</button>
-          <button id="craft-toggle" type="button" aria-controls="craft-menu" hidden>Изготовить</button>
-          <button id="mode-toggle" type="button" aria-controls="mode-menu" hidden>Режимы игроков</button>
-          <button id="npc-editor-toggle" type="button" aria-haspopup="dialog" aria-controls="npc-menu" disabled>Редактор NPC</button>
-          <button id="admin-toggle" type="button" aria-haspopup="dialog" aria-controls="admin-menu" hidden>Администрирование</button>
-        </div>
-        <details id="keys">
-          <summary>Управление</summary>
-          <section class="touch-guide" aria-label="Сенсорное управление">
-            <h2>На экране</h2>
-            <dl>
-              <dt>Стик / провести по миру</dt><dd>Движение / поворот камеры</dd>
-              <dt>Разгон / Прыжок / Пригнуться</dt><dd>Ускориться, подпрыгнуть или переключить приседание. В полёте удерживайте «Вверх» или «Вниз».</dd>
-              <dt>Действие / Другое действие</dt><dd>Взаимодействовать с объектом или выполнить альтернативное действие через «Ещё»</dd>
-              <dt>Строительство</dt><dd>Открыть кнопки «Поставить», «Сломать» и «Копия»</dd>
-              <dt>Панель предметов / ячейка</dt><dd>Развернуть или свернуть панель, выбрать предмет нажатием на ячейку</dd>
-              <dt>Чат / Пауза / На весь экран</dt><dd>Открыть чат, меню паузы или полноэкранный режим</dd>
-              <dt>Ещё</dt><dd>Полёт, ползти, сесть или встать, сменить вид, свободный обзор, наблюдатель, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
-              <dt data-admin-control-hint hidden>Телепорт</dt><dd data-admin-control-hint hidden>Открыть ввод координат из меню «Ещё»</dd>
-            </dl>
-          </section>
-          <h2>Клавиатура и мышь</h2>
-          <dl>
-            <dt>WASD / стрелки</dt><dd>Движение</dd>
-            <dt>Мышь</dt><dd>Повернуть камеру</dd>
-            <dt>Пробел</dt><dd>Прыжок или подъём в полёте</dd>
-            <dt>Ctrl / C</dt><dd>Спуститься в полёте</dd>
-            <dt>Shift</dt><dd>Ускориться</dd>
-            <dt>H / Shift+H</dt><dd>Автодвижение / автоспринт. H или ручное движение отключают режим.</dd>
-            <dt>F / P</dt><dd>Полёт / режим наблюдателя</dd>
-            <dt>C / V / X</dt><dd>Присесть или подобрать предмет / ползти / сесть или встать</dd>
-            <dt>F5 или Y / U</dt><dd>Сменить вид / свободный обзор</dd>
-            <dt>ЛКМ / ПКМ</dt><dd>Ударить или сломать / поставить. Удерживайте ЛКМ для повторных ударов.</dd>
-            <dt>СКМ / O</dt><dd>Копировать блок</dd>
-            <dt>R</dt><dd>Перебрать положение блока при установке</dd>
-            <dt>K / Shift+K</dt><dd>Резец / размер резца</dd>
-            <dt>E / Shift+E</dt><dd>Действие / альтернативное действие</dd>
-            <dt>Q / Ctrl+Q</dt><dd>Выбросить один предмет / всю стопку</dd>
-            <dt>1–9 / колесо</dt><dd>Выбрать ячейку</dd>
-            <dt>I / J</dt><dd>Предметы / инвентарь</dd>
-            <dt>B / Z</dt><dd>Помахать копытом / танцевать</dd>
-            <dt>T / Enter</dt><dd>Открыть чат в игре</dd>
-            <dt>Tab</dt><dd>Показать список игроков, пока клавиша нажата</dd>
-            <dt data-admin-control-hint hidden>G / L</dt><dd data-admin-control-hint hidden>Телепорт / настройка игрового времени</dd>
-            <dt>Esc / Enter</dt><dd>Пауза, закрытие меню или возврат к игре</dd>
-          </dl>
-          <h2>Инвентарь и карта</h2>
-          <dl>
-            <dt>Shift+клик</dt><dd>Переложить стопку или взять полную стопку из каталога</dd>
-            <dt>1–9 / Q / Delete</dt><dd>Перенести выбранную стопку на панель, выбросить или удалить</dd>
-            <dt>Стрелки / Home / End</dt><dd>Перейти между вкладками каталога, к первой или последней</dd>
-            <dt>↓ / Enter в поиске</dt><dd>Перейти к первому результату или выбрать его</dd>
-            <dt>Перетаскивание / стрелки</dt><dd>Переместить карту</dd>
-            <dt>Колесо / двойной клик</dt><dd>Изменить масштаб карты</dd>
-            <dt>+ / − / 0</dt><dd>Приблизить, отдалить или показать всю карту. На телефоне масштаб меняется двумя пальцами.</dd>
-          </dl>
-          <div class="context-keys">
-            <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
-            <span id="chisel-hint" role="status" hidden>Резец 1/8 · Shift+K — сменить размер · ЛКМ — убрать · ПКМ — добавить · O/СКМ — взять материал</span>
-            <span id="flight-status" role="status" hidden>Полёт · Пробел вверх · Ctrl/C вниз · Shift — ускориться</span>
-            <span id="seat-status" role="status" hidden>Сидите · E — встать</span>
-            <span id="orbit-status" role="status" hidden>Свободный обзор · U — выйти</span>
-            <span id="spectator-status" role="status" hidden>Наблюдатель · Пробел вверх · Ctrl/C вниз · P — выйти</span>
-          </div>
-        </details>
-        <small id="entry-help" hidden></small>
       </div>
     </section>
     <span id="selected" class="target-tag"></span>
@@ -354,11 +408,9 @@
       </div>
     </dialog>
     <dialog id="audio-settings" aria-labelledby="audio-settings-title">
-      <h2 id="audio-settings-title">Звук и окружение</h2>
+      <h2 id="audio-settings-title">Окружение и музыка высоты</h2>
       <div class="audio-options">
         <button id="audio-master" type="button" aria-pressed="true">Весь звук: вкл.</button>
-        <label>Звуки <input id="audio-volume" type="range" min="0" max="100" value="100"></label>
-        <label>Музыка <input id="music-volume" type="range" min="0" max="100" value="50"></label>
         <fieldset class="altitude-music-settings">
           <legend>Музыка высотного обзора</legend>
           <button id="altitude-music-choose" type="button" aria-describedby="altitude-music-status">Выбрать аудиофайл</button>
@@ -428,24 +480,49 @@
     <div id="touch" aria-label="Сенсорное управление">
       <div id="stick"><i></i></div>
       <button id="touch-chat" type="button" class="icon-button" aria-label="Открыть чат" title="Чат"><i aria-hidden="true"></i><span id="chat-unread" aria-hidden="true" hidden></span></button>
-      <div class="touch-actions">
-        <button id="jump" type="button">Прыжок</button>
-        <button id="touch-lower" type="button" aria-pressed="false">Пригнуться</button>
-        <button id="touch-use" type="button">Действие</button>
+      <div class="touch-actions" role="group" aria-label="Движение и действия">
+        <button id="touch-sprint" type="button" class="icon-button touch-control" aria-label="Ускорение" title="Ускорение" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 8H4v8l-2 2v3h11a2 2 0 0 0 0-4h-2l-1-9Zm2-3h9m-3-3 3 3-3 3"/></svg>
+        </button>
+        <button id="touch-flight" type="button" class="icon-button touch-control" aria-label="Полёт" title="Полёт" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19c1-5 3-8 8-10 4-1 7-3 10-6 0 5-2 7-5 9l4-1c-1 4-4 6-8 6h3c-2 3-7 4-12 2Z"/></svg>
+        </button>
+        <button id="jump" type="button" class="icon-button touch-control" aria-label="Прыжок" title="Прыжок">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7m-14 7 7-7 7 7"/></svg>
+        </button>
+        <button id="touch-remove" type="button" class="icon-button touch-control" aria-label="Ударить или сломать" title="Ударить или сломать">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 14 8-10 3-1-1 4-9 9m-4-3 4 4m-2-2-5 5m-1-1 2 2"/></svg>
+        </button>
+        <button id="touch-use" type="button" class="icon-button touch-control" aria-label="Действие" title="Действие">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 12V6a1.5 1.5 0 0 1 3 0v5-7a1.5 1.5 0 0 1 3 0v7-6a1.5 1.5 0 0 1 3 0v6-4a1.5 1.5 0 0 1 3 0v7c0 5-3 7-6 7h-2c-2 0-3-1-4-3l-3-4a1.5 1.5 0 0 1 2-2l2 2"/></svg>
+        </button>
+        <button id="touch-lower" type="button" class="icon-button touch-control" aria-label="Пригнуться" title="Пригнуться" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <g class="touch-crouch-icon"><circle cx="15" cy="6" r="2"/><path d="m15 10-5 3 4 3-3 4H6m4-7-2 4H5m10-7 3 3h2"/></g>
+            <path class="touch-descend-icon" d="m5 5 7 7 7-7m-14 7 7 7 7-7"/>
+          </svg>
+        </button>
       </div>
       <div id="touch-build-panel" class="touch-build-panel" aria-label="Строительство" hidden>
-        <button id="touch-place" type="button" title="Поставить">Поставить</button>
-        <button id="touch-remove" type="button" title="Сломать">Сломать</button>
-        <button id="touch-copy" type="button" title="Копировать">Копия</button>
+        <button id="touch-place" type="button" class="icon-button touch-control" aria-label="Поставить" title="Поставить">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 3 7 4v8l-7 4-7-4V7l7-4Zm-7 4 7 4 7-4m-7 4v8m8 1h5m-2.5-2.5v5"/></svg>
+        </button>
+        <button id="touch-copy" type="button" class="icon-button touch-control" aria-label="Копировать" title="Копировать">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M15 5V4H4v11h1"/></svg>
+        </button>
       </div>
-      <div class="touch-quick" aria-label="Меню и движение">
-        <button id="touch-sprint" type="button" aria-pressed="false">Разгон</button>
-        <button id="touch-build" type="button" aria-pressed="false" aria-controls="touch-build-panel" aria-label="Инструменты строительства" title="Строительство">▦</button>
-        <button id="touch-more" type="button" aria-expanded="false" aria-controls="touch-more-panel">Ещё</button>
-        <button id="touch-pause" type="button" aria-label="Пауза" title="Пауза">☰</button>
+      <div class="touch-quick" aria-label="Меню">
+        <button id="touch-build" type="button" class="icon-button touch-control" aria-pressed="false" aria-controls="touch-build-panel" aria-label="Инструменты строительства" title="Строительство">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3ZM4 7.5l8 4.5 8-4.5M12 12v9M8 5.25l8 4.5"/></svg>
+        </button>
+        <button id="touch-more" type="button" class="icon-button touch-control" aria-expanded="false" aria-controls="touch-more-panel" aria-label="Ещё" title="Ещё">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+        </button>
+        <button id="touch-pause" type="button" class="icon-button touch-control" aria-label="Пауза" title="Пауза">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
       </div>
       <div id="touch-more-panel" aria-label="Дополнительные действия" hidden>
-        <button id="touch-flight" type="button" aria-pressed="false">Полёт</button>
         <button id="touch-crawl" type="button" aria-pressed="false">Ползти</button>
         <button id="touch-seat" type="button" aria-pressed="false">Сесть / встать</button>
         <button id="touch-camera" type="button">Вид</button>

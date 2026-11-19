@@ -17,7 +17,9 @@ const iphoneQa=test==='iphone-fullscreen';
 const preloadQa=test==='terrain-preload-mobile'||test==='terrain-preload-desktop';
 const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
 const controlsQa=test==='controls-update'||test==='controls-update-mobile';
-const mobileQa=iphoneQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile'].includes(test);
+const touchGameplayQa=test==='touch-gameplay';
+const pauseQa=test==='pause-desktop'||test==='pause-mobile';
+const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
@@ -53,6 +55,8 @@ const visible=selector=>page.locator(selector).isVisible();
 const shot=name=>page.screenshot({path:join(output,name+'.png'),timeout:15_000});
 const ready=()=>page.waitForFunction(()=>globalThis.honeymoon?.stats().playable>0,undefined,{timeout:90_000});
 const skipPreload=()=>page.context().route(/\/api\/terrain-preload\?/,route=>route.fulfill({status:409}));
+const pauseSection=section=>click(`[data-pause-section="${section}"]`);
+const pauseTab=tab=>click(`[data-pause-tab="${tab}"]`);
 async function start(admin=!solo) {
   if (admin) {
     const response=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка игры'}});
@@ -153,11 +157,11 @@ try {
       },manifest.chunkCacheVersion);
       assert.ok((await usage()).terrain.buckets.detailed.bytes>=90*MiB);
       await page.locator('#touch-pause').tap();
-      await page.locator('[data-pause-section="settings"]').tap();
     } else {
       await page.waitForFunction(()=>Boolean(document.pointerLockElement));
       await page.keyboard.press('Escape');
     }
+    await pauseSection('settings');
     const output=page.locator('#game-cache-usage');
     await output.waitFor({state:'visible'});
     const expectLimit=limit=>page.waitForFunction(limit=>
@@ -196,6 +200,151 @@ try {
     assert.deepEqual(upperRequests,[]);
     result.checks.push({marker,upperRequests:upperRequests.length,overviewVisible:true});
     await shot('upper-with-cache');
+  } else if (touchGameplayQa) {
+    await skipPreload();
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Сенсорное управление'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await owner.json();
+    const y=73, z=1467;
+    app.game.worldEdit.write(playerId,[
+      {x:3361,y,z,cell:null,object:null},
+      {x:3362,y,z,cell:'legacy:1:0',object:null},
+      {x:3359,y,z,cell:'legacy:54:3',object:{key:`tile:3359:${y}:${z}`,type:'Chest',position:[3359,y,z],data:{Items:[]}}},
+    ]);
+    await start(false);
+    await hop(3360.5,72,1467.51);
+    const touch=await page.context().newCDPSession(page);
+    const point={x:194,y:304,id:1};
+    const touchEvent=(type,...touchPoints)=>touch.send('Input.dispatchTouchEvent',{type,touchPoints});
+    const tap=async()=>{
+      await touchEvent('touchStart',point);
+      await touchEvent('touchEnd');
+    };
+    const aim=async (x,yaw)=>{
+      await page.evaluate(yaw=>honeymoon.look(yaw,0),yaw);
+      await page.waitForFunction(([x,y,z])=>{
+        const target=honeymoon.target();
+        return target?.x===x && target.y===y && target.z===z;
+      },[x,y,z]);
+    };
+    const expectCell=(x,cell)=>page.waitForFunction(([x,y,z,cell])=>{
+      const value=honeymoon.getCell(x,y,z);
+      return (typeof value==='string'?value:value?.key??null)===cell;
+    },[x,y,z,cell],{timeout:10000});
+    async function edit(type,input) {
+      const [response]=await Promise.all([
+        page.waitForResponse(response=>new URL(response.url()).pathname==='/api/action' &&
+          response.request().postDataJSON()?.type===type,{timeout:10000}),
+        input(),
+      ]);
+      assert.equal(response.status(),200,await response.text());
+      return {request:response.request().postDataJSON(),reply:await response.json()};
+    }
+    const actions=[];
+    page.on('request',request=>{
+      if (new URL(request.url()).pathname!=='/api/action') return;
+      const {type}=request.postDataJSON();
+      if (['container_open','copy','place','remove'].includes(type)) actions.push(type);
+    });
+    // Empty hands use the block, while the explicit palm button works even with a block selected.
+    await aim(3359,Math.PI/2);
+    await tap();
+    await page.locator('#container-menu').waitFor({state:'visible'});
+    await page.locator('#container-close').tap();
+    await page.locator('#container-menu').waitFor({state:'hidden'});
+    await aim(3362,-Math.PI/2);
+    await page.keyboard.press('KeyO');
+    await page.waitForFunction(()=>document.getElementById('toast')?.textContent.includes('Скопировано'));
+    const beforeSlide=actions.length;
+    await touchEvent('touchStart',point);
+    await touchEvent('touchMove',{...point,x:point.x+34});
+    await touchEvent('touchMove',point);
+    await touchEvent('touchEnd');
+    await page.waitForTimeout(250);
+    assert.equal(actions.length,beforeSlide,'a drag that returns to its initial position does not act');
+    await expectCell(3361,null);
+    await aim(3362,-Math.PI/2);
+    const placed=await edit('place',tap);
+    assert.deepEqual(placed.reply.changes?.map(({x,y,z,cell})=>({x,y,z,cell})),
+      [{x:3361,y,z,cell:'legacy:1:0'}],JSON.stringify(placed));
+    await expectCell(3361,'legacy:1:0');
+    await aim(3361,-Math.PI/2);
+    await edit('remove',()=>page.locator('#touch-remove').tap());
+    await expectCell(3361,null);
+    await aim(3359,Math.PI/2);
+    await page.locator('#touch-use').tap();
+    await page.locator('#container-menu').waitFor({state:'visible'});
+    await page.locator('#container-close').tap();
+    await page.locator('#container-menu').waitFor({state:'hidden'});
+    assert.deepEqual(actions,['container_open','copy','place','remove','container_open']);
+    for (const [width,height] of [[390,730],[800,370]]) {
+      await page.setViewportSize({width,height});
+      const ids=['jump','touch-lower','touch-sprint','touch-flight','touch-use','touch-remove'];
+      const buttons=await page.locator(ids.map(id=>'#'+id).join(',')).evaluateAll(buttons=>buttons.map(button=>{
+        const {top,bottom,left,right,width,height}=button.getBoundingClientRect();
+        return {label:button.getAttribute('aria-label'),top,bottom,left,right,width,height};
+      }));
+      assert.equal(buttons.length,ids.length);
+      assert.ok(buttons.every(button=>button.label&&button.top>height/2&&button.left>width/2&&
+        button.right<=width&&button.bottom<=height&&button.width>=44&&button.height>=44));
+      const sprint=page.locator('#touch-sprint');
+      const flight=page.locator('#touch-flight');
+      await sprint.tap();
+      assert.equal(await sprint.getAttribute('aria-pressed'),'true');
+      await sprint.tap();
+      assert.equal(await sprint.getAttribute('aria-pressed'),'false');
+      await flight.tap();
+      await page.waitForFunction(()=>honeymoon.stats().flying);
+      await shot('touch-gameplay-'+width);
+      await flight.tap();
+      await page.waitForFunction(()=>!honeymoon.stats().flying);
+    }
+    result.checks.push({noActionOnSwipe:true,actions,orientationChecks:2,sprintAndFlight:true});
+  } else if (pauseQa) {
+    await skipPreload();
+    await start();
+    for (const [width,height] of mobileQa?[[390,730],[800,370],[667,300]]:[[1200,750]]) {
+      await page.setViewportSize({width,height});
+      if (mobileQa) await page.locator('#touch-pause').tap();
+      else {
+        await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+        await page.keyboard.press('Escape');
+      }
+      const resume=page.locator('#play');
+      await resume.waitFor({state:'visible'});
+      const resumeBox=await resume.boundingBox();
+      assert.ok(resumeBox.x>=0&&resumeBox.y>=0&&resumeBox.y+resumeBox.height<=height);
+      await shot('pause-home-'+width);
+      if (mobileQa) await pauseSection('settings');
+      else await page.locator('[data-pause-section="settings"]').press('Enter');
+      const cacheUsage=page.locator('#game-cache-usage');
+      await cacheUsage.waitFor({state:'visible'});
+      assert.ok(await cacheUsage.evaluate(output=>{
+        const full=output.getBoundingClientRect();
+        const scroll=output.closest('.pause-content').getBoundingClientRect();
+        return full.top>=scroll.top && full.bottom<=scroll.bottom;
+      }),`the cache counter fits in the initial settings view at ${width}×${height}`);
+      assert.equal(await visible('#detail-distance'),true);
+      assert.equal(await visible('#audio-mute-toggle'),false);
+      await shot('pause-graphics-'+width);
+      if (mobileQa) await pauseTab('audio');
+      else await page.locator('[data-pause-tab="graphics"]').press('ArrowRight');
+      assert.equal(await visible('#audio-mute-toggle'),true);
+      assert.equal(await visible('#detail-distance'),false);
+      await pauseTab('controls');
+      const guide=page.locator('#keys');
+      assert.equal(await guide.evaluate(panel=>panel.open),false);
+      await click('#keys > summary');
+      assert.equal(await guide.evaluate(panel=>panel.open),true);
+      await shot('pause-controls-'+width);
+      await click('#keys > summary');
+      if (mobileQa) await click('#pause-back');
+      else await page.keyboard.press('Escape');
+      await page.locator('[data-pause-section="settings"]').waitFor({state:'visible'});
+      await resume.click();
+      await page.waitForFunction(()=>document.getElementById('game').classList.contains('playing'));
+      result.checks.push({width,height,resumeVisible:true,graphicsAudioAndControls:true});
+    }
   } else if (controlsQa) {
     await start();
     if (mobileQa) {
@@ -218,12 +367,13 @@ try {
         assert.equal(await crouch.getAttribute('aria-pressed'),'false');
       }
       await page.locator('#touch-pause').tap();
-      await page.locator('[data-pause-section="settings"]').tap();
     } else {
       await page.waitForFunction(()=>Boolean(document.pointerLockElement));
       await page.keyboard.press('Escape');
       await page.locator('#play').waitFor({state:'visible'});
     }
+    await pauseSection('settings');
+    await pauseTab('audio');
     const quickMute=page.locator('#audio-mute-toggle');
     assert.ok(await quickMute.isVisible());
     assert.equal(await quickMute.evaluate(button=>button.previousElementSibling?.id),'audio-settings-toggle');
@@ -547,6 +697,8 @@ try {
       await click('#touch-pause');
       assert.equal(await visible('#play'),true);
       await shot('pause-'+id);
+      await pauseSection('settings');
+      await pauseTab('controls');
       const controls=page.locator('#keys');
       assert.equal(await controls.evaluate(panel=>panel.open),false);
       await click('#keys > summary');
@@ -554,6 +706,7 @@ try {
       assert.equal(await controls.getByRole('heading',{name:'На экране'}).isVisible(),true);
       await shot('controls-'+id);
       await click('#keys > summary');
+      await click('#pause-back');
       await click('#inventory-toggle');
       const dimensions=await page.locator('#creative-close').boundingBox();
       assert.ok(dimensions.width>=44 && dimensions.height>=44,JSON.stringify(dimensions));
@@ -920,6 +1073,7 @@ try {
     assert.equal(await visible('#teleport-form'),false);
     await page.evaluate(()=>document.exitPointerLock());
     await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+    await pauseSection('world');
     for (const id of ['teleport-toggle','warp-toggle','touch-teleport']) {
       assert.equal(await page.locator('#'+id).getAttribute('hidden'),'');
     }
@@ -933,6 +1087,8 @@ try {
     await start();
     await page.evaluate(()=>document.exitPointerLock());
     await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+    await pauseSection('settings');
+    await pauseTab('controls');
     const controls=page.locator('#keys'), summary=controls.locator('summary');
     assert.equal(await summary.isVisible(),true);
     assert.equal(await controls.evaluate(panel=>panel.open),false);
@@ -1036,8 +1192,10 @@ try {
     if (custom) {
       await page.evaluate(()=>document.exitPointerLock());
       await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
-      await click('#audio-settings-toggle');
+      await pauseSection('settings');
+      await pauseTab('audio');
       await page.locator('#music-volume').fill('35');
+      await click('#audio-settings-toggle');
       await page.locator('#altitude-music-file').setInputFiles(process.env.HONEYMOON_QA_AUDIO);
       await page.waitForFunction(()=>honeymoon.stats().audio.altitudeMusicConfigured);
       await click('#audio-settings-close');

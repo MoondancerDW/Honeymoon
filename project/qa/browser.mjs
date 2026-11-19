@@ -74,6 +74,7 @@ try {
     await page.evaluate(async () => {
       if (document.pointerLockElement) document.exitPointerLock();
     });
+    await page.locator('[data-pause-section="world"]').click();
     await page.locator('#reset').click();
     await page.waitForTimeout(250);
     await page.locator('#play').click();

@@ -1,0 +1,206 @@
+#game.paused .entry:not([hidden]) {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  height: min(100%, var(--visible-height, 100dvh));
+  padding: max(.75rem, env(safe-area-inset-top)) max(.75rem, env(safe-area-inset-right))
+    max(.75rem, env(safe-area-inset-bottom)) max(.75rem, env(safe-area-inset-left));
+  background: #0a161dbd;
+}
+
+#game.paused .entry .panel {
+  display: flex;
+  width: min(100%, 36rem);
+  max-height: 100%;
+  min-height: 0;
+  padding: 0;
+  text-align: start;
+  color: #f7f4ec;
+  background: #13232bf7;
+  border-color: #9ebcbf45;
+  box-shadow: 0 1rem 4rem #061015a6;
+  overflow: hidden;
+}
+
+#game.paused :is(.top, .bottom, .hud-hotbar-row, #fullscreen-toggle) { visibility: hidden; }
+#game.paused:has(#chat.expanded, #clock-form:not([hidden]), #teleport-form:not([hidden]), #warps-menu:not([hidden])) #entry {
+  visibility: hidden;
+}
+
+#pause-menu:not([hidden]) {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: 100%;
+  min-height: 0;
+}
+
+.pause-header {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  min-width: 0;
+  padding: .85rem 1.1rem;
+  background: #1c3039;
+  border-bottom: 1px solid var(--line);
+}
+
+#pause-heading {
+  margin: 0;
+  color: var(--gold);
+  font: 400 clamp(1.45rem, 4vw, 2.05rem)/1.1 Georgia, serif;
+}
+#pause-heading:focus { outline: none; }
+
+.pause-identity {
+  display: grid;
+  gap: .18rem;
+  margin-inline-start: auto;
+  min-width: 0;
+  color: #dbebea;
+  font-size: .78rem;
+  text-align: end;
+}
+
+#player-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--gold);
+  font-size: .86rem;
+  font-weight: 600;
+}
+
+#build-caption { color: #a8bec0; }
+
+.pause-content {
+  min-height: 0;
+  padding: .85rem 1.1rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+}
+
+.pause-footer {
+  padding: .75rem 1.1rem .9rem;
+  background: #1c3039;
+  border-top: 1px solid var(--line);
+}
+
+#pause-menu button, #pause-menu select, #pause-menu #keys > summary, #pause-menu .skin-picker {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+#pause-menu button:where(:not(#play)) {
+  min-width: 0;
+  padding: .45rem .65rem;
+  color: #edf5f2;
+  background: #1c3039;
+  font-weight: 500;
+}
+
+#pause-menu button:where(:not(#play)):hover:enabled { background: #2c4650; }
+#pause-menu button:disabled { cursor: default; }
+#pause-menu button[aria-pressed="true"]:where(:not(#play)) { color: var(--gold); border-color: #b69e72; }
+#pause-menu #play { width: 100%; min-width: 0; }
+#pause-menu #play:hover:enabled { background: #ffe4b0; }
+#pause-menu #resume-help { margin: .45rem 0 0; }
+
+#pause-menu #pause-back {
+  flex-shrink: 0;
+  width: 44px;
+  padding: 0;
+  font-size: 1.65rem;
+  line-height: 1;
+}
+
+.pause-destinations, .pause-actions, .pause-tabs, .pause-settings-list { display: grid; gap: .45rem; }
+.pause-destinations, .pause-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.pause-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pause-destinations { margin-bottom: .8rem; }
+.pause-destinations [data-pause-section] { border-color: #a0bbc16b; }
+#pause-menu [role=tab] { font-size: .86rem; }
+#pause-menu [role=tab][aria-selected="true"] {
+  color: var(--gold);
+  border-color: #cbb48d;
+  background: #31464b;
+  font-weight: 650;
+}
+
+.pause-tabs { margin-bottom: .75rem; }
+.pause-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  min-height: 44px;
+  padding: .4rem .55rem;
+  border: 1px solid #a0bbc134;
+  border-radius: .45rem;
+  text-align: start;
+  font-size: .9rem;
+}
+.pause-setting select { flex-shrink: 0; max-width: 48%; }
+.pause-setting input { accent-color: var(--gold); }
+.pause-setting input[type="range"] { width: min(62%, 20rem); min-height: 35px; }
+.pause-setting input[type="checkbox"] { flex-shrink: 0; width: 1.2rem; height: 1.2rem; }
+.pause-switch-state::after { content: "Выкл."; font-size: .82em; }
+[aria-pressed="true"] > .pause-switch-state::after { content: "Вкл."; }
+#pause-menu .audio-menu-controls { display: flex; gap: .45rem; }
+#pause-menu #audio-mute-toggle { flex: 0 0 44px; width: 44px; }
+.cache-usage { color: #cbdadb; font-size: .84rem; }
+
+#pause-profile .profile { margin: 0; max-width: none; }
+#pause-profile .pause-profile-note { min-height: 0; margin: .55rem 0 0; color: #c2d0d1; font-size: .82rem; }
+#pause-profile .skin-option { align-items: center; }
+#pause-profile .skin-picker { display: inline-flex; align-items: center; }
+#pause-profile :is(#nickname, #clear-skin) { min-height: 44px; }
+#pause-world .pause-world-admin { margin-top: .85rem; }
+#pause-world .pause-world-admin h3 { margin: 0 0 .45rem; font-size: .94rem; font-weight: 600; color: #d7e6e4; }
+#pause-world .pause-world-admin:not(:has(:is(button, select):not([hidden]):enabled)),
+#pause-world .pause-world-admin .pause-actions:not(:has(button:not([hidden]):enabled)),
+#pause-world .pause-world-admin label:has(select:disabled),
+#pause-world #npc-editor-toggle:disabled { display: none; }
+#pause-world .pause-world-admin label { margin-top: .45rem; }
+#pause-world #solo-world-switch { width: 100%; margin-top: .45rem; }
+
+#keys {
+  margin-top: .55rem;
+  font-size: .85rem;
+  border: 1px solid var(--line);
+  border-radius: .45rem;
+  background: #1c3039;
+}
+#keys > summary { align-content: center; padding: .45rem .65rem; cursor: pointer; font-weight: 600; }
+#keys > summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+#keys[open] { padding-bottom: .6rem; }
+#keys h2 { font-size: .9rem; margin: .65rem .6rem .35rem; }
+#keys dl { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: .32rem .55rem; margin: 0 .6rem; }
+#keys dt { color: var(--gold); overflow-wrap: anywhere; }
+#keys dd { margin: 0; overflow-wrap: anywhere; }
+#keys .touch-guide { display: none; }
+.touch #keys .touch-guide { display: block; }
+#keys .context-keys:has(span:not([hidden])) {
+  display: grid; gap: .35rem; margin: .5rem .6rem 0; padding-top: .45rem;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 375px) {
+  .pause-header, .pause-content, .pause-footer { padding-inline: .65rem; }
+  #pause-menu button:where(:not(#play)) { padding-inline: .4rem; }
+  .pause-destinations button { font-size: .88rem; }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .pause-header, .pause-content, .pause-footer { padding-block: .45rem; }
+  #pause-heading { font-size: 1.5rem; }
+  .pause-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (orientation: landscape) and (max-height: 500px) and (min-width: 31rem) {
+  .pause-tabs { margin-bottom: .4rem; }
+  .pause-settings-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem; }
+  .pause-settings-list .pause-setting:has(select) { padding-block: 0; }
+  .pause-settings-list .audio-menu-controls { grid-column: 1 / -1; }
+  #game-cache-usage:not([hidden]) { display: flex; padding-block: 0; }
+}
