@@ -19,6 +19,7 @@ import {createContainerMenu} from './container-menu.mjs';
 import {createAccessUi} from './access-ui.mjs';
 import {createAdminUi} from './admin-ui.mjs';
 import {createNpcUi} from './npc-ui.mjs';
+import {isNpcEditorWand,npcNameVisible} from '../world/npc-editor-wand.mjs';
 import {createWorldEdit,isWoodAxe} from './world-edit.mjs';
 import {renderCreativeIcon,inventoryItemEntry} from './creative-icons.mjs';
 import {renderInventoryPreview} from './inventory-preview.mjs';
@@ -34,7 +35,8 @@ import {boatSeat} from '../world/boats.mjs';
 import {canLogLiquid, liquidKind} from '../world/logged-fluid.mjs';
 import {FAKE_WATER,bucketCell,bucketKeys,fluidState} from '../world/fluid-state.mjs';
 import {detailCoverage} from '../world/full-detail.mjs';
-import {bookType,plainMinecraftText,stackRevision} from '../world/item-text.mjs';
+import {bookType,itemTooltip,plainMinecraftText,stackRevision} from '../world/item-text.mjs';
+import {formatMinecraftId,minecraftBlockCode,minecraftItemCode} from '../world/minecraft-id.mjs';
 import {containerSpec} from '../world/containers.mjs';
 import {chiselMaterialShape, coverBoxes, signFor} from '../world/geometry.mjs';
 import {creativeMicroblock,signItemKey,signPlacementCell} from '../world/creative-items.mjs';
@@ -64,7 +66,10 @@ const loading = element('loading');
 const button = element('play');
 const surface = element('scene');
 const toast = element('toast');
-const selectionStatus = element('selected');
+const selectionStatus = element('selected-label');
+const selectionDetails = element('selected-details');
+const selectionAction = element('selected-action');
+const selectionId = element('selected-id');
 const coordinateStatus = element('coords');
 const creativeToggle = element('creative-toggle');
 const inventoryToggle = element('inventory-toggle');
@@ -106,9 +111,10 @@ let catalogRequest, inventoryRequest = Promise.resolve();
 let inventory = {slots:Array(36).fill(null),selected:0}, offhandProp = null;
 let emote=null;
 let heldSignature = '';
-let selectionInputs, selectionRevision = 0;
+let selectionInputs, selectionRevision = 0, solidSelectionDistance;
 let seatTarget = null;
 let frameTarget = null, rayFrameTarget;
+let dropTarget;
 let npcTarget, npcEditorAvailable = false;
 const npcBards=new Map();
 let nextBardCheck=0;
@@ -121,6 +127,9 @@ const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 let playing = false, jump = false, lastFrame = 0, physicsTime = 0, timer;
 let jumpHeldAt, jumpGrant;
 let profileSwapPending=false;
+let profileUid;
+let nightVisionRevision=0;
+const nightVisionPreference='honeymoon-night-vision';
 let autoMovement=null;
 let previousFramePosition, framePosition, correctionOffset;
 let feedReopenAt=-Infinity;
@@ -138,7 +147,7 @@ let arrivalVersion = 0;
 let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
 let feed,feedRetry;
 let nearbyStream;
-let entered = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
+let entered = false, multiplayer = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
 let horizontalSpeed = 0;
 let nextSprintDust = 0;
 const movementSync=createMovementSync({
@@ -220,15 +229,19 @@ const social = createSocialHud({post, notice, pause, resume, teleport, placeWarp
   loadWarps:()=>json('/api/warps',{signal:AbortSignal.timeout(5000)})});
 const inventoryStackAt=slot=>slot===offhandSlot ? inventory.offhand :
   slot<36 ? inventory.slots[slot] : inventory.equipment?.[slot-36];
+const holdingNpcWand=()=>isNpcEditorWand(inventoryStackAt(inventory.selected)) ||
+  hasOffhand() && isNpcEditorWand(inventory.offhand);
 const itemDocuments=createItemDocuments({stackAt:inventoryStackAt,act:inventoryAction,pause,resume});
 const storage=createContainerMenu({action:containerAction,entryFor:entryForInventoryStack,
   draw:drawCreativeIcon,inventory:()=>inventory,pause,resume});
 const npcUi=createNpcUi({command:npcCommand,onTeleport:receiveNpcTeleport,
+  nameVisible:npc=>npcNameVisible(npc,holdingNpcWand()),
   loadEditor:()=>getNpc('/api/npcs/editor'),edit:payload=>post('npcs/editor',payload,AbortSignal.timeout(10000)),
   unlock:key=>post('npcs/admin',{key},AbortSignal.timeout(5000)),
   loadModels:()=>import('../world/npc-model-catalog.mjs').then(module=>module.loadNpcModelManifest()),
   loadCatalog:loadCreative,entryFor:npcItemEntry,drawItem:drawCreativeIcon,inventory:()=>inventory,
-  position:()=>position,preview:(canvas,appearance)=>view.npcs?.preview(canvas,appearance,performance.now()),
+  position:()=>position,lookYaw:()=>heading.yaw,isPlaying:()=>playing,
+  preview:(canvas,appearance)=>view.npcs?.preview(canvas,appearance,performance.now()),
   clearPreview:canvas=>view.npcs?.clearPreview(canvas),pause,resume,notice});
 const modeUi=createPlayerModeUi({element,notice,pause,changed:updateGameMode,revive:revivePlayer,
   fetchModes:()=>json('/api/modes',{signal:AbortSignal.timeout(5000)}),
@@ -243,7 +256,10 @@ const adminUi=createAdminUi({element,load:()=>getNpc('/api/admin/access'),loadUi
     if (path==='admin/teleport' && fields.direction==='bring' && !await flushPosition()) {
       return {ok:false,body:{error:'movement_blocked'}};
     }
-    return post(path,fields,AbortSignal.timeout(10000));
+    const result=await post(path,fields,AbortSignal.timeout(10000));
+    if (result.ok && (path==='admin/profiles/race' || path==='admin/profiles/size')) applyRaceUpdate(result.body);
+    if (result.ok && path==='admin/profiles/night-vision') applyNightVision(result.body);
+    return result;
   },pause,teleport:receiveAdminTeleport,
   worldSettings:()=>({
     weather:view.weather,weatherChanged:updateWeather,
@@ -268,7 +284,7 @@ const creative = createCreativeMenu({load:loadCreative,
   clone:(from,to,count)=>inventoryAction('inventory_clone',{from,to,count}),
   trash:slot=>inventoryAction('inventory_trash',{slot}),
   drop:fields=>inventoryAction('drop_item',{...fields,yaw:heading.yaw,eye:view.eyeOffset()}),
-  preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin),
+  preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin,view?.localPonyType,view?.localPonySize),
   editItem:itemDocuments.openItem,readBook:itemDocuments.openBook,
   swap:swapHands,
   canCopy:()=>modeUi.creative,
@@ -688,6 +704,12 @@ function stream() {
   });
   feed.addEventListener('weather',event=>updateWeather(JSON.parse(event.data)));
   feed.addEventListener('game-mode',event=>modeUi.update(JSON.parse(event.data)));
+  feed.addEventListener('profile-race',event=>{
+    if (feed===source) applyRaceUpdate(JSON.parse(event.data));
+  });
+  feed.addEventListener('profile-night-vision',event=>{
+    if (feed===source) applyNightVision(JSON.parse(event.data));
+  });
   feed.addEventListener('access-revoked',()=>location.reload());
   feed.addEventListener('admin-teleport',event=>{
     receiveAdminTeleport(JSON.parse(event.data)).catch(error=>notice(error.message));
@@ -719,8 +741,9 @@ function heldPonyItem() {
 
 function playerPose() {
   const moving=playing || automaticTravelEnabled();
-  const motion = seat ? 'sit' : !moving ? 'idle' : flying ? 'fly' : movement.stance === 'swim' ? 'swim' :
-    !movement.grounded && !movement.medium && movement.stance === 'stand' ? 'air' : horizontalSpeed > .15 ?
+  const activePose=moving || multiplayer && entered && !modeUi.death;
+  const motion = seat ? 'sit' : !activePose ? 'idle' : flying ? 'fly' : movement.stance === 'swim' ? 'swim' :
+    !movement.grounded && !movement.medium && movement.stance === 'stand' ? 'air' : moving && horizontalSpeed > .15 ?
       (sprinting() && movement.stance === 'stand' ? 'run' : 'walk') : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
     stance:seat?.bed ? 'crawl' : movement.stance, boost:!seat && flying && moving && sprinting(), eye:view.eyeOffset(),
@@ -874,11 +897,56 @@ function applyPonyTraits(payload) {
   movement.size=size;
   if (movement.ponyType!==ponyType) movement.cancelSlowFall();
   movement.ponyType=ponyType;
+  view.setLocalSkin(profile.confirmed.skin,ponyType,size);
+  creative.refreshPreview();
   ponyUi.setTraits(ponyType,size);
   ponyUi.sync(payload);
   refreshOffhand();
   element('touch-flight').hidden=!canFly();
   if (!canFly() && (flying || pendingFlight?.enabled)) stopFlight();
+}
+
+function applyRaceUpdate(body) {
+  const current=profile.confirmed;
+  if (!current || body.uid!==profileUid || !Number.isSafeInteger(body.raceRevision) || body.raceRevision<=(current.raceRevision??0)) return;
+  const {size=current.size,skin=current.skin,ponyType,raceOverride,sizeOverride,raceRevision}=body;
+  const changed=current.ponyType!==ponyType || current.size!==size;
+  profile.confirmed={...current,skin,size,ponyType,raceOverride,sizeOverride,raceRevision};
+  if (!changed && current.skin===skin) return;
+  if (current.skin!==skin) profile.showSelection();
+  if (changed) {
+    if (body.position) setSeat(body.seat,body.position,body.stance);
+    else movementSync.reset(position,movement.stance);
+  }
+  applyPonyTraits(body);
+  if (body.gameMode) modeUi.update(body.gameMode);
+  if (!spectator && !seat && typeof body.flight==='boolean' && body.flight!==flying) setFlight(body.flight);
+  presenceDirty=true;
+}
+
+function showNightVision(enabled) {
+  view.setNightVision(enabled);
+  element('night-vision').setAttribute('aria-pressed',String(enabled));
+}
+
+function applyNightVision(state) {
+  if (typeof state?.enabled!=='boolean' || (state.uid!==undefined && state.uid!==profileUid) ||
+      !Number.isSafeInteger(state.revision) || state.revision<=nightVisionRevision) return;
+  nightVisionRevision=state.revision;
+  showNightVision(state.enabled);
+  try {localStorage.setItem(nightVisionPreference,state.enabled?'1':'0');} catch {}
+}
+
+function restoreNightVision(state) {
+  if (state) { applyNightVision(state); return; }
+  let previous;
+  try {previous=localStorage.getItem(nightVisionPreference);} catch {}
+  if (previous!=='1' && previous!=='0') return;
+  const enabled=previous==='1';
+  showNightVision(enabled);
+  void post('night-vision',{enabled,initialize:true},AbortSignal.timeout(4000)).then(result=>{
+    if (result.ok) applyNightVision(result.body);
+  }).catch(()=>{});
 }
 
 function setFlight(active) {
@@ -1020,6 +1088,7 @@ function setAuthoritativePosition(feet, stance = 'stand') {
 
 function setSeat(next, feet, stance) {
   seatEpoch++;
+  seatedMoveSince = undefined;
   seat = next;
   setAuthoritativePosition(feet,stance);
   game.classList.toggle('seated', Boolean(seat));
@@ -1067,8 +1136,15 @@ async function acceptTeleport(body) {
 const canUsePonyAbility = () => playing && !menuOpen() && !spectator && !orbitHeading && !modeUi.death &&
   !seat && !seatPending && !resetting && !acting && !profileSwapPending && teleportLoading.hidden;
 
+function showMagicCooldown(seconds) {
+  const duration=seconds===1 ? '1 секунда' : `${seconds} ${seconds<=4 ? 'секунды' : 'секунд'}`;
+  notice(`До перезарядки ${seconds===1 ? 'осталась' : 'осталось'} ${duration}`);
+}
+
 async function magicTeleport() {
-  if (!canUsePonyAbility() || !ponyAbilities(movement.ponyType).horn || ponyUi.cooldown(performance.now())) return;
+  if (!canUsePonyAbility() || !ponyAbilities(movement.ponyType).horn) return;
+  const remaining=ponyUi.cooldown(performance.now());
+  if (remaining) { showMagicCooldown(remaining); return; }
   const {yaw,pitch}=heading;
   resetting=true;
   try {
@@ -1076,6 +1152,7 @@ async function magicTeleport() {
     const result=await post('magic-teleport',{yaw,pitch},AbortSignal.timeout(5000));
     ponyUi.sync(result.body);
     if (result.ok) await acceptTeleport(result.body);
+    else if (result.body.error==='magic_cooldown') showMagicCooldown(Math.max(1,ponyUi.cooldown(performance.now())));
     else notice(messages[result.body.error] ?? 'Не удалось телепортироваться');
   } catch { notice('Связь с сервером прервалась'); }
   finally { resetting=false; }
@@ -1183,7 +1260,11 @@ async function toggleSeat(ground) {
 
 function interact(sneaking = false) {
   if (!playing || acting || resetting || spectator || menuOpen()) return;
-  if (npcTarget && !seat) {npcUi.interact(npcTarget); return;}
+  if (npcTarget && !seat) {
+    if (holdingNpcWand() && modeUi.admin) void npcUi.editTarget(npcTarget.id);
+    else void npcUi.interact(npcTarget);
+    return;
+  }
   if (seat || seatTarget) return toggleSeat();
   if (frameTarget) return action('interact');
   const cell = selection?.cell;
@@ -1409,6 +1490,7 @@ function updateSelection() {
     selection = null;
     seatTarget = null;
     frameTarget = null;
+    dropTarget = null;
     npcTarget = null;
     hitPlayer = null;
     selectionInputs = null;
@@ -1419,12 +1501,15 @@ function updateSelection() {
   const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,chiselSize,seat,movement.stance];
   const changed = !selectionInputs || stamp.some((value, index) => value !== selectionInputs[index]);
   const vehicleChanged=changed || world.minecarts.size || world.boats.size || seatTarget;
-  if (!vehicleChanged && !view.npcs&&!modeUi.active) return;
+  if (!vehicleChanged && !view.npcs && !modeUi.active && !world.droppedItems.size && !dropTarget) return;
   selectionInputs = stamp;
   const cp = Math.cos(pitch);
   const origin = view.sightOrigin(position,seat ? SEATED_EYE : EYE);
   const direction = [-Math.sin(yaw) * cp,Math.sin(pitch),-Math.cos(yaw) * cp];
-  if (changed) selection = pick(world, origin, direction, chiseling);
+  if (changed) {
+    selection = pick(world, origin, direction, chiseling);
+    solidSelectionDistance=undefined;
+  }
   if (vehicleChanged) seatTarget = pickVehicle(world,origin,direction,selection);
   if (changed) rayFrameTarget = pickItemFrame(world,origin,direction,selection);
   frameTarget = rayFrameTarget;
@@ -1434,10 +1519,27 @@ function updateSelection() {
     Math.min(6,selection?.length??6,seatTarget?.length??6,frameTarget?.length??6));
   hitPlayer=modeUi.active&&!seat&&view.players.pick(origin,direction,Math.min(4.2,selection?.length??Infinity,
     seatTarget?.length??Infinity,frameTarget?.length??Infinity,npcTarget?.distance??Infinity));
+  dropTarget=!seat && view.droppedItemView?.pick(origin,direction,Math.min(6,frameTarget?.length??Infinity,
+    seatTarget?.length??Infinity,npcTarget?.distance??Infinity,hitPlayer?.length??Infinity));
+  if (dropTarget && (selection?.length??Infinity)<=dropTarget.depth) {
+    solidSelectionDistance??=pick(world,origin,direction,false,true)?.length??Infinity;
+    if (solidSelectionDistance<=dropTarget.depth) dropTarget=null;
+  }
   if (changed && chiseling && chiselSize === 2 && selection?.voxel !== undefined) {
     selection.chiselSize = chiselSize;
     selection.boxes = [voxelRemovalBrush(selection.cell.voxels, selection.voxel, chiselSize).box];
   }
+}
+
+function framedItemStack({id,Damage=0,Block,tag}={}) {
+  if (!Number.isInteger(id)) return null;
+  return {key:`creative:${id}:${Damage}`,...((Block || id<256) && {cell:`legacy:${id}:${Damage & 15}`}),nbt:tag};
+}
+
+function setTargetDetail(node,text) {
+  if (node.textContent===text) return;
+  node.textContent=text;
+  node.hidden=!text;
 }
 
 async function action(type, sneaking = false, tapTool = false) {
@@ -1659,8 +1761,12 @@ function tick(now) {
   const manualTravel=playing && !openMenu && !orbitHeading && !profileSwapPending;
   const automaticTravel=!profileSwapPending && automaticTravelEnabled(openMenu);
   const travelling=manualTravel || automaticTravel;
+  // Multiplayer menus capture controls, but gravity and moving fluids still act on the player.
+  const passivePhysics=!travelling && multiplayer && entered && !flying && !spectator && !seat && !seatPending &&
+    !profileSwapPending && !modeUi.death && !switchingSoloWorld && teleportLoading.hidden;
+  const simulatePhysics=travelling || passivePhysics;
   movement.waitingForTerrain=false;
-  physicsTime=travelling && !resetting && hasPredictionRoom ? Math.min(physicsTime+dt,.064) : 0;
+  physicsTime=simulatePhysics && !resetting && hasPredictionRoom ? Math.min(physicsTime+dt,.064) : 0;
   const liveActionsReady=connection.canMove();
   let seatedSpeed = 0;
   if (emote && (automaticTravel || flying || seat || jump || forwardInput() || turnInput() || movement.stance!=='stand' ||
@@ -1681,7 +1787,7 @@ function tick(now) {
   if (seat?.kind === 'ground' && manualTravel && liveActionsReady && (forwardInput() || turnInput())) {
     seatedMoveSince ??= now;
     if (!acting && !seatPending && !resetting) {
-      if (now-seatedMoveSince >= 1000) {
+      if (now-seatedMoveSince >= 500) {
         seatedMoveSince = now;
         void toggleSeat(false);
       } else if (hasPredictionRoom) {
@@ -1699,17 +1805,17 @@ function tick(now) {
       }
     }
   } else seatedMoveSince = undefined;
-  if (travelling && !seat && !seatPending && teleportLoading.hidden) {
+  if (simulatePhysics && !seat && !seatPending && teleportLoading.hidden) {
     const startX = position.x, startZ = position.z;
     const fallSpeed = movement.fall;
-    const forward = automaticTravel ? 1 : forwardInput();
+    const forward = automaticTravel ? 1 : manualTravel ? forwardInput() : 0;
     const strafe = manualTravel && !automaticTravel ? turnInput() : 0;
     const rising = manualTravel && keys.has('Space');
     const descending = manualTravel && (keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC'));
     const vertical = flying ? Number(rising) - Number(descending) : 0;
     const sin = Math.sin(heading.yaw), cos = Math.cos(heading.yaw);
     if (!resetting && hasPredictionRoom) {
-      if (!flying) {
+      if (!flying && travelling) {
         const previous = movement.stance;
         const crouching=touchCrouching || manualTravel && (keys.has('KeyC') || now < crouchUntil);
         const stance = movement.wantsSwim(position,sprinting()) ? 'swim' :
@@ -1726,7 +1832,7 @@ function tick(now) {
         const dz = (-cos * forward - sin * strafe) * speed;
         if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, physicsStep, recordPosition, spectator, automaticTravel);
         else movement.update(position, dx, dz, manualTravel && jump, physicsStep,
-          {rise: manualTravel && jump || rising, descend: descending || movement.medium === 'ladder' && sprinting(),
+          {rise: manualTravel && jump || rising, descend: descending || travelling && movement.medium === 'ladder' && sprinting(),
             swimPitch: -Math.sin(heading.pitch)*forward, recordStep: recordPosition, automatic:automaticTravel,
             chargedJump:jump==='charged'});
         jump=false;
@@ -1745,7 +1851,7 @@ function tick(now) {
     jump=false;
     horizontalSpeed = seatedSpeed;
   }
-  if (!hasPredictionRoom || resetting || !travelling || seat?.entity) {
+  if (!hasPredictionRoom || resetting || !simulatePhysics || seat?.entity) {
     previousFramePosition={...position};
     physicsTime=0;
     if (!hasPredictionRoom && movementSync.inspect().status!=='binding') jump=false;
@@ -1776,8 +1882,8 @@ function tick(now) {
   if (!movementSync.busy() || presenceDirty) sendPresence(now);
   const intended=Boolean(automaticTravel || forwardInput() || turnInput() || keys.has('Space') || flying &&
     (keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC')));
-  const waiting=travelling && !resetting && (intended || positionTrail.length) && !hasPredictionRoom;
-  const needsTerrain=travelling && intended && movement.waitingForTerrain;
+  const waiting=simulatePhysics && !resetting && (intended || positionTrail.length) && !hasPredictionRoom;
+  const needsTerrain=(travelling && intended || passivePhysics) && movement.waitingForTerrain;
   connection.movementWaiting(Boolean(waiting),needsTerrain && (now < unavailableSoloTerrainUntil ? 'solo-unavailable' : true));
   if (travelling && !seat && !flying && movement.stance === 'stand') {
     view.viewBob.step(horizontalSpeed * dt, dt, movement.grounded && !movement.medium, movement.fall);
@@ -1807,18 +1913,33 @@ function tick(now) {
   }
   const useHint = touchMode ? 'Ладонь' : 'E';
   const attackHint = touchMode ? 'Меч' : 'ЛКМ';
-  const selected = hitPlayer ? hitPlayer.name : npcTarget ? plainMinecraftText(npcTarget.entity?.name??'NPC') :
+  const wandHeld=holdingNpcWand();
+  view.npcs?.setRevealHiddenNames(wandHeld);
+  const npcEdit=wandHeld && modeUi.admin;
+  const targetNpcName=npcNameVisible(npcTarget?.entity,wandHeld) ? plainMinecraftText(npcTarget.entity.name) : '';
+  const selected = hitPlayer ? hitPlayer.name : npcTarget ? targetNpcName :
     frameTarget ? `Рамка · ${touchMode?'Тап':'ПКМ'} — вложить предмет · ${useHint} — повернуть` :
     seatTarget ? `${seatTarget.kind === 'boat' ? 'Лодка' : 'Вагонетка'} · ${useHint} — сесть` :
     selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
   const targetSeat = !npcTarget && !seat && !seatTarget && !frameTarget && seatFor(selection?.cell,world.models);
-  const interaction = npcTarget ? `${useHint} — разговор` : targetSeat ? `${useHint} — ${targetSeat.bed?'лечь':'сесть'}` :
+  const interaction = npcTarget ? `${useHint} — ${npcEdit?'настроить NPC':'разговор'}` : targetSeat ? `${useHint} — ${targetSeat.bed?'лечь':'сесть'}` :
     !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) ? `${useHint} — редактировать` : '';
   const fluidHint = npcTarget?'':selection?.cell?.fluid === 'water' ? `${attackHint} — убрать воду` :
     selection?.cell?.fluid === 'lava' ? `${attackHint} — убрать лаву` : '';
-  const status = wieldWorldEdit() ? worldEdit.hint(touchMode) : [selected,interaction,fluidHint].filter(Boolean).join('  /  ');
+  const editing=wieldWorldEdit();
+  const framedItem=!hitPlayer && !npcTarget && framedItemStack(frameTarget?.item);
+  const aimedItem=!editing && (dropTarget?.item || framedItem);
+  const entry=aimedItem && entryForInventoryStack(aimedItem);
+  const status = editing ? worldEdit.hint(touchMode) :
+    entry ? entry.name : [selected,interaction,fluidHint].filter(Boolean).join('  /  ');
+  const sourceId=entry ? formatMinecraftId(minecraftItemCode(aimedItem,entry)) :
+    editing || hitPlayer || npcTarget || frameTarget || seatTarget?.entity ? '' :
+      formatMinecraftId(minecraftBlockCode(selection?.voxelMaterial??selection?.cell));
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
+  setTargetDetail(selectionDetails, entry ? itemTooltip(aimedItem,status,{withLore:true}).slice(status.length+1) : '');
+  setTargetDetail(selectionAction,entry && framedItem && !dropTarget ? `${useHint} — повернуть` : '');
+  setTargetDetail(selectionId,sourceId);
   const coordinates = `X ${position.x.toFixed(2)}  Y ${position.y.toFixed(2)}  Z ${position.z.toFixed(2)}`;
   if (coordinateStatus.textContent !== coordinates) coordinateStatus.textContent = coordinates;
   if (now >= nextClockUpdate) {
@@ -1828,7 +1949,7 @@ function tick(now) {
   nearbyStream?.update();
   const eye=view.sightOrigin(position,movement.body.eye);
   touchControls?.update({flying,spectator,stance:movement.stance,crawlRequested,touchCrouching,seated:seat?.kind==='ground',
-    orbit:Boolean(orbitHeading),chisel:chiseling,actionLabel:seat?'Встать':npcTarget?'Диалог':
+    orbit:Boolean(orbitHeading),chisel:chiseling,actionLabel:seat?'Встать':npcTarget?(npcEdit?'Настроить NPC':'Диалог'):
       containerSpec(selection?.cell)?'Открыть':targetSeat?(targetSeat.bed?'Лечь':'Сесть'):undefined});
   view.render(now, npcTarget||hitPlayer?null:selection, playing && !openMenu || automaticTravel, placement, document.hasFocus(),{x:eye[0],y:eye[1],z:eye[2]});
   connection.frames(view.renderedFrames,now);
@@ -1887,10 +2008,10 @@ function bindControls() {
   controls.addEventListener('toggle',()=>{
     if (controls.open) controls.querySelector('summary').scrollIntoView({block:'start'});
   });
-  createAltitudeMap({
+  const altitudeMap=createAltitudeMap({
     game,openButton:element('altitude-map'),backButton:element('altitude-map-back'),
     manifest:world.manifest,palette:view.terrainTextures?.average?.image,
-    persistentTerrain:Boolean(worldCheckpoint),
+    persistentTerrain:Boolean(worldCheckpoint),altitudeBuild,
     localMarker:()=>({x:position.x,z:position.z,name:profile.confirmed.nickname}),
     remoteMarkers:()=>view.players.mapMarkers(),
     pause:()=>{if (playing) setPlaying(false);},
@@ -1918,15 +2039,17 @@ function bindControls() {
         if (!ok) {
           throw new Error(messages[body.error] || 'Не удалось сохранить профиль');
         }
-        const changedTraits=movement.size!==body.size || movement.ponyType!==body.ponyType;
-        profile.saved(body, pending);
-        if (body.gameMode) modeUi.update(body.gameMode);
-        applyPonyTraits(body);
-        if (body.position) setSeat(body.seat,body.position,body.stance);
+        const {skin,size,ponyType,raceOverride,sizeOverride,raceRevision=0}=profile.confirmed;
+        const staleRace=(body.raceRevision??0)<raceRevision;
+        const next=staleRace ? {...body,skin,size,ponyType,raceOverride,sizeOverride,raceRevision} : body;
+        const changedTraits=movement.size!==next.size || movement.ponyType!==next.ponyType;
+        profile.saved(next, pending);
+        if (!staleRace && body.gameMode) modeUi.update(body.gameMode);
+        applyPonyTraits(staleRace ? {} : body);
+        if (!staleRace && body.position) setSeat(body.seat,body.position,body.stance);
         else if (changedTraits) movementSync.reset(position,movement.stance);
-        if (!spectator && !seat && typeof body.flight==='boolean' && body.flight!==flying) setFlight(body.flight);
+        if (!staleRace && !spectator && !seat && typeof body.flight==='boolean' && body.flight!==flying) setFlight(body.flight);
         social.profileUpdated(profile.confirmed);
-        view.setLocalSkin(profile.confirmed.skin);
         if (playing && !entered) enterWorld();
         else if (playing) presenceDirty = true;
       }).catch(error => {
@@ -2192,15 +2315,19 @@ function bindControls() {
     } catch (error) {notice(error.message);}
     finally {paintLowDevice(); lowDevice.disabled=false;}
   });
-  const showVision = enabled=>{
-    view.setNightVision(enabled);
-    night.setAttribute('aria-pressed',String(enabled));
-  };
-  showVision(localStorage.getItem('honeymoon-night-vision') === '1');
-  night.addEventListener('click',()=>{
-    const enabled = !view.nightVision;
-    localStorage.setItem('honeymoon-night-vision',enabled ? '1' : '0');
-    showVision(enabled);
+  night.addEventListener('click',async()=>{
+    const previous=view.nightVision;
+    const before=nightVisionRevision;
+    night.disabled=true;
+    showNightVision(!previous);
+    try {
+      const result=await post('night-vision',{enabled:!previous},AbortSignal.timeout(5000));
+      if (!result.ok) throw new Error('night vision update rejected');
+      applyNightVision(result.body);
+    } catch {
+      if (before===nightVisionRevision) showNightVision(previous);
+      notice('Не удалось сохранить ночное зрение');
+    } finally {night.disabled=false;}
   });
   const weather = element('weather');
   weather.addEventListener('change',async()=>{
@@ -2294,6 +2421,7 @@ function bindControls() {
       resetting = false;
     }
   });
+  return altitudeMap;
 }
 
 function distanceToChunk([x, z]) {
@@ -2311,7 +2439,7 @@ async function addChunk([x, z], visualOnly = false, isNeeded, signal, highOnly=f
       const data=await readJson(url,response);
       if (data?.x!==x || data.z!==z || !Array.isArray(data.sections)) throw new Error('Invalid terrain chunk');
       return data;
-    });
+    },{isStale:data=>!data.frameItemText && data.entities?.some(entity=>entity.type==='ItemFrame' && entity.data?.Item)});
   if (isNeeded && !isNeeded()) return;
   if (highOnly && world.chunks.has(chunkKey(x,z))) return;
   view.addChunk(world.addChunk(chunk, visualOnly));
@@ -2465,6 +2593,8 @@ function bindSoloWorld(kind) {
 async function start() {
   const sessionBody = await accessUi.acquire();
   if (!sessionBody) return;
+  multiplayer=!sessionBody.access?.singlePlayer;
+  profileUid=sessionBody.access?.uid ?? sessionBody.playerId;
   audio.setDefaultAltitudeMusic(sessionBody.altitudeMusic);
   soloStreaming=Boolean(sessionBody.soloDownload);
   soloDownloadUi.enable(soloStreaming);
@@ -2509,9 +2639,9 @@ async function start() {
   touchCrouching = touchMode && movement.stance === 'crouch';
   view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
     lowDevice,terrainNetwork,persistentTerrain:Boolean(worldCheckpoint),altitudeBuild});
+  restoreNightVision(session.body.nightVision);
   modeUi.update(session.body.gameMode);
   applyPonyTraits(session.body);
-  view.setLocalSkin(profile.confirmed.skin);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
   if (session.body.seat) setSeat(session.body.seat, p,session.body.stance);
   if (session.body.time) view.setWorldTime(session.body.time);
@@ -2538,7 +2668,7 @@ async function start() {
   void refreshNpcs();
   await refresh();
   await view.prepareGraphics();
-  bindControls();
+  const altitudeMap=bindControls();
   stream();
   movementSync.pump();
   requestAnimationFrame(tick);
@@ -2582,6 +2712,7 @@ async function start() {
   await view.whenReady(near,{position});
   restoreFlight(session.body);
   metrics.playable = performance.now() - metrics.started;
+  const mapWarmup=altitudeMap?.prepare();
   loading.textContent = 'Можно войти в мир';
   button.disabled = false;
   const horizon = farSupported ? view.setDetailedLodDistance(Number(distance.value)) : view.setDistance(4);
@@ -2589,7 +2720,8 @@ async function start() {
   if (worldCheckpoint && (manifest.vista || manifest.lod)) {
     terrainPreload=createTerrainPreload({manifest,build:altitudeBuild,mobile:touchMode,
       backgroundBusy:()=>document.hidden || terrainNetwork.urgent || terrainNetwork.constrained()});
-    terrainPreload.setMode(lowDevice);
+    if (mapWarmup) void mapWarmup.then(()=>terrainPreload.setMode(view.lowDevice));
+    else terrainPreload.setMode(lowDevice);
   }
   if (manifest.chunkPalettes) nearbyStream = streamNearby(manifest.visualChunks ?? []);
   const pending = nearbyStream?.done ?? streamChunks(manifest.chunks.filter(chunk => !buffered.includes(chunk)), manifest.visualChunks ?? []);

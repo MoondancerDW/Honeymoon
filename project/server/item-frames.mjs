@@ -12,12 +12,13 @@ const visibleEntity = raw => raw?.type === 'ItemFrame' ? displayEntity(raw) : nu
 
 export function createItemFrames({base,store,physical,getCurrent,faceSupports,protectedCell}) {
   const snapshot = () => store.getState(module,world,state)?.value ?? [];
+  const publicFrames=entries=>entries.map(displayEntity);
   function write(entries,entity,key) {
     const revision = store.nextRevision();
     const frames = entries.filter(frame => frame.key !== key);
     if (entity) frames.push({...entity,revision});
     store.putState(module,world,state,1,frames);
-    return {worldRevision:revision,changes:[],effects:[],frames};
+    return {worldRevision:revision,changes:[],effects:[],frames:publicFrames(frames)};
   }
 
   function place(input,sight,invisible = false) {
@@ -50,7 +51,8 @@ export function createItemFrames({base,store,physical,getCurrent,faceSupports,pr
     const entries = snapshot();
     const entity = entries.find(frame => frame.key === key) ?? visibleEntity(base.getEntity?.(x,z,key));
     if (!entity || !samePoint(entity.position?.map(Math.floor),[x,y,z])) throw new RequestError(409,'not_a_frame');
-    if ((entity.revision ?? 0) !== expectedRevision) throw new RequestError(409,'stale_frame',{frames:entries,worldRevision:store.worldRevision()});
+    if ((entity.revision ?? 0) !== expectedRevision) throw new RequestError(409,'stale_frame',{
+      frames:publicFrames(entries),worldRevision:store.worldRevision()});
     const origin = [sight.x,sight.y+(sight.eye ?? 1.62),sight.z];
     const target = axes.map(axis => hit[axis]);
     const delta = target.map((value,index) => value - origin[index]);
@@ -87,7 +89,7 @@ export function createItemFrames({base,store,physical,getCurrent,faceSupports,pr
     const remaining = entries.filter(frame => !frame.placed || !supports.has(itemFrameMount(frame)?.support.join(',')));
     if (remaining.length === entries.length) return undefined;
     store.putState(module,world,state,1,remaining);
-    return remaining;
+    return publicFrames(remaining);
   }
 
   function hasMountAt(x,y,z) {
@@ -95,5 +97,5 @@ export function createItemFrames({base,store,physical,getCurrent,faceSupports,pr
       samePoint(frame.position.map(Math.floor),[x,y,z]));
   }
 
-  return {snapshot,place,edit,removeSupported,removeSupportedMany,hasMountAt};
+  return {snapshot:()=>publicFrames(snapshot()),place,edit,removeSupported,removeSupportedMany,hasMountAt};
 }

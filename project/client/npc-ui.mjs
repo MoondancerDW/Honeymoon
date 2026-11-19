@@ -1,5 +1,6 @@
 import {block,button,field,node,stackChip,textComponent} from './npc-controls.mjs';
 import {createNpcEditor} from './npc-editor.mjs';
+import {npcNameVisible} from '../world/npc-editor-wand.mjs';
 
 const errors={
   npc_editor_required:'Введите ключ администратора',
@@ -51,7 +52,7 @@ export function createNpcUi(options) {
   const content=element('npc-menu-content');
   const closeButton=element('npc-menu-close');
   const editorButton=element('npc-editor-toggle');
-  let panel,identity,access=false,active,task,epoch=0,fromPlay;
+  let panel,identity,access=false,active,task,epoch=0,fromPlay,startingInteraction=false;
   const status=(message='')=>{
     statusElement.textContent=message;
     statusElement.hidden=!message;
@@ -60,6 +61,10 @@ export function createNpcUi(options) {
     heading.replaceChildren(textComponent(name));
     subtitle.replaceChildren(detail?textComponent(detail):'');
   };
+  function npcTitle(npc) {
+    const visible=options.nameVisible?.(npc)??npcNameVisible(npc);
+    return {name:visible ? npc.name||'NPC' : 'NPC',detail:visible ? npc.title : ''};
+  }
   const editor=createNpcEditor({...options,content,edit:modify,status});
   function setAccess(value) {
     const authorized=Boolean(value);
@@ -163,7 +168,8 @@ export function createNpcUi(options) {
     const npc=response.npc??active;
     if (npc) {
       active=npc;
-      title(npc.name||'NPC',npc.title);
+      const {name,detail}=npcTitle(npc);
+      title(name,detail);
     }
     const info=response.interaction;
     if (!info || info.closed) {close(true,false); return;}
@@ -255,16 +261,6 @@ export function createNpcUi(options) {
       }
       body.append(block(bank.name||'Банк',bankBody));
     }
-    if (info.recipes?.length) {
-      const list=node('div','npc-trade-list');
-      for (const recipe of info.recipes) {
-        const card=node('div','npc-trade');
-        card.append(stackList(recipe.items??[]),node('span','npc-trade-arrow','→'),stackList([recipe.result]),
-          actionChoice('Изготовить','craft',{recipeId:recipe.id},recipe.affordable!==false));
-        list.append(card);
-      }
-      body.append(block('Рецепты',list));
-    }
     if (info.jobData?.giftAvailable) body.append(actionChoice('Получить предметы','gift'));
     if (info.jobData?.healer) body.append(actionChoice('Восстановить здоровье','heal'));
     if (info.services?.length) {
@@ -291,21 +287,37 @@ export function createNpcUi(options) {
     return true;
   }
 
-  function interact(target) {
+  async function interact(target) {
+    if (startingInteraction || dialog.open) return;
     const npc=target.entity??target;
-    open('interaction',{name:npc.name||'NPC',detail:npc.title,playing:true});
-    active=npc;
-    identity=target.id??npc.id;
-    content.append(node('p','npc-empty','Начинаем разговор…'));
-    const openEpoch=epoch;
-    void act('interact').then(ok=>{
-      if (!ok && epoch===openEpoch) content.replaceChildren();
-    });
+    const id=target.id??npc.id;
+    const initialEpoch=epoch;
+    startingInteraction=true;
+    try {
+      const result=await options.command(id,'interact');
+      if (!result.ok) {
+        options.notice(errors[result.body?.error]??result.body?.message??'Действие сейчас недоступно');
+        return;
+      }
+      if (!result.body.interaction || result.body.interaction.closed) return;
+      if (epoch!==initialEpoch || !options.isPlaying()) {
+        void options.command(id,'close').catch(()=>{});
+        return;
+      }
+      open('interaction',{...npcTitle(result.body.npc??npc),playing:true});
+      active=npc;
+      identity=id;
+      await renderConversation(result.body);
+    } catch (error) {
+      options.notice(error.message||'Связь с сервером прервана');
+    } finally {
+      startingInteraction=false;
+    }
   }
 
-  async function loadEditor(targetId) {
+  async function loadEditor(targetId,playing=false) {
     if (panel==='interaction' && identity) void options.command(identity,'close').catch(()=>{});
-    open('editor',{name:'Редактор NPC'});
+    open('editor',{name:'Редактор NPC',playing});
     content.append(node('p','npc-empty','Загружаем персонажей…'));
     const data=await run(options.loadEditor);
     if (!data && panel==='editor') {
@@ -329,7 +341,7 @@ export function createNpcUi(options) {
   }
 
   async function startEditor(targetId,playing=false) {
-    if (access) return loadEditor(targetId);
+    if (access) return loadEditor(targetId,playing);
     open('unlock',{name:'Редактор NPC',playing});
     const form=node('form','npc-unlock');
     const key=field('Ключ администратора',{type:'password',maxLength:256});
@@ -358,6 +370,7 @@ export function createNpcUi(options) {
   return {
     isOpen:()=>dialog.open,
     interact,
+    editTarget:id=>startEditor(id,true),
     setAccess,
     setAvailable(value){editorButton.disabled=!value;},
     close,

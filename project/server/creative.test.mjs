@@ -9,6 +9,7 @@ import {createHoneymoonServer} from './index.mjs';
 import * as geometry from '../world/geometry.mjs';
 import {CREATIVE_FRAME_KEY, CREATIVE_INVISIBLE_FRAME_KEY, CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
 import {guidedMicroblock} from '../world/microblocks.mjs';
+import {NPC_EDITOR_WAND_KEY} from '../world/npc-editor-wand.mjs';
 
 const fixture = fileURLToPath(new URL('../work/', import.meta.url));
 
@@ -21,6 +22,8 @@ test('creative catalog supplies the transport items when the generated catalog i
   assert.equal(items.get(CREATIVE_MINECART_KEY)?.blockKey, undefined);
   assert.equal(items.get(CREATIVE_FRAME_KEY)?.kind,'item-frame');
   assert.equal(items.get(CREATIVE_INVISIBLE_FRAME_KEY)?.invisible,true);
+  assert.equal(items.get(NPC_EDITOR_WAND_KEY)?.name,'Инструмент настройки NPC');
+  assert.equal(catalog.entries.filter(row=>row.key===NPC_EDITOR_WAND_KEY).length,1);
   assert.ok(placeable.has('legacy:1:0'));
 });
 

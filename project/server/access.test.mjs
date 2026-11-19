@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
+import {crc32,deflateSync} from 'node:zlib';
 import * as geometry from '../world/geometry.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import {normalizeLegacyPlayerName} from './legacy-player.mjs';
@@ -16,7 +17,7 @@ const secret='owner-local-test-secret';
 const config={geometry,secure:true,inviteRequired:true,ownerOnPrimary:false,allowedOrigin:external,publicOrigin:external,
   npcAdminKey:secret,initialMode:'creative'};
 
-function startAssets() {
+function startAssets({ceiling}={}) {
   mkdirSync(fixtures,{recursive:true});
   const generated=mkdtempSync(join(fixtures,'access-test-'));
   mkdirSync(join(generated,'world','chunks'),{recursive:true});
@@ -24,6 +25,7 @@ function startAssets() {
   const bounds={minX:0,minY:0,minZ:0,maxX:15,maxY:15,maxZ:15};
   const sections=Buffer.alloc(8192);
   for (let index=0;index<256;index++) sections.writeUInt16LE(1,index*2);
+  if (ceiling) sections.writeUInt16LE(1,2*(ceiling.x+16*ceiling.z+256*ceiling.y));
   writeFileSync(join(generated,'world','world.json'),JSON.stringify({schemaVersion:1,bounds,palette,chunks:[[0,0]],spawn:[8.5,1,8.5]}));
   writeFileSync(join(generated,'world','chunks','0.0.json'),JSON.stringify({x:0,z:0,sections:[{y:0,indices:sections.toString('base64')}],
     objects:[],entities:[]}));
@@ -312,6 +314,256 @@ async function eventReader(t,url,cookie,query='presence=1') {
   };
 }
 
+function unicornSkin(size='small') {
+  const sizeMarkers={small:[0xff,0xbe,0x53],large:[0xce,0x32,0x54],tall:[0x2a,0x3c,0x78]};
+  const ihdr=Buffer.from([0,0,0,64,0,0,0,32,8,6,0,0,0]);
+  const pixels=Buffer.alloc(32*(1+64*4));
+  pixels.set([0xd1,0x9f,0xe4,255],1);
+  pixels.set([...sizeMarkers[size],255],13);
+  function chunk(type,data=Buffer.alloc(0)) {
+    const result=Buffer.alloc(data.length+12);
+    result.writeUInt32BE(data.length);
+    result.write(type,4);
+    data.copy(result,8);
+    result.writeUInt32BE(crc32(result.subarray(4,-4)),result.length-4);
+    return result;
+  }
+  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),
+    chunk('IDAT',deflateSync(pixels)),chunk('IEND')]).toString('base64');
+}
+
+test('administrators set persistent races for themselves and other players until a skin is submitted',async t=>{
+  const {start}=fixture(t);
+  let urls=await start({initialMode:'game'});
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const hostUid=code(owner).access.uid;
+  const host=(path,body)=>request(urls.owner,path,{body,cookie:owner.cookie});
+  const invitation=code(await host('/api/admin/invites',{kind:'player'}));
+  const guest=await request(urls.public,'/api/session',{body:{invite:invitation.code,profileName:'Cloud Watcher'},origin:external});
+  const guestUid=code(guest).access.uid;
+  const player=(path,body)=>request(urls.public,path,{body,cookie:guest.cookie,origin:external});
+  const race='/api/admin/profiles/race';
+  const skin=unicornSkin();
+  const native=code(await player('/api/profile',{skin}));
+  assert.deepEqual([native.ponyType,native.size,native.raceOverride,native.raceRevision],['unicorn','small',null,1]);
+  assert.equal(native.gameMode.maxHealth,6);
+  assert.equal(code(await player(race,{uid:guestUid,ponyType:'alicorn'}),403).error,'admin_required');
+  assert.equal(code(await host(race,{uid:guestUid,ponyType:'unknown'}),400).error,'invalid_pony_type');
+  assert.equal(code(await host(race,{uid:'10000000-0000-4000-8000-000000000010',ponyType:'earth'}),404).error,'player_missing');
+
+  const hostEvents=await eventReader(t,urls.owner,owner.cookie);
+  const guestEvents=await eventReader(t,urls.public,guest.cookie);
+  assert.equal((await hostEvents('profile-race')).uid,hostUid);
+  assert.equal((await guestEvents('profile-race')).raceRevision,1);
+  code(await player('/api/presence',{yaw:0,pitch:0,motion:'idle'}));
+  const pegasus=code(await host(race,{uid:guestUid,ponyType:'pegasus'}));
+  assert.deepEqual((await guestEvents('profile-race')),pegasus);
+  assert.deepEqual([pegasus.ponyType,pegasus.size,pegasus.raceOverride,pegasus.raceRevision],['pegasus','small','pegasus',2]);
+  assert.equal(pegasus.flightAllowed,true);
+  assert.equal(pegasus.gameMode.maxHealth,4);
+  let avatar;
+  do {
+    const {players}=await hostEvents('presence');
+    avatar=players.find(profile=>profile.id===native.id && profile.ponyType==='pegasus');
+  } while (!avatar);
+  assert.equal(Object.hasOwn(avatar,'raceOverride'),false);
+  assert.equal(Object.hasOwn(avatar,'raceRevision'),false);
+
+  assert.equal(code(await player('/api/flight',{enabled:true,sequence:1})).flight,true);
+  const earth=code(await host(race,{uid:guestUid,ponyType:'earth'}));
+  assert.deepEqual(await guestEvents('profile-race'),earth);
+  assert.equal(earth.flight,false);
+  assert.equal(earth.gameMode.maxHealth,8);
+  assert.equal(code(await player('/api/flight',{enabled:true,sequence:2}),409).error,'flight_unavailable');
+  const self=code(await host(race,{uid:hostUid,ponyType:'alicorn'}));
+  assert.deepEqual(await hostEvents('profile-race'),self);
+  assert.equal(self.ponyType,'alicorn');
+  assert.equal(self.gameMode.maxHealth,12);
+
+  urls=await start({initialMode:'game'});
+  assert.equal(code(await host('/api/session',{})).profile.ponyType,'alicorn');
+  const rejoined=code(await player('/api/session',{}));
+  assert.deepEqual([rejoined.profile.ponyType,rejoined.profile.size,rejoined.profile.raceOverride,rejoined.profile.raceRevision],
+    ['earth','small','earth',3]);
+  const reconnect=await eventReader(t,urls.public,guest.cookie);
+  assert.equal((await reconnect('profile-race')).raceRevision,3);
+  const adminRow=code(await host('/api/admin/access')).profiles.find(row=>row.uid===guestUid);
+  assert.deepEqual([adminRow.ponyType,adminRow.raceOverride],['earth','earth']);
+  const renamed=code(await player('/api/profile',{nickname:'New Nickname'}));
+  assert.deepEqual([renamed.raceOverride,renamed.raceRevision],['earth',3]);
+  const uploaded=code(await player('/api/profile',{skin}));
+  assert.deepEqual([uploaded.ponyType,uploaded.size,uploaded.raceOverride,uploaded.raceRevision],['unicorn','small',null,4]);
+  assert.equal(uploaded.gameMode.maxHealth,6);
+  assert.equal((await reconnect('profile-race')).raceRevision,4);
+  assert.equal(code(await host(race,{uid:guestUid,ponyType:'earth'})).raceRevision,5);
+  const automatic=code(await host(race,{uid:guestUid,ponyType:null}));
+  assert.deepEqual([automatic.ponyType,automatic.raceOverride,automatic.raceRevision],['unicorn',null,6]);
+  assert.equal(code(await host(race,{uid:guestUid,ponyType:'alicorn'})).raceRevision,7);
+  const cleared=code(await player('/api/profile',{skin:null}));
+  assert.deepEqual([cleared.ponyType,cleared.size,cleared.raceOverride,cleared.raceRevision],['earth','normal',null,8]);
+  assert.equal(cleared.gameMode.maxHealth,12);
+  const large=code(await player('/api/profile',{skin:unicornSkin('large')}));
+  assert.deepEqual([large.ponyType,large.size,large.gameMode.maxHealth],['unicorn','large',13]);
+  const largePegasus=code(await host(race,{uid:guestUid,ponyType:'pegasus'}));
+  assert.deepEqual([largePegasus.size,largePegasus.gameMode.maxHealth],['large',11]);
+  const tall=code(await player('/api/profile',{skin:unicornSkin('tall')}));
+  assert.deepEqual([tall.ponyType,tall.size,tall.gameMode.maxHealth],['unicorn','tall',10]);
+});
+
+test('administrators update pony size without changing race and both settings follow the selected profile',async t=>{
+  const {start,close,state}=fixture(t);
+  let urls=await start({initialMode:'game'});
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const hostUid=code(owner).access.uid;
+  const host=(path,body)=>request(urls.owner,path,{body,cookie:owner.cookie});
+  const invite=code(await host('/api/admin/invites',{kind:'player'}));
+  const guest=await request(urls.public,'/api/session',{body:{invite:invite.code,profileName:'Visitor'},origin:external});
+  const guestUid=code(guest).access.uid;
+  const player=(path,body)=>request(urls.public,path,{body,cookie:guest.cookie,origin:external});
+  const race='/api/admin/profiles/race',size='/api/admin/profiles/size';
+  const skin=unicornSkin();
+  code(await player('/api/profile',{skin}));
+  // Read the pre-size database representation of a race override.
+  await close();
+  const db=new DatabaseSync(state);
+  db.prepare('UPDATE module_state SET value=? WHERE module=? AND owner=? AND key=?')
+    .run(JSON.stringify('pegasus'),'pony-abilities',guestUid,'race-override');
+  db.close();
+  urls=await start({initialMode:'game'});
+  const hostEvents=await eventReader(t,urls.owner,owner.cookie);
+  const guestEvents=await eventReader(t,urls.public,guest.cookie);
+  assert.equal((await hostEvents('profile-race')).uid,hostUid);
+  const initial=await guestEvents('profile-race');
+  assert.deepEqual([initial.ponyType,initial.size,initial.raceOverride,initial.sizeOverride],['pegasus','small','pegasus',null]);
+  assert.equal(code(await player(size,{uid:guestUid,size:'large'}),403).error,'admin_required');
+  assert.equal(code(await host(size,{uid:guestUid,size:'huge'}),400).error,'invalid_pony_size');
+  assert.equal(code(await host(size,{uid:'10000000-0000-4000-8000-000000000010',size:'small'}),404).error,'player_missing');
+  code(await player('/api/presence',{yaw:0,pitch:0,motion:'idle'}));
+  const page=crypto.randomUUID();
+  const {movement}=code(await player('/api/position-state',{page,start:true}));
+  const {x,y,z}=movement.position;
+  const waiting={page,epoch:movement.epoch,first:2,from:[x+.1,y,z],trail:[[x+.2,y,z]],x:x+.2,y,z,requestId:'before-size-2'};
+  assert.equal(code(await player('/api/position',waiting)).movement.accepted,0);
+
+  const assigned=code(await host(size,{uid:guestUid,size:'large'}));
+  assert.deepEqual(assigned.position,movement.position);
+  const stale=code(await player('/api/position',{...waiting,first:1,from:[x,y,z],trail:[[x+.1,y,z]],x:x+.1,
+    requestId:'before-size-1'}),409);
+  assert.equal(stale.error,'movement_reset');
+  assert.notEqual(stale.movement.epoch,movement.epoch);
+  assert.equal(stale.movement.accepted,0);
+  assert.deepEqual(stale.movement.position,movement.position);
+  assert.deepEqual(await guestEvents('profile-race'),assigned);
+  assert.deepEqual([assigned.size,assigned.sizeOverride,assigned.ponyType,assigned.raceRevision,assigned.gameMode.maxHealth],
+    ['large','large','pegasus',2,11]);
+  let avatar;
+  do {
+    const {players}=await hostEvents('presence');
+    avatar=players.find(profile=>profile.id===code(guest).profile.id && profile.size==='large');
+  } while (!avatar);
+  assert.equal(avatar.ponyType,'pegasus');
+  assert.equal(Object.hasOwn(avatar,'sizeOverride'),false);
+
+  const own=code(await host(size,{uid:hostUid,size:'small'}));
+  assert.deepEqual(await hostEvents('profile-race'),own);
+  assert.deepEqual([own.size,own.sizeOverride,own.ponyType,own.gameMode.maxHealth],['small','small','earth',8]);
+  const switched=code(await host(race,{uid:guestUid,ponyType:'alicorn'}));
+  assert.deepEqual(await guestEvents('profile-race'),switched);
+  assert.deepEqual([switched.size,switched.sizeOverride,switched.gameMode.maxHealth],['large','large',15]);
+
+  urls=await start({initialMode:'game'});
+  const rejoined=code(await player('/api/session',{}));
+  assert.equal(rejoined.profile.sizeOverride,'large');
+  assert.equal(code(await host('/api/session',{})).profile.size,'small');
+  const listed=code(await host('/api/admin/access')).profiles.find(profile=>profile.uid===guestUid);
+  assert.deepEqual([listed.size,listed.sizeOverride],['large','large']);
+  const automatic=code(await host(size,{uid:guestUid,size:null}));
+  assert.deepEqual([automatic.size,automatic.sizeOverride,automatic.raceOverride,automatic.gameMode.maxHealth],
+    ['small',null,'alicorn',8]);
+  const tall=code(await host(size,{uid:guestUid,size:'tall'}));
+  assert.deepEqual([tall.size,tall.gameMode.maxHealth],['tall',12]);
+  const uploaded=code(await player('/api/profile',{skin}));
+  assert.deepEqual([uploaded.size,uploaded.sizeOverride,uploaded.ponyType,uploaded.raceOverride],['small',null,'unicorn',null]);
+});
+
+test('changing the size of an offline player resolves their previous saved position before growing',async t=>{
+  const {start,close,state}=fixture(t,startAssets({ceiling:{x:4,y:2,z:4}}));
+  let urls=await start({initialMode:'game'});
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const host=(path,body)=>request(urls.owner,path,{body,cookie:owner.cookie});
+  const invite=code(await host('/api/admin/invites',{kind:'player'}));
+  const guest=await request(urls.public,'/api/session',{body:{invite:invite.code,profileName:'Visitor'},origin:external});
+  const initial=code(guest),uid=initial.access.uid;
+  const player=(path,body)=>request(urls.public,path,{body,cookie:guest.cookie,origin:external});
+  code(await player('/api/profile',{skin:unicornSkin()}));
+  await close();
+
+  const originalPosition={x:4.5,y:1,z:4.5};
+  const db=new DatabaseSync(state);
+  db.prepare('UPDATE module_state SET value=? WHERE module=? AND owner=? AND key=?')
+    .run(JSON.stringify({world:initial.contentHash,position:originalPosition,stance:'stand'}),'movement',uid,'pos');
+  db.close();
+  urls=await start({initialMode:'game'});
+  const changed=code(await host('/api/admin/profiles/size',{uid,size:'large'}));
+  assert.notDeepEqual(changed.position,originalPosition);
+  assert.notDeepEqual(changed.position,initial.position);
+  assert.ok(Math.hypot(changed.position.x-originalPosition.x,changed.position.y-originalPosition.y,
+    changed.position.z-originalPosition.z)<=2);
+  const saved=new DatabaseSync(state,{readOnly:true});
+  const {value}=saved.prepare('SELECT value FROM module_state WHERE module=? AND owner=? AND key=?')
+    .get('movement',uid,'pos');
+  saved.close();
+  assert.deepEqual(JSON.parse(value).position,changed.position);
+  const returned=code(await player('/api/session',{}));
+  assert.deepEqual(returned.position,changed.position);
+  assert.equal(returned.profile.size,'large');
+});
+
+test('night vision settings follow the target profile, with a personal switch and safe initialization',async t=>{
+  const {start}=fixture(t);
+  let urls=await start();
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Host Owner'}});
+  const ownerUid=code(owner).access.uid;
+  const host=(path,body)=>request(urls.owner,path,{body,cookie:owner.cookie});
+  const invitation=code(await host('/api/admin/invites',{kind:'player'}));
+  const guest=await request(urls.public,'/api/session',{body:{invite:invitation.code,profileName:'Target Player'},origin:external});
+  const uid=code(guest).access.uid;
+  const player=(path,body)=>request(urls.public,path,{body,cookie:guest.cookie,origin:external});
+  const personal='/api/night-vision',admin='/api/admin/profiles/night-vision';
+  assert.equal(guest.json.nightVision,null);
+  assert.equal(code(await request(urls.public,personal,{origin:external,body:{enabled:true}}),401).error,'session_required');
+  assert.equal(code(await player(admin,{uid:ownerUid,enabled:true}),403).error,'admin_required');
+  assert.equal(code(await host(admin,{uid:'10000000-0000-4000-8000-000000000010',enabled:true}),404).error,'player_missing');
+  assert.equal(code(await player(personal,{enabled:'true'}),400).error,'invalid_night_vision');
+  assert.equal(code(await player(personal,{enabled:false,initialize:1}),400).error,'invalid_night_vision');
+
+  const events=await eventReader(t,urls.public,guest.cookie);
+  const ownerEvents=await eventReader(t,urls.owner,owner.cookie);
+  const on=code(await host(admin,{uid,enabled:true}));
+  assert.deepEqual(on,{uid,enabled:true,revision:1});
+  assert.deepEqual(await events('profile-night-vision'),on);
+  assert.deepEqual(code(await player(personal,{enabled:false,initialize:true})),on);
+  assert.equal(code(await host('/api/session',{})).nightVision,null);
+  const rows=code(await host('/api/admin/access')).profiles;
+  assert.equal(rows.find(row=>row.uid===uid).nightVision,true);
+  assert.equal(rows.find(row=>row.uid===ownerUid).nightVision,null);
+  const off=code(await player(personal,{uid:ownerUid,enabled:false}));
+  assert.deepEqual(off,{uid,enabled:false,revision:2});
+  assert.deepEqual(await events('profile-night-vision'),off);
+  const initialized=code(await host(personal,{enabled:false,initialize:true}));
+  assert.deepEqual(initialized,{uid:ownerUid,enabled:false,revision:1});
+  assert.deepEqual(await ownerEvents('profile-night-vision'),initialized);
+
+  urls=await start();
+  const rejoined=code(await player('/api/session',{}));
+  assert.deepEqual(rejoined.nightVision,{enabled:false,revision:2});
+  const reconnect=await eventReader(t,urls.public,guest.cookie);
+  assert.deepEqual(await reconnect('profile-night-vision'),off);
+  const enabled=code(await host(admin,{uid,enabled:true}));
+  assert.deepEqual(await reconnect('profile-night-vision'),{uid,enabled:true,revision:3});
+  assert.equal(enabled.revision,3);
+});
+
 test('an administrator can override a natural weather front and all clients reload the same schedule',async t=>{
   const {start}=fixture(t);
   let now=100_000;
@@ -458,7 +710,14 @@ test('the single-player owner can use coordinate travel and manage warps without
   const session=code(await local('/api/session',{}));
   assert.equal(session.access.role,'admin');
   assert.equal(session.access.singlePlayer,true);
-  await eventReader(t,url,'');
+  const events=await eventReader(t,url,'');
+  assert.equal((await events('profile-race')).ponyType,'earth');
+  const uid=session.access.uid;
+  assert.equal(code(await local('/api/admin/access')).profiles.find(profile=>profile.uid===uid).raceOverride,null);
+  assert.equal(code(await local('/api/admin/profiles/race',{uid,ponyType:'unicorn'})).ponyType,'unicorn');
+  assert.equal((await events('profile-race')).raceOverride,'unicorn');
+  assert.equal(code(await local('/api/admin/profiles/size',{uid,size:'large'})).size,'large');
+  assert.equal((await events('profile-race')).sizeOverride,'large');
   code(await local('/api/presence',{yaw:0,pitch:0,motion:'idle'}));
   const target={x:7.5,y:8,z:7.5};
   assert.deepEqual(code(await local('/api/teleport',target)).position,target);

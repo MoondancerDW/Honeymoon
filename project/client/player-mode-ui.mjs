@@ -25,7 +25,7 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     if (!next) return;
     state=next;
     health.hidden=next.mode!=='game'||Boolean(next.death);
-    const maxHealth=next.maxHealth===15?15:10;
+    const maxHealth=next.maxHealth??10;
     if (cells.length!==maxHealth) {
       cells=Array.from({length:maxHealth},()=>document.createElement('span'));
       health.setAttribute('aria-valuemax',String(maxHealth));

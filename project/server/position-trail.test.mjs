@@ -219,6 +219,25 @@ test('increasing avatar height at the world ceiling keeps its flight position', 
   assert.deepEqual(game.session(player).position,local);
 });
 
+test('a seated foal that grows under a low ceiling leaves the seat in a fitting stance', t => {
+  const store=openStore(':memory:');
+  t.after(()=>store.close());
+  const bounds={minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15};
+  const base={manifest:{bounds,spawn:[8.5,1,8.5]},hash:'seat-resize',
+    inBounds:(x,y,z)=>[x,y,z].every(value=>value>=0 && value<=15),
+    getCell:(x,y,z)=>({key:y===0 || (y===2 && x===4 && z===4)?'legacy:1:0':'air'})};
+  let size='small';
+  const game=createGame(base,store,geometry,{modules:[],playerSize:()=>size});
+  const player=store.createPlayer().id;
+  game.session(player);
+  const position={x:4.5,y:1,z:4.5};
+  assert.deepEqual(game.teleport(player,position).position,position);
+  assert.equal(game.sit(player,undefined,{yaw:0},true).seat.kind,'ground');
+  size='large';
+  assert.deepEqual(game.reconcileProfile(player),{seat:null,position,stance:'crawl'});
+  assert.equal(game.session(player).stance,'crawl');
+});
+
 test('a restarted movement channel returns an authoritative saved position for the same world', t => {
   const store = openStore(':memory:');
   t.after(() => store.close());

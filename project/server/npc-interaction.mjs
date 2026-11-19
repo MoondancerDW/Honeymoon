@@ -7,6 +7,8 @@ const day=86400000;
 const playerStateKey='progress';
 const playerStateVersion=1;
 const noData=()=>({dialogs:{},active:{},completed:{},gifts:{},transport:{},banks:{},kills:{},experience:0});
+const hasConversation = info => Boolean(info.message || info.lines.length || info.dialog || info.dialogs.length ||
+  info.quests.length || info.trade.length || info.transport.length || info.bank || info.follower || info.jobData);
 const isNative = /^(?:creative|legacy):(\d+):(\d+)$/;
 const itemIdentity = item => {
   const native=isNative.exec(item.key);
@@ -140,8 +142,6 @@ export function createNpcInteraction({store,inventory,definitions,shared,actors,
       lines:npc.lines.interact.map(value=>playerText(value,ctx.profile)),
       dialog:dialog ? editableDialog(dialog,progress,ctx.profile,ctx.tick) : null,
       dialogs:dialogRoots(npc,ctx).map(({id,title})=>({id,title})),quests,trade,transport,
-      recipes:shared.recipes.filter(recipe=>recipe.global&&availability(recipe.availability,progress,ctx.tick))
-        .map(row=>({...row,affordable:canTake(state,row.items)})),
       ...(bankView&&{bank:{...bankView,name:bank.name,max:bank.max*9,cost:bank.cost,upgrade:bank.upgrade}}),
       ...(npc.role==='follower' && {follower:{following:npcState.following===ctx.player,costs:[]}}),
       ...(npc.job==='itemGiver'&&{jobData:{giftAvailable:giftReady(npc,ctx)}}),
@@ -355,12 +355,7 @@ export function createNpcInteraction({store,inventory,definitions,shared,actors,
         if (current.following && current.following!==player) throw new RequestError(409,'npc_follower_unavailable');
         follow=current.following?null:player;
       } else if (['bankDeposit','bankWithdraw','bankUpgrade'].includes(action)) bankAction(npc,ctx,body);
-      else if (action==='craft') {
-        const recipe=shared.recipes.find(row=>row.id===body.recipeId && row.global && availability(row.availability,ctx.progress,ctx.tick));
-        if (!recipe) throw new RequestError(409,'npc_recipe_unavailable');
-        charge(ctx,recipe.items);
-        give(ctx,[recipe.result]);
-      } else throw new RequestError(400,'invalid_npc_action');
+      else throw new RequestError(400,'invalid_npc_action');
       interactionUpdate=row?.id??null;
       const messages=[message,...tryInstant(ctx)].filter(Boolean);
       return output(npc,ctx,row,{...(messages.length&&{message:messages.join('\n')})});
@@ -378,9 +373,17 @@ export function createNpcInteraction({store,inventory,definitions,shared,actors,
       current.following=follow;
       response.interaction.follower.following=Boolean(follow);
     }
+    if (body.action==='interact') {
+      const responds=hasConversation(response.interaction);
+      if (responds || npc.interactionRotation==='head' || npc.interactionRotation==='body') actors.face(npc,position);
+      response.npc=actors.view(npc);
+      if (!responds) {
+        response.interaction={closed:true};
+        interactionUpdate=undefined;
+      }
+    }
     if (interactionUpdate===undefined) opened.delete(player);
     else opened.set(player,{npcId:npc.id,dialogId:interactionUpdate});
-    if (body.action==='interact') actors.face(npc,position);
     return response;
   }
   return {act,leave(player) { opened.delete(player);attackAt.delete(player); }};

@@ -1,6 +1,7 @@
 import {blockState} from './block-interactions.mjs';
 import {jammyBenchState} from './jammy-benches.mjs';
 import {jammySofaVariant} from './jammy-sofas.mjs';
+import {BED_SURFACE_HEIGHT} from './geometry.mjs';
 
 export const SEATED_EYE = 1.05;
 export const SEATED_HEIGHT = 1.28;
@@ -11,7 +12,7 @@ const sofaIds = {chair:213, left:214, right:215, center:216, corner:217};
 
 export function seatFor(cell, catalogs, heading = 0, neighbors) {
   const [id, meta] = blockState(cell);
-  if (id === 26) return {height:9 / 16, yaw:jammyFacings[meta & 3], bed:true};
+  if (id === 26) return {height:BED_SURFACE_HEIGHT, yaw:jammyFacings[meta & 3], bed:true};
   const sofas = catalogs?.jammy?.sofaIds ?? sofaIds;
   let turns = meta & 3;
   let height;

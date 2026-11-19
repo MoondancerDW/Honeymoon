@@ -1,6 +1,7 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {ponyModels} from '../world/pony-model-data.mjs';
 import {defaultPonyPixels, ponySkinHeight, readPonySkin} from '../world/pony-skins.mjs';
+import {ponyAbilities} from '../world/pony-abilities.mjs';
 import {createPonyHeldItem, magicMaterial} from './pony-held-item.mjs';
 import {createPonyArmor} from './pony-armor.mjs';
 import {applyPonyEmote,ponyEmoteDuration} from './pony-emotes.mjs';
@@ -205,7 +206,7 @@ function geometryFor(model, names, position, rotation = [0, 0, 0], hornScale = 1
   return geometry;
 }
 
-function sampleSkinFaces(shader) {
+function sampleSkinFaces(shader, fillAnatomyGaps = false) {
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', '#include <common>\nattribute vec4 skinUvBounds;\nflat varying vec4 vSkinUvBounds;')
     .replace('#include <uv_vertex>', '#include <uv_vertex>\nvSkinUvBounds = skinUvBounds;');
@@ -225,7 +226,15 @@ function sampleSkinFaces(shader) {
         vec2 center = (vSkinUvBounds.xy + vSkinUvBounds.zw) * 0.5;
         vec2 low = min(center, (ceil(vSkinUvBounds.xy * mipSize) + 0.5) / mipSize);
         vec2 high = max(center, (floor(vSkinUvBounds.zw * mipSize) - 0.5) / mipSize);
-        diffuseColor *= textureLod(map, clamp(vMapUv, low, high), lod);
+        vec4 skinSample = textureLod(map, clamp(vMapUv, low, high), lod);
+        ${fillAnatomyGaps ? `
+        // A different race may have no painted wings or horn in the original atlas.
+        if (skinSample.a < 0.25) {
+          vec4 coatPixel = textureLod(map, vec2(28.5 / 64.0, 4.5 / 32.0), 0.0);
+          skinSample = vec4(coatPixel.a >= 0.25 ? coatPixel.rgb : vec3(0.58, 0.32, 0.19), 1.0);
+        }
+        ` : ''}
+        diffuseColor *= skinSample;
       #endif
     `);
 }
@@ -238,19 +247,20 @@ function renderGroup(parent, [y, z, sx, sy, sz]) {
   return group;
 }
 
-function buildRig(visual, materials, skin) {
+function buildRig(visual, materials, assignedAnatomy, skin, sourceRace) {
   const model = skin.advanced ? 'advanced' : 'basic';
   const parts = ponyModels[model];
   const scales = skin.size === 'normal' ? renderScales.normal[skin.male ? 'male' : 'female'] : renderScales[skin.size];
   const [headGroup, neckGroup, bodyGroup, tailGroup, legGroup] = scales.map(scale => renderGroup(visual, scale));
-  const hasWings = skin.ponyType === 'pegasus' || skin.ponyType === 'alicorn';
-  const hasHorn = skin.ponyType === 'unicorn' || skin.ponyType === 'alicorn';
+  const {winged:hasWings,horn:hasHorn} = ponyAbilities(skin.ponyType);
+  const originalAnatomy = ponyAbilities(sourceRace);
   const pivot = [0, 0, 0];
   let meshes = 0;
-  function attach(parent, names, pose = pivot, rotation, hornScale) {
+  function attach(parent, names, pose = pivot, {rotation,hornScale,keepSkinAlpha=true} = {}) {
     const geometry = geometryFor(model, names, pose.slice(0, 3), rotation, hornScale);
     const groups = geometry.groups;
-    const mesh = new THREE.Mesh(geometry, groups.length === 1 ? materials[groups[0].materialIndex] : materials);
+    const material = keepSkinAlpha ? (groups.length === 1 ? materials[groups[0].materialIndex] : materials) : assignedAnatomy();
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(pose[0] / 16, pose[1] / 16, pose[2] / 16);
     mesh.rotation.order = 'ZYX';
     if (rotation) mesh.rotation.set(...rotation);
@@ -266,7 +276,7 @@ function buildRig(visual, materials, skin) {
   const eyes = new THREE.Object3D();
   eyes.position.set(0, -2 / 16, -5.8 / 16);
   head.add(eyes);
-  const horn = hasHorn ? attach(head, ['headpiece.2'], pivot, undefined, hornScale) : null;
+  const horn = hasHorn ? attach(head, ['headpiece.2'], pivot, {hornScale,keepSkinAlpha:originalAnatomy.horn}) : null;
   const maneNames = skin.mane === 1 ? ['mohawk'] : skin.mane === 2 ? ['maneLeft.2'] :
     skin.mane === 3 ? ['maneRight.2'] : skin.mane === 4 ? ['maneLeft.2', 'maneRight.2'] : [];
   const maneParts = groupParts(parts, maneNames);
@@ -283,10 +293,10 @@ function buildRig(visual, materials, skin) {
   if (hasWings) {
     for (const side of ['Left', 'Right']) {
       const name = 'wing' + side;
-      foldedWings.push(attach(bodyGroup, groupParts(parts, [name]), parts[name + '.0'][0]));
+      foldedWings.push(attach(bodyGroup, groupParts(parts, [name]), parts[name + '.0'][0], {keepSkinAlpha:originalAnatomy.winged}));
       const open = name + 'Open';
       const pose = parts[open + '.0'][0], rotation = [0, 0, pose[5]];
-      openWings.push(attach(bodyGroup, groupParts(parts, [open]), pose, rotation));
+      openWings.push(attach(bodyGroup, groupParts(parts, [open]), pose, {rotation,keepSkinAlpha:originalAnatomy.winged}));
       openWings.at(-1).visible = false;
     }
   }
@@ -324,9 +334,19 @@ export function createPonyAvatar(isAir) {
     map: defaultTexture, vertexColors:true, alphaTest:.25, alphaToCoverage:true, side:THREE.DoubleSide,
     polygonOffset:layer > 0, polygonOffsetFactor:-layer, polygonOffsetUnits:-2 * layer,
   }));
-  for (const material of materials) material.onBeforeCompile = sampleSkinFaces;
-  let skin = defaultSkin, texture = defaultTexture;
-  let rig = buildRig(visual, materials, skin);
+  for (const material of materials) material.onBeforeCompile = shader=>sampleSkinFaces(shader);
+  const skinMaterials = [...materials];
+  let anatomyMaterial;
+  function assignedAnatomy() {
+    if (!anatomyMaterial) {
+      anatomyMaterial = materials[0].clone();
+      anatomyMaterial.onBeforeCompile = shader=>sampleSkinFaces(shader,true);
+      skinMaterials.push(anatomyMaterial);
+    }
+    return anatomyMaterial;
+  }
+  let sourceSkin = defaultSkin, skin = defaultSkin, texture = defaultTexture, assignedRace, assignedSize;
+  let rig = buildRig(visual, materials, assignedAnatomy, skin, sourceSkin.ponyType);
   let armor = createPonyArmor(rig), worn;
   let skinUrl = null, skinReady = true, pending, revision = 0, disposed = false;
   let lightColor = 0xffffff;
@@ -346,30 +366,42 @@ export function createPonyAvatar(isAir) {
   const shoulderOffset = new THREE.Vector3();
   let heldAssets, strike = 0, strikeTurn = 0;
 
-  function applySkin(next, nextTexture) {
-    const changed = Object.keys(next).some(key => next[key] !== skin[key]);
-    if (texture !== defaultTexture) texture.dispose();
+  function applySkin(decoded, nextTexture) {
+    const next = {...decoded,ponyType:assignedRace??decoded.ponyType,size:assignedSize??decoded.size};
+    const changed = decoded.ponyType !== sourceSkin.ponyType || Object.keys(next).some(key => next[key] !== skin[key]);
+    if (texture !== defaultTexture && texture !== nextTexture) texture.dispose();
+    sourceSkin = decoded;
     skin = next;
     texture = nextTexture;
-    for (const material of materials) material.map = texture;
+    for (const material of skinMaterials) material.map = texture;
     if (changed) {
       armor.dispose();
       visual.clear();
-      rig = buildRig(visual, materials, skin);
+      rig = buildRig(visual, materials, assignedAnatomy, skin, sourceSkin.ponyType);
       armor = createPonyArmor(rig);
       armor.setLight(burn ? charredColor : lightColor);
       armor.update(worn);
       hornGlow?.material.dispose();
       hornGlow = null;
+      if (!rig.horn) {
+        activeOffhand = null;
+        offhandItem?.show(null,heldAssets,null);
+      }
       rig.head.visible = !firstPerson;
       rig.neck.visible = !firstPerson;
     }
   }
 
-  function setSkin(url) {
+  function setSkin(url, ponyType, size) {
     url ||= null;
     if (disposed) return Promise.resolve(false);
-    if (url === skinUrl && (pending || skinReady)) return pending ?? Promise.resolve(true);
+    const traitsChanged = assignedRace !== ponyType || assignedSize !== size;
+    assignedRace = ponyType;
+    assignedSize = size;
+    if (url === skinUrl && (pending || skinReady)) {
+      if (traitsChanged) applySkin(sourceSkin, texture);
+      return pending ?? Promise.resolve(true);
+    }
     skinUrl = url;
     const request = ++revision;
     if (!url) {
@@ -378,6 +410,7 @@ export function createPonyAvatar(isAir) {
       pending = null;
       return Promise.resolve(true);
     }
+    if (traitsChanged) applySkin(sourceSkin, texture);
     skinReady = false;
     pending = loadSkin(url).then(({skin: next, texture: nextTexture}) => {
       if (request !== revision) {
@@ -764,7 +797,8 @@ export function createPonyAvatar(isAir) {
   }
 
   function inspect() {
-    return {skinReady, ponyType: skin.ponyType, advanced: skin.advanced, size: skin.size, phase:limbSwing * .6662 % TAU,
+    return {skinReady, ponyType: skin.ponyType, hasHorn:Boolean(rig.horn), hasWings:rig.foldedWings.length>0,
+      advanced: skin.advanced, size: skin.size, phase:limbSwing * .6662 % TAU,
       tail:skin.tail, male:skin.male, mane:skin.mane,
       meshCount: rig.meshes, motion, stance, legAngles: rig.legs.map(leg => leg.rotation.x),
       legRoll:rig.legs.map(leg=>leg.rotation.z), armor:armor.inspect(),
@@ -846,7 +880,7 @@ export function createPonyAvatar(isAir) {
 
   function applyLight() {
     const color=burn ? charredColor : lightColor;
-    for (const material of materials) material.color.setHex(color, THREE.SRGBColorSpace);
+    for (const material of skinMaterials) material.color.setHex(color, THREE.SRGBColorSpace);
     armor.setLight(color);
   }
 
@@ -861,7 +895,7 @@ export function createPonyAvatar(isAir) {
     disposed = true;
     revision++;
     if (texture !== defaultTexture) texture.dispose();
-    for (const material of materials) material.dispose();
+    for (const material of skinMaterials) material.dispose();
     hornGlow?.material.dispose();
     heldItem?.dispose();
     offhandItem?.dispose();

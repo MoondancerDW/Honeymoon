@@ -19,17 +19,17 @@ function recordEdge(profile,edge,start,end,y,tile) {
   }
 }
 
-export function lodBoundaryHeights({count, offset, span, surface}) {
+export function lodBoundaryHeights({count, offset, span, surface,coordinateScale=1,heightScale=1}) {
   const profile = new Uint16Array(TILE_CHUNKS ** 2 * CHUNK_STRIDE);
   for (let i=0; i<count; i++) {
     const face = surface[i*2+1];
     if ((face & 7)!==3 || face & 256) continue;
     const chunk = face >> 3 & 15;
-    const x = offset[i*3] - (chunk & 3)*CHUNK_BLOCKS;
-    const y = offset[i*3+1];
-    const z = offset[i*3+2] - (chunk >> 2)*CHUNK_BLOCKS;
-    const east = x + span[i*2+1];
-    const south = z + span[i*2];
+    const x = offset[i*3]/coordinateScale - (chunk & 3)*CHUNK_BLOCKS;
+    const y = offset[i*3+1]/heightScale;
+    const z = offset[i*3+2]/coordinateScale - (chunk >> 2)*CHUNK_BLOCKS;
+    const east = x + span[i*2+1]/coordinateScale;
+    const south = z + span[i*2]/coordinateScale;
     const tile = surface[i*2];
     const from = chunk*CHUNK_STRIDE;
     if (x===0) recordEdge(profile,from,z,south,y,tile);

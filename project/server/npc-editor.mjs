@@ -1,6 +1,7 @@
 import {createHash,randomUUID,timingSafeEqual} from 'node:crypto';
 import {RequestError} from './errors.mjs';
-import {clamp,list,npcAnimations,npcJobs,npcRoles,npcSharedCollections,number,point,text} from './npc-source.mjs';
+import {clamp,list,npcAnimations,npcInteractionRotations,npcJobs,npcRoles,npcRotations,npcSharedCollections,npcSpinSpeed,
+  number,point,text} from './npc-source.mjs';
 
 const digest = value => createHash('sha256').update(value).digest();
 const nonEmpty = (value,cap=128) => typeof value==='string' && value.trim().length>0 && value.length<=cap &&
@@ -66,6 +67,10 @@ export function sanitizeNpc(raw,previous,inBounds) {
   const id=previous?.id ?? randomUUID();
   const texture=text(raw.texture).slice(0,260);
   const cloak=text(raw.cloak).slice(0,260);
+  const rotation=npcRotations.includes(raw.rotation)?raw.rotation:'head';
+  const interactionRotation=npcInteractionRotations.includes(raw.interactionRotation)?raw.interactionRotation:'default';
+  const showName=(raw.showName??previous?.showName)!==false;
+  const showNameWhenAttacking=!showName && (raw.showNameWhenAttacking??previous?.showNameWhenAttacking)===true;
   if (texture && texture!==previous?.texture && !textureId(texture) ||
       cloak && cloak!==previous?.cloak && !textureId(cloak)) {
     throw new RequestError(400,'invalid_npc_texture');
@@ -73,10 +78,13 @@ export function sanitizeNpc(raw,previous,inBounds) {
   return {
     id,name:raw.name.trim(),title:text(raw.title).slice(0,128),position:npcLocation(raw.position,inBounds),
     revision:(previous?.revision??0)+1,yaw:number(raw.yaw)% (Math.PI*2),pitch:clamp(number(raw.pitch),-Math.PI/2,Math.PI/2),
-    model:raw.model,scale:clamp(number(raw.scale,1),.2,6),texture,cloak,showName:raw.showName!==false,
+    ...((Number.isFinite(raw.headYaw)||Number.isFinite(previous?.headYaw)) &&
+      {headYaw:clamp(number(raw.headYaw,previous?.headYaw),-Math.PI,Math.PI)}),
+    model:raw.model,scale:clamp(number(raw.scale,1),.2,6),texture,cloak,showName,
+    ...(showNameWhenAttacking && {showNameWhenAttacking}),
     animation:npcAnimations.slice(0,6).includes(raw.animation)?raw.animation:'idle',
     health:clamp(number(raw.health,20),1,10000),invulnerable:Boolean(raw.invulnerable),
-    rotation:['head','body','fixed'].includes(raw.rotation)?raw.rotation:'head',
+    rotation,interactionRotation,...(rotation==='spin' && {spinSpeed:npcSpinSpeed(raw.spinSpeed)}),
     factionId:number(raw.factionId),role:npcRoles.includes(raw.role)?raw.role:'none',job:npcJobs.includes(raw.job)?raw.job:'none',
     movement:{mode:names.includes(movement.mode)?movement.mode:'stationary',
       speed:clamp(number(movement.speed,1.5),.1,12),range:clamp(number(movement.range,5),0,96),

@@ -141,18 +141,19 @@ function rotateFaces(faceTiles, quarterTurns) {
   return result;
 }
 
-function bed(meta, bottom = 0) {
+export const BED_SURFACE_HEIGHT = 9 / 16;
+
+function bed(meta) {
   const head = Boolean(meta & 8);
   const direction = meta & 3;
   const turns = (2 - direction) & 3;
   const faces = head ? [151, 151, 4, 135, 152, -1] : [150, 150, 4, 134, -1, 149];
-  return [box([0, bottom, 0, 1, 9 / 16, 1], rotateFaces(faces, turns),
+  return [box([0, 3 / 16, 0, 1, BED_SURFACE_HEIGHT, 1], rotateFaces(faces, turns),
     { bedFacing: direction, mirrorFaces: rotateFaces([true, false, false, false, false, false], turns) })];
 }
 
 export function bedMesh(cell) {
-  const [id, meta] = unpack(cell);
-  return id === 26 ? bed(meta, 3 / 16) : null;
+  return unpack(cell)[0] === 26 ? shapeFor(cell) : null;
 }
 
 function turnedBox(bounds, faceTiles, quarterTurns, options) {

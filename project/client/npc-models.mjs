@@ -1,5 +1,6 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {loadNpcModelManifest, npcSkinUrl} from '../world/npc-model-catalog.mjs';
+import {npcNameVisible} from '../world/npc-editor-wand.mjs';
 import {createPonyAvatar} from './pony-avatar.mjs';
 import {createPonyHeldItem} from './pony-held-item.mjs';
 
@@ -8,6 +9,7 @@ const textureLoader=new THREE.TextureLoader();
 const pixelMeshMaterial={alphaTest:.24,side:THREE.DoubleSide,toneMapped:false};
 const renderModeTime={walk:.76,fly:.9,idle:1.65,dance:1.25,attack:.6};
 const maxScale=5;
+const radiansPerDegree=Math.PI/180;
 const browserSize=(value,fallback)=>Math.max(24,Math.min(440,value||fallback));
 const vector=(value,target)=>Array.isArray(value) ? target.fromArray(value) : target.set(value.x,value.y,value.z);
 const stackAppearance=stack=>stack?.part ? {kind:'block',key:stack.key,part:stack.part} :
@@ -140,10 +142,10 @@ async function makeModel(npc,itemAssets) {
     await pony.setSkin(textureUrl);
     let dance;
     return {...pony,height:1.45,width:1,depth:1.12,
-      animate({time,dt,moving,animation,pitch,position,held,equipment,yaw}) {
+      animate({time,dt,moving,animation,pitch,headYaw,position,held,equipment}) {
         const motion=animation==='fly'?'fly':animation==='sit'?'sit':moving?'walk':'idle';
         dance=animation==='dance'?(dance??{id:'dance',started:Date.now()}):undefined;
-        pony.animate({time,dt,speed:moving?2.9:0,motion,pitch:-(pitch??0),
+        pony.animate({time,dt,speed:moving?2.9:0,motion,pitch:-(pitch??0),yawOffset:headYaw,
           stance:animation==='crawl'?'crawl':animation==='sneak'?'crouch':'stand',
           groundSeat:animation==='sit',position,swing:animation==='attack'?Math.floor(time*2):0,
           held,equipment,itemAssets,emote:dance});
@@ -174,7 +176,7 @@ async function makeModel(npc,itemAssets) {
     mesh.bind(skeleton,new THREE.Matrix4());
   }
 
-  const headAxis=new THREE.Vector3(1,0,0), turn=new THREE.Quaternion();
+  const headTurn=new THREE.Euler(0,0,0,'YXZ'), turn=new THREE.Quaternion();
   let prop;
   function showProp(held) {
     if(model.hand<0) return;
@@ -203,14 +205,15 @@ async function makeModel(npc,itemAssets) {
   setPose(model.rest,model.rest,0);
   return {object,height:model.height,width:model.width,depth:model.depth,
     setLight(color) {lightColor(materials,color);prop?.setLight(color);},
-    animate({time,moving,animation,pitch,held}) {
+    animate({time,moving,animation,pitch=0,headYaw=0,held}) {
       const mode=moving && animation==='idle' ? 'walk' : animation;
       const clip=model.clips[mode]??model.clips.idle;
       const sample=((time/(renderModeTime[mode]??1.5))%1+1)%1*clip.length;
       const left=Math.floor(sample),alpha=sample-left;
       setPose(clip[left],clip[(left+1)%clip.length],alpha);
-      if(pitch) {
-        turn.setFromAxisAngle(headAxis,THREE.MathUtils.clamp(-pitch,-.8,.8));
+      if(pitch || headYaw) {
+        headTurn.set(THREE.MathUtils.clamp(-pitch,-.8,.8),-headYaw,0);
+        turn.setFromEuler(headTurn);
         for(const i of model.head) bones[i].quaternion.multiply(turn);
       }
       showProp(held);
@@ -262,6 +265,12 @@ function removeLabel(row) {
 }
 const signature=npc=>JSON.stringify([npc.model,npc.texture,npc.item]);
 const angleMix=(a,b,f)=>a+Math.atan2(Math.sin(b-a),Math.cos(b-a))*f;
+const spinningYaw=(yaw,rate,elapsed)=>(yaw??0)+(rate??0)*radiansPerDegree*Math.max(0,elapsed)*.001;
+
+function setNpcState(row,npc,now) {
+  if (row.yawAt===undefined || row.npc.yaw!==npc.yaw || row.npc.spinSpeed!==npc.spinSpeed) row.yawAt=now;
+  row.npc=npc;
+}
 
 export class NpcView {
   constructor(scene, camera, itemAssets, {mobile=false, chunkVisible=()=>true, light=()=>0xffffff}={}) {
@@ -285,7 +294,15 @@ export class NpcView {
     this.temp=new THREE.Vector3();
   }
 
-  replace(list) {
+  setRevealHiddenNames(enabled) {
+    this.revealHiddenNames=Boolean(enabled);
+  }
+
+  nameVisible(npc) {
+    return npcNameVisible(npc,this.revealHiddenNames);
+  }
+
+  replace(list,now=performance.now()) {
     if(!Array.isArray(list)) return;
     const present=new Set();
     for(const npc of list) {
@@ -300,7 +317,7 @@ export class NpcView {
         object.rotation.y=npc.yaw??0;
         object.visible=false;
         this.scene.add(object);
-        row={object,target,npc,key,actor:null,label:null,pending:0};
+        row={object,target,npc,key,actor:null,label:null,pending:0,headYaw:npc.headYaw??0};
         this.entries.set(npc.id,row);
       }
       if(row.key!==key) {
@@ -310,7 +327,7 @@ export class NpcView {
         row.key=key;
       }
       if(row.npc.name!==npc.name || row.npc.title!==npc.title || row.npc.showName!==npc.showName) removeLabel(row);
-      row.npc=npc;
+      setNpcState(row,npc,now);
       vector(npc.position,row.target);
       if(row.object.position.distanceToSquared(row.target)>64) row.object.position.copy(row.target);
       row.object.scale.setScalar(THREE.MathUtils.clamp(Number(npc.scale)||1,.05,maxScale));
@@ -323,12 +340,12 @@ export class NpcView {
     }
   }
 
-  motion(list) {
+  motion(list,now=performance.now()) {
     if(!Array.isArray(list)) return;
     for(const npc of list) {
       const row=this.entries.get(npc.id);
       if(!row) continue;
-      row.npc={...row.npc,...npc};
+      setNpcState(row,{...row.npc,...npc},now);
       if(npc.position) vector(npc.position,row.target);
       if(row.object.position.distanceToSquared(row.target)>64) row.object.position.copy(row.target);
     }
@@ -379,15 +396,17 @@ export class NpcView {
       object.visible=true;
       const gain=1-Math.exp(-Math.max(.002,dt)*11);
       object.position.lerp(target,gain);
-      object.rotation.y=angleMix(object.rotation.y,npc.yaw??0,gain);
+      const yaw=spinningYaw(npc.yaw,npc.spinSpeed,now-row.yawAt);
+      object.rotation.y=row.lastAnimation ? angleMix(object.rotation.y,yaw,gain) : yaw;
+      row.headYaw=THREE.MathUtils.lerp(row.headYaw,npc.headYaw??0,gain);
       const distance=object.position.distanceToSquared(eye);
       if(!this.mobile || distance<144 || !row.lastAnimation || now-row.lastAnimation>=55) {
         const elapsed=row.lastAnimation?Math.min(.1,(now-row.lastAnimation)*.001):dt;
         row.lastAnimation=now;
-        actor.animate({...npc,time:now*.001,dt:elapsed,position:object.position});
+        actor.animate({...npc,headYaw:row.headYaw,time:now*.001,dt:elapsed,position:object.position});
         actor.setLight(this.light(target.x,target.y+.8,target.z));
       }
-      const labeled=npc.showName!==false && npc.name && distance<34**2;
+      const labeled=this.nameVisible(npc) && npc.name && distance<34**2;
       if(labeled&&!row.label) {
         row.label=nameplate(npc.name,npc.title??'');
         row.label.position.y=actor.height+.18;
@@ -428,7 +447,7 @@ export class NpcView {
     let session=this.previews.get(canvas);
     if(session?.key!==key) {
       this.clearPreview(canvas);
-      session={key,pending:makeModel(appearance,itemAssets),lastTime:0};
+      session={key,pending:makeModel(appearance,itemAssets),lastTime:0,started:now};
       this.previews.set(canvas,session);
     }
     try {
@@ -443,7 +462,8 @@ export class NpcView {
       const scene=new THREE.Scene();
       const camera=new THREE.PerspectiveCamera(34,width/height,.01,100);
       const radius=Math.max(.7,model.height,model.width,model.depth);
-      model.object.rotation.y=.62;
+      const rate=appearance.rotation==='spin' ? appearance.spinSpeed||45 : 0;
+      model.object.rotation.y=.62+spinningYaw(appearance.yaw,rate,now-session.started);
       camera.position.set(radius*.14,model.height*.68,-radius*2.2);
       camera.lookAt(0,model.height*.53,0);
       scene.add(model.object);

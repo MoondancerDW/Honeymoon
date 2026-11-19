@@ -12,7 +12,8 @@ const [outputArg='work/build-2-qa', test='mobile']=process.argv.slice(2);
 const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 2);
 const output=resolve(outputArg);
 await mkdir(output,{recursive:true});
-const solo=test==='solo';
+const solo=test==='solo'||test==='admin-race-solo';
+const raceAdminQa=test==='admin-race'||test==='admin-race-solo';
 const iphoneQa=test==='iphone-fullscreen';
 const preloadQa=test==='terrain-preload-mobile'||test==='terrain-preload-desktop';
 const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
@@ -25,9 +26,9 @@ const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
-const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa?'game':'creative',
+const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
-  ...((onlineCacheQa||preloadQa)&&{inviteRequired:true,ownerOnPrimary:true}),
+  ...((onlineCacheQa||preloadQa||raceAdminQa&&!solo)&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
 app.server.listen(0,'127.0.0.1');
 await once(app.server,'listening');
@@ -37,7 +38,7 @@ const browser=await chromium.launch({channel:'msedge',args:['--enable-unsafe-swi
 const page=await browser.newPage({
   ...(mobileQa?{viewport:{width:390,height:730},isMobile:true,hasTouch:true}:{viewport:{width:1000,height:640}}),
   deviceScaleFactor:1,
-  ...((onlineCacheQa||preloadQa||iphoneQa)&&{serviceWorkers:'block'}),
+  ...((onlineCacheQa||preloadQa||iphoneQa||test==='map')&&{serviceWorkers:'block'}),
 });
 page.on('pageerror',error=>result.errors.push(error.message));
 page.on('console',message=>{
@@ -85,7 +86,371 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (raceQa) {
+  if (test==='microblock-seam') {
+    await skipPreload();
+    await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='globalThis.honeymoon = Object.freeze({';
+      const probe=`qaMicroblockFaces(x,y,z) {
+        const group=view.groups.get([x>>4,y>>4,z>>4].join(','));
+        const geometry=group?.children.find(child=>child.material===view.materials.opaque)?.geometry;
+        if (!geometry) return null;
+        const {position,uv}=geometry.attributes;
+        const dx=x&15, dy=y&15, dz=z&15;
+        const faces=[];
+        for (let at=0; at<position.count; at+=4) {
+          const columns=[0,1,2,3].map(i=>position.getX(at+i));
+          const rows=[0,1,2,3].map(i=>position.getY(at+i));
+          if (![0,1,2,3].every(i=>position.getZ(at+i)===dz && columns[i]>=dx && columns[i]<=dx+1 && rows[i]>=dy && rows[i]<=dy+1)) continue;
+          const normalZ=(columns[1]-columns[0])*(rows[2]-rows[0])-(rows[1]-rows[0])*(columns[2]-columns[0]);
+          if (normalZ>=0) continue;
+          const tile=Math.floor(uv.getX(at)*64)+64*Math.floor((1-uv.getY(at))*view.atlasRows);
+          if (tile!==130 && tile!==194) continue;
+          faces.push({tile,rect:[Math.min(...columns)-dx,Math.min(...rows)-dy,Math.max(...columns)-dx,Math.max(...rows)-dy]});
+        }
+        return faces;
+      },`;
+      assert.ok(source.includes(marker));
+      await route.fulfill({response,body:source.replace(marker,marker+probe)});
+    });
+    await start();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-211.19,65,125.74);
+    await page.evaluate(()=>honeymoon.look(-1.69,-.14));
+    const point=[-207,65,126];
+    await page.waitForFunction(at=>honeymoon.qaMicroblockFaces(...at)?.some(face=>face.tile===194),point);
+    const faces=await page.evaluate(at=>honeymoon.qaMicroblockFaces(...at),point);
+    assert.deepEqual(faces.filter(face=>face.tile===194),[{tile:194,rect:[0,.25,.25,.75]}]);
+    for (const [i,{rect:[x0,y0,x1,y1]}] of faces.entries()) for (const {rect:[xx0,yy0,xx1,yy1]} of faces.slice(i+1)) {
+      assert.ok(x1<=xx0 || xx1<=x0 || y1<=yy0 || yy1<=y0,JSON.stringify(faces));
+    }
+    assert.ok(faces.some(face=>face.tile===130));
+    await shot('microblock-fence');
+    result.checks.push({point,faces});
+  } else if (test==='seated-movement') {
+    await skipPreload();
+    await start();
+    await page.keyboard.press('KeyX');
+    await page.waitForFunction(()=>honeymoon.stats().seat?.kind==='ground');
+    let stoodAt=0;
+    page.on('request',request=>{
+      if (new URL(request.url()).pathname==='/api/seat' && request.postDataJSON()?.ground===false) stoodAt=performance.now();
+    });
+    await page.keyboard.down('KeyW');
+    await page.waitForTimeout(240);
+    await page.keyboard.up('KeyW');
+    assert.equal((await stat()).seat.kind,'ground');
+    assert.equal(stoodAt,0);
+    await page.waitForTimeout(60);
+    const begin=performance.now();
+    await page.keyboard.down('KeyW');
+    await page.waitForFunction(()=>!honeymoon.stats().seat);
+    await page.keyboard.up('KeyW');
+    const heldMs=stoodAt-begin;
+    assert.ok(heldMs>=465&&heldMs<800,`Stand requested after ${heldMs} ms`);
+    result.checks.push({stillSeatedAfterMs:240,heldMs});
+  } else if (test==='item-hover') {
+    await skipPreload();
+    await start();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-157.5,72,-159.5);
+    await page.evaluate(()=>honeymoon.look(Math.PI,-.82));
+    await page.waitForFunction(()=>{
+      const hit=honeymoon.target();
+      return hit?.x===-158 && hit.y===72 && hit.z===-159;
+    });
+    assert.equal(await page.locator('#selected-id').innerText(),'id 54:2');
+    await page.keyboard.press('KeyE');
+    const item=page.locator('#container-menu [data-side="storage"][data-slot="8"]');
+    await item.waitFor({state:'visible'});
+    await page.waitForFunction(()=>!document.querySelector('#container-menu [data-side="storage"][data-slot="8"]').disabled);
+    await item.hover();
+    const tooltip=page.locator('#container-menu .item-tooltip:not([hidden])');
+    const description=await tooltip.innerText({timeout:1000});
+    assert.match(description,/Таблетки от головной боли/);
+    assert.match(description,/Хранить вдали от жеребят\./);
+    assert.match(description,/Избегать воздействия прямого солнечного света\./);
+    assert.equal(description.trim().split('\n').at(-1),'id 5771');
+    const potion=page.locator('#container-menu [data-side="storage"][data-slot="3"]');
+    await potion.hover();
+    const remedy=await tooltip.innerText({timeout:1000});
+    assert.match(remedy,/Морпоний/);
+    assert.match(remedy,/Принимать только по рецепту врача!/);
+    assert.equal(remedy.trim().split('\n').at(-1),'id 373:8197');
+    await shot('item-hover-original-nbt');
+    result.checks.push({chest:[-158,72,-159],description,remedy});
+  } else if (test==='world-item-hover') {
+    await skipPreload();
+    await start();
+    const {playerId}=await page.request.post(url+'api/session',{data:{}}).then(response=>response.json());
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-93.5,65,2.5);
+    await page.evaluate(()=>honeymoon.look(-Math.PI/2,-.0485448));
+    await page.waitForFunction(()=>document.getElementById('selected-label').textContent==='Букет');
+    const hint=()=>page.evaluate(()=>Object.fromEntries(['label','details','id'].map(key=>[key,document.getElementById('selected-'+key).textContent])));
+    const framed=await hint();
+    assert.match(framed.details,/Просто небольшой букетик из засушенных розовых астр/);
+    assert.equal(framed.id,'id 4000:2');
+    await shot('world-item-original-frame');
+    app.game.prepareNpcLoot({x:-91.85,y:65,z:2.5},[{key:'creative:5771:0',count:1,
+      nbt:{display:{Name:'Таблетки у игрока',Lore:['Строка описания предмета.']}, privateExample:'not sent'}}])();
+    let drop;
+    for (let attempt=0;attempt<40;attempt++) {
+      drop=app.game.droppedItemSnapshot(playerId).find(entry=>entry.item.key==='creative:5771:0');
+      if (drop?.resting) break;
+      await page.waitForTimeout(75);
+    }
+    assert.ok(drop?.resting,JSON.stringify(drop));
+    assert.equal(drop.item.nbt.privateExample,undefined);
+    await page.evaluate(([x,y,z])=>{
+      const {position,body}=honeymoon.stats();
+      const dx=x-position.x, dz=z-position.z;
+      const dy=y+.12-position.y-body.eye;
+      honeymoon.look(Math.atan2(-dx,-dz),Math.atan2(dy,Math.hypot(dx,dz)));
+    },drop.position);
+    await page.waitForFunction(()=>document.getElementById('selected-label').textContent==='Таблетки у игрока');
+    const dropped=await hint();
+    assert.match(dropped.details,/Строка описания предмета\./);
+    assert.equal(dropped.id,'id 5771');
+    await shot('world-item-ground');
+    result.checks.push({framed,dropped});
+  } else if (test==='pause-gravity') {
+    await skipPreload();
+    await start();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-8,95,-19);
+    const releasePointer=()=>page.evaluate(()=>document.exitPointerLock());
+    const paused=()=>page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+    await releasePointer();
+    await paused();
+    await page.waitForTimeout(450);
+    const flying=await stat();
+    assert.ok(flying.flying&&Math.abs(flying.position.y-95)<.2);
+    await click('#play');
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>!honeymoon.stats().flying);
+    await releasePointer();
+    await paused();
+    await page.waitForFunction(()=>{
+      const {position,movementSync}=honeymoon.stats();
+      return position.y<87 && movementSync.confirmed[1]<89;
+    },undefined,{timeout:10_000});
+    const falling=await stat();
+    assert.ok(Math.abs(falling.position.x+8)<.05 && Math.abs(falling.position.z+19)<.05);
+    await page.waitForFunction(()=>{
+      const {position,movementSync}=honeymoon.stats();
+      return position.y<73 && Math.abs(position.y-movementSync.confirmed[1])<.1;
+    },undefined,{timeout:15_000});
+    assert.ok(await visible('#pause-menu'));
+    result.checks.push({hoverWhileFlying:flying.position,fallingWhilePaused:falling.position,landed:(await stat()).position});
+  } else if (test==='rounded-logs') {
+    await skipPreload();
+    await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='globalThis.honeymoon = Object.freeze({';
+      const inspect=`qaLogMesh(x,y,z) {
+        const key=[x>>4,y>>4,z>>4].join(',');
+        const group=view.groups.get(key);
+        if (!group || group.userData.visualOnly) return null;
+        const cell=[x&15,y&15,z&15];
+        let bevels=0;
+        for (const mesh of group.children) {
+          if (mesh.material!==view.materials.opaque) continue;
+          const {geometry}=mesh, positions=geometry.getAttribute('position'), indices=geometry.index;
+          if (!positions || !indices) continue;
+          const vertices=indices.array;
+          for (let i=0;i<indices.count;i+=3) {
+            const corner=offset=>{
+              const at=vertices[i+offset];
+              return [positions.getX(at),positions.getY(at),positions.getZ(at)];
+            };
+            const [a,b,c]=[corner(0),corner(1),corner(2)];
+            if (![a,b,c].every(point=>point.every((value,axis)=>value>=cell[axis]-1e-5&&value<=cell[axis]+1+1e-5))) continue;
+            const u=b.map((value,axis)=>value-a[axis]), v=c.map((value,axis)=>value-a[axis]);
+            if (Math.abs(u[1]*v[2]-u[2]*v[1])>1e-5 && Math.abs(u[0]*v[1]-u[1]*v[0])>1e-5) bevels++;
+          }
+        }
+        return {bevels,version:view.installedVersions.get(key)};
+      },`;
+      assert.ok(source.includes(marker));
+      await route.fulfill({response,body:source.replace(marker,marker+inspect)});
+    });
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка брёвен'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await owner.json();
+    const x=3359,y=85,z=1467;
+    app.game.worldEdit.write(playerId,[{x,y,z,cell:'legacy:17:0',object:null},{x,y:y+1,z,cell:'legacy:17:0',object:null},
+      {x:x+1,y,z,cell:null,object:null},{x:x+2,y,z,cell:null,object:null}]);
+    await start(false);
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(x+3.45,y-1.1,z+.51);
+    await page.evaluate(()=>honeymoon.look(Math.PI/2,0));
+    const at=[x,y,z];
+    const mesh=()=>page.evaluate(([x,y,z])=>honeymoon.qaLogMesh(x,y,z),at);
+    await page.waitForFunction(at=>honeymoon.qaLogMesh(...at)?.bevels>0&&honeymoon.qaLogMesh(at[0],at[1]+1,at[2])?.bevels>0,at);
+    const isolated=await mesh();
+    await shot('rounded-logs-trunk');
+    await page.waitForFunction(([x,y,z])=>{
+      const target=honeymoon.target();
+      return target?.x===x&&target.y===y&&target.z===z;
+    },at);
+    await page.keyboard.press('KeyO');
+    await page.waitForFunction(()=>document.getElementById('toast').textContent.includes('Скопировано'));
+    await page.mouse.down({button:'right'});
+    await page.mouse.up({button:'right'});
+    await page.waitForFunction(at=>{
+      const cell=honeymoon.getCell(at[0]+1,at[1],at[2]);
+      const key=typeof cell==='string'?cell:cell?.key;
+      return key?.startsWith('legacy:17:') && honeymoon.qaLogMesh(...at)?.bevels===0 &&
+        honeymoon.qaLogMesh(at[0]+1,at[1],at[2])?.bevels===0;
+    },at,{timeout:15_000});
+    const joined=await mesh();
+    assert.notEqual(joined.version,isolated.version);
+    await shot('rounded-logs-wall');
+    await page.waitForFunction(([x,y,z])=>{
+      const target=honeymoon.target();
+      return target?.x===x+1&&target.y===y&&target.z===z;
+    },at);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForFunction(at=>honeymoon.getCell(at[0]+1,at[1],at[2])===null&&honeymoon.qaLogMesh(...at)?.bevels>0,at);
+    result.checks.push({alignedTrunk:isolated,sideJoin:joined,afterRemoval:await mesh(),chunkBoundary:true});
+  } else if (raceAdminQa) {
+    await skipPreload();
+    await start();
+    const local=await page.request.post(url+'api/session',{data:{}}).then(response=>response.json());
+    const uid=local.access.uid;
+    let guest,guestUid,guestPublicId;
+    if (!solo) {
+      const invite=await page.request.post(url+'api/admin/invites',{data:{kind:'player'}});
+      assert.equal(invite.status(),200,await invite.text());
+      guest=await browser.newPage({viewport:{width:390,height:730},isMobile:true,hasTouch:true,deviceScaleFactor:1});
+      await guest.context().route(/\/api\/terrain-preload\?/,route=>route.fulfill({status:409}));
+      guest.on('pageerror',error=>result.errors.push(error.message));
+      const redeemed=await guest.request.post(url+'api/session',{data:{invite:(await invite.json()).code,profileName:'Гость для проверки расы'}});
+      assert.equal(redeemed.status(),200,await redeemed.text());
+      const invited=await redeemed.json();
+      guestUid=invited.access.uid;
+      guestPublicId=invited.profile.id;
+      await guest.goto(url,{waitUntil:'domcontentloaded'});
+      await guest.waitForFunction(()=>globalThis.honeymoon?.stats().playable>0&&document.getElementById('game').classList.contains('playing'),undefined,{timeout:90_000});
+      const forbidden=await guest.request.post(url+'api/admin/profiles/race',{data:{uid:guestUid,ponyType:'alicorn'}});
+      assert.equal(forbidden.status(),403);
+      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id),guestPublicId);
+    }
+    await page.evaluate(()=>document.exitPointerLock());
+    await page.locator('#pause-home').waitFor({state:'visible'});
+    await pauseSection('world');
+    await click('#admin-toggle');
+    await click('#admin-menu [data-admin-tab="profiles"]');
+    async function assign(id,value,trait='race') {
+      const card=page.locator(`[data-profile-uid="${id}"]`);
+      await card.locator(`select[name="pony-${trait}"]`).selectOption(value);
+      const [response]=await Promise.all([
+        page.waitForResponse(response=>response.url().endsWith(`/api/admin/profiles/${trait}`)),
+        card.locator(`[data-${trait}-apply]`).click(),
+      ]);
+      assert.equal(response.status(),200,await response.text());
+      await page.waitForFunction(()=>document.getElementById('admin-menu').getAttribute('aria-busy')==='false');
+      return response.json();
+    }
+    const own=await assign(uid,'alicorn');
+    assert.equal(own.raceOverride,'alicorn');
+    const observeRace=(tab,type,wings,horn)=>tab.waitForFunction(({type,wings,horn})=>{
+      const avatar=honeymoon.localAvatar();
+      return honeymoon.stats().ponyType===type && avatar?.ponyType===type && avatar.skinReady &&
+        avatar.hasWings===wings && avatar.hasHorn===horn;
+    },{type,wings,horn},{timeout:20000});
+    await observeRace(page,'alicorn',true,true);
+    assert.equal((await page.evaluate(()=>honeymoon.health())).maxHealth,12);
+    const small=await assign(uid,'small','size');
+    assert.equal(small.sizeOverride,'small');
+    assert.equal(small.raceOverride,'alicorn');
+    await page.waitForFunction(()=>honeymoon.localAvatar()?.size==='small' && honeymoon.stats().body.size==='small' &&
+      honeymoon.health().maxHealth===8);
+    assert.equal((await assign(uid,'','size')).sizeOverride,null);
+    await page.waitForFunction(()=>honeymoon.localAvatar()?.size==='normal' && honeymoon.health().maxHealth===12);
+    await shot('admin-race-'+(solo?'solo':'profiles'));
+    if (guest) {
+      const guestCard=page.locator(`[data-profile-uid="${guestUid}"]`);
+      async function setGuestNightVision(enabled) {
+        const setting=enabled?'on':'off';
+        const [response]=await Promise.all([
+          page.waitForResponse(response=>response.url().endsWith('/api/admin/profiles/night-vision')),
+          guestCard.locator(`[data-night-vision="${setting}"]`).click(),
+        ]);
+        assert.equal(response.status(),200,await response.text());
+        await guest.waitForFunction(enabled=>honeymoon.stats().nightVision===enabled,enabled);
+        await page.waitForFunction(()=>document.getElementById('admin-menu').getAttribute('aria-busy')==='false');
+      }
+      await setGuestNightVision(true);
+      assert.equal((await stat()).nightVision,false);
+      await setGuestNightVision(false);
+      await guest.locator('#touch-pause').tap();
+      await guest.locator('[data-pause-section="settings"]').tap();
+      const [personal]=await Promise.all([
+        guest.waitForResponse(response=>new URL(response.url()).pathname==='/api/night-vision'),
+        guest.locator('#night-vision').tap(),
+      ]);
+      assert.equal(personal.status(),200,await personal.text());
+      assert.equal((await personal.json()).enabled,true);
+      await guest.locator('#play').tap();
+      const assigned=await assign(guestUid,'pegasus');
+      assert.equal(assigned.raceOverride,'pegasus');
+      await observeRace(guest,'pegasus',true,false);
+      await guest.waitForFunction(()=>honeymoon.health().maxHealth===8 && document.getElementById('health').childElementCount===8);
+      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.ponyType==='pegasus'&&player.hasWings),guestPublicId);
+      assert.equal((await assign(guestUid,'large','size')).sizeOverride,'large');
+      await guest.waitForFunction(()=>honeymoon.localAvatar()?.size==='large' && honeymoon.stats().body.size==='large' &&
+        honeymoon.health().maxHealth===11);
+      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.size==='large'),guestPublicId);
+      await guest.locator('#touch-flight').tap();
+      await guest.waitForFunction(()=>honeymoon.stats().flying);
+      await assign(guestUid,'unicorn');
+      await observeRace(guest,'unicorn',false,true);
+      assert.equal((await guest.evaluate(()=>honeymoon.stats())).flying,false);
+      assert.equal(await guest.locator('#touch-flight').isVisible(),false);
+      assert.equal(await guest.locator('#touch-swap-hands').isVisible(),true);
+      const png=await guest.evaluate(()=>{
+        const canvas=document.createElement('canvas');
+        canvas.width=64;
+        canvas.height=32;
+        const context=canvas.getContext('2d');
+        context.fillStyle='#f9b131';
+        context.fillRect(0,0,64,32);
+        context.fillStyle='#ffbe53';
+        context.fillRect(3,0,1,1);
+        return canvas.toDataURL('image/png').split(',')[1];
+      });
+      await guest.locator('#touch-pause').tap();
+      await guest.locator('[data-pause-section="profile"]').tap();
+      await guest.locator('#pony-skin').setInputFiles({name:'earth.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
+      await guest.waitForFunction(()=>document.getElementById('skin-status').textContent.includes('earth.png'));
+      await guest.locator('#play').tap();
+      await observeRace(guest,'earth',false,false);
+      const reset=await guest.request.post(url+'api/session',{data:{}}).then(response=>response.json());
+      assert.equal(reset.profile.raceOverride,null);
+      assert.equal(reset.profile.sizeOverride,null);
+      await guest.waitForFunction(()=>honeymoon.stats().body.size==='small' && honeymoon.health().maxHealth===8);
+      await page.waitForFunction(id=>honeymoon.players().some(player=>player.id===id&&player.ponyType==='earth'),guestPublicId);
+      await assign(guestUid,'pegasus');
+      await guest.waitForFunction(()=>honeymoon.stats().body.size==='small' && honeymoon.health().maxHealth===4 &&
+        document.getElementById('health').childElementCount===4);
+      await guest.close();
+    }
+    const restored=await assign(uid,'');
+    assert.equal(restored.raceOverride,null);
+    await observeRace(page,'earth',false,false);
+    result.checks.push({self:true,other:Boolean(guest),remoteVisuals:Boolean(guest),skinReset:Boolean(guest),manualReset:true,sizeOverride:true,
+      remoteNightVision:Boolean(guest),personalNightVision:Boolean(guest)});
+  } else if (raceQa) {
     await skipPreload();
     await start();
     assert.match(await page.title(),/^Lilium Moonlight\b/);
@@ -176,23 +541,34 @@ try {
       assert.equal((await health()).health,value);
     };
     await ground();
-    await expectHealth(15);
+    await expectHealth(12);
+    const chargeDots=count=>page.waitForFunction(count=>{
+      const indicator=document.getElementById('jump-charge-status');
+      return !indicator.hidden && indicator.querySelectorAll('.jump-charge-dot').length===2 &&
+        indicator.querySelectorAll('.jump-charge-dot.ready').length===count;
+    },count,{timeout:8000});
+    await chargeDots(2);
     await noFlight();
     const normal=await sampleApex(24);
     const charged=await sampleApex(275);
     assert.ok(normal>1.2 && normal<1.27 && Math.abs(normal+.5-charged)<.06,JSON.stringify({normal,charged}));
     await page.waitForFunction(()=>honeymoon.stats().jumpCharges===1);
+    await chargeDots(1);
     const second=await sampleApex(275);
     assert.ok(Math.abs(second-charged)<.06);
     await page.waitForFunction(()=>honeymoon.stats().jumpCharges===0);
+    await chargeDots(0);
+    const beforeEmpty=await page.locator('#toast').textContent();
     const empty=await sampleApex(275);
     assert.ok(Math.abs(normal-empty)<.06,JSON.stringify({normal,empty}));
-    await page.waitForFunction(()=>honeymoon.stats().jumpCharges===1,undefined,{timeout:8_000});
-    await page.waitForFunction(()=>honeymoon.stats().jumpCharges===2,undefined,{timeout:4_000});
-    result.checks.push({earth:{normal,charged,second,empty,bothRecharged:true,health:15}});
+    const afterEmpty=await page.locator('#toast').textContent();
+    assert.ok(!afterEmpty || afterEmpty===beforeEmpty,'an empty jump charge produces no error message');
+    await chargeDots(1);
+    await chargeDots(2);
+    result.checks.push({earth:{normal,charged,second,empty,bothRecharged:true,chargeDots:true,health:12}});
 
     await uploadSkin('#88caf0','pegasus','large');
-    await expectHealth(10);
+    await expectHealth(11);
     await pressSpace();
     await page.waitForFunction(()=>honeymoon.stats().gliding);
     assert.equal((await stat()).fallSpeed,-1.4);
@@ -208,8 +584,8 @@ try {
     await page.waitForFunction(()=>!honeymoon.stats().flying&&honeymoon.stats().fallSpeed<-3);
     assert.equal((await stat()).gliding,false);
     await ground();
-    await expectHealth(10);
-    result.checks.push({pegasus:{health:10,height:'large',glideCanceled:true,fallDamage:0}});
+    await expectHealth(11);
+    result.checks.push({pegasus:{health:11,height:'large',glideCanceled:true,fallDamage:0}});
 
     await uploadSkin('#d19fe4','unicorn','normal');
     await expectHealth(10);
@@ -262,9 +638,11 @@ try {
       const at=honeymoon.stats().position;
       return Math.hypot(at.x-x,at.y-y,at.z-z)<.15 && document.getElementById('teleport-loading').hidden;
     },after,{timeout:45_000});
-    result.checks.push({unicorn:{health:10,offhandTorch:true,magicDestination:after,cooldown:true}});
+    await activate('#touch-magic','KeyM');
+    await page.waitForFunction(()=>/До перезарядки оста(?:лось|лась) \d+ секунд/.test(document.getElementById('toast').textContent),undefined,{timeout:5000});
+    result.checks.push({unicorn:{health:10,offhandTorch:true,magicDestination:after,cooldown:true,cooldownNotice:true}});
 
-    await uploadSkin('#fef9fc','alicorn','normal');
+    await uploadSkin('#fef9fc','alicorn','large');
     await expectHealth(15);
     assert.ok(await visible('#hud-offhand [data-slot="40"]'));
     await activate('#touch-flight','KeyF');
@@ -311,18 +689,32 @@ try {
     await start();
     const fullscreen=page.locator('#touch #fullscreen-toggle');
     const dialog=page.locator('#fullscreen-help');
-    for (const [width,height] of [[390,730],[800,370]]) {
-      await page.setViewportSize({width,height});
-      assert.ok(await fullscreen.isVisible());
-      assert.equal(await fullscreen.getAttribute('aria-haspopup'),'dialog');
-      await fullscreen.tap();
+    const helpFor=async(control,screenshot)=>{
+      assert.ok(await control.isVisible());
+      assert.equal(await control.getAttribute('aria-haspopup'),'dialog');
+      await control.tap();
       await dialog.waitFor({state:'visible'});
       assert.match(await dialog.locator('#fullscreen-help-instructions').textContent(),/Поделиться.*На экран.*веб-приложение/);
-      assert.equal(await page.locator('#game').evaluate(game=>game.classList.contains('playing')&&!game.classList.contains('paused')),true);
-      await shot('iphone-fullscreen-'+width);
+      if (screenshot) await shot(screenshot);
       await dialog.getByRole('button',{name:'Понятно'}).tap();
       await dialog.waitFor({state:'hidden'});
-      assert.equal(await fullscreen.evaluate(button=>document.activeElement===button),true);
+      assert.equal(await control.evaluate(button=>document.activeElement===button),true);
+    };
+    for (const [width,height] of [[390,730],[800,370]]) {
+      await page.setViewportSize({width,height});
+      await helpFor(fullscreen,'iphone-fullscreen-'+width);
+      assert.equal(await page.locator('#game').evaluate(game=>game.classList.contains('playing')&&!game.classList.contains('paused')),true);
+      await page.locator('#touch-chat').tap();
+      await helpFor(page.locator('#fullscreen-chat-toggle'));
+      await page.locator('#chat-close').tap();
+      await page.locator('#touch-more').tap();
+      await page.locator('#touch-inventory').tap();
+      await helpFor(page.locator('#fullscreen-inventory-toggle'));
+      assert.ok(await visible('#creative-menu[open]'));
+      await page.locator('#creative-close').tap();
+      await page.locator('#touch-pause').tap();
+      await helpFor(page.locator('#fullscreen-pause-toggle'));
+      await page.locator('#play').tap();
     }
     result.checks.push({iphoneFullscreenFallback:true});
   } else if (preloadQa) {
@@ -568,13 +960,30 @@ try {
     if (mobileQa) {
       const fullscreen=page.locator('#touch #fullscreen-toggle');
       const crouch=page.locator('#touch-lower');
+      const toggleFullscreen=async control=>{
+        assert.ok(await control.isVisible());
+        await control.tap();
+        await page.waitForFunction(()=>Boolean(document.fullscreenElement));
+        await control.tap();
+        await page.waitForFunction(()=>!document.fullscreenElement);
+      };
       for (const [width,height] of [[390,730],[800,370]]) {
         await page.setViewportSize({width,height});
-        assert.ok(await fullscreen.isVisible());
-        await fullscreen.tap();
-        await page.waitForFunction(()=>Boolean(document.fullscreenElement));
-        await fullscreen.tap();
-        await page.waitForFunction(()=>!document.fullscreenElement);
+        await toggleFullscreen(fullscreen);
+        await page.locator('#touch-chat').tap();
+        await toggleFullscreen(page.locator('#fullscreen-chat-toggle'));
+        assert.ok(await visible('#chat.expanded'));
+        await page.locator('#chat-close').tap();
+        await page.locator('#touch-more').tap();
+        await page.locator('#touch-inventory').tap();
+        await toggleFullscreen(page.locator('#fullscreen-inventory-toggle'));
+        assert.ok(await visible('#creative-menu[open]'));
+        await page.locator('#creative-close').tap();
+        await page.locator('#touch-pause').tap();
+        await toggleFullscreen(page.locator('#fullscreen-pause-toggle'));
+        assert.ok(await visible('#pause-menu'));
+        await shot('fullscreen-in-pause-'+width);
+        await page.locator('#play').tap();
         await crouch.tap();
         await page.waitForFunction(()=>honeymoon.stats().stance==='crouch');
         await page.waitForTimeout(300);
@@ -616,7 +1025,7 @@ try {
     await hop(3359.4,72,1467.5);
     await page.waitForFunction(()=>Boolean(document.pointerLockElement));
     await page.evaluate(()=>honeymoon.look(-Math.PI/2,0));
-    app.game.damageFromNpc(playerId,13);
+    app.game.damageFromNpc(playerId,10);
     await page.waitForFunction(()=>honeymoon.health().health===2);
     await page.evaluate(()=>{
       const health=document.getElementById('health');
@@ -658,7 +1067,7 @@ try {
     ]);
     const respawn=await revive.json();
     assert.deepEqual(respawn.position,{x:spawn[0],y:spawn[1],z:spawn[2]});
-    await page.waitForFunction(()=>honeymoon.health().health===15&&!honeymoon.health().death&&
+    await page.waitForFunction(()=>honeymoon.health().health===12&&!honeymoon.health().death&&
       !honeymoon.localAvatar()?.lavaDeath&&!honeymoon.stats().lavaDeathParticles&&
       document.getElementById('teleport-loading').hidden,undefined,{timeout:20000});
     assert.equal(await visible('#death-screen'),false);
@@ -935,7 +1344,7 @@ try {
         const pixels=icon.getContext('2d').getImageData(0,0,32,32).data;
         return pixels.some((value,index)=>index%4===3 && value>0);
       }),undefined,{timeout:10_000});
-      assert.match(await page.locator('#creative-menu [data-slot="4"]').getAttribute('title'),/Записка/);
+      assert.match(await page.locator('#creative-menu [data-slot="4"]').getAttribute('aria-label'),/Записка/);
       await shot('inventory-'+id);
       await click('#creative-close');
       if (await visible('#play')) await click('#play');
@@ -1146,6 +1555,83 @@ try {
       phases.at(-1).renderedFrames>landing.renderedFrames,JSON.stringify(phases));
     await shot('ground-ponyville');
     result.checks.push({phases,below:await stat()});
+  } else if (test==='terrain-tint') {
+    await skipPreload();
+    await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='globalThis.honeymoon = Object.freeze({';
+      const probe=`qaGroundTint:(x,z)=>{
+        const terrain=view.farTerrain;
+        const key=[x>>6,z>>6].join('.');
+        const vistaKey='vista:'+[x>>9,z>>9].join('.');
+        const lookup=(candidate,step)=>{
+          const region=candidate?.previous??candidate;
+          if (!region?.installed || !region.biomeTexture) return null;
+          const {data,width}=region.biomeTexture.image;
+          const {x:west,z:north}=region.group.position;
+          const id=data[Math.floor((x-west)/step)+Math.floor((z-north)/step)*width];
+          const palette=region.group.children[0].material.uniforms.grassPalette.value.image.data;
+          return {id,rgb:Array.from(palette.subarray(id*4,id*4+3))};
+        };
+        return {
+          detailed:view.climate.tintAt(x,z).grass,
+          detailedVisible:view.exactChunks.has((x>>4)+','+(z>>4)),
+          simplified:lookup(terrain.packs.get(key),1),
+          primitive:lookup(terrain.packs.get(key+'.outer'),1),
+          vista:lookup(terrain.packs.get(vistaKey),8),
+        };
+      },qaWaterColor:()=>{
+        const terrain=view.farTerrain;
+        const tile=terrain.packs.get('vista:-3.0');
+        const region=tile?.previous??tile;
+        const geometry=region?.group.children[0]?.geometry;
+        if (!region?.installed || !geometry || region.coarse) return null;
+        const {faceOrigin,faceSurface}=geometry.attributes;
+        const water=Array.from({length:geometry.instanceCount},(_,i)=>i).find(i=>{
+          return faceSurface.getX(i)===3200 && faceSurface.getY(i)%8===3 && faceOrigin.getY(i)===775 &&
+            faceOrigin.getX(i)/8+region.group.position.x===-1248 && faceOrigin.getZ(i)/8+region.group.position.z===160;
+        });
+        const uniforms=terrain.materials;
+        const source=view.terrainTextures.water;
+        return {water:water!==undefined, shared:uniforms.water.uniforms.terrainWater.value===source &&
+          uniforms.vista.uniforms.terrainWater.value===source,alpha:source.image.data[3]};
+      },`;
+      assert.ok(source.includes(marker));
+      await route.fulfill({response,body:source.replace(marker,marker+probe)});
+    });
+    const sample={id:6,rgb:[106,196,78]}, points=[[-1535,38],[-1470,38]];
+    await start();
+    await page.evaluate(async()=>{
+      await honeymoon.setDetailedDistance(12);
+      await honeymoon.setDistance(32);
+    });
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-1534.54,97.65,38.42);
+    await page.evaluate(()=>honeymoon.look(0,-.19));
+    const ground=()=>page.evaluate(points=>points.map(at=>honeymoon.qaGroundTint(...at)),points);
+    await page.waitForFunction(at=>{
+      const layer=honeymoon.qaGroundTint(...at);
+      return layer.detailedVisible && layer.simplified?.id===6 && layer.vista?.id===6;
+    },points[0],{timeout:50_000});
+    const near=await ground();
+    assert.equal(near[0].detailed,0x6ac44e);
+    assert.equal(near[1].detailed,0x91bd59);
+    assert.deepEqual(near[0].simplified,sample);
+    assert.deepEqual(near[0].vista,sample);
+    await shot('terrain-tint-near');
+    await hop(-1214.5,140,38.42);
+    await page.evaluate(()=>honeymoon.look(Math.PI/2,-.15));
+    await page.waitForFunction(at=>honeymoon.qaGroundTint(...at).primitive?.id===6,points[0],{timeout:50_000});
+    const far=await ground();
+    assert.deepEqual(far[0].primitive,sample);
+    assert.deepEqual(far[1].primitive,{id:1,rgb:[145,189,89]});
+    await shot('terrain-tint-primitive');
+    await page.waitForFunction(()=>honeymoon.qaWaterColor()?.water,undefined,{timeout:45_000});
+    const water=await page.evaluate(()=>honeymoon.qaWaterColor());
+    assert.deepEqual(water,{water:true,shared:true,alpha:153});
+    result.checks.push({near,far,pond:{x:-1244,z:164,...water}});
   } else if (test==='vista-stitch') {
     await page.route('**/game.mjs',async route=>{
       const response=await route.fetch();
@@ -1241,22 +1727,41 @@ try {
     assert.ok(darkSandPixels<8,`Unexpectedly dark sand pixels at atlas seams: ${darkSandPixels}`);
     result.checks.push({canterlot:await stat(),fallback,darkSandPixels});
   } else if (test==='map') {
+    await skipPreload();
     await page.addInitScript(()=>{
       const draw=CanvasRenderingContext2D.prototype.fillText;
       const paint=CanvasRenderingContext2D.prototype.drawImage;
       globalThis.mapLabels=[];
+      globalThis.mapPaint={base:0,vista:0,detail:0,badFiltering:0,partialDetail:0};
       CanvasRenderingContext2D.prototype.fillText=function(text,...args) {
         if (this.canvas.parentElement?.id==='altitude-map-panel') mapLabels.push(text);
         return draw.call(this,text,...args);
       };
       CanvasRenderingContext2D.prototype.drawImage=function(source,...args) {
-        if (this.canvas.parentElement?.id==='altitude-map-panel' && source instanceof HTMLCanvasElement && source.width===64) {
-          globalThis.mapDetailPainted=true;
+        if (this.canvas.parentElement?.id==='altitude-map-panel') {
+          if (!this.imageSmoothingEnabled) mapPaint.badFiltering++;
+          if (source instanceof HTMLImageElement) mapPaint.base++;
+          if (source instanceof HTMLCanvasElement && source.width===256 && this.globalAlpha>0) mapPaint.vista++;
+          if (source instanceof HTMLCanvasElement && source.width===64 && this.globalAlpha>0) {
+            if (this.globalAlpha<.99) mapPaint.partialDetail++;
+            else mapPaint.detail++;
+          }
         }
         return paint.call(this,source,...args);
       };
     });
+    const overviewPath=`/altitude-colors.webp?build=${expectedBuild}`;
+    let overviewDownloads=0;
+    page.on('request',request=>{
+      const url=new URL(request.url());
+      if (url.pathname+url.search===overviewPath) overviewDownloads++;
+    });
     await start();
+    await page.waitForFunction(async path=>{
+      const {missingTerrain}=await import('/terrain-cache.mjs');
+      return (await missingTerrain([path]))?.length===0;
+    },overviewPath);
+    assert.equal(overviewDownloads,1,'The map was warmed before opening');
     const peer=await browser.newContext();
     const feed=new AbortController();
     try {
@@ -1268,23 +1773,248 @@ try {
       await page.evaluate(()=>document.exitPointerLock());
       await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
       await click('#altitude-map');
-      await page.waitForFunction(()=>mapLabels.includes('Проверка карты'));
+      await page.waitForFunction(()=>mapPaint.base>0 && mapLabels.includes('Проверка карты'));
       await shot('map-overview');
-      const [vista,lod]=await Promise.all([
-        page.waitForResponse(response=>/\/generated\/vista\/[^/]+\/[^/]+\.bin$/.test(response.url()) && response.ok()),
-        page.waitForResponse(response=>/\/generated\/lod\/[^/]+\/[^/]+\.bin$/.test(response.url()) && response.ok()),
-        page.getByRole('button',{name:'Моя позиция'}).click(),
-      ]);
       const zoomIn=page.getByRole('button',{name:'Приблизить'});
-      for (let step=0;step<4;step++) await zoomIn.click();
+      for (let step=0;step<3;step++) await zoomIn.click();
+      const mapCanvas=page.locator('#altitude-map-panel canvas');
+      const mapBox=await mapCanvas.boundingBox();
+      const center=[mapBox.x+mapBox.width/2,mapBox.y+mapBox.height/2];
+      await page.mouse.move(...center);
+      await page.mouse.down();
+      await page.mouse.move(center[0]+68,center[1]+46,{steps:12});
+      await page.mouse.up();
+      const middle=await page.evaluate(()=>({...mapPaint}));
+      assert.equal(middle.vista+middle.detail+middle.badFiltering,0,JSON.stringify(middle));
+      await shot('map-pan-medium');
+      await page.getByRole('button',{name:'Моя позиция'}).click();
+      for (let step=0;step<3;step++) await zoomIn.click();
       await page.getByRole('button',{name:'Отдалить'}).click();
-      await page.waitForFunction(()=>globalThis.mapDetailPainted);
+      await page.waitForFunction(()=>mapPaint.detail>0 && mapPaint.partialDetail>0);
       await shot('map-detail');
       await page.keyboard.press('Escape');
       assert.equal(await visible('#altitude-map-panel'),false);
       assert.equal(await page.locator('#altitude-map').evaluate(button=>button===document.activeElement),true);
-      result.checks.push({marker:'Проверка карты',assets:[new URL(vista.url()).pathname,new URL(lod.url()).pathname]});
+      const paints=await page.evaluate(()=>({...mapPaint}));
+      assert.equal(paints.vista+paints.badFiltering,0);
+      await page.route('**/altitude-colors.webp*',route=>route.abort());
+      await start(false);
+      await page.evaluate(()=>document.exitPointerLock());
+      await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+      await click('#altitude-map');
+      await page.waitForFunction(()=>mapPaint.base>0);
+      assert.equal(overviewDownloads,1,'Reload must reuse the stored overview');
+      await shot('map-cached-reload');
+      result.checks.push({marker:'Проверка карты',overviewPath,overviewDownloads,middle,paints,persisted:true});
     } finally { feed.abort(); await peer.close(); }
+  } else if (test==='bed-collision') {
+    await skipPreload();
+    await start();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-174.45,75.37,-288.07);
+    await page.evaluate(()=>honeymoon.look(0,-.12));
+    const patients=await page.request.get(url+'api/npcs').then(response=>response.json()).then(({npcs})=>npcs.filter(npc=>
+      new Set(['Унылый пациент','Особо опасный пациент']).has(npc.name)&&npc.position.z>-294&&npc.position.z<-290));
+    assert.equal(patients.length,2);
+    for (const npc of patients) assert.equal(npc.position.y,75.5625);
+    await shot('bed-collision-patients');
+    const landings=[];
+    for (const [x,z] of [[-175.5,-291.5],[-172.5,-292.5]]) {
+      await hop(x,77,z);
+      await page.keyboard.press('KeyF');
+      await page.waitForFunction(()=>{
+        const state=honeymoon.stats();
+        return !state.flying&&Math.abs(state.position.y-75.5625)<.035 &&
+          Math.abs(state.movementSync.confirmed[1]-75.5625)<.04;
+      });
+      await page.waitForTimeout(300);
+      const landed=(await stat()).position;
+      assert.ok(Math.abs(landed.y-75.5625)<.035);
+      landings.push(landed);
+      await page.keyboard.press('KeyF');
+      await page.waitForFunction(()=>honeymoon.stats().flying);
+    }
+    result.checks.push({patients:patients.map(({name,position})=>({name,position})),landings});
+  } else if (test==='npc-names') {
+    await skipPreload();
+    await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='globalThis.honeymoon = Object.freeze({';
+      assert.ok(source.includes(marker));
+      await route.fulfill({response,body:source.replace(marker,marker+
+        'qaNameplate:id=>Boolean(view.npcs?.entries.get(id)?.label?.visible),')});
+    });
+    await start();
+    const {definitions}=await page.request.get(url+'api/npcs/editor').then(response=>response.json());
+    const autumn=definitions.find(npc=>npc.name==='Осень' && npc.position.x===-109.5 && npc.position.z===-51.5);
+    assert.ok(autumn);
+    assert.equal(autumn.showName,false);
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    await hop(-112.84,65.71,-49.57);
+    for (const height of [.86,.66,1.05]) {
+      await page.evaluate(({position:target,height})=>{
+        const {position,body}=honeymoon.stats();
+        const dx=target.x-position.x,dz=target.z-position.z,dy=target.y+height-position.y-body.eye;
+        honeymoon.look(Math.atan2(-dx,-dz),Math.atan2(dy,Math.hypot(dx,dz)));
+      },{position:autumn.position,height});
+      if (await page.waitForFunction(id=>honeymoon.targetNpc()?.id===id,autumn.id,{timeout:1400}).catch(()=>null)) break;
+    }
+    const target=await page.evaluate(()=>honeymoon.targetNpc()?.id);
+    assert.equal(target,autumn.id);
+    assert.equal(await page.evaluate(id=>honeymoon.qaNameplate(id),autumn.id),false);
+    assert.doesNotMatch(await page.locator('#selected-label').innerText(),/Осень/);
+    await page.keyboard.press('KeyE');
+    await page.locator('#npc-menu[open] .npc-conversation').waitFor();
+    assert.doesNotMatch(await page.locator('#npc-menu-title').innerText(),/Осень/);
+    assert.doesNotMatch(await page.locator('#npc-menu-content').innerText(),/Рецепты/);
+    await shot('npc-hidden-name-dialogue');
+    await click('#npc-menu-close');
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+    await page.keyboard.press('KeyI');
+    await click('#creative-tabs [data-tab="all"]');
+    await page.locator('#creative-search').fill('Инструмент настройки NPC');
+    await click('#creative-grid [data-key="creative:26980:0"]');
+    const [given]=await Promise.all([
+      page.waitForResponse(response=>response.url().endsWith('/api/action') &&
+        response.request().postDataJSON()?.type==='inventory_give'),
+      click('#inventory-hotbar [data-slot="0"]'),
+    ]);
+    assert.equal(given.status(),200,await given.text());
+    await click('#creative-close');
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+    await page.keyboard.press('Digit1');
+    await page.waitForFunction(id=>honeymoon.qaNameplate(id)&&document.getElementById('selected-label').textContent.includes('Осень'),autumn.id);
+    await shot('npc-hidden-name-wand');
+    await page.keyboard.press('Digit2');
+    await page.waitForFunction(id=>!honeymoon.qaNameplate(id)&&!document.getElementById('selected-label').textContent.includes('Осень'),autumn.id);
+    await page.keyboard.press('Digit1');
+    await page.waitForFunction(()=>document.getElementById('selected-label').textContent.includes('настроить NPC'));
+    await page.keyboard.press('KeyE');
+    const showName=page.locator('#npc-show-name');
+    await showName.waitFor();
+    assert.equal(await showName.isChecked(),false);
+    await showName.check();
+    const save=page.waitForResponse(response=>response.url().endsWith('/api/npcs/editor') && response.request().method()==='POST');
+    await page.getByRole('button',{name:'Сохранить NPC',exact:true}).click();
+    assert.equal((await save).status(),200);
+    await click('#npc-menu-close');
+    if (await visible('#play')) await click('#play');
+    await page.keyboard.press('Digit2');
+    await page.waitForFunction(id=>honeymoon.qaNameplate(id),autumn.id);
+    result.checks.push({npc:autumn.id,originallyHidden:true,normalDialogueRecipes:false,wandReveals:true,editorToggle:true});
+  } else if (test==='npc-rotation') {
+    await skipPreload();
+    await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='globalThis.honeymoon = Object.freeze({';
+      const probe=`qaNpc:id=>{
+        const row=view.npcs?.entries.get(id);
+        if (!row?.actor) return null;
+        return {angle:row.object.rotation.y,yaw:row.npc.yaw,headYaw:row.headYaw,
+          spinSpeed:row.npc.spinSpeed,visible:row.object.visible};
+      },qaAimNpc:(id,height)=>{
+        const row=view.npcs.entries.get(id);
+        const [x,y,z]=view.sightOrigin(position,EYE);
+        const place=row.object.position;
+        const targetY=place.y+row.actor.height*row.object.scale.y*height;
+        heading.yaw=Math.atan2(x-place.x,z-place.z);
+        heading.pitch=Math.atan2(targetY-y,Math.hypot(x-place.x,z-place.z));
+        updateCamera();
+      },`;
+      assert.ok(source.includes(marker));
+      await route.fulfill({response,body:source.replace(marker,marker+probe)});
+    });
+    await start();
+    const editor=await page.request.get(url+'api/npcs/editor');
+    assert.ok(editor.ok(),await editor.text());
+    const {definitions}=await editor.json();
+    const ruin=definitions.find(npc=>npc.name==='Ruin');
+    const quiet=definitions.find(npc=>npc.name==='Хозяйка общежития');
+    assert.equal(ruin?.rotation,'head');
+    assert.ok(Math.abs(ruin.yaw-Math.PI/2)<1e-6);
+    assert.ok(quiet && !quiet.dialogIds.length && !quiet.lines.interact.length);
+
+    async function aimAt(id,approach) {
+      await hop(...approach);
+      await page.waitForFunction(id=>honeymoon.qaNpc(id)?.visible,id,{timeout:30_000});
+      for (const height of [.75,.9,.55]) {
+        await page.evaluate(([id,height])=>honeymoon.qaAimNpc(id,height),[id,height]);
+        const targeted=await page.waitForFunction(id=>honeymoon.targetNpc()?.id===id,id,{timeout:1250}).catch(()=>null);
+        if (targeted) {await targeted.dispose(); return;}
+      }
+      assert.fail('Could not target NPC '+id);
+    }
+    const talkResponse=id=>page.waitForResponse(response=>{
+      if (!response.url().endsWith('/api/npcs/action')) return false;
+      const body=response.request().postDataJSON();
+      return body?.npcId===id && body.action==='interact';
+    });
+    await aimAt(ruin.id,[47.5,65,-66.5]);
+    await page.waitForFunction(id=>{
+      const pose=honeymoon.qaNpc(id);
+      return pose?.visible && Math.abs(Math.atan2(Math.sin(pose.angle-Math.PI/2),Math.cos(pose.angle-Math.PI/2)))<.1 &&
+        pose.headYaw<-.2;
+    },ruin.id);
+    const originalPose=await page.evaluate(id=>honeymoon.qaNpc(id),ruin.id);
+    const dialogue=await Promise.all([talkResponse(ruin.id),page.keyboard.press('KeyE')]).then(([response])=>response);
+    assert.ok(dialogue.ok(),await dialogue.text());
+    assert.equal((await dialogue.json()).interaction.dialog.title,'START');
+    await page.getByRole('heading',{name:'START',exact:true}).waitFor();
+    await shot('npc-original-dialogue');
+    await click('#npc-menu-close');
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+
+    await page.evaluate(()=>document.exitPointerLock());
+    await page.waitForFunction(()=>document.getElementById('game').classList.contains('paused'));
+    await page.locator('#npc-editor-toggle').evaluate(button=>button.click());
+    await page.getByPlaceholder('Имя, модель или ID').fill(ruin.id);
+    await page.getByRole('button',{name:/^Ruin\b/}).click();
+    assert.equal(await page.locator('#npc-rotation').inputValue(),'head');
+    assert.equal(await page.locator('#npc-yaw').inputValue(),'90');
+    await page.locator('#npc-rotation').selectOption('spin');
+    await page.locator('#npc-yaw').fill('60');
+    await page.locator('#npc-spin-speed').fill('-90');
+    await page.locator('#npc-interaction-rotation').selectOption('none');
+    const savedRequest=page.waitForResponse(response=>response.url().endsWith('/api/npcs/editor') &&
+      response.request().method()==='POST');
+    await page.getByRole('button',{name:'Сохранить NPC',exact:true}).click();
+    const savedResponse=await savedRequest;
+    assert.ok(savedResponse.ok(),await savedResponse.text());
+    const saved=(await savedResponse.json()).definitions.find(npc=>npc.id===ruin.id);
+    assert.deepEqual([saved.rotation,saved.spinSpeed,saved.interactionRotation],['spin',-90,'none']);
+    assert.ok(Math.abs(saved.yaw-Math.PI/3)<1e-6);
+    await shot('npc-editor-spin');
+    await click('#npc-menu-close');
+    if (await visible('#play')) await click('#play');
+    await page.waitForFunction(id=>honeymoon.qaNpc(id)?.spinSpeed===-90,ruin.id);
+    const firstAngle=await page.evaluate(id=>honeymoon.qaNpc(id).angle,ruin.id);
+    await page.waitForFunction(({id,from})=>{
+      const angle=honeymoon.qaNpc(id)?.angle, delta=Math.atan2(Math.sin(angle-from),Math.cos(angle-from));
+      return delta<-.35 && delta> -Math.PI*.85;
+    },{id:ruin.id,from:firstAngle});
+    const secondAngle=await page.evaluate(id=>honeymoon.qaNpc(id).angle,ruin.id);
+    await shot('npc-spinning-in-game');
+
+    await aimAt(quiet.id,[153.5,65,-201.5]);
+    await page.evaluate(()=>{
+      globalThis.qaNpcDialogOpened=false;
+      const dialog=document.getElementById('npc-menu');
+      const observer=new MutationObserver(records=>{
+        if (records.some(record=>record.oldValue===null)) globalThis.qaNpcDialogOpened=true;
+      });
+      observer.observe(dialog,{attributes:true,attributeOldValue:true,attributeFilter:['open']});
+    });
+    const silent=await Promise.all([talkResponse(quiet.id),page.keyboard.press('KeyE')]).then(([response])=>response);
+    assert.ok(silent.ok(),await silent.text());
+    assert.deepEqual((await silent.json()).interaction,{closed:true});
+    assert.equal(await page.evaluate(()=>qaNpcDialogOpened||document.getElementById('npc-menu').open),false);
+    await shot('npc-silent-in-game');
+    result.checks.push({original:{id:ruin.id,rotation:ruin.rotation,pose:originalPose},
+      spin:{configured:saved.spinSpeed,from:firstAngle,to:secondAngle},silent:{id:quiet.id,dialogOpened:false}});
   } else if (test==='travel-roles') {
     await start(false);
     await page.keyboard.press('KeyG');

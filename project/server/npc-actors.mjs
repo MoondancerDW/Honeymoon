@@ -1,9 +1,14 @@
-import {clamp,npcAnimations,number} from './npc-source.mjs';
+import {clamp,npcAnimations,npcSpinSpeed,number} from './npc-source.mjs';
 
 const distance = (a,b)=>Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
 const horizontal = (a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 const turn = (source,target)=>Math.atan2(source.x-target.x,source.z-target.z);
 const radius=96;
+const gazeRadius=7;
+const headLimit=Math.PI/4;
+const spinSyncMs=2000;
+const fullTurn=Math.PI*2;
+const angleDelta=(from,to)=>Math.atan2(Math.sin(to-from),Math.cos(to-from));
 const nearest = (point,rows,max,location=row=>row.position) => {
   let best=null;
   for (const row of rows) {
@@ -12,27 +17,42 @@ const nearest = (point,rows,max,location=row=>row.position) => {
   }
   return best;
 };
-const initial = npc => ({position:npc.position,yaw:npc.yaw,pitch:npc.pitch,health:npc.health,moving:false,
+const initial = npc => ({position:npc.position,yaw:npc.yaw,headYaw:npc.headYaw??0,pitch:npc.pitch,health:npc.health,moving:false,
   step:0,wanderAt:0,lastAttack:0,target:null,haltUntil:0,animation:npc.animation});
 const round = number => Math.round(number*100)/100;
+function leaveIdle(current) {
+  current.spinAt=undefined;
+  current.headYaw=0;
+  current.pitch=0;
+}
 
-export function createNpcActors({definitions,shared,walk,visibility,damagePlayer,sound,now,random=Math.random}) {
+export function createNpcActors({definitions,shared,walk,visibility,damagePlayer,sound,now,random=Math.random,
+  settleBed=()=>undefined}) {
   const states=new Map();
   let lastTick=0;
   function state(npc) {
-    if (!states.has(npc.id)) states.set(npc.id,initial(npc));
-    return states.get(npc.id);
+    const previous=npc.position;
+    const contact=settleBed(npc);
+    let current=states.get(npc.id);
+    if (!current) {
+      current=initial(npc);
+      states.set(npc.id,current);
+    } else if (contact && current.position===previous) current.position=contact;
+    return current;
   }
   function get(id) {
     const npc=definitions.get(id);
     return npc && state(npc);
   }
   function view(npc,current=state(npc),time=now()) {
-    const {id,name,title,model,scale,texture,cloak,showName,equipment,held,item,job,jobData}=npc;
-    const position=Object.fromEntries(Object.entries(current.position).map(([axis,value])=>[axis,round(value)]));
+    const {id,name,title,model,scale,texture,cloak,showName,showNameWhenAttacking,equipment,held,item,job,jobData}=npc;
+    const position=current.position===npc.position ? current.position :
+      Object.fromEntries(Object.entries(current.position).map(([axis,value])=>[axis,round(value)]));
     const animation=current.health<=0?'dead':time<current.swingUntil?'attack':time<current.hurtUntil?'hurt':
       current.moving?'walk':npcAnimations.includes(current.animation)?current.animation:'idle';
-    return {id,name,title,position,yaw:round(current.yaw),pitch:round(current.pitch??0),model,scale,texture,cloak,showName,
+    return {id,name,title,position,yaw:round(current.yaw),headYaw:round(current.headYaw),pitch:round(current.pitch??0),
+      spinSpeed:current.spinAt===undefined?null:npcSpinSpeed(npc.spinSpeed),model,scale,texture,cloak,showName,
+      ...(showNameWhenAttacking && {showNameWhenAttacking}),
       animation,moving:current.moving,health:current.health,maxHealth:npc.health,equipment,held,item,
       revision:npc.revision??0,
       ...(job==='bard' && jobData?.song && {bard:{song:jobData.song,instrument:jobData.instrument,minRange:jobData.minRange,
@@ -61,6 +81,7 @@ export function createNpcActors({definitions,shared,walk,visibility,damagePlayer
       current.deadAt=time;
       current.moving=false;
       current.target=null;
+      leaveIdle(current);
       say(npc,current,'kill',time);
       return true;
     }
@@ -74,16 +95,48 @@ export function createNpcActors({definitions,shared,walk,visibility,damagePlayer
     if (!killed && npc.combat.behavior!=='ignore') {
       current.target={player,until:time+8000};
       current.yaw=turn(current.position,point);
+      leaveIdle(current);
       say(npc,current,'attack',time);
     }
     return killed;
   }
+  function spinYaw(npc,current,time) {
+    return (current.yaw+(time-current.spinAt)*npcSpinSpeed(npc.spinSpeed)*Math.PI/180_000)%fullTurn;
+  }
+
+  function orient(npc,current,rotation,target,time) {
+    current.headYaw=npc.headYaw??0;
+    current.pitch=npc.pitch??0;
+    if (rotation==='spin') {
+      current.spinAt??=time;
+      if (time-current.spinAt>=spinSyncMs) {
+        current.yaw=spinYaw(npc,current,time);
+        current.spinAt=time;
+      }
+      return;
+    }
+    if (current.spinAt!==undefined) {
+      current.yaw=spinYaw(npc,current,time);
+      current.spinAt=undefined;
+    }
+    if (npc.movement.mode==='stationary' && npc.rotation!=='spin') current.yaw=npc.yaw;
+    if (!target || rotation!=='body' && rotation!=='head') return;
+    const range=horizontal(current.position,target);
+    if (range<.01) return;
+    const yaw=turn(current.position,target);
+    if (rotation==='body') current.yaw=yaw;
+    else current.headYaw=clamp(angleDelta(current.yaw,yaw),-headLimit,headLimit);
+    current.pitch=clamp(-Math.atan2(target.y-current.position.y,range),-.6,.6);
+  }
+
   function face(npc,point,time=now()) {
     const current=state(npc);
-    if (npc.rotation==='body') current.yaw=turn(current.position,point);
-    const d=horizontal(current.position,point);
-    if (npc.rotation!=='fixed') current.pitch=clamp(Math.atan2(point.y-current.position.y,d),-.6,.6);
+    if (npc.interactionRotation==='none') return;
     current.haltUntil=time+5000;
+    const rotation=!npc.interactionRotation || npc.interactionRotation==='default' ? npc.rotation : npc.interactionRotation;
+    if (rotation!=='head' && rotation!=='body') return;
+    current.interactionLook={point,rotation,until:current.haltUntil};
+    orient(npc,current,rotation,point,time);
   }
   function steer(npc,current,target,speed,dt) {
     const {position}=current;
@@ -137,6 +190,7 @@ export function createNpcActors({definitions,shared,walk,visibility,damagePlayer
     const dt=clamp((time-lastTick)/1000,0,.25);
     lastTick=time;
     if (!players.length) return;
+    const people=players.filter(player=>!player.spectator);
     const active=new Map();
     for (const player of players) for (const npc of inRange(player.position,72,true)) active.set(npc.id,npc);
     for (const npc of active.values()) {
@@ -152,16 +206,17 @@ export function createNpcActors({definitions,shared,walk,visibility,damagePlayer
         say(npc,current,'world',time);
       }
       if (current.following) {
+        leaveIdle(current);
         const guide=players.find(player=>player.id===current.following);
         if (guide && distance(current.position,guide.position)>2) current.moving=steer(npc,current,guide.position,npc.movement.speed,dt);
         continue;
       }
       const {combat}=npc;
-      const people=players.filter(player=>!player.spectator);
       const victim=current.target?.until>time ? people.find(player=>player.id===current.target.player) : null;
       const hostile= combat.hostile || faction(npc)?.attackPlayers;
       const target=victim ?? (hostile ? nearest(current.position,people,Math.max(combat.range,9)) : null);
       if (target) {
+        leaveIdle(current);
         const {position}=target;
         const range=distance(current.position,position);
         if (range>Math.max(combat.range,24)) current.target=null;
@@ -181,6 +236,7 @@ export function createNpcActors({definitions,shared,walk,visibility,damagePlayer
           .filter(other=>other!==npc && enemies.includes(other.factionId) && state(other).health>0),
         npc.jobData.guardRange,other=>state(other).position);
         if (target) {
+          leaveIdle(current);
           const victim=state(target);
           if (distance(current.position,victim.position)>Math.min(combat.range,2.3))
             current.moving=steer(npc,current,victim.position,combat.speed,dt);
@@ -194,6 +250,20 @@ export function createNpcActors({definitions,shared,walk,visibility,damagePlayer
         }
       }
       current.moving=Boolean(moveByHabit(npc,current,time,dt));
+      if (current.moving) {
+        leaveIdle(current);
+        continue;
+      }
+      if (current.interactionLook?.until>time) {
+        const {point,rotation}=current.interactionLook;
+        orient(npc,current,rotation,point,time);
+      } else {
+        current.interactionLook=undefined;
+        const {rotation}=npc;
+        const person=rotation==='head'||rotation==='body'?nearest(current.position,people,gazeRadius):null;
+        const target=person && visibility(current.position,person.position)?person.position:null;
+        orient(npc,current,rotation,target,time);
+      }
     }
   }
   return {snapshot,get,view,tick,face,receiveAttack,clear:id=>states.delete(id)};

@@ -27,12 +27,12 @@ export async function verifyAltitudeAsset(url,response) {
   return blob;
 }
 
-export async function loadAltitudeImage(path,build,persistent,loader) {
+export async function loadAltitudeImage(path,build,persistent,loader,{signal,waitForStore=false}={}) {
   if (!persistent) return loader.loadAsync(path);
   const url=altitudeAssetUrl(path,build);
-  return readTerrain(url,{priority:'low'},true,async response=>{
+  return readTerrain(url,{priority:'low',signal},true,async response=>{
     const source=URL.createObjectURL(await verifyAltitudeAsset(url,response));
     try {return await loader.loadAsync(source);}
     finally {URL.revokeObjectURL(source);}
-  });
+  },{waitForStore});
 }

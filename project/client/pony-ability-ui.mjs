@@ -1,6 +1,6 @@
 import {JUMP_CHARGE_LIMIT,ponyAbilities} from '../world/pony-abilities.mjs';
 
-const raceLabels = {earth:'Земной пони',pegasus:'Пегас',unicorn:'Единорог',alicorn:'Аликорн'};
+export const raceLabels = Object.freeze({earth:'Земной пони',pegasus:'Пегас',unicorn:'Единорог',alicorn:'Аликорн'});
 const sizeLabels = {small:'низкий',normal:'обычный',tall:'высокий',large:'крупный'};
 
 export function createPonyAbilityUi(element) {
@@ -9,6 +9,14 @@ export function createPonyAbilityUi(element) {
   const magic = element('magic-cooldown-status');
   const magicButton = element('touch-magic');
   const label = element('pony-traits-label');
+  const dots=Array.from({length:JUMP_CHARGE_LIMIT},()=>{
+    const dot=document.createElement('span');
+    dot.className='jump-charge-dot';
+    dot.setAttribute('aria-hidden','true');
+    return dot;
+  });
+  charges.setAttribute('role','img');
+  charges.append(...dots);
   let replenishes = [];
   let magicReadyAt = 0;
   let nextPaint = 0;
@@ -32,9 +40,12 @@ export function createPonyAbilityUi(element) {
     const seconds = cooldown(now);
     const jumpText = `Прыжок ${count}/${JUMP_CHARGE_LIMIT}${next ? ` · ${Math.ceil((next-now)/1000)} с` : ''}`;
     const magicText = seconds ? `Телепорт · ${seconds} с` : 'Телепорт готов';
-    if (charges.textContent!==jumpText) charges.textContent=jumpText;
+    if (charges.getAttribute('aria-label')!==jumpText) {
+      charges.setAttribute('aria-label',jumpText);
+      dots.forEach((dot,index)=>dot.classList.toggle('ready',index<count));
+    }
     if (magic.textContent!==magicText) magic.textContent=magicText;
-    magicButton.disabled = seconds>0;
+    magicButton.toggleAttribute('data-cooldown',seconds>0);
     magicButton.title = magicText;
   }
 

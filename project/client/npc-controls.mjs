@@ -1,4 +1,5 @@
 import {minecraftTextRuns,plainMinecraftText} from '../world/item-text.mjs';
+import {updateItemTooltip} from './item-tooltip.mjs';
 
 export function node(tag,className,text) {
   const element=document.createElement(tag);
@@ -81,7 +82,9 @@ export function stackChip(stack,{entryFor,drawItem}) {
   canvas.setAttribute('aria-hidden','true');
   if (entry) Promise.resolve(drawItem(entry,canvas)).catch(()=>{canvas.hidden=true;});
   else canvas.hidden=true;
-  item.append(canvas,textComponent(stack.name??entry?.name??stack.key??('ID '+stack.id)));
+  const label=entry?.name??stack.name??stack.key??('ID '+stack.id);
+  item.append(canvas,textComponent(label));
+  updateItemTooltip(item,stack,label,{entry});
   if (stack.count>1) item.append(node('span','npc-stack-count','×'+stack.count));
   return item;
 }

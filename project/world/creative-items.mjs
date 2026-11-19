@@ -23,6 +23,14 @@ export function microblockPartFromDamage(damage) {
   return isMicroPart(part) ? part : null;
 }
 
+export function microblockDamageFromPart(part) {
+  if (!isMicroPart(part)) return null;
+  const slot=part.sourceSlot??part.slot;
+  const category=slot<6?0:slot<14?6:slot<26?14:26;
+  const variant=coverDamage.find(([,type,shape])=>type===category && shape===part.shape);
+  return variant?(variant[0]<<8)|part.material:null;
+}
+
 // CoverLib.damageToCoverData stores the kind in the upper byte, then
 // thickness/flags, internal shape and material. Type 0 also covers hollow panels.
 export function creativeMicroblock(entry) {

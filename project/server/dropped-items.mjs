@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {RequestError} from './errors.mjs';
+import {bookType,publicItemText} from '../world/item-text.mjs';
 
 const moduleName = 'dropped-items';
 const worldOwner = 'world';
@@ -46,9 +47,10 @@ function sweep(position, velocity, seconds, blocked) {
 }
 
 function publicItem({key, stack, position, resting}) {
-  const {key:itemKey, count, cell, part} = stack;
-  return {key, item:{key:itemKey,count, ...(cell && {cell}), ...(part && {part})},
-    position:[...position], resting};
+  const {key:itemKey, count, cell, part, name} = stack;
+  const nbt=publicItemText(stack.nbt,bookType(stack)==='signed');
+  return {key,item:{key:itemKey,count,...(cell && {cell}),...(part && {part}),
+    ...(typeof name==='string' && {name}),...(nbt && {nbt})},position:[...position],resting};
 }
 
 export function createDroppedItems({base, store, clock, collides, visible, liquidAt=()=>null, currentAt=()=>[0,0,0]}) {

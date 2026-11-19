@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url';
 import {CREATIVE_BOAT_KEY, CREATIVE_FRAME_KEY, CREATIVE_INVISIBLE_FRAME_KEY, CREATIVE_MINECART_KEY, creativeMicroblock} from '../world/creative-items.mjs';
 import {isCoverMaterial} from '../world/geometry.mjs';
 import {FAKE_WATER} from '../world/fluid-state.mjs';
+import {NPC_EDITOR_WAND_ID,NPC_EDITOR_WAND_KEY} from '../world/npc-editor-wand.mjs';
 
 const rails = [
   [66, 'Рельсы', 'Rail'],
@@ -19,6 +20,8 @@ const frame = {key:CREATIVE_FRAME_KEY,id:389,damage:0,kind:'item-frame',name:'Р
   english:'Item Frame',mod:'Minecraft',category:'items',technical:false,placeable:true};
 const invisibleFrame = {...frame,key:CREATIVE_INVISIBLE_FRAME_KEY,damage:1,name:'Невидимая рамка для предметов',
   english:'Invisible Item Frame',invisible:true};
+const npcWand = {key:NPC_EDITOR_WAND_KEY,id:NPC_EDITOR_WAND_ID,damage:0,kind:'flat-item',name:'Инструмент настройки NPC',
+  english:'NPC Wand',mod:'Custom NPCs',category:'items',technical:false,placeable:true};
 
 export function readCreativeCatalog(generated, project = fileURLToPath(new URL('..', import.meta.url)), flatItems = []) {
   let catalog;
@@ -36,7 +39,7 @@ export function readCreativeCatalog(generated, project = fileURLToPath(new URL('
   // Rail neighbors determine orientation at placement time. Expose one item per rail type, even with an older catalog.
   const captured = new Map(catalog.entries.map(entry => [entry.key, entry]));
   catalog.entries = catalog.entries.filter(entry => !railState.test(entry.key) &&
-    ![CREATIVE_MINECART_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_BOAT_KEY].includes(entry.key));
+    ![CREATIVE_MINECART_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_BOAT_KEY,NPC_EDITOR_WAND_KEY].includes(entry.key));
   for (const [id, name, english] of rails) {
     const key = `legacy:${id}:0`;
     catalog.entries.push({...captured.get(key), key, id, meta:0, name, english, mod:'Minecraft', category:'redstone',
@@ -44,7 +47,7 @@ export function readCreativeCatalog(generated, project = fileURLToPath(new URL('
   }
   if (!captured.has(FAKE_WATER)) catalog.entries.push({key:FAKE_WATER,id:4095,meta:0,
     name:'Фальшивая вода',english:'Fake Water',mod:'Lilium Moonlight',category:'nature',technical:false,placeable:true});
-  const extra = new Map([minecart,frame,invisibleFrame,boat].map(item => [item.key,item]));
+  const extra = new Map([minecart,frame,invisibleFrame,boat,npcWand].map(item => [item.key,item]));
   for (const {id,damage,name,english,mod} of flatItems) {
     if (!Number.isInteger(id) || id < 1 || id > 32767 || !Number.isInteger(damage) || damage < 0 || damage > 32767 ||
         typeof name !== 'string' || !name) continue;

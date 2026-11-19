@@ -1,10 +1,16 @@
 import overview from './altitude-map-data.mjs';
+import {loadAltitudeImage} from './altitude-assets.mjs';
 import {VISTA_BLOCKS} from './vista-format.mjs';
 
 const packBlocks=64;
 const maxScale=8;
 const maxFetch=2;
+const tileFadeMs=160;
 const clamp=(value,min,max)=>Math.min(max,Math.max(min,value));
+const fade=progress=>{
+  const fraction=clamp(progress,0,1);
+  return fraction*fraction*(3-2*fraction);
+};
 const regionKey=(x,z)=>`${x}.${z}`;
 const trackPoint=(x,y)=>({x,y});
 const midpoint=([a,b])=>trackPoint((a.x+b.x)/2,(a.y+b.y)/2);
@@ -45,7 +51,8 @@ function control(parent,label,text,action) {
   return button;
 }
 
-export function createAltitudeMap({game,openButton,backButton,manifest,palette,localMarker,remoteMarkers,pause,persistentTerrain}) {
+export function createAltitudeMap({game,openButton,backButton,manifest,palette,localMarker,remoteMarkers,pause,
+  persistentTerrain,altitudeBuild}) {
   const hasOverview=manifest.vista?.hash===overview.vistaHash;
   const layers=layersFor(manifest);
   if (!hasOverview && !layers.length) return;
@@ -57,7 +64,7 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
   const inflight=new Set();
   const failures=new Map();
   let active=false, width=0, height=0, dpr=1, minScale=0, scale=1, x=centerX, z=centerZ;
-  let frame=0, timer, retryTimer, image, worker, workerFailed=false, markers=[], lastMarkers='';
+  let frame=0, timer, retryTimer, image, overviewLoading, worker, workerFailed=false, markers=[], lastMarkers='';
 
   const dialog=document.createElement('section');
   dialog.id='altitude-map-panel';
@@ -100,7 +107,7 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
           const tile=document.createElement('canvas');
           tile.width=tile.height=size;
           tile.getContext('2d').putImageData(new ImageData(pixels,size,size),0,0);
-          layer.cache.set(key,tile);
+          layer.cache.set(key,{image:tile,starts:performance.now()});
           while (layer.cache.size>layer.limit) layer.cache.delete(layer.cache.keys().next().value);
         } else if (retry) {
           failures.set(id,performance.now()+10_000);
@@ -173,6 +180,24 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
     schedule();
   }
 
+  function prepare() {
+    if (!hasOverview || image) return Promise.resolve();
+    if (!overviewLoading) {
+      const loader={async loadAsync(source) {
+        const raster=new Image();
+        raster.src=source;
+        await raster.decode();
+        return raster;
+      }};
+      overviewLoading=loadAltitudeImage('/altitude-colors.webp',altitudeBuild,persistentTerrain,loader,
+        {signal:AbortSignal.timeout(12_000),waitForStore:true}).then(raster=>{image=raster;}).catch(()=>{}).finally(()=>{
+        overviewLoading=null;
+        schedule();
+      });
+    }
+    return overviewLoading;
+  }
+
   function open() {
     if (active) return;
     pause();
@@ -184,12 +209,7 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
     backButton.focus({preventScroll:true});
     updateMarkers();
     timer=setInterval(updateMarkers,250);
-    if (hasOverview && !image) {
-      image=new Image();
-      image.addEventListener('load',schedule,{once:true});
-      image.addEventListener('error',()=>{image=null; schedule();},{once:true});
-      image.src=new URL('./altitude-colors.webp',import.meta.url);
-    }
+    void prepare();
   }
 
   function close() {
@@ -201,7 +221,6 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
     clearTimeout(retryTimer);
     retryTimer=null;
     pointers.clear();
-    for (const id of inflight) worker?.postMessage({id,cancel:true});
     dialog.hidden=true;
     game.classList.remove('altitude-map-open');
     openButton.focus({preventScroll:true});
@@ -213,8 +232,9 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
 
   function queueTiles(visible) {
     const needed=new Set(visible.filter(tile=>!tile.layer.cache.has(tile.key)).map(tile=>tile.id));
+    if (!needed.size) return;
     for (const id of inflight) if (!needed.has(id)) worker?.postMessage({id,cancel:true});
-    if (!needed.size || inflight.size>=maxFetch) return;
+    if (inflight.size>=maxFetch) return;
     startWorker();
     if (!worker) return;
     const now=performance.now();
@@ -279,7 +299,7 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
     }
   }
 
-  function draw() {
+  function draw(now) {
     frame=0;
     if (!active) return;
     synchronizeSize();
@@ -287,33 +307,41 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
     minus.disabled=scale<=minScale*1.001;
     plus.disabled=scale>=maxScale;
     context.setTransform(dpr,0,0,dpr,0,0);
+    context.imageSmoothingEnabled=true;
+    context.imageSmoothingQuality='medium';
     context.fillStyle='#172928';
     context.fillRect(0,0,width,height);
     const screenX=worldX=>(worldX-x)*scale+width/2;
     const screenY=worldZ=>(worldZ-z)*scale+height/2;
-    if (image?.naturalWidth) {
-      context.imageSmoothingEnabled=scale<.125;
-      context.drawImage(image,screenX(bounds.west),screenY(bounds.north),spanX*scale,spanZ*scale);
-    }
+    if (image) context.drawImage(image,screenX(bounds.west),screenY(bounds.north),spanX*scale,spanZ*scale);
     const extent={x,z,west:x-width/(2*scale),east:x+width/(2*scale),north:z-height/(2*scale),south:z+height/(2*scale)};
     const nearScale=Math.max(.9,Math.sqrt(width*height/64)/packBlocks);
     const visible=[];
-    context.imageSmoothingEnabled=false;
+    const pixel=value=>Math.round(value*dpr)/dpr;
     for (const layer of layers) {
-      const threshold=layer.name==='vista' ? (image?.naturalWidth ? .08 : .035) : nearScale;
+      // The Vista ground is sampled at eight blocks, coarser than the four-block overview.
+      // Keep one base image until close-up tiles add real detail.
+      const vista=layer.name==='vista';
+      if (vista && image) continue;
+      const threshold=vista ? .035 : nearScale;
       if (scale<threshold) continue;
+      const zoomBlend=vista || !image ? 1 : fade((scale-threshold)/(threshold*.4));
       for (const tile of visibleTiles(layer,extent)) {
         const cached=layer.cache.get(tile.key);
         if (cached) {
           layer.cache.delete(tile.key);
           layer.cache.set(tile.key,cached);
-          const left=Math.round(screenX(tile.x)), top=Math.round(screenY(tile.z));
-          context.drawImage(cached,left,top,Math.round(screenX(tile.x+layer.size))-left,
-            Math.round(screenY(tile.z+layer.size))-top);
+          const arrival=fade((now-cached.starts)/tileFadeMs);
+          context.globalAlpha=zoomBlend*arrival;
+          const left=pixel(screenX(tile.x)), top=pixel(screenY(tile.z));
+          context.drawImage(cached.image,left,top,pixel(screenX(tile.x+layer.size))-left,
+            pixel(screenY(tile.z+layer.size))-top);
+          if (arrival<1) schedule();
         }
         visible.push(tile);
       }
     }
+    context.globalAlpha=1;
     queueTiles(visible);
     drawMarkers(screenX,screenY);
   }
@@ -368,4 +396,6 @@ export function createAltitudeMap({game,openButton,backButton,manifest,palette,l
     }
     event.preventDefault();
   },true);
+
+  return {prepare};
 }

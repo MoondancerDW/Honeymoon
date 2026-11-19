@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {Climate,readBiomes,readWorldBiomes,biomeSnow} from './climate.mjs';
+import {BIOME_PALETTE_SIZE,Climate,biomeTint,readBiomes,readWorldBiomes,biomeSnow,grassTintPalette,terrainBiomePixels} from './climate.mjs';
 import {encodeBiomePalette} from '../import/biomes.mjs';
 
 test('precipitation samples exact biome columns and changes to snow with altitude everywhere',()=>{
@@ -40,4 +40,27 @@ test('compact world climates preserve original IDs and missing columns',()=>{
       assert.equal(sample(x-32,z-48),id===255 ? undefined : id);
     }
   }
+});
+
+test('packed terrain and the detailed mesh share grass tints at biome boundaries',()=>{
+  const climate=new Climate();
+  climate.full=(x,z)=>x < -1534 && z===38 ? 134 : x===-1534 && z===38 ? 1 : undefined;
+  const terrain=terrainBiomePixels(climate,-1536,0,64,1);
+  const detailed=climate.columnTints(-96,2);
+  const palette=grassTintPalette();
+  assert.equal(palette.length,BIOME_PALETTE_SIZE*4);
+  assert.equal(terrain.byteLength,4096);
+  assert.deepEqual(terrain.slice(38*64,38*64+4),new Uint8Array([6,6,1,4]));
+  for (let x=0;x<4;x++) {
+    const rgb=terrain[38*64+x]*4;
+    assert.equal(palette[rgb]<<16 | palette[rgb+1]<<8 | palette[rgb+2],detailed[(6*16+x)*2]);
+  }
+});
+
+test('Vista samples each eight-block terrain cell at its center, including negative positions',()=>{
+  const climate=new Climate();
+  climate.full=(x,z)=>x===-516 && z===-4 ? 21 : x===-508 && z===-4 ? 3 : undefined;
+  assert.deepEqual(terrainBiomePixels(climate,-520,-8,2,8),new Uint8Array([21,3,4,4]));
+  assert.deepEqual(grassTintPalette().slice(21*4,22*4),
+    new Uint8Array([biomeTint(21).grass>>16,biomeTint(21).grass>>8&255,biomeTint(21).grass&255,255]));
 });

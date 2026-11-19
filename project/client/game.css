@@ -273,6 +273,31 @@ button:disabled { cursor: wait; opacity: .45; }
 }
 #creative-close { position: absolute; top: calc(2 * var(--gui-px)); right: calc(3 * var(--gui-px)); width: calc(12 * var(--gui-px)); height: calc(12 * var(--gui-px)); }
 #creative-menu button:focus-visible, #creative-menu input:focus-visible { outline: 2px solid #235299; outline-offset: -2px; }
+.item-tooltip {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+  width: max-content;
+  max-width: min(28rem, calc(100vw - 1rem));
+  max-height: calc(100dvh - 1rem);
+  padding: .45rem .65rem;
+  border: 1px solid #63828d;
+  border-radius: .32rem;
+  background: #14242bf5;
+  color: #f4f5ef;
+  box-shadow: 0 .2rem .7rem #07101390;
+  font: .85rem/1.35 system-ui, sans-serif;
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  pointer-events: none;
+}
+.item-tooltip-name, .item-tooltip-id { flex: none; }
+.item-tooltip-details { min-height: 0; overflow: hidden; }
+.item-tooltip-id { color: #adbec2; font-size: .75rem; }
 .creative-tabs-row, #creative-tabs { position: absolute; inset: 0; pointer-events: none; }
 .creative-tabs-row > button {
   position: absolute; top: calc(-25 * var(--gui-px)); height: calc(13 * var(--gui-px)); width: calc(13 * var(--gui-px));
@@ -419,12 +444,14 @@ button:disabled { cursor: wait; opacity: .45; }
   background-position: calc(-184 * var(--gui-px)) calc(-280 * var(--gui-px));
 }
 #hotbar .selected-slot { isolation: isolate; }
-#game:not(.paused) .target-tag:not(:empty) {
+#game:not(.paused) .target-tag:has(#selected-label:not(:empty)) {
   position: absolute; top: max(.65rem, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
   max-width: min(35rem,62vw); width: max-content; font-size: .82rem; text-align: center;
   padding: .38rem .65rem; border: 1px solid var(--line); background: var(--glass); border-radius: .4rem;
   pointer-events: none;
 }
+#selected-details:not([hidden]) { display: block; margin-top: .15rem; white-space: pre-line; overflow-wrap: anywhere; }
+#selected-action:not([hidden]), #selected-id:not([hidden]) { display: block; margin-top: .15rem; color: #b2c2c7; }
 #game.paused .target-tag { display: none; }
 #auto-move-status:not([hidden]) {
   position: absolute; right: max(.75rem,env(safe-area-inset-right)); bottom: max(.65rem,env(safe-area-inset-bottom));

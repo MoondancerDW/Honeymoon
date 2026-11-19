@@ -9,7 +9,8 @@ import {clipLiquidFace, liquidCavity, liquidKind} from '/world/logged-fluid.mjs'
 import {FAKE_WATER,fluidState,fluidSurface} from '/world/fluid-state.mjs';
 import {buildSectionVisibility, isOcclusionBlock, markOcclusionBlock} from './section-visibility.mjs';
 import {appendFoliage,leafBlock} from './foliage-mesh.mjs';
-import {blockFaceVertices} from '/world/block-faces.mjs';
+import {isTreeLog, joinsLogEnds, logAxis, roundedLogSurfaces} from './rounded-logs.mjs';
+import {blockFaceVertices,boxFaceFragments,canClipBoxFace} from '/world/block-faces.mjs';
 
 const {shapeFor, ATLAS_GRID, TILE_SIZE, FACES} = geometry;
 const SIDE = 18;
@@ -24,6 +25,7 @@ let models = {};
 let atlasRows = ATLAS_GRID;
 let carpentryModel = false;
 const cache = new Map();
+const uniqueModels = new WeakMap();
 const MAX_CACHED_SHAPES = 4096;
 
 function layer() {
@@ -77,6 +79,23 @@ function modelQuad(out, {positions, uv, emissive, tint = 0xffffff}, origin, ligh
   out.indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
 }
 
+function uniqueModelFaces(surfaces) {
+  const cached=uniqueModels.get(surfaces);
+  if (cached) return cached;
+  const seen=new Set();
+  const result=surfaces.filter(surface=>{
+    if (surface.mode!=='opaque') return true;
+    const vertices=Array.from({length:4},(_,i)=>surface.positions.slice(i*3,i*3+3)
+      .map(value=>Math.round(value*1e6)).join(','));
+    const key=vertices.map((_,i)=>vertices.slice(i).concat(vertices.slice(0,i)).join(':')).sort()[0];
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  uniqueModels.set(surfaces,result);
+  return result;
+}
+
 const FULL_UV = [[0, 1], [1, 1], [1, 0], [0, 0]];
 const FIRE_UV = [0,.5].map(offset => FULL_UV.map(([u,v]) => [offset + (u === 0 ? .25 : 15.75) / 32,v === 0 ? .25 / 16 : 15.75 / 16]));
 
@@ -104,21 +123,27 @@ function torchQuads(out, box, [x,y,z], packed) {
 
 // Each face uses tangent axes whose cross product points outward.
 const AXES = [[2, 1], [1, 2], [0, 2], [2, 0], [1, 0], [0, 1]];
+const FACE_OFFSETS = FACES.map((normal, face) => normal[face >> 1] * STRIDE[face >> 1]);
+const NOT_A_LOG = -2;
+
+function interpolateFace([a, b, c, d], u, v) {
+  return (a + (b - a) * u) * (1 - v) + (d + (c - d) * u) * v;
+}
 
 function faceQuad(out, box, face, origin, brightness, tile = box.faces[face], shade = 1, quarter = -1, shadow,
-  tint = box.tintFaces?.[face] ?? box.tint, wind = 0) {
+  tint = box.tintFaces?.[face] ?? box.tint, wind = 0, fragment=box) {
   if (!Number.isInteger(tile) || tile < 0) return;
   const [uAxis, vAxis] = AXES[face];
-  const {points,uv} = blockFaceVertices(box,face,quarter);
+  const {points,uv} = blockFaceVertices(box,face,quarter,fragment);
   const corners = points.map(([x,y,z])=>[x+origin[0],y+origin[1],z+origin[2]]);
   let vertexShade = shadow;
   let vertexLight = brightness;
   const croppedFace = !box.angle &&
-    (box[MIN[uAxis]] !== 0 || box[MAX[uAxis]] !== 1 || box[MIN[vAxis]] !== 0 || box[MAX[vAxis]] !== 1);
+    (fragment[MIN[uAxis]] !== 0 || fragment[MAX[uAxis]] !== 1 || fragment[MIN[vAxis]] !== 0 || fragment[MAX[vAxis]] !== 1);
   if ((quarter >= 0 || croppedFace) && (shadow || Array.isArray(brightness))) {
-    const sample = ([a,b,c,d], point) => {
+    const sample = (levels, point) => {
       const u = point[uAxis] - origin[uAxis], v = point[vAxis] - origin[vAxis];
-      return (a + (b - a) * u) * (1 - v) + (d + (c - d) * u) * v;
+      return interpolateFace(levels, u, v);
     };
     if (shadow) vertexShade = corners.map(point => sample(shadow, point));
     if (Array.isArray(brightness)) {
@@ -186,9 +211,11 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
   const liquidVolumes = new Map();
   const hasSculptures = voxelCells.size > 0;
   const rendered = new Map();
+  const logPalette = new Uint8Array(palette.length);
   const signs = [];
   const occlusionCells = collectVisibility ? new Uint8Array(16 ** 3) : null;
   let opaqueCells = 0;
+  let roundedLogs = 0;
   function cell(at) {
     const key = palette[indices[at]];
     if (!key || key === 'air') return null;
@@ -204,6 +231,32 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
     if (!indices[at] || hasSculptures && voxelCells.has(at) && !editedParts.has(at)) return null;
     if (!rendered.has(at)) rendered.set(at, makeShape(palette[indices[at]], at, cell(at), cell, editedParts.has(at)));
     return rendered.get(at);
+  }
+  function logAt(at, knownShape) {
+    const index = indices[at];
+    if (!index) return NOT_A_LOG;
+    logPalette[index] ||= isTreeLog(palette[index]) ? 2 : 1;
+    if (logPalette[index] === 1 || editedParts.has(at) || hasSculptures && voxelCells.has(at)) return NOT_A_LOG;
+    const block = knownShape ?? shape(at);
+    if (block?.boxes.length !== 1 || block.full?.mode !== 'opaque' || !block.full.solid) return NOT_A_LOG;
+    return block.logAxis ??= logAxis(block.full.faces);
+  }
+  function roundsHere(at, axis) {
+    return axis >= 0 && FACE_OFFSETS.every((offset, face) => {
+      const neighborAxis = logAt(at + offset);
+      return neighborAxis === NOT_A_LOG || joinsLogEnds(axis, neighborAxis, face);
+    });
+  }
+  function opaqueVoxels(at) {
+    return hasSculptures && isOpaqueFullVoxels(voxelCells.get(at));
+  }
+  function fullNeighborFace(at, axis, face, block = shape(at)) {
+    if (opaqueVoxels(at)) return true;
+    if (block?.full?.mode !== 'opaque') return false;
+    const adjacentLog = logAt(at, block);
+    // Only one cell of neighboring terrain is available. Keep the face behind
+    // a potentially beveled log so a corner still has a surface to look onto.
+    return adjacentLog < 0 || axis !== NOT_A_LOG && !joinsLogEnds(axis, adjacentLog, face);
   }
   const offsetCell = at => (dx, dy, dz) => cell(at + dx + dz * SIDE + dy * SIDE * SIDE);
   function openVolume(at) {
@@ -263,6 +316,53 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
       averageLight(center,right,top,topRight), averageLight(center,left,top,topLeft),
     ]};
   }
+  function emitRoundedLog(box, axis, at, origin) {
+    const samples = FACE_OFFSETS.map((offset, face) => {
+      const adjacent = at + offset;
+      const [dx, dy, dz] = FACES[face];
+      const brightness = box.emissive ? 256 : usesNeighborLight(palette[indices[adjacent]]) ?
+        neighborLight(light, adjacent, origin[0] + 1 + dx, origin[1] + 1 + dy, origin[2] + 1 + dz) : light[adjacent];
+      const smooth = box.emissive ? null : faceLighting(adjacent, face, brightness);
+      const {uv} = blockFaceVertices(box, face);
+      return {
+        covered: shape(adjacent)?.full?.mode === 'opaque' || opaqueVoxels(adjacent),
+        textureU: uv.map(point => point[0]),
+        textureV: uv.map(point => point[1]),
+        brightness,
+        shadow: smooth?.shadow,
+        sky: smooth?.levels?.map(value => value >> 4),
+        block: smooth?.levels?.map(value => value & 15),
+      };
+    });
+    function lighting(face, point) {
+      const sample = samples[face];
+      const [uAxis, vAxis] = AXES[face];
+      const u = point[uAxis], v = point[vAxis];
+      const packed = sample.sky ?
+        Math.round(interpolateFace(sample.sky, u, v)) << 4 | Math.round(interpolateFace(sample.block, u, v)) :
+        sample.brightness;
+      return [packed, sample.shadow ? interpolateFace(sample.shadow, u, v) : 1];
+    }
+    for (const {face, bevel, points} of roundedLogSurfaces[axis]) {
+      if (bevel === undefined && samples[face].covered) continue;
+      const [uAxis, vAxis] = AXES[face];
+      const {textureU, textureV} = samples[face];
+      const uv = points.map(point => [
+        interpolateFace(textureU, point[uAxis], point[vAxis]),
+        interpolateFace(textureV, point[uAxis], point[vAxis]),
+      ]);
+      const colors = points.map(point => {
+        const [packed, shadow] = lighting(face, point);
+        if (bevel === undefined || box.emissive) return [packed, shadow];
+        const [otherPacked, otherShadow] = lighting(bevel, point);
+        return [averageLight(packed, packed, otherPacked, otherPacked), (shadow + otherShadow) * .5];
+      });
+      const shade = box.emissive ? 1 : bevel === undefined ? FACE_SHADE[face] : (FACE_SHADE[face] + FACE_SHADE[bevel]) * .5;
+      quad(layers.opaque, points.map(point => point.map((coordinate, i) => coordinate + origin[i])),
+        box.faces[face], uv, colors.map(color => color[0]), box.tintFaces?.[face] ?? box.tint, shade,
+        undefined, colors.map(color => color[1]));
+    }
+  }
   for (let y = 0; y < 16; y++) {
     for (let z = 0; z < 16; z++) {
       for (let x = 0; x < 16; x++) {
@@ -292,7 +392,7 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
         const voxels = hasSculptures && voxelCells.get(at);
         if (voxels) {
           const next = face => at + FACES[face][face >> 1] * STRIDE[face >> 1];
-          const faces = voxelFaces(voxels, face => cell(next(face)), face => shape(next(face))?.full?.mode === 'opaque');
+          const faces = voxelFaces(voxels, face => cell(next(face)), face => fullNeighborFace(next(face), NOT_A_LOG, face));
           for (const {box, face} of faces) {
             const axis = face >> 1;
             const boundary = face & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0;
@@ -305,6 +405,12 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
         }
         const blockShape = shape(at);
         const {boxes, model, atlasModel} = blockShape;
+        const treeAxis = logAt(at, blockShape);
+        if (roundsHere(at, treeAxis)) {
+          emitRoundedLog(blockShape.full, treeAxis, at, origin);
+          roundedLogs++;
+          continue;
+        }
         if (occlusionCells && !voxels && !editedParts.has(at)) {
           blockShape.occludes ??= boxes.length === 1 && isOcclusionBlock(blockShape.full);
           if (blockShape.occludes) {
@@ -318,7 +424,7 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
         }
         if (model) {
           const shade = light[at];
-          for (const surface of model.surfaces) {
+          for (const surface of uniqueModelFaces(model.surfaces)) {
             const mode = `${model.family}:${surface.mode ?? 'cutout'}`;
             modelQuad(layers[mode] ??= layer(), surface, origin, shade);
           }
@@ -342,7 +448,8 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
           const sign = geometry.signFor?.(cell(at));
           if (sign) signs.push({...sign, x: x + sign.x, y: y + sign.y, z: z + sign.z});
         }
-        for (let box of boxes) {
+        for (let boxIndex=0; boxIndex<boxes.length; boxIndex++) {
+          let box=boxes[boxIndex];
           const fluid = !box.solid && liquidKind(blockKey);
           if (fluid && boxes.length === 1) {
             function corner(sx,sz) {
@@ -400,12 +507,14 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
             }
             const onEdge = box.angle === undefined && !box.redPowerOffset && (f & 1 ? box[MAX[axis]] === 1 : box[MIN[axis]] === 0);
             if (fluid && (onEdge || f === 3) && liquidKind(palette[indices[adjacent]]) === fluid) continue;
+            const neighbor=onEdge?shape(adjacent):null;
             if (onEdge) {
-              const neighbor = shape(adjacent)?.full;
-              if (neighbor?.mode === 'opaque' || hasSculptures && isOpaqueFullVoxels(voxelCells.get(adjacent)) ||
-                  (neighbor && box.mode !== 'opaque' && indices[adjacent] === indices[at])) continue;
+              if (fullNeighborFace(adjacent, treeAxis, f, neighbor) ||
+                  (neighbor?.full && box.mode !== 'opaque' && indices[adjacent] === indices[at])) continue;
             }
-            if (boxes.length > 1 && boxes.some(other => coversFace(other, box, f))) continue;
+            const neighborBoxes=neighbor?.boxes.length && neighbor.full?.mode!=='opaque'?neighbor.boxes:undefined;
+            const clip=!chisel && canClipBoxFace(box) && (boxes.length>1 || neighborBoxes);
+            if (!clip && boxes.length>1 && boxes.some(other=>coversFace(other,box,f))) continue;
             let packed = light[onEdge ? adjacent : at];
             if (onEdge && usesNeighborLight(palette[indices[adjacent]])) {
               const [dx, dy, dz] = FACES[f];
@@ -442,8 +551,14 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
             }
             const tint=isGrass && box.tintFaces?.[f] ? biomeTints?.[biomeIndex] ?? box.tintFaces[f] :
               leafTint ?? box.tintFaces?.[f] ?? box.tint;
-            faceQuad(out,box,f,origin,smooth?.levels ?? brightness,tile,shade,-1,smooth?.shadow,tint,
-              isLeaf ? -24 : isVine ? 36 : 0);
+            const wind=isLeaf ? -24 : isVine ? 36 : 0;
+            if (clip) {
+              for (const fragment of boxFaceFragments(box,boxIndex,boxes,f,neighborBoxes)) {
+                faceQuad(out,box,f,origin,smooth?.levels ?? brightness,tile,shade,-1,smooth?.shadow,tint,wind,fragment);
+              }
+            } else {
+              faceQuad(out,box,f,origin,smooth?.levels ?? brightness,tile,shade,-1,smooth?.shadow,tint,wind);
+            }
           }
         }
       }
@@ -455,7 +570,7 @@ function precise({indices, light, objects, microblocks, sculpted, logged, connec
     emit:(corners,tile,packed,tint,shade,wind,slot,uv=FULL_UV)=>quad(ornament,corners,tile,uv,
       packed,tint,shade,undefined,undefined,wind,slot)}) : 0;
   if (foliageQuads) layers.foliage=ornament;
-  return {layers,signs,visibility,foliageQuads};
+  return {layers,signs,visibility,foliageQuads,roundedLogs};
 }
 
 function coarse({chunks, origin, stride}) {
@@ -509,7 +624,7 @@ self.onmessage = ({data}) => {
   carpentryModel = data.carpentryModel === true;
   const start = performance.now();
   try {
-    const {layers, signs, visibility, foliageQuads = 0} =
+    const {layers, signs, visibility, foliageQuads = 0, roundedLogs = 0} =
       data.type === 'precise' ? precise(data) : coarse(data);
     const transfers = [];
     let fitsSection = !signs.length;
@@ -547,7 +662,7 @@ self.onmessage = ({data}) => {
       transfers.push(visibility.links.buffer);
       if (visibility.cells) transfers.push(visibility.cells.buffer);
     }
-    self.postMessage({id: data.id, version: data.version, layers, signs, visibility, fitsSection, foliageQuads,
+    self.postMessage({id: data.id, version: data.version, layers, signs, visibility, fitsSection, foliageQuads, roundedLogs,
       visibilityClassified: data.collectVisibility === true,
       elapsed: performance.now() - start}, transfers);
   } catch (error) {

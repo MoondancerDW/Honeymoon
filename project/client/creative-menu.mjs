@@ -1,8 +1,9 @@
 import {arrangeCreativeCatalog} from './creative-layout.mjs';
 import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
 import {itemStackLimit,offhandSlot} from '../world/item-stack.mjs';
-import {bookType,itemTooltip,stackType,writtenBookInfo} from '../world/item-text.mjs';
+import {bookType,stackType,writtenBookInfo} from '../world/item-text.mjs';
 import {iconSignature,inventoryItemEntry,pendingItemIcon} from './creative-icons.mjs';
+import {updateItemTooltip} from './item-tooltip.mjs';
 
 const columns = 9;
 const visibleRows = 5;
@@ -254,6 +255,10 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
     button.style.setProperty('--equipment-y',i % 2 === 0 ? 6 : 33);
   }
 
+  function refreshPreview() {
+    if (storageMode() && dialog.open) preview?.(previewCanvas,state.equipment);
+  }
+
   function paintInventory() {
     for (let slot=0;slot<menuSlots.length;slot++) {
       const stack = stackAt(slot);
@@ -274,7 +279,7 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
         const label = `${title} · ${entry?.name ?? 'Пусто'}${count > 1 ? ' ×'+count : ''}`;
         if (slot === offhandSlot) button.classList.toggle('offhand-empty', !count);
         const swapHint = world && slot === offhandSlot;
-        button.title = itemTooltip(stack,swapHint ? label + ' · Сменить руки (N)' : label,{withLore:true});
+        updateItemTooltip(button,stack,count ? entry?.name : null,{entry,extra:swapHint ? 'Сменить руки (N)' : undefined});
         button.setAttribute('aria-label',swapHint ? label + ' · Сменить руки' : label);
         const signature = count && entry ? `${iconSignature(entry)}:${count}` : '';
         if (button.dataset.image === signature) continue;
@@ -288,7 +293,7 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
       }
     }
     updateEditingTarget();
-    if (storageMode() && dialog.open) preview?.(previewCanvas,state.equipment);
+    refreshPreview();
   }
 
   function updateEditingTarget() {
@@ -333,7 +338,7 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
     card.dataset.key = entry.key;
     card.disabled = entry.placeable === false;
     card.draggable = !card.disabled;
-    card.title = [name[0]?.toLocaleUpperCase('ru') + name.slice(1),entry.mod,code].filter(Boolean).join(' · ');
+    updateItemTooltip(card,null,name,{entry,code,extra:entry.mod});
     card.setAttribute('aria-label',name);
     card.append(draw(icon));
     const source = {entry};
@@ -552,7 +557,7 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   paintInventory();
 
   return {
-    open:()=>open(), openInventory:()=>open(true), close, isOpen:()=>dialog.open, setInventory, setOffhandAvailable, selectSlot,
+    open:()=>open(), openInventory:()=>open(true), close, isOpen:()=>dialog.open, setInventory, setOffhandAvailable, refreshPreview, selectSlot,
     scrollHotbar(direction) {
       if (direction) return selectSlot(((requestedSlot ?? state.selected)+Math.sign(direction)+columns)%columns);
     },

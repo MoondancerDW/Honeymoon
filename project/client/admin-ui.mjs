@@ -1,6 +1,14 @@
 import {button,field,node} from './npc-controls.mjs';
+import {raceLabels} from './pony-ability-ui.mjs';
 
 const titles={player:'Игрок',admin:'Администратор',device:'Устройство'};
+const sizeLabels={normal:'Обычный',small:'Жеребёнок',large:'Крупный',tall:'Высокий'};
+const ponyTraits={
+  race:{field:'ponyType',override:'raceOverride',labels:raceLabels,fallback:'earth',
+    title:'Текущая раса',label:'Назначить расу',changed:'назначена раса',restored:'восстановлена раса'},
+  size:{field:'size',override:'sizeOverride',labels:sizeLabels,fallback:'normal',
+    title:'Текущий размер',label:'Назначить размер',changed:'назначен размер',restored:'восстановлен размер'},
+};
 const inviteStatus={active:'Действует',available:'Действует',pending:'Действует',used:'Использовано',
   expired:'Истекло',revoked:'Отозвано'};
 const textErrors={
@@ -22,6 +30,10 @@ const textErrors={
   player_dead:'Персонаж должен возродиться перед телепортом.',
   movement_blocked:'Сервер скорректировал позицию. Повторите действие.',
   invalid_ban_reason:'Проверьте текст причины блокировки.',
+  invalid_pony_type:'Выберите расу из списка.',
+  invalid_race:'Выберите расу из списка.',
+  invalid_pony_size:'Выберите размер из списка.',
+  invalid_night_vision:'Выберите состояние ночного зрения.',
   owner_protected:'Профиль владельца защищён от блокировки.',
   admin_target_self:'Выберите профиль другого игрока.',
 };
@@ -49,7 +61,7 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
   function setAccess(value) {
     access=value;
     if (access?.singlePlayer) tab='world';
-    for (const control of tabs) control.hidden=Boolean(access?.singlePlayer && control.dataset.adminTab!=='world');
+    for (const control of tabs) control.hidden=Boolean(access?.singlePlayer && !['profiles','world'].includes(control.dataset.adminTab));
     identity.classList.toggle('with-access',Boolean(access?.inviteRequired));
     networkReport.hidden=!(access?.ownerBootstrap && access?.owner);
     toggle.hidden=access?.role!=='admin';
@@ -190,6 +202,50 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     return form;
   }
 
+  function ponyTraitForm(person,key,trait) {
+    const form=node('form','admin-pony-trait-form');
+    const selected=person[trait.override]??'';
+    const apply=button('Применить');
+    apply.type='submit';
+    apply.dataset[key+'Apply']='';
+    apply.disabled=true;
+    const choice=field(trait.label,{choices:[['','По скину'],...Object.entries(trait.labels)],value:selected,
+      changed:value=>{apply.disabled=value===selected;}});
+    choice.input.name='pony-'+key;
+    form.append(choice.wrapper,apply);
+    form.addEventListener('submit',event=>{
+      event.preventDefault();
+      const value=choice.input.value;
+      if (value===selected) return;
+      void submit('admin/profiles/'+key,{uid:person.uid,[trait.field]:value||null},()=>{
+        tell(value ? `Для ${nameOf(person)} ${trait.changed} «${trait.labels[value]}».` :
+          `Для ${nameOf(person)} ${trait.restored} по скину.`);
+      });
+    });
+    return form;
+  }
+
+  function nightVisionControls(person) {
+    const group=node('div','admin-night-vision');
+    group.setAttribute('role','group');
+    group.setAttribute('aria-label',`Ночное зрение · ${nameOf(person)}`);
+    const state=node('small',null,person.nightVision===true ? 'Включено' :
+      person.nightVision===false ? 'Выключено' : 'Состояние неизвестно');
+    state.dataset.currentNightVision='';
+    const caption=node('div','admin-vision-state');
+    caption.append(node('span',null,'Ночное зрение'),state);
+    const actions=node('div','admin-actions');
+    for (const [enabled,label] of [[true,'Включить'],[false,'Выключить']]) {
+      const control=button(label,()=>void submit('admin/profiles/night-vision',{uid:person.uid,enabled},()=>{
+        tell(`Ночное зрение для ${nameOf(person)} ${enabled?'включено':'выключено'}.`);
+      }));
+      control.dataset.nightVision=enabled?'on':'off';
+      actions.append(control);
+    }
+    group.append(caption,actions);
+    return group;
+  }
+
   function profileCard(person) {
     const row=node('article','admin-record');
     row.dataset.profileUid=person.uid;
@@ -201,11 +257,20 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
       person.ban?'Заблокирован':person.online?'В сети':'Не в сети',short].filter(Boolean);
     information.append(node('strong',null,nameOf(person)),node('small',null,identification.join(' · ')));
     if (person.nickname && person.nickname!==nameOf(person)) information.append(node('small',null,'Ник в игре · '+person.nickname));
-    const linkDevice=button('Привязать устройство',()=>void submit('admin/invites',
-      {kind:'device',profileUid:person.uid},reply=>createdLink(reply,person)));
+    for (const [key,trait] of Object.entries(ponyTraits)) {
+      const label=trait.labels[person[trait.field]]??trait.labels[trait.fallback];
+      const source=person[trait.override]?'назначение администратора':'по скину';
+      const current=node('small',null,`${trait.title} · ${label} · ${source}`);
+      current.setAttribute('data-current-'+key,'');
+      information.append(current);
+    }
     header.append(information);
-    if (manageable && !person.ban) header.append(linkDevice);
+    if (!access.singlePlayer && manageable && !person.ban) header.append(button('Привязать устройство',
+      ()=>void submit('admin/invites',{kind:'device',profileUid:person.uid},reply=>createdLink(reply,person))));
     row.append(header);
+    for (const [key,trait] of Object.entries(ponyTraits)) row.append(ponyTraitForm(person,key,trait));
+    row.append(nightVisionControls(person));
+    if (access.singlePlayer) return row;
     if (person.ban?.reason) row.append(node('small','admin-error','Причина блокировки · '+person.ban.reason));
     const actions=profileActions(person,manageable);
     if (actions.childElementCount) row.append(actions);
@@ -221,6 +286,10 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
   }
 
   function profiles() {
+    if (access.singlePlayer) {
+      const self=data?.profiles.find(person=>person.uid===access.uid);
+      return section('Профиль игрока',self ? profileCard(self) : node('p','admin-subtle','Профиль не найден.'));
+    }
     const active=section('Профили игроков');
     const search=field('Найти профиль',{type:'search',value:searchText,placeholder:'Имя, ник или UID'});
     const list=node('div','admin-cards');
@@ -356,7 +425,7 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     dialog.showModal();
     pause();
     tell();
-    if (access.singlePlayer) { render(); return; }
+    if (access.singlePlayer && tab==='world') { data=undefined; render(); return; }
     if (tab==='uids') {
       await refreshUids();
       return;

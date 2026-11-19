@@ -16,6 +16,30 @@ export class DroppedItemView {
     this.world = world;
     this.meshes = new Map();
     this.bounds = new THREE.Box3();
+    this.ray = new THREE.Ray();
+    this.hit = new THREE.Vector3();
+  }
+
+  pick(origin,direction,range) {
+    if (!this.meshes.size) return null;
+    this.ray.origin.fromArray(origin);
+    this.ray.direction.fromArray(direction);
+    let selected;
+    for (const [key,mesh] of this.meshes) {
+      const item=this.world.droppedItems.get(key)?.target.item;
+      if (!item) continue;
+      const center=mesh.object.position;
+      const dx=center.x-origin[0],dy=center.y-origin[1],dz=center.z-origin[2];
+      const depth=dx*direction[0]+dy*direction[1]+dz*direction[2];
+      if (depth<=0 || depth>range || (dx-depth*direction[0])**2+(dy-depth*direction[1])**2+
+          (dz-depth*direction[2])**2>.33**2) continue;
+      const model=mesh.selectionMesh;
+      this.bounds.copy(model.geometry.boundingBox).applyMatrix4(model.matrixWorld).expandByScalar(.06);
+      if (!this.ray.intersectBox(this.bounds,this.hit)) continue;
+      const distance=this.ray.origin.distanceTo(this.hit);
+      if (distance<Math.min(range,selected?.distance??Infinity)) selected={item,distance,depth};
+    }
+    return selected;
   }
 
   update(now, camera, assets, light, chunkVisible) {
@@ -36,6 +60,7 @@ export class DroppedItemView {
         mesh.updated = now;
         mesh.show(appearance(tracked.target.item),assets,null);
         const model = mesh.object.children.find(child => child.isMesh && child.visible);
+        mesh.selectionMesh=model;
         model.geometry.computeBoundingBox();
         const {min,max} = model.geometry.boundingBox;
         const flat = max.z - min.z < .15;

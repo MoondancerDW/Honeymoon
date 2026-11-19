@@ -32,7 +32,17 @@
   background-position: 3px 7px, 10px 7px, 3px 10px, 10px 10px, 7px 3px, 10px 3px, 7px 10px, 10px 10px;
 }
 #game:not(.touch).playing #connection-metrics { margin-right: 3rem; }
-#game:has(dialog[open]) .fullscreen-toggle, #game:has(#chat.expanded) .fullscreen-toggle { visibility: hidden; }
+#game:has(dialog[open]) #fullscreen-toggle, #game:has(#chat.expanded) #fullscreen-toggle { visibility: hidden; }
+.fullscreen-panel-toggle { position: static; flex: 0 0 auto; display: none; }
+.touch .fullscreen-panel-toggle:not([hidden]) { display: grid; }
+#fullscreen-chat-toggle { margin-inline: auto .35rem; }
+.touch #fullscreen-inventory-toggle {
+  position: absolute;
+  top: calc(-28 * var(--gui-px) - 47px);
+  right: 6rem;
+  width: 44px;
+  color: #f4f1e9;
+}
 #fullscreen-help {
   width: min(24rem, calc(100% - 2rem));
   max-height: calc(100dvh - 2rem);
@@ -93,7 +103,7 @@
 .touch #chat:not(.expanded) li { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .touch:has(#chat.expanded) #touch, .touch:has(#chat.expanded) .bottom { display: none; }
 
-#touch, #fullscreen-toggle, .hud-hotbar-row, #scene {
+#touch, .fullscreen-toggle, .hud-hotbar-row, #scene {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;

@@ -28,7 +28,7 @@ import { createWorldEdit } from './world-edit.mjs';
 import { createSurvival } from './survival.mjs';
 import {accessCookie,createAccess,legacyClearCookie,legacyCookieName,readAccessCookie} from './access.mjs';
 import { modelFamilies, withExtractedModels } from '../world/extracted-models.mjs';
-import {ponyAbilities} from '../world/pony-abilities.mjs';
+import {ponyMaxHealth} from '../world/pony-abilities.mjs';
 import { readBuildNumber } from './build-version.mjs';
 import { openLocalJournal } from './local-journal.mjs';
 import { loadSoloDistribution } from './solo-distribution.mjs';
@@ -44,6 +44,8 @@ const MAX_NPC_EDITOR_BODY = 4 * 1024 * 1024;
 const MAX_STREAMS = 64;
 const MAX_PROFILE_STREAMS = 3;
 const parallelDeviceRoutes=new Set(['/api/profile','/api/time','/api/weather','/api/modes','/api/npcs/editor']);
+const ponyRaces=new Set(['earth','pegasus','unicorn','alicorn']);
+const ponySizes=new Set(['normal','small','large','tall']);
 const MAX_STREAM_BACKLOG = 256 * 1024;
 const MAX_BULK_COMMIT = 3 * 1024 * 1024;
 const MAX_WORLD_RESPONSES = 224;
@@ -324,9 +326,10 @@ export function createHoneymoonServer({
   if (state !== ':memory:') mkdirSync(dirname(state), { recursive: true });
   const store = openStore(state);
   const savedTraits = new Map();
-  function rememberTraits(player,{size,ponyType}) {
+  function rememberTraits(player,{size:skinSize,ponyType:skinPonyType}) {
     if (!savedTraits.has(player) && savedTraits.size >= 512) savedTraits.delete(savedTraits.keys().next().value);
-    const traits={size,ponyType};
+    const overrides=store.getPonyTraits(player);
+    const traits={skinSize,skinPonyType,size:overrides.sizeOverride??skinSize,ponyType:overrides.raceOverride??skinPonyType,...overrides};
     savedTraits.set(player,traits);
     return traits;
   }
@@ -337,10 +340,17 @@ export function createHoneymoonServer({
   }
   const playerSize=(player,saved)=>playerTraits(player,saved).size;
   const playerPonyType=player=>playerTraits(player).ponyType;
-  const survival=createSurvival(store,initialMode,{now:clock,healthLimit:player=>ponyAbilities(playerPonyType(player)).maxHealth});
+  const survival=createSurvival(store,initialMode,{now:clock,healthLimit:player=>{
+    const {ponyType,size}=playerTraits(player);
+    return ponyMaxHealth(ponyType,size);
+  }});
   function profileFor(player, saved = store.getProfile(player)) {
-    const {size,ponyType}=playerTraits(player,saved);
-    return publicProfile(player,saved,size,ponyType);
+    const {size,ponyType,raceOverride,sizeOverride,raceRevision}=playerTraits(player,saved);
+    return {...publicProfile(player,saved,size,ponyType),raceOverride,sizeOverride,raceRevision};
+  }
+  function avatarProfile(profile) {
+    const {raceOverride,sizeOverride,raceRevision,...avatar}=profile;
+    return avatar;
   }
   let game;
   try {
@@ -384,7 +394,7 @@ export function createHoneymoonServer({
       }).map(({player}) => player);
     },
   });
-  const presence = createPresence({store, profileFor, send:writeEvent, onVisibility(profile, online, player) {
+  const presence = createPresence({store, profileFor:player=>avatarProfile(profileFor(player)), send:writeEvent, onVisibility(profile, online, player) {
     loadLog?.player(player,online);
     if (!online) {
       game.leaveSeat(player);
@@ -466,7 +476,7 @@ export function createHoneymoonServer({
       ...(altitudeTrackFile() && {altitudeMusic:'/api/altitude-music'}),
       ...(survival.enabled&&{gameMode:playerMode(player)}),...(diagnostics&&{playerDiagnostics:diagnostics}),
       ...(streamedWorld&&{soloDownload:true}),...(soloWorld&&{soloWorld}),
-      profile:profileFor(player),access:accessView(credential,owner) };
+      profile:profileFor(player),nightVision:store.getNightVision(player),access:accessView(credential,owner) };
   };
 
   function sendStudyHeartbeat(stream) {
@@ -479,6 +489,32 @@ export function createHoneymoonServer({
   function playerMode(player) {
     const {flight,flightAllowed}=game.abilityState(player);
     return {...survival.status(player),admin:npcs.isAdmin(player),flight,flightAllowed};
+  }
+
+  function raceSnapshot(player,profile=profileFor(player)) {
+    const {size,skin,ponyType,raceOverride,sizeOverride,raceRevision}=profile;
+    const {position,stance,seat,flight,flightAllowed,jumpCharge,magicCooldownMs}=game.session(player);
+    return {uid:player,size,skin,ponyType,raceOverride,sizeOverride,raceRevision,position,stance,seat,
+      flight,flightAllowed,jumpCharge,magicCooldownMs,...(survival.enabled&&{gameMode:playerMode(player)})};
+  }
+
+  function reconcilePonyTraits(player,previous,traits) {
+    if (traits.ponyType!==previous.ponyType) game.reconcileRace(player);
+    if (traits.size!==previous.size) return game.reconcileProfile(player);
+  }
+
+  function publishProfileSetting(player,event,snapshot) {
+    for (const stream of streams) if (stream.player===player && stream.presence) {
+      writeEvent(stream.response,event,snapshot);
+    }
+  }
+
+  function setNightVision(player,enabled,initialize=false) {
+    if (typeof enabled!=='boolean' || typeof initialize!=='boolean') throw new RequestError(400,'invalid_night_vision');
+    const {setting,changed}=store.setNightVision(player,enabled,initialize);
+    const snapshot={uid:player,...setting};
+    if (changed) publishProfileSetting(player,'profile-night-vision',snapshot);
+    return snapshot;
   }
 
   function survivalChanged(player,state) {
@@ -552,8 +588,8 @@ export function createHoneymoonServer({
     let rosterChanged=!stream.npcRows || snapshot.npcs.length!==stream.npcRows.size ||
       snapshot.editor!==stream.npcAdmin;
     for (const npc of snapshot.npcs) {
-      const {id,position,yaw,pitch,animation,moving,health,line,revision}=npc;
-      const motion={id,position,yaw,pitch,animation,moving,health,line:line??null};
+      const {id,position,yaw,headYaw,pitch,spinSpeed,animation,moving,health,line,revision}=npc;
+      const motion={id,position,yaw,headYaw,pitch,spinSpeed,animation,moving,health,line:line??null};
       const entry={base:revision,motion:JSON.stringify(motion)};
       const previous=stream.npcRows?.get(id);
       if (previous?.base!==entry.base) rosterChanged=true;
@@ -750,9 +786,52 @@ export function createHoneymoonServer({
         const result=access.revokeDevice(credential);
         return json(response,200,result,{'Set-Cookie':[accessCookie('',requestSecure,0),legacyClearCookie(requestSecure)]});
       }
-      if (path==='/api/admin/access' && method==='GET')
-        return json(response,200,access.listAdmin(credential,presence.onlineProfile));
+      if (path==='/api/night-vision' && method==='POST') {
+        const {enabled,initialize}=await readInput();
+        return json(response,200,setNightVision(player,enabled,initialize));
+      }
+      if (path==='/api/admin/access' && method==='GET') {
+        const panel=access.listAdmin(credential,presence.onlineProfile);
+        for (const row of panel.profiles) {
+          const {ponyType,size,raceOverride,sizeOverride}=playerTraits(row.uid);
+          Object.assign(row,{ponyType,size,raceOverride,sizeOverride,nightVision:store.getNightVision(row.uid)?.enabled??null});
+        }
+        return json(response,200,panel);
+      }
       if (path==='/api/admin/uids' && method==='GET') return json(response,200,access.listUids(player));
+      if (method==='POST' && (path==='/api/admin/profiles/race' || path==='/api/admin/profiles/size')) {
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        const {uid,ponyType,size}=await readInput();
+        if (!access.account(uid)) throw new RequestError(404,'player_missing');
+        const changingSize=path.endsWith('/size');
+        const value=changingSize?size:ponyType;
+        if (value!==null && !(changingSize?ponySizes:ponyRaces).has(value)) {
+          throw new RequestError(400,changingSize?'invalid_pony_size':'invalid_pony_type');
+        }
+        const field=changingSize?'sizeOverride':'raceOverride';
+        const previous=playerTraits(uid);
+        if (previous[field]===value) return json(response,200,raceSnapshot(uid));
+        if (changingSize && previous.size!==(value??previous.skinSize)) game.initializePosition(uid);
+        store.setPonyTraits(uid,{[field]:value});
+        const traits=rememberTraits(uid,{size:previous.skinSize,ponyType:previous.skinPonyType});
+        const relocation=reconcilePonyTraits(uid,previous,traits);
+        const profile=profileFor(uid);
+        const snapshot=raceSnapshot(uid,profile);
+        presence.profile(uid,avatarProfile(profile));
+        const position=presence.onlinePosition(uid);
+        if (position) {
+          if (relocation) presence.update(uid,relocation.position,game.poseFor(uid,{motion:'idle'}));
+          else presence.update(uid,position,{offhand:game.offhandPose(uid)});
+        }
+        publishProfileSetting(uid,'profile-race',snapshot);
+        return json(response,200,snapshot);
+      }
+      if (path==='/api/admin/profiles/night-vision' && method==='POST') {
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        const {uid,enabled}=await readInput();
+        if (!access.account(uid)) throw new RequestError(404,'player_missing');
+        return json(response,200,setNightVision(uid,enabled));
+      }
       if (path==='/api/admin/invites' && method==='POST')
         return json(response,200,access.issue(player,await readInput()));
       if (path==='/api/admin/invites/revoke' && method==='POST') {
@@ -878,28 +957,33 @@ export function createHoneymoonServer({
         const updates = await profileChanges(await readInput(MAX_PROFILE_BODY));
         access.requireUnbanned(player);
         const saved = store.getProfile(player);
+        const submittedSkin = updates.skin;
+        const previousTraits = submittedSkin === undefined ? undefined : playerTraits(player,saved);
+        const nextSkinTraits=submittedSkin ?? {size:'normal',ponyType:'earth'};
+        if (previousTraits && previousTraits.size!==nextSkinTraits.size) game.initializePosition(player);
         if (updates.nickname === saved?.nickname) delete updates.nickname;
         if (updates.skin !== undefined && (updates.skin?.hash ?? null) === (saved?.skinHash ?? null)) delete updates.skin;
-        const previousTraits = updates.skin === undefined ? undefined : playerTraits(player,saved);
-        const different = updates.nickname !== undefined || updates.skin !== undefined;
+        if (submittedSkin !== undefined) updates.ponyTraits={raceOverride:null,sizeOverride:null};
+        const different = updates.nickname !== undefined || submittedSkin !== undefined;
         const renamed = different && store.updateProfile(player, updates,
           saved?.nickname ?? presence.onlineProfile(player)?.nickname);
         let relocation, movementState;
-        if (updates.skin !== undefined) {
-          const {size,ponyType}=rememberTraits(player,updates.skin ?? {size:'normal',ponyType:'earth'});
-          if (ponyType!==previousTraits.ponyType) game.reconcileRace(player);
-          if (size!==previousTraits.size) relocation = game.reconcileProfile(player);
+        if (submittedSkin !== undefined) {
+          const traits=rememberTraits(player,nextSkinTraits);
+          const {size,ponyType}=traits;
+          relocation=reconcilePonyTraits(player,previousTraits,traits);
           if (!relocation && (size!==previousTraits.size || ponyType!==previousTraits.ponyType)) {
             const {position,seat,stance}=game.session(player);
             movementState={position,seat,stance};
           }
         }
         const profile = profileFor(player, different ? store.getProfile(player) : saved);
-        if (different) presence.profile(player, profile);
+        if (different) presence.profile(player, avatarProfile(profile));
         if (relocation) presence.update(player,relocation.position,game.poseFor(player,{motion:'idle'}));
-        if (updates.skin!==undefined) {
+        if (submittedSkin!==undefined) {
           const position=presence.onlinePosition(player);
           if (position) presence.update(player,position,{offhand:game.offhandPose(player)});
+          publishProfileSetting(player,'profile-race',raceSnapshot(player,profile));
         }
         if (renamed) chat.publishRecorded(renamed);
         return json(response, 200, {...profile,...relocation,...movementState,...game.abilityState(player),
@@ -1093,7 +1177,12 @@ export function createHoneymoonServer({
           const movement=game.movementChannel.state(player,credential.deviceId,stream.movementPage);
           if (movement) writeEvent(response,'movement-ack',{movement});
         }
-        if (presenceEntry) presence.connect(stream, presenceEntry);
+        if (presenceEntry) {
+          presence.connect(stream, presenceEntry);
+          writeEvent(response,'profile-race',raceSnapshot(player));
+          const nightVision=store.getNightVision(player);
+          if (nightVision) writeEvent(response,'profile-night-vision',{uid:player,...nightVision});
+        }
         if (stream.social) {
           writeEvent(response, 'chat-history', {entries:chat.history(player)});
           writeEvent(response, 'world-time', worldTime.snapshot());

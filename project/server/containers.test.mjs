@@ -157,6 +157,8 @@ test('an old lid edit recovers original storage while breaking a chest keeps ite
   player.teleport({x:x+.5,y,z:z+1.35});
   assert.equal(player('remove',a,{expectedRevision:revision}).status,200);
   assert.equal(player.drops().length,1);
+  const {display,title,author}=originalTag;
+  assert.deepEqual(player.drops()[0].item.nbt,{display,title,author});
   const pickup=player('pickup_item',a);
   assert.equal(pickup.status,200);
   assert.equal(pickup.output.inventory.slots[0].key,itemKey);
@@ -186,7 +188,7 @@ test('a newly placed chest starts empty and persists inventory added by a player
   assert.deepEqual(other('container_read',lower).output.container.slots[17].nbt,originalTag);
 });
 
-test('compiled local chunks borrow private original inventories without publishing them',t=>{
+test('staged chunks recover original inventories and publish only item frame tooltip text',t=>{
   const root=mkdtempSync(join(tmpdir(),'honeymoon-storage-fixture-'));
   t.after(()=>rmSync(root,{recursive:true,force:true}));
   const world=join(root,'world'), detail=join(root,'full-world');
@@ -202,12 +204,15 @@ test('compiled local chunks borrow private original inventories without publishi
   const pos=[4,1,4];
   const sourceCell=fixture().getCell(...a);
   const original={...sourceCell,object:{...sourceCell.object,position:pos,key:'tile:4:1:4'}};
-  const local={x:0,z:0,palette:['air',original.key],entities:[],compositions:{}};
+  const frame={key:'frame',type:'ItemFrame',position:[4.5,1.5,4.4375],
+    data:{TileX:4,TileY:1,TileZ:4,Direction:2,Item:{id:387,Damage:0}}};
+  const rawFrame={...frame,data:{...frame.data,Item:{...frame.data.Item,tag:originalTag}}};
+  const local={x:0,z:0,palette:['air',original.key],entities:[frame],compositions:{}};
   const indices=Buffer.alloc(8192);
   indices.writeUInt16LE(1,(pos[0]+pos[2]*16+pos[1]*256)*2);
   local.sections=[{y:0,indices:indices.toString('base64')}];
   writeFileSync(join(world,'chunks','0.0.json'),JSON.stringify({...local,objects:[{...original.object,data:{}}]}));
-  const payload=gzipSync(JSON.stringify({...local,objects:[original.object]}));
+  const payload=gzipSync(JSON.stringify({...local,objects:[original.object],entities:[rawFrame]}));
   const header=Buffer.alloc(DETAIL_HEADER_SIZE);
   header.write('HDTL');
   header.writeUInt16LE(1,4);
@@ -217,5 +222,10 @@ test('compiled local chunks borrow private original inventories without publishi
 
   const base=loadBase(world);
   assert.deepEqual(base.getCell(...pos),original);
-  assert.deepEqual(base.publicChunk(0,0).objects[0].data,{});
+  const published=base.publicChunk(0,0);
+  assert.deepEqual(published.objects[0].data,{});
+  assert.equal(published.frameItemText,true);
+  const {display,title,author}=originalTag;
+  assert.deepEqual(published.entities[0].data.Item,{id:387,Damage:0,tag:{display,title,author}});
+  assert.deepEqual(base.getEntity(4.5,4.4375,'frame'),rawFrame);
 });

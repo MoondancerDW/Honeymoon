@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
   <meta name="apple-mobile-web-app-title" content="Lilium Moonlight">
-  <meta name="honeymoon-build" content="19">
+  <meta name="honeymoon-build" content="20">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -28,7 +28,7 @@
     <div id="build-outdated" role="alert" hidden>Ваша версия игры устарела, пожалуйста обновите страницу</div>
     <div id="scene"></div>
     <button id="altitude-map-back" type="button" hidden>Вернуться</button>
-    <button id="fullscreen-toggle" class="icon-button fullscreen-toggle" type="button" aria-label="На весь экран" title="На весь экран" aria-pressed="false" hidden><i aria-hidden="true"></i></button>
+    <button id="fullscreen-toggle" class="icon-button fullscreen-toggle" type="button" aria-label="На весь экран" title="На весь экран" data-fullscreen-toggle hidden><i aria-hidden="true"></i></button>
     <dialog id="fullscreen-help" aria-labelledby="fullscreen-help-title" aria-describedby="fullscreen-help-instructions">
       <h2 id="fullscreen-help-title">Игра без строки адреса</h2>
       <p id="fullscreen-help-instructions">В меню браузера выберите «Установить приложение» или «Добавить на главный экран». Затем запустите Lilium Moonlight с новой иконки.</p>
@@ -110,6 +110,7 @@
               <span id="player-name" hidden></span>
               <span id="build-caption">Equestria</span>
             </div>
+            <button id="fullscreen-pause-toggle" class="icon-button fullscreen-toggle fullscreen-panel-toggle" type="button" aria-label="На весь экран" data-fullscreen-toggle hidden><i aria-hidden="true"></i></button>
           </header>
           <div class="pause-content">
             <div id="pause-home">
@@ -263,7 +264,7 @@
         </section>
       </div>
     </section>
-    <span id="selected" class="target-tag"></span>
+    <span id="selected" class="target-tag"><span id="selected-label"></span><span id="selected-details" hidden></span><small id="selected-action" hidden></small><small id="selected-id" hidden></small></span>
     <span id="auto-move-status" role="status" hidden></span>
     <div id="toast" role="status" aria-live="polite"></div>
     <aside id="online" class="social-panel" aria-label="Игроки онлайн" hidden>
@@ -273,6 +274,7 @@
     <section id="chat" aria-label="Чат">
       <header id="chat-header" hidden>
         <strong>Чат</strong>
+        <button id="fullscreen-chat-toggle" class="icon-button fullscreen-toggle fullscreen-panel-toggle" type="button" aria-label="На весь экран" data-fullscreen-toggle hidden><i aria-hidden="true"></i></button>
         <button id="chat-close" type="button" aria-label="Закрыть чат" title="Закрыть чат">×</button>
       </header>
       <ul id="chat-log" class="chat-log" role="log" aria-label="История чата" aria-live="polite" tabindex="0"></ul>
@@ -344,6 +346,7 @@
         <button id="inventory-edit" type="button" title="Перетащите предмет сюда, чтобы изменить название и описание" hidden>Изменить название и описание</button>
       </section>
       <div id="inventory-carried" aria-hidden="true" hidden></div>
+      <button id="fullscreen-inventory-toggle" class="icon-button fullscreen-toggle fullscreen-panel-toggle" type="button" aria-label="На весь экран" data-fullscreen-toggle hidden><i aria-hidden="true"></i></button>
       <button id="creative-close" type="button" aria-label="Закрыть" title="Закрыть · Esc">× Закрыть</button>
     </dialog>
     <dialog id="mode-menu" class="inventory-document" aria-labelledby="mode-title">

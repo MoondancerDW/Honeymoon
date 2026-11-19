@@ -566,9 +566,11 @@ export class Display {
       this.actionEye.map((value,index) => value + position[['x','y','z'][index]]) : [position.x,position.y + eyeHeight,position.z];
   }
 
-  setLocalSkin(skin) {
+  setLocalSkin(skin, ponyType, size) {
     this.localSkin = skin;
-    this.localAvatar?.setSkin(skin);
+    this.localPonyType = ponyType;
+    this.localPonySize = size;
+    this.localAvatar?.setSkin(skin, ponyType, size);
   }
 
   heldItemAssets() {
@@ -591,7 +593,7 @@ export class Display {
     if (!this.localAvatar) {
       this.localAvatar = createPonyAvatar(this.ponyAirAt);
       this.scene.add(this.localAvatar.object);
-      this.localAvatar.setSkin(this.localSkin);
+      this.localAvatar.setSkin(this.localSkin, this.localPonyType, this.localPonySize);
     }
     const firstPerson = this.perspective === 0;
     const {object} = this.localAvatar;
@@ -1318,6 +1320,7 @@ export class Display {
       group.userData.sectionCoords = coords;
       group.userData.fitForOcclusion = result.fitsSection === true;
       group.userData.foliageQuads = result.foliageQuads ?? 0;
+      group.userData.roundedLogs = result.roundedLogs ?? 0;
     }
     for (const [mode, data] of Object.entries(result.layers)) {
       const geometry = new THREE.BufferGeometry();
@@ -1715,10 +1718,11 @@ export class Display {
 
   statistics() {
     const {render, memory} = this.renderer.info;
-    let preciseBytes = 0, coarseBytes = 0, preciseTriangles = 0, coarseTriangles = 0, foliageQuads = 0;
+    let preciseBytes = 0, coarseBytes = 0, preciseTriangles = 0, coarseTriangles = 0, foliageQuads = 0, roundedLogs = 0;
     for (const [id, group] of this.groups) {
       if (!group.visible) continue;
       const coarse = id.startsWith('lod:');
+      roundedLogs += group.userData.roundedLogs ?? 0;
       for (const mesh of group.children) {
         if (!mesh.visible) continue;
         if (mesh.userData.foliage) foliageQuads+=group.userData.foliageQuads ?? 0;
@@ -1738,7 +1742,7 @@ export class Display {
       lastSectionError:this.lastSectionError,
       occlusion:this.sectionVisibility.statistics(), heldLights:this.heldLights.statistics(),
       preciseBytes, coarseBytes, preciseTriangles, coarseTriangles, farTerrain:this.farTerrain?.stats(),
-      foliageQuads, fallingLeaves:this.visibleLeaves ?? 0,lavaDeathParticles:this.lavaDeathParticles?.count??0,
+      foliageQuads, roundedLogs, fallingLeaves:this.visibleLeaves ?? 0,lavaDeathParticles:this.lavaDeathParticles?.count??0,
       pending: this.pendingWork, weather:this.weather, nightVision:this.nightVision, rainDrops:this.visibleRain ?? 0,
       loaded: this.groups.size, lastEditRender: this.lastEditRender, meshTimes: this.meshTimes.slice(), frameTimes: this.frameTimes.slice()};
   }

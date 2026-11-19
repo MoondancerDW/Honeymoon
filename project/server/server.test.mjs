@@ -80,8 +80,8 @@ test('alpha requires the administrator key for weather, time, and player modes',
   const user=await request(app,'/api/session',{payload:{}});
   const cookie=user.cookie;
   assert.equal(user.data.gameMode.mode,'game');
-  assert.equal(user.data.gameMode.health,15);
-  assert.equal(user.data.gameMode.maxHealth,15);
+  assert.equal(user.data.gameMode.health,12);
+  assert.equal(user.data.gameMode.maxHealth,12);
   assert.equal((await request(app,'/api/modes',{cookie})).status,403);
   assert.equal((await request(app,'/api/weather',{cookie,payload:{mode:'rain'}})).status,403);
   assert.equal((await request(app,'/api/time',{cookie,payload:{time:'11:30'}})).status,403);

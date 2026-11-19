@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createGame} from './game.mjs';
+import {createNpcs} from './npcs.mjs';
+import {physics} from './physics.mjs';
 import {openStore} from './store.mjs';
 import {displayEntity} from './base.mjs';
 import * as geometry from '../world/geometry.mjs';
@@ -39,6 +41,53 @@ test('all bed orientations and both halves provide the same upright seat pose', 
     assert.deepEqual(bedMate(bottom,foot,() => top),head);
     assert.deepEqual(bedMate(top,head,() => bottom),foot);
   }
+});
+
+test('both bed halves share the render and collision shape, including room below the mattress', () => {
+  for (const meta of [0,1,2,3,8,9,10,11,12,13,14,15]) {
+    const key = `legacy:26:${meta}`;
+    const mesh = geometry.bedMesh(key);
+    assert.equal(geometry.collisionFor(key),mesh);
+    assert.equal(geometry.selectionFor(key),mesh);
+    const [{x0,y0,z0,x1,y1,z1}]=mesh;
+    assert.deepEqual([x0,y0,z0,x1,y1,z1],[0,3/16,0,1,9/16,1]);
+  }
+  const getCell=(x,y,z)=>({key:cells.get(`${x},${y},${z}`)??'air'});
+  const colliders=physics({manifest:{}},geometry,getCell);
+  assert.equal(colliders.collides({x:3.5,y:1,z:2.5},{halfWidth:.2,height:1/8}),false);
+  assert.equal(colliders.collides({x:3.5,y:1,z:2.5},{halfWidth:.2,height:1/4}),true);
+});
+
+test('imported airborne NPCs regain mattress contact while authored poses stay unchanged',t=>{
+  const store=openStore(':memory:');
+  t.after(()=>store.close());
+  const bounds={minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15};
+  const base={hash:'npc-bed-test',manifest:{spawn:Object.values(spawn),bounds},
+    inBounds:(...coords)=>coords.every(n=>n>=0&&n<16),
+    catalog:new Set(['air','legacy:1:0',...cells.values()]),
+    getCell:(x,y,z)=>({key:cells.get(`${x},${y},${z}`)??(y===0?'legacy:1:0':'air'),object:null})};
+  const game=createGame(base,store,geometry,{modules:[]});
+  const common={name:'Patient',scale:1,health:20,combat:{},lines:{},equipment:[],model:'npcpony'};
+  const airborne={OnGround:0,Motion:[0,-.155,0],FallDistance:4};
+  const patient={...common,id:'patient',native:airborne,animation:'crawl',position:{x:3.5,y:1.9841,z:2.5}};
+  const aboveHead={...common,id:'other',native:airborne,animation:'sneak',position:{x:3.5,y:2.0625,z:3.5}};
+  const posed={...patient,id:'posed',native:{...airborne,OnGround:1},position:{...patient.position}};
+  const away={...patient,id:'away',position:{x:5.5,y:1.9841,z:3.5}};
+  const npcs=createNpcs({base,store,game,source:{definitions:[patient,aboveHead,posed,away],shared:{}},
+    editorAuth:{isAdmin:()=>true,require:()=>{}}});
+  const player=store.createPlayer().id;
+  game.session(player);
+  const shown=Object.fromEntries(npcs.snapshot(player).npcs.map(npc=>[npc.id,npc]));
+  assert.deepEqual(shown.patient.position,{x:3.5,y:1.5625,z:2.5});
+  assert.equal(shown.patient.animation,'crawl');
+  assert.equal(shown.other.position.y,1.5625);
+  assert.equal(shown.other.animation,'sneak');
+  assert.equal(shown.posed.position.y,1.9841);
+  assert.equal(shown.away.position.y,1.9841);
+  const corrected=npcs.editor(player).definitions.find(npc=>npc.id==='patient');
+  assert.equal(corrected.position.y,1.5625);
+  npcs.edit(player,{action:'save',npcId:'patient',definition:{...corrected,position:{...corrected.position,y:1.9841}}});
+  assert.equal(npcs.snapshot(player).npcs.find(npc=>npc.id==='patient').position.y,1.9841);
 });
 
 test('bed halves share occupancy and releasing a seat restores a collision-free standing position', t => {

@@ -52,10 +52,14 @@
 #admin-menu .admin-error { color: #ffbaaa; }
 #admin-menu .admin-danger { color: #ffe3dc; background: #653d3d; border-color: #b5746e; }
 #admin-menu .admin-ban-form { display: grid; gap: .55rem; padding: .65rem; background: #392f34; border-radius: .35rem; }
+#admin-menu :is(.admin-pony-trait-form, .admin-night-vision) { display: flex; flex-wrap: wrap; align-items: end; gap: .45rem; }
+#admin-menu :is(.admin-pony-trait-form label, .admin-vision-state) { flex: 0 1 12rem; }
+#admin-menu .admin-pony-trait-form select { min-width: 0; max-width: 100%; }
+#admin-menu .admin-vision-state { display: grid; min-width: 0; gap: .25rem; }
 #admin-menu .admin-link input { font-family: ui-monospace, Consolas, monospace; }
 #admin-menu :is(.admin-record, .admin-device) strong { overflow-wrap: anywhere; }
 @media (pointer:coarse) {
-  #admin-menu button, #access-submit { min-height: 44px; }
+  #admin-menu button, #admin-menu .admin-pony-trait-form select, #access-submit { min-height: 44px; }
   #admin-menu input, #access-form input { font-size: 1rem; }
 }
 @media (max-width: 520px) {

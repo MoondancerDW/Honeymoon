@@ -233,6 +233,21 @@ export function openStore(filename) {
   const readState = statement('SELECT version,value FROM module_state WHERE module=? AND owner=? AND key=?');
   const writeState = statement(`INSERT INTO module_state VALUES (?,?,?,?,?) ON CONFLICT(module,owner,key)
     DO UPDATE SET version=excluded.version,value=excluded.value`);
+  const readPonyTraits = player => {
+    const row = readState.get('pony-abilities', player, 'race-override');
+    const value=row ? JSON.parse(row.value) : null;
+    // Earlier saves stored only the race under this key.
+    const traits=typeof value==='string' ? {raceOverride:value} : value;
+    return {raceOverride:traits?.raceOverride??null,sizeOverride:traits?.sizeOverride??null,raceRevision:row?.version??0};
+  };
+  function writePonyTraits(player, updates) {
+    const {raceRevision,...previous}=readPonyTraits(player);
+    writeState.run('pony-abilities',player,'race-override',raceRevision+1,JSON.stringify({...previous,...updates}));
+  }
+  const readNightVision = player => {
+    const row=readState.get('player-settings',player,'night-vision');
+    return row ? {enabled:JSON.parse(row.value),revision:row.version} : null;
+  };
   const readEdit = statement('SELECT cell,object,revision,micro_parts,voxels,fluid FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
   const readMicroParts = statement('SELECT micro_parts FROM edits WHERE x=? AND y=? AND z=? AND quarantined=0');
   const readEditOwner = statement('SELECT placed_by FROM edits WHERE x=? AND y=? AND z=? AND cell IS NOT NULL AND quarantined=0');
@@ -317,10 +332,23 @@ export function openStore(filename) {
     getProfile(player) {
       return readProfile.get(player);
     },
-    updateProfile(player, { nickname, skin }, previousNickname) {
+    getPonyTraits: readPonyTraits,
+    setPonyTraits: (player, updates) => transaction(db,()=>writePonyTraits(player,updates)),
+    getNightVision: readNightVision,
+    setNightVision(player,enabled,initialize=false) {
+      return transaction(db,()=>{
+        const previous=readNightVision(player);
+        if (previous && (initialize || previous.enabled===enabled)) return {setting:previous,changed:false};
+        const setting={enabled,revision:(previous?.revision ?? 0)+1};
+        writeState.run('player-settings',player,'night-vision',setting.revision,JSON.stringify(enabled));
+        return {setting,changed:true};
+      });
+    },
+    updateProfile(player, { nickname, skin, ponyTraits }, previousNickname) {
       return transaction(db, () => {
         if (nickname !== undefined) writeNickname.run(player, nickname);
         if (skin !== undefined) writeSkin.run(player, skin?.hash ?? null, skin?.png ?? null);
+        if (ponyTraits) writePonyTraits(player,ponyTraits);
         if (nickname !== undefined && previousNickname && nickname !== previousNickname) {
           return appendChat({kind:'rename', nickname:previousNickname, newNickname:nickname, channel:'global'});
         }

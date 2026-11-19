@@ -18,7 +18,7 @@ const sampleChunkRadius = 8;
 const inOriginalDistrict = ([x,z]) => x >= -sampleChunkRadius && x < sampleChunkRadius &&
   z >= -sampleChunkRadius && z < sampleChunkRadius;
 
-test('mounted item frames expose their visual state without the original NBT payload', {
+test('mounted item frames expose visual state and tooltip text without other NBT', {
   skip: !existsSync(join(directory, 'world.json')) ? 'Run the Anvil import to verify item frames' : false,
 }, () => {
   const base = loadBase(directory);
@@ -31,7 +31,11 @@ test('mounted item frames expose their visual state without the original NBT pay
     assert.equal(frame.position.length, 3);
     assert.ok([0, 1, 2, 3].includes(frame.data.Dir ?? frame.data.Direction));
     assert.ok(!Object.hasOwn(frame.data, 'UUIDMost'));
-    if (frame.data.Item) assert.deepEqual(Object.keys(frame.data.Item), ['id', 'Damage']);
+    if (!frame.data.Item) continue;
+    const {tag,...item}=frame.data.Item;
+    assert.ok(Object.keys(item).every(key=>['id','Damage','Block'].includes(key)));
+    assert.ok(Object.keys(tag??{}).every(key=>['display','title','author'].includes(key)));
+    assert.ok(Object.keys(tag?.display??{}).every(key=>['Name','Lore'].includes(key)));
   }
 });
 

@@ -11,13 +11,23 @@
   font-variant-numeric: tabular-nums;
 }
 
-#pony-abilities span:not([hidden]) {
+#pony-abilities > span:not([hidden]) {
   padding: .25rem .45rem;
   border: 1px solid var(--line);
   border-radius: .4rem;
   color: var(--gold);
   background: var(--glass);
 }
+
+#jump-charge-status:not([hidden]) { display: flex; gap: .32rem; align-items: center; }
+.jump-charge-dot {
+  display: block;
+  width: .65rem;
+  height: .65rem;
+  border: 1px solid var(--gold);
+  border-radius: 50%;
+}
+.jump-charge-dot.ready { background: var(--gold); }
 
 #game:not(.playing) #pony-abilities, #game.dead #pony-abilities { display: none; }
 
@@ -34,6 +44,7 @@
 #touch-use { grid-area: use; }
 #touch-lower { grid-area: lower; }
 #touch-magic { grid-area: magic; color: #e2bbff; }
+#touch-magic[data-cooldown] svg { opacity: .5; }
 
 #touch .touch-actions:has(#touch-flight[hidden]):has(#touch-magic:not([hidden])) {
   grid-template-areas: "sprint magic jump" "attack use lower";
@@ -44,7 +55,7 @@
 }
 
 @media (orientation: portrait) {
-  #game.touch.playing:has(#health:not([hidden])) .target-tag:not(:empty) {
+  #game.touch.playing:has(#health:not([hidden])) .target-tag:has(#selected-label:not(:empty)) {
     top: calc(max(.5rem, env(safe-area-inset-top)) + 89px);
     margin-top: 0;
     white-space: nowrap;
@@ -56,8 +67,14 @@
   .touch #health:not([hidden]) { gap: 2px; }
   .touch #health span { width: clamp(7px, 2.1vw, 10px); }
 
-  #game.touch:has(#health:not([hidden])) #pony-abilities:not([hidden]) {
-    top: calc(max(.5rem, env(safe-area-inset-top)) + 130px);
+  #game.touch #pony-abilities:not([hidden]) {
+    top: calc(max(.5rem, env(safe-area-inset-top)) + 88px);
+    display: flex;
+  }
+
+  #game.touch.playing:has(#pony-abilities:not([hidden])) .target-tag:has(#selected-label:not(:empty)) {
+    top: calc(max(.5rem, env(safe-area-inset-top)) + 119px);
+    margin-top: 0;
   }
 
   .touch #touch:has(#touch-flight:not([hidden])):has(#touch-magic:not([hidden])) #touch-build-panel:not([hidden]) {
@@ -66,8 +83,11 @@
 }
 
 @media (orientation: landscape) and (max-height: 400px) {
-  #game.touch.playing:has(#health:not([hidden])) .target-tag:not(:empty) {
-    max-width: max(6rem, calc(100vw - 415px - 2 * max(env(safe-area-inset-left), env(safe-area-inset-right))));
+  .touch #health:not([hidden]) { gap: 2px; }
+  .touch #health span { width: clamp(7px, 1.14vw, 10px); }
+
+  #game.touch.playing:has(#health:not([hidden])) .target-tag:has(#selected-label:not(:empty)) {
+    max-width: max(6rem, calc(100vw - 455px - 2 * max(env(safe-area-inset-left), env(safe-area-inset-right))));
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

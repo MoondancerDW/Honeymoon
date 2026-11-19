@@ -3,6 +3,8 @@ import {DEFAULT_DETAILED_LOD_DISTANCE,lodDistance,supportedLodVersion,validateDe
 import {terrainFilterShader} from './terrain-filter.mjs';
 import {VISTA_BLOCKS,VISTA_STEP,supportedVistaVersion} from './vista-format.mjs';
 import {VISTA_STITCH_FACE,VISTA_STITCH_LIMIT,writeVistaStitch} from './vista-stitch.mjs';
+import {BIOME_PALETTE_SIZE,defaultGrassTint,grassTintPalette,terrainBiomePixels} from './climate.mjs';
+import {tiles} from '../world/geometry.mjs';
 
 const PACK_CHUNKS = 4;
 const PACK_BLOCKS = PACK_CHUNKS * 16;
@@ -24,19 +26,26 @@ const corners = new Float32Array([0,0,0, 1,0,0, 1,1,0, 0,1,0]);
 const triangles = new Uint16Array([0,1,2, 0,2,3]);
 const edges = [[-1,0],[1,0],[0,-1],[0,1]];
 const distanceSquared = (x,z) => x * x + z * z;
+const baseGrass = [defaultGrassTint>>16,defaultGrassTint>>8&255,defaultGrassTint&255]
+  .map(channel=>channel.toFixed(1)).join(',');
+const srgbToLinear = `
+  vec3 srgbToLinear(vec3 encoded) {
+    return mix(encoded / 12.92, pow((encoded + .055) / 1.055, vec3(2.4)), step(vec3(.04045), encoded));
+  }`;
 
 export function supportsFarTerrain({lod}) {
   return supportedLodVersion(lod?.version) && lod.tileChunks === PACK_CHUNKS && lod.maxDistance === lodDistance(lod.version) &&
     /^[0-9a-f]{64}$/.test(lod.contentHash ?? '');
 }
 
-function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=false,vista=false,micro=false,transition=false,antialias=false} = {}) {
+function farMaterial(textures, lightmap, rows, grassPalette, {water=false,outer=false,rail=false,vista=false,micro=false,transition=false,antialias=false} = {}) {
   const uniforms = {
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
     atlas:{value:textures.source}, terrainMid:{value:textures.mid}, terrainAverage:{value:textures.average},
     terrainWater:{value:textures.water},
     lightmap:{value:lightmap}, terrainRows:{value:rows}, visibilityMask:{value:65535}, heightScale:{value:1},
-    coordinateScale:{value:1},
+    coordinateScale:{value:1}, grassPalette:{value:grassPalette}, biomeTile:{value:null},
+    biomeArea:{value:new THREE.Vector3()},
     vistaMask:{value:null}, vistaMaskOrigin:{value:new THREE.Vector2()}, vistaStitch:{value:null},
     paletteMode:{value:1},
     seamMasks:{value:new THREE.Vector4()},
@@ -58,14 +67,12 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
       uniform sampler2D lightmap;
       ${vista ? 'uniform sampler2D vistaStitch; uniform vec2 vistaMaskOrigin;' : ''}
       varying vec2 localUv;
-      varying float tile;
+      flat varying float tile;
       varying float cutout;
       varying vec3 tint;
       varying vec2 surfaceXZ;
       #include <fog_pars_vertex>
-      vec3 srgbToLinear(vec3 encoded) {
-        return mix(encoded / 12.92, pow((encoded + .055) / 1.055, vec3(2.4)), step(vec3(.04045), encoded));
-      }
+      ${srgbToLinear}
       void main() {
         float flags = mod(faceSurface.y,256.0);
         float chunk = floor(mod(flags,128.0) / 8.0);
@@ -117,15 +124,14 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
         tile = faceSurface.x;
         cutout = step(256.0,faceSurface.y);
         surfaceXZ = (modelMatrix * vec4(point,1.0)).xz;
-        ${vista ? `
         // A wall exactly on a chunk edge belongs to the solid side of that edge.
         if (face < .5) surfaceXZ.x += .0625;
         else if (face < 1.5) surfaceXZ.x -= .0625;
         else if (face > 3.5 && face < 4.5) surfaceXZ.y += .0625;
         else if (face > 4.5) surfaceXZ.y -= .0625;
-        ` : ''}
         vec2 lightUv = vec2((mod(faceLight, 16.0) + .5) / 16.0, (floor(faceLight / 16.0) + .5) / 17.0);
-        tint = srgbToLinear(faceColor * texture2D(lightmap, lightUv).rgb);
+        vec3 shaded = faceColor * texture2D(lightmap, lightUv).rgb;
+        tint = tile == 0.0 ? shaded : srgbToLinear(shaded);
         vec4 mvPosition = modelViewMatrix * vec4(point, 1.0);
         gl_Position = projectionMatrix * mvPosition;
         #ifdef USE_FOG
@@ -133,22 +139,29 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
         #endif
       }`,
     fragmentShader:`
-      ${water ? 'uniform sampler2D terrainWater;' : terrainFilterShader}
+      ${water || vista ? 'uniform sampler2D terrainWater;' : ''}
+      ${water ? '' : terrainFilterShader}
       uniform sampler2D atlas;
+      uniform sampler2D grassPalette;
+      uniform sampler2D biomeTile;
+      uniform vec3 biomeArea;
       varying vec2 localUv;
-      varying float tile;
+      flat varying float tile;
       varying float cutout;
       varying vec3 tint;
       varying vec2 surfaceXZ;
       uniform float paletteMode;
       ${vista ? 'uniform sampler2D vistaMask; uniform vec2 vistaMaskOrigin;' : ''}
       #include <fog_pars_fragment>
+      ${srgbToLinear}
       void main() {
         ${vista ? `
           vec2 maskUv = (floor(surfaceXZ / 16.0) - vistaMaskOrigin + .5) / ${VISTA_MASK_SIDE}.0;
           if (all(greaterThan(maskUv,vec2(0.0))) && all(lessThan(maskUv,vec2(1.0))) &&
               texture2D(vistaMask,maskUv).r > .5) discard;
         ` : ''}
+        bool grass = tile == 0.0;
+        bool liquid = tile == ${tiles.water}.0;
         float coverage = 1.0;
         ${water ? 'vec4 color = texture2D(terrainWater,vec2(localUv.x,-localUv.y));' : `
         float tileIndex = floor(tile + .5);
@@ -158,7 +171,11 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
           ${vista ? `
           vec2 meanUv = (cell + .5) / vec2(64.0,terrainRows);
           vec4 color = texture2D(terrainAverage,meanUv);
-          if (vFogDepth < 240.0) {
+          vec2 waterUv = vec2(localUv.x,-localUv.y);
+          vec2 waterDx=dFdx(waterUv), waterDy=dFdy(waterUv);
+          if (liquid) color = textureGrad(terrainWater,waterUv,waterDx,waterDy);
+          else if (grass) color = terrainSample(atlas,cell,within,footprint);
+          else if (vFogDepth < 240.0) {
             vec4 close = terrainSample(atlas,cell,within,footprint);
             float detail = close.a * (1.0 - smoothstep(130.0,240.0,vFogDepth));
             color.rgb = mix(color.rgb,close.rgb,detail);
@@ -167,7 +184,7 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
           // As block patterns shrink toward a pixel, prefilter before the
           // detail begins to flicker. This also covers rails and glass.
           float blur = ${outer ? '.24+.42*smoothstep(180.0,384.0,vFogDepth)' : '.42*smoothstep(90.0,312.0,vFogDepth)'};
-          footprint = max(1.35*footprint,blur);
+          if (!grass) footprint = max(1.35*footprint,blur);
           vec4 color = terrainSample(atlas,cell,within,footprint);
           if (${rail ? 'true' : 'cutout>.5 || tileIndex==49.0 || tileIndex>=3328.0 && tileIndex<3388.0'}) {
             ${antialias ? `
@@ -179,10 +196,21 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
           }
           `}
         `}
-        vec3 terrainColor=color.rgb * tint;
+        vec3 surfaceTint = tint;
+        if (grass) {
+          if (biomeArea.z > 0.0) {
+            vec2 uv = (surfaceXZ-biomeArea.xy)*biomeArea.z;
+            float id = floor(texture2D(biomeTile,uv).r*255.0+.5);
+            vec3 grassRgb = texture2D(grassPalette,vec2((id+.5)/${BIOME_PALETTE_SIZE}.0,.5)).rgb;
+            // Replace the baked forest palette without discarding face shade or light.
+            surfaceTint *= grassRgb/(vec3(${baseGrass})/255.0);
+          }
+          surfaceTint = srgbToLinear(surfaceTint);
+        }
+        vec3 terrainColor=color.rgb * surfaceTint;
         // Filtering averages the little bright highlights toward darker
         // texels. Keep the midtones closer to the nearby block material.
-        if (paletteMode > .5) {
+        if (paletteMode > .5 && !grass && !liquid) {
           float distanceWeight=smoothstep(70.0,380.0,vFogDepth);
           float luminance=dot(terrainColor,vec3(.2126,.7152,.0722));
           float vegetation=terrainColor.g>terrainColor.r*1.25 && terrainColor.g>terrainColor.b*1.18 ? 1.0 : 0.0;
@@ -194,6 +222,14 @@ function farMaterial(textures, lightmap, rows, {water=false,outer=false,rail=fal
         }
         gl_FragColor = vec4(terrainColor, ${water ? 'color.a' : 'coverage'});
         #include <colorspace_fragment>
+        ${vista ? `
+          if (liquid) {
+            // Vista contains only the surface. Composite the same water opacity
+            // over a diffuse submerged bed instead of making it bright opaque blue.
+            vec2 bedUv = vec2(2.5,terrainRows-.5)/vec2(64.0,terrainRows);
+            vec3 bed = texture2D(terrainAverage,bedUv).rgb * surfaceTint * .45;
+            gl_FragColor.rgb = mix(linearToOutputTexel(vec4(bed,1.0)).rgb,gl_FragColor.rgb,color.a);
+          }` : ''}
         #ifdef USE_FOG
           float farFog = smoothstep(fogNear,fogFar,vFogDepth);
           float haze = .16 * smoothstep(fogNear*.46,fogNear,vFogDepth);
@@ -222,6 +258,9 @@ function meshFor(layer, material, region, extent = PACK_BLOCKS) {
     material.uniforms.visibilityMask.value = region.mask;
     material.uniforms.heightScale.value = heightScale;
     material.uniforms.coordinateScale.value = coordinateScale;
+    material.uniforms.biomeTile.value = region.biomeTexture ?? null;
+    material.uniforms.biomeArea.value.set(region.group?.position.x ?? 0,region.group?.position.z ?? 0,
+      region.biomeTexture ? 1/extent : 0);
     material.uniforms.seamMasks.value.copy(region.seams);
     material.uniformsNeedUpdate = true;
   };
@@ -240,7 +279,9 @@ export class FarTerrain {
     this.bounds = {minX:Math.floor(bounds.minX / PACK_BLOCKS),maxX:Math.floor(bounds.maxX / PACK_BLOCKS),
       minZ:Math.floor(bounds.minZ / PACK_BLOCKS),maxZ:Math.floor(bounds.maxZ / PACK_BLOCKS)};
     const antialias = Boolean(display.renderer.getContext().getContextAttributes()?.antialias);
-    const material = options => farMaterial(textures,display.lightmap,display.atlasRows,{antialias,...options});
+    const grassPalette=new THREE.DataTexture(grassTintPalette(),BIOME_PALETTE_SIZE,1);
+    grassPalette.needsUpdate=true;
+    const material = options => farMaterial(textures,display.lightmap,display.atlasRows,grassPalette,{antialias,...options});
     this.materials = {inner:material(),water:material({water:true}),outer:material({outer:true}),rail:material({rail:true}),
       micro:material({micro:true}),outerMicro:material({outer:true,micro:true}),
       transition:material({transition:true}),outerTransition:material({outer:true,transition:true})};
@@ -260,6 +301,7 @@ export class FarTerrain {
       uniforms.vistaStitch.value=this.stitchTexture;
     }
     this.packs = new Map();
+    this.biomePending = new Set();
     this.pending = new Map();
     this.failed = new Map();
     this.targets = new Map();
@@ -537,6 +579,7 @@ export class FarTerrain {
       group.add(mesh);
     }
     this.packs.set(key,region);
+    this.biomePending.add(region);
     group.visible = false;
     const upload={meshes:group.children.slice(),object:group,parent:this.scene,far:region};
     if (this.altitude && key===vistaKeyAt(this.cx*16,this.cz*16)) this.display.uploads.unshift(upload);
@@ -547,9 +590,29 @@ export class FarTerrain {
     const region = this.packs.get(key);
     this.packs.delete(key);
     if (!region.vista) this.coverageDirty=true;
-    if (region.previous) this.display.discardGroup(region.previous.group);
-    this.display.discardGroup(region.group);
+    if (region.previous) this.discardRegion(region.previous);
+    this.discardRegion(region);
     if (!region.installed) this.display.uploads = this.display.uploads.filter(job => job.far !== region);
+  }
+
+  discardRegion(region) {
+    this.biomePending.delete(region);
+    region.biomeTexture?.dispose();
+    this.display.discardGroup(region.group);
+  }
+
+  prepareBiomeTile() {
+    if (!this.display.climate.loaded || !this.biomePending.size) return;
+    const region=this.biomePending.values().next().value;
+    this.biomePending.delete(region);
+    const {x,z}=region.group.position;
+    // Match the eight-block Vista sampling; both packed tiers retain
+    // individual biome columns without splitting any merged terrain faces.
+    const step=region.vista ? VISTA_STEP : 1;
+    const side=(region.vista ? VISTA_BLOCKS : PACK_BLOCKS)/step;
+    const pixels=terrainBiomePixels(this.display.climate,x,z,side,step);
+    region.biomeTexture=new THREE.DataTexture(pixels,side,side,THREE.RedFormat);
+    region.biomeTexture.needsUpdate=true;
   }
 
   isQueued(region) {
@@ -559,7 +622,7 @@ export class FarTerrain {
   install(region) {
     region.installed = true;
     if (region.vista) {
-      if (region.previous) this.display.discardGroup(region.previous.group);
+      if (region.previous) this.discardRegion(region.previous);
       region.previous = null;
       region.group.visible = true;
       return;
@@ -579,6 +642,7 @@ export class FarTerrain {
       const priority=this.decoded.findIndex(tile=>tile.key===centerVista);
       this.add(this.decoded.splice(Math.max(0,priority),1)[0]);
     }
+    this.prepareBiomeTile();
     const busy = [...this.pending.values(),...this.decoded].map(({key}) => key);
     const network = this.display.terrainNetwork;
     const constrained = network?.constrained(now);

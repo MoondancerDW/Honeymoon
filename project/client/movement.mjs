@@ -76,7 +76,8 @@ export function pickItemFrame(world,origin,direction,block) {
     nearest = length;
     const [x,y,z] = entity.position.map(Math.floor);
     const [hx,hy,hz] = origin.map((value,index) => value + length * direction[index]);
-    target = {x,y,z,entity:entity.key,length,revision:entity.revision ?? 0,hit:{x:hx,y:hy,z:hz}};
+    target = {x,y,z,entity:entity.key,length,revision:entity.revision ?? 0,hit:{x:hx,y:hy,z:hz},
+      ...(entity.data?.Item && {item:entity.data.Item})};
   };
   const [ox,,oz] = origin;
   for (let z = Math.floor((oz - 7) / 16); z <= Math.floor((oz + 7) / 16); z++) {

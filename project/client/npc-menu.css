@@ -57,6 +57,7 @@
 #npc-menu .npc-field textarea { min-height: 4.5rem; resize: vertical; }
 #npc-menu textarea.npc-json-field { min-height: 9rem; font: .8rem ui-monospace, Consolas, monospace; }
 #npc-menu .npc-field.npc-check { display: flex; align-items: center; gap: .42rem; }
+#npc-menu .npc-field[hidden] { display: none; }
 #npc-menu .npc-field.npc-check input { width: auto; margin: 0; accent-color: var(--gold); }
 #npc-menu .npc-bindings { display: grid; min-width: 0; max-height: 12rem; gap: .35rem; overflow: auto; border: 1px solid var(--line); }
 #npc-menu .npc-appearance { display: grid; grid-template-columns: minmax(8rem, .85fr) minmax(0,1fr); align-items: start; gap: .7rem; }

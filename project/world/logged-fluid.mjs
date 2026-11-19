@@ -1,6 +1,7 @@
 import {extractedModel} from './extracted-models.mjs';
 import {shapeFor} from './geometry.mjs';
 import {FAKE_WATER, plantBlock} from './fluid-state.mjs';
+import {subtractBox} from './block-faces.mjs';
 
 const min = ['x0', 'y0', 'z0'];
 const max = ['x1', 'y1', 'z1'];
@@ -15,30 +16,6 @@ export function liquidKind(cell) {
 }
 
 export const liquidCell = kind => sources[kind];
-
-function subtractBox(box, obstruction, axes) {
-  const intersection = {...box};
-  for (const axis of axes) {
-    const lower = min[axis], upper = max[axis];
-    intersection[lower] = Math.max(box[lower], obstruction[lower]);
-    intersection[upper] = Math.min(box[upper], obstruction[upper]);
-    if (intersection[lower] >= intersection[upper]) return [box];
-  }
-  const remainder = [];
-  const middle = {...box};
-  for (const axis of axes) {
-    const lower = min[axis], upper = max[axis];
-    if (middle[lower] < intersection[lower]) {
-      remainder.push({...middle, [upper]:intersection[lower]});
-      middle[lower] = intersection[lower];
-    }
-    if (middle[upper] > intersection[upper]) {
-      remainder.push({...middle, [lower]:intersection[upper]});
-      middle[upper] = intersection[upper];
-    }
-  }
-  return remainder;
-}
 
 const axes = [0, 1, 2];
 export function liquidCavity(cell, neighbors, models) {

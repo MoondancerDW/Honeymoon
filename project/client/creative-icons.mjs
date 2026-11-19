@@ -11,7 +11,7 @@ const texturePath=family=>family==='terrain'?'/generated/textures/atlas.png':`/g
 export function inventoryItemEntry(stack, known, labelFor = key => key) {
   if (!stack) return null;
   const [,id,variant] = /^(?:creative|legacy):(\d+):(\d+)$/.exec(stack.key) ?? [];
-  const name = writtenBookInfo(stack)?.title || plainMinecraftText(itemName(stack)) ||
+  const name = plainMinecraftText(itemName(stack)) || writtenBookInfo(stack)?.title ||
     stack.name || known?.name || (stack.cell ? labelFor(stack.cell) : id === undefined ? stack.key : `Предмет ${id}`);
   return {
     ...known,
@@ -52,7 +52,6 @@ export function pendingItemIcon(entry, draw) {
   const placeholder = document.createElement('span');
   placeholder.className = 'slot-icon-pending';
   placeholder.setAttribute('aria-hidden','true');
-  placeholder.title = entry.name ?? entry.key;
   placeholder.textContent = '…';
   const tries = [350,1000,2200];
   async function paint() {

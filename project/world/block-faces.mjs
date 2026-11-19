@@ -4,7 +4,75 @@ const AXES = [[2,1],[1,2],[0,2],[2,0],[1,0],[0,1]];
 const UV_AXES = [[2,1],[2,1],[0,2],[0,2],[0,1],[0,1]];
 const cornersOfFace = [[0,0],[1,0],[1,1],[0,1]];
 
-export function blockFaceVertices(box,face,quarter=-1) {
+export function subtractBox(box,obstruction,axes) {
+  const intersection={...box};
+  for (const axis of axes) {
+    const lower=MIN[axis], upper=MAX[axis];
+    intersection[lower]=Math.max(box[lower],obstruction[lower]);
+    intersection[upper]=Math.min(box[upper],obstruction[upper]);
+    if (intersection[lower]>=intersection[upper]) return [box];
+  }
+  const remainder=[];
+  const middle={...box};
+  for (const axis of axes) {
+    const lower=MIN[axis], upper=MAX[axis];
+    if (middle[lower]<intersection[lower]) {
+      remainder.push({...middle,[upper]:intersection[lower]});
+      middle[lower]=intersection[lower];
+    }
+    if (middle[upper]>intersection[upper]) {
+      remainder.push({...middle,[lower]:intersection[upper]});
+      middle[upper]=intersection[upper];
+    }
+  }
+  return remainder;
+}
+
+export const canClipBoxFace=box=>!box.kind && !box.angle && !box.fluid && !box.liquidSurface && !box.torchMount &&
+  (box.mode==='opaque'||box.mode==='cutout');
+
+function facePriority(box,face) {
+  const alphaPriority=box.mode==='opaque'?0:65536;
+  return alphaPriority+box.faces[face];
+}
+
+export function boxFaceFragments(box,boxIndex,boxes,face,neighborBoxes) {
+  const axis=face>>1;
+  const high=Boolean(face&1);
+  const [outside,inside]=high?[MAX[axis],MIN[axis]]:[MIN[axis],MAX[axis]];
+  const plane=box[outside];
+  const priority=facePriority(box,face);
+  const tangents=AXES[face];
+  let fragments=[box];
+  for (let i=0;i<boxes.length;i++) {
+    const other=boxes[i];
+    if (i===boxIndex || !canClipBoxFace(other)) continue;
+    // Opaque geometry continuing past this face hides it, even for a partial overlap.
+    const crosses=high?other[inside]<=plane && other[outside]>plane:other[inside]>=plane && other[outside]<plane;
+    const coincident=other[outside]===plane && other.faces[face]!==-1;
+    const candidate=facePriority(other,face);
+    const wins=candidate<priority || candidate===priority && i<boxIndex;
+    if (!(crosses && other.mode==='opaque') && !(coincident && wins)) continue;
+    fragments=fragments.flatMap(fragment=>subtractBox(fragment,other,tangents));
+    if (!fragments.length) return fragments;
+  }
+  const neighborEdge=high?0:1, neighborFace=face^1;
+  for (const other of neighborBoxes??[]) {
+    if (!canClipBoxFace(other) || (high?other[inside]>neighborEdge:other[inside]<neighborEdge)) continue;
+    // Two opaque pieces hide their shared interior. Between two double-sided cutouts,
+    // retain one face and use the lower-coordinate cell to break remaining ties.
+    if (other.mode!=='opaque') {
+      if (box.mode==='opaque' || other[inside]!==neighborEdge || other.faces[neighborFace]===-1) continue;
+      const candidate=facePriority(other,neighborFace);
+      if (candidate>priority || candidate===priority && high) continue;
+    }
+    fragments=fragments.flatMap(fragment=>subtractBox(fragment,other,tangents));
+    if (!fragments.length) return fragments;
+  }
+  return fragments;
+}
+
+export function blockFaceVertices(box,face,quarter=-1,fragment=box) {
   const axis = face >> 1;
   const [uAxis,vAxis] = AXES[face];
   const [textureU,textureV] = UV_AXES[face];
@@ -12,8 +80,8 @@ export function blockFaceVertices(box,face,quarter=-1) {
   for (const [u,v] of cornersOfFace) {
     const point = [0,0,0];
     point[axis] = box[face & 1 ? MAX[axis] : MIN[axis]];
-    point[uAxis] = box[u ? MAX[uAxis] : MIN[uAxis]];
-    point[vAxis] = box[v ? MAX[vAxis] : MIN[vAxis]];
+    point[uAxis] = fragment[u ? MAX[uAxis] : MIN[uAxis]];
+    point[vAxis] = fragment[v ? MAX[vAxis] : MIN[vAxis]];
     if (box.liquidSurface && face !== 2 && point[1] === box.y1) {
       const [h00,h10,h01,h11] = box.liquidSurface;
       const [x,,z] = point;

@@ -8,10 +8,32 @@ const colors = [
 ].map(([grass,leaves])=>Object.freeze({grass,leaves}));
 const snowLine = 160;
 const mountainBiomes = new Set([3,13,20]);
+const defaultBiome = 4;
+export const BIOME_PALETTE_SIZE = 128;
 
 // These are the active My-Little-Ponyach-147f colormap pixels, addressed by
 // the original biome temperature and rain values. The reference disables swamp blending.
-export const biomeTint = biome => colors[biome & 127] ?? colors[4];
+export const biomeTint = biome => colors[biome & (BIOME_PALETTE_SIZE-1)] ?? colors[defaultBiome];
+export const defaultGrassTint = biomeTint(defaultBiome).grass;
+
+export function grassTintPalette() {
+  const pixels=new Uint8Array(BIOME_PALETTE_SIZE*4);
+  for (let id=0;id<BIOME_PALETTE_SIZE;id++) {
+    const {grass}=biomeTint(id);
+    pixels.set([grass>>16,grass>>8&255,grass&255,255],id*4);
+  }
+  return pixels;
+}
+
+export function terrainBiomePixels(climate,west,north,side,step) {
+  const pixels=new Uint8Array(side**2);
+  const center=Math.floor(step/2);
+  for (let z=0;z<side;z++) for (let x=0;x<side;x++) {
+    const biome=climate.biomeAt(west+x*step+center,north+z*step+center) ?? defaultBiome;
+    pixels[x+z*side]=biome & (BIOME_PALETTE_SIZE-1);
+  }
+  return pixels;
+}
 
 export function readWorldBiomes(buffer) {
   const view=new DataView(buffer);
@@ -61,6 +83,7 @@ export class Climate {
       this.chunks=readBiomes(await reply.json());
     }
     this.columns.clear();
+    this.loaded=true;
     return true;
   }
 
@@ -75,7 +98,7 @@ export class Climate {
 
   snowAt(x,y,z) { return y>=snowLine || biomeSnow(this.biomeAt(x,z),y); }
 
-  tintAt(x,z) { return biomeTint(this.biomeAt(x,z) ?? 4); }
+  tintAt(x,z) { return biomeTint(this.biomeAt(x,z) ?? defaultBiome); }
 
   columnTints(cx,cz) {
     const key=`${cx}.${cz}`;

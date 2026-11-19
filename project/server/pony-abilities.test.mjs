@@ -25,7 +25,7 @@ function scenario(t, race) {
 
 test('race changes preserve damage and only winged survival ponies may fly or ignore landing damage',t=>{
   const {game,id,spawn,survival,raceTo,advance}=scenario(t,'earth');
-  assert.equal(survival.status(id).health,15);
+  assert.equal(survival.status(id).health,12);
   assert.throws(()=>game.setFlight(id,'device',{enabled:true,sequence:1}),{code:'flight_unavailable'});
   assert.throws(()=>game.setSpectator(id,{enabled:true}),{code:'creative_required'});
   survival.damage(id,3,spawn,spawn.y);
@@ -35,7 +35,7 @@ test('race changes preserve damage and only winged survival ponies may fly or ig
   assert.equal(survival.status(id).maxHealth,10);
   raceTo('earth');
   game.reconcileRace(id);
-  assert.equal(survival.status(id).health,12);
+  assert.equal(survival.status(id).health,9);
   survival.setMode(id,'creative');
   assert.equal(game.setFlight(id,'device',{enabled:true,sequence:1}),true);
   survival.setMode(id,'game');
@@ -49,9 +49,10 @@ test('race changes preserve damage and only winged survival ponies may fly or ig
     game.position(id,{...spawn,pose:{motion:'fly'}});
   };
   land();
-  assert.equal(survival.status(id).health,13,'the motion label alone cannot prevent fall damage');
+  assert.equal(survival.status(id).health,10,'the motion label alone cannot prevent fall damage');
   raceTo('pegasus');
   game.reconcileRace(id);
+  assert.equal(survival.status(id).maxHealth,8);
   assert.equal(game.setFlight(id,'device',{enabled:true,sequence:2}),true);
   assert.equal(game.setFlight(id,'device',{enabled:false,sequence:3}),false);
   const before=survival.status(id).health;

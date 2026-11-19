@@ -18,7 +18,7 @@ import { createBoats } from './boats.mjs';
 import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
-import { chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
+import { BED_SURFACE_HEIGHT, chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
 import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, POSITION_BATCH_LIMIT, POSITION_FLIGHT_DROP_LIMIT, POSITION_STEP_LIMIT,
   POSITION_TRAIL_LIMIT, POSITION_VERTICAL_STEP_LIMIT, WORLD_GRAVITY, flightPositionCost, isPlayerStance,
   playerBody } from '../world/player-body.mjs';
@@ -81,6 +81,7 @@ function trailPoint(input) {
 }
 
 const samePoint = (left, right) => axes.every(axis => left[axis] === right[axis]);
+const npcBody = ({scale}) => ({halfWidth:Math.min(.54,.26*scale),height:Math.min(3.6,1.38*scale)});
 const slotNumber = value => Number.isInteger(value) && value >= 0 && value < PART_SLOT_LIMIT;
 
 function normalizeAction(body) {
@@ -2014,18 +2015,25 @@ export function createGame(base, store, geometry, {
   const descriptions = player => diagnostic?.describe(player) ?? null;
 
   function reconcileProfile(player) {
-    if (!positions.has(player)) return;
+    if (!positions.has(player)) return movementChannel.invalidate(player);
     const previous = playerAt(player);
     const seat = publicSeat(player);
     const body = seat ? bodyAtSeat(player,seat) : bodyFor(player);
     const observing = spectators.has(player);
-    if (bodyWithinMap(previous,body) && (observing || !physical.collides(previous,body,seats.get(player)?.blocks))) return;
+    if (bodyWithinMap(previous,body) && (observing || !physical.collides(previous,body,seats.get(player)?.blocks))) {
+      movementChannel.invalidate(player);
+      return;
+    }
 
     const standing = bodyFor(player,'stand');
     const highest = base.manifest.bounds.maxY + 1 - standing.height;
     let position;
+    let stance='stand';
     if (observing) position = {...previous,y:Math.min(previous.y,highest)};
-    else if (seat) position = leaveSeat(player);
+    else if (seat) {
+      position=leaveSeat(player);
+      stance=stanceFor(player);
+    }
     else {
       const nearby = {...previous,y:Math.min(previous.y,highest)};
       const center = {x:Math.floor(nearby.x)+.5,y:nearby.y,z:Math.floor(nearby.z)+.5};
@@ -2041,8 +2049,9 @@ export function createGame(base, store, geometry, {
       }
     }
     position ??= spawn;
-    movePlayer(player,position);
-    return {position, stance:'stand', seat:null};
+    if (!seat || observing) movePlayer(player,position,stance);
+    if (persistPositions) store.putState('movement',player,'pos',1,{world:base.hash,position,stance});
+    return {position, stance, seat:null};
   }
 
   function respawn(player) {
@@ -2133,10 +2142,18 @@ export function createGame(base, store, geometry, {
       const target=[point.x,point.y+height,point.z];
       return Math.hypot(...target.map((value,axis)=>value-origin[axis]))<=6 && physical.visiblePoint(origin,target);
     },
+    npcBedPosition(npc) {
+      const {x,y,z}=npc.position;
+      const layer=Math.floor(y-BED_SURFACE_HEIGHT);
+      if (blockState(cellAt(Math.floor(x),layer,Math.floor(z)))[0]!==26) return;
+      const target={x,y:layer+BED_SURFACE_HEIGHT,z};
+      if (y-target.y>.5 || y===target.y) return;
+      if (physical.movementAllowed(npc.position,target,npcBody(npc))) return target;
+    },
     npcWalk(from,target,npc) {
       const {x,y,z}=target;
       if (!base.inBounds(x,y,z) || base.hasPlayableChunk && !base.hasPlayableChunk(x>>4,z>>4)) return;
-      const body={halfWidth:Math.min(.54,.26*npc.scale),height:Math.min(3.6,1.38*npc.scale)};
+      const body=npcBody(npc);
       if (physical.supported(target,body) && physical.movementAllowed(from,target,body)) return target;
       const next=physical.standAbove({x,y:y-1.01,z},y+1.01,body);
       if (next && physical.movementAllowed(from,next,body)) return next;
@@ -2172,6 +2189,7 @@ export function createGame(base, store, geometry, {
     leaveSeat,
     poseFor,
     offhandPose,
+    initializePosition,
     reconcileProfile,
     reconcileFlight,
     reconcileRace,

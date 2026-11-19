@@ -237,6 +237,8 @@ test('independent cookies share profiles and only confirmed movement, and retain
   assert.equal(chosen.data.ponyType,'pegasus');
   const withoutMovement=({position,seat,stance,...profile})=>profile;
   const ownFields=({flight,flightAllowed,jumpCharge,magicCooldownMs,...profile})=>withoutMovement(profile);
+  const avatarFields=({raceOverride,sizeOverride,raceRevision,...profile})=>ownFields(profile);
+  assert.deepEqual([chosen.data.raceOverride,chosen.data.raceRevision],[null,1]);
   assert.deepEqual(chosen.data.position,point);
   assert.equal(chosen.data.stance,'stand');
   assert.equal((await post('session',{},a.cookie)).data.profile.nicknameChosen,false);
@@ -254,7 +256,7 @@ test('independent cookies share profiles and only confirmed movement, and retain
   const joined = await post('presence',{...options,x:25,y:25,z:25},b.cookie);
   assert.equal(joined.status,200);
   const entered = await observer.next('presence');
-  assert.deepEqual(entered, {revision:undefined,data:{players:[{...ownFields(chosen.data),position:point,...options,stance:'stand'}],selfOnline:false}});
+  assert.deepEqual(entered, {revision:undefined,data:{players:[{...avatarFields(chosen.data),position:point,...options,stance:'stand'}],selfOnline:false}});
   assert.equal((await post('position',{...point,x:100,pose:{...options,motion:'fly'}},b.cookie)).status,409);
   assert.equal((await post('position',{...point,z:8.75,pose:{...options,motion:'walk'}},b.cookie)).status,200);
   const moved = await observer.next('presence-motion');

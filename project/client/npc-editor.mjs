@@ -10,6 +10,10 @@ const jobs=[['none','Нет занятия'],['bard','Бард'],['healer','Це
 const animations=[['idle','Стоит'],['walk','Ходьба'],['sit','Сидит'],['crawl','Ползёт'],
   ['sneak','Пригибается'],['dance','Танцует']];
 const movements=[['stationary','На месте'],['wander','Ходит поблизости'],['route','Следует по точкам']];
+const rotations=[['fixed','Сохраняет направление'],['head','Следит взглядом'],['body','Поворачивается к игроку'],
+  ['spin','Вращается на месте']];
+const interactionRotations=[['default','Как в режиме поворота'],['none','Не поворачивается'],
+  ['head','Поворачивает голову'],['body','Поворачивается целиком']];
 const optionTypes=[['dialog','К диалогу'],['close','Закрывает разговор'],['role','Открывает услуги NPC'],
   ['command','Действие сценария'],['disabled','Недоступно']];
 const questTypes=[['item','Принести предметы'],['dialog','Поговорить'],['kill','Победить цель']];
@@ -23,8 +27,9 @@ const settings=[
   ['recipes','Рецепты','Новый рецепт'],['banks','Банки','Новый банк'],
 ];
 const globalTabs=['dialogs','quests','settings'];
+const degrees=radians=>Math.round(((radians*180/Math.PI%360+360)%360)*100)%36000/100;
 
-export function createNpcEditor({content,edit,position,preview,clearPreview,loadModels,loadCatalog,drawItem,entryFor,status}) {
+export function createNpcEditor({content,edit,position,lookYaw,preview,clearPreview,loadModels,loadCatalog,drawItem,entryFor,status}) {
   let data,draft,tab='identity',definitionId,sharedId,subview,models,modelRequest;
   let skins=[];
   let collectionName='transport';
@@ -120,13 +125,63 @@ export function createNpcEditor({content,edit,position,preview,clearPreview,load
 
   function identity() {
     const grid=values(draft,[['name','Имя',{maxLength:64}],['title','Подпись',{maxLength:64}],
-      ['health','Здоровье',{type:'number',min:1,max:10000,step:1}],['showName','Показывать имя',{type:'checkbox'}],
-      ['rotation','Реакция на игрока',{choices:[['head','Поворачивает голову'],['body','Поворачивается целиком'],
-        ['fixed','Сохраняет направление']],value:'head'}],['invulnerable','Неуязвим',{type:'checkbox'}]]);
-    const angle=field('Поворот в градусах',{type:'number',step:'any',value:Math.round((draft.yaw??0)*180/Math.PI),
+      ['health','Здоровье',{type:'number',min:1,max:10000,step:1}],
+      ['invulnerable','Неуязвим',{type:'checkbox'}]]);
+    const duringAttack=field('Показывать имя и подпись при атаке',{type:'checkbox',value:draft.showNameWhenAttacking,
+      changed:assign(draft,'showNameWhenAttacking')});
+    duringAttack.input.id='npc-show-name-attacking';
+    duringAttack.wrapper.hidden=draft.showName!==false;
+    const showName=field('Показывать имя и подпись',{type:'checkbox',value:draft.showName!==false,changed:enabled=>{
+      draft.showName=enabled;
+      duringAttack.wrapper.hidden=enabled;
+    }});
+    showName.input.id='npc-show-name';
+    const nameHint=node('small',null,'Скрытое имя видно, если держать инструмент настройки NPC.');
+    nameHint.id='npc-show-name-help';
+    showName.input.setAttribute('aria-describedby',nameHint.id);
+    grid.append(showName.wrapper,duringAttack.wrapper);
+    const section=node('div','npc-sections');
+    section.append(block('Персонаж',grid,nameHint,coordinates(draft.position),
+      button('Использовать мою позицию',()=>useCurrent(draft.position))),orientation());
+    return section;
+  }
+
+  function orientation() {
+    const angle=field('Начальное направление, °',{type:'number',step:'any',value:degrees(draft.yaw??0),
       changed:value=>{draft.yaw=value*Math.PI/180;}});
-    return block('Персонаж',grid,coordinates(draft.position),angle.wrapper,
-      button('Использовать мою позицию',()=>useCurrent(draft.position)));
+    angle.input.id='npc-yaw';
+    const speed=field('Скорость вращения, °/с',{type:'number',min:-180,max:180,step:'any',value:draft.spinSpeed??45,
+      changed:assign(draft,'spinSpeed')});
+    speed.input.id='npc-spin-speed';
+    const speedHint=node('small',null,'Отрицательное значение меняет направление. При 0 используется 45°/с.');
+    speedHint.id='npc-spin-speed-help';
+    speed.input.setAttribute('aria-describedby',speedHint.id);
+    speed.wrapper.append(speedHint);
+    const orientationFields=node('div','npc-grid');
+    function showSpin(mode) {
+      if (mode==='spin') orientationFields.append(speed.wrapper);
+      else speed.wrapper.remove();
+    }
+    const rotation=field('Режим поворота',{choices:rotations,value:draft.rotation??'head',changed:mode=>{
+      draft.rotation=mode;
+      showSpin(mode);
+    }});
+    rotation.input.id='npc-rotation';
+    const interaction=field('Поворот при взаимодействии',{choices:interactionRotations,
+      value:draft.interactionRotation??'default',changed:assign(draft,'interactionRotation')});
+    interaction.input.id='npc-interaction-rotation';
+    orientationFields.append(rotation.wrapper,angle.wrapper,interaction.wrapper);
+    showSpin(rotation.input.value);
+    const hint=node('small',null,'0° — север, 90° — запад, 180° — юг, 270° — восток.');
+    hint.id='npc-yaw-help';
+    angle.input.setAttribute('aria-describedby',hint.id);
+    angle.wrapper.append(hint);
+    const section=block('Направление',orientationFields);
+    if (lookYaw) section.append(button('Взять направление моего взгляда',()=>{
+      draft.yaw=lookYaw();
+      angle.input.value=degrees(draft.yaw);
+    }));
+    return section;
   }
 
   function appearance() {

@@ -41,14 +41,26 @@ export const terrainCacheUsage=()=>cache.usage();
 export const storePrefetchedTerrain=(url,blob)=>cache.put(url,blob);
 export const missingTerrain=paths=>cache.missing(paths.filter(partitionOf));
 
-export async function readTerrain(url,init,enabled,decode) {
-  if (!enabled || !partitionOf(url)) return decode(await fetch(url,init));
+export async function readTerrain(url,init,enabled,decode,{waitForStore=false,isStale}={}) {
+  if (!enabled || !partitionOf(url)) {
+    const value=await decode(await fetch(url,init));
+    if (!isStale?.(value)) return value;
+    try {
+      return await decode(await fetch(url,{...init,cache:'reload'}));
+    } catch {
+      init?.signal?.throwIfAborted();
+      return value;
+    }
+  }
   init?.signal?.throwIfAborted();
   const cached=await cache.get(url);
   init?.signal?.throwIfAborted();
+  let stale;
   if (cached) {
     try {
-      return await decode(new Response(cached));
+      const value=await decode(new Response(cached));
+      if (!isStale?.(value)) return value;
+      stale=value;
     } catch {
       await cache.delete(url);
     }
@@ -59,7 +71,8 @@ export async function readTerrain(url,init,enabled,decode) {
     const copy=response.clone();
     try {
       const value=await decode(response);
-      void copy.blob().then(blob=>cache.put(url,blob)).catch(()=>{});
+      const saved=copy.blob().then(blob=>cache.put(url,blob)).catch(()=>{});
+      if (waitForStore) await saved;
       return value;
     } catch (error) {
       void copy.body?.cancel().catch(()=>{});
@@ -67,5 +80,11 @@ export async function readTerrain(url,init,enabled,decode) {
       return download({...options,cache:'reload'},false);
     }
   }
-  return cached ? download({...init,cache:'reload'},false) : download(init,true);
+  try {
+    return await (cached ? download({...init,cache:'reload'},false) : download(init,true));
+  } catch (error) {
+    init?.signal?.throwIfAborted();
+    if (stale!==undefined) return stale;
+    throw error;
+  }
 }

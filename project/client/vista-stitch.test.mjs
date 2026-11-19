@@ -29,3 +29,17 @@ test('the Vista stitch uses a negative-coordinate LOD edge and skips covered nei
   writeVistaStitch(field,coverage,sources,size,-9,-5);
   assert.ok(field.every(value=>value===0));
 });
+
+test('a clipped eighth-block LOD face still anchors Vista in ordinary world coordinates', () => {
+  const land=lodBoundaryHeights({
+    count:2,
+    offset:[128,544,2, 129,688,2],
+    span:[126,128, 126,126],
+    surface:[100,11, 101,11],
+    coordinateScale:8,
+    heightScale:8,
+  });
+  assert.deepEqual([...land.slice(24,30)],[0,0,68,100,68,100]);
+  assert.deepEqual([...land.slice(30,36)],[0,0,68,100,68,100]);
+  assert.deepEqual([...land.slice(42,48)],[68,100,86,101,68,100]);
+});

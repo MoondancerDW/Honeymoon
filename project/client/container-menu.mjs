@@ -1,8 +1,9 @@
-import {itemName,itemTooltip,plainMinecraftText,stackType,writtenBookInfo} from '../world/item-text.mjs';
+import {itemName,plainMinecraftText,stackType,writtenBookInfo} from '../world/item-text.mjs';
 import {itemStackLimit} from '../world/item-stack.mjs';
 import {containerSpec} from '../world/containers.mjs';
 import {createContainerCache} from './container-cache.mjs';
 import {pendingItemIcon} from './creative-icons.mjs';
+import {updateItemTooltip} from './item-tooltip.mjs';
 
 const summaryView = {containerView:'summary'};
 const detailsView = {containerView:'details'};
@@ -76,10 +77,11 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
         button.dataset.slot=slot;
         button.disabled=!active.authorized || !container.slots;
         button.draggable=!!stack&&!button.disabled;
+        const entry=stack && entryFor(stack);
         const label=count && !stack ? `Ячейка ${slot+1}, количество ${count}, загрузка` :
-          writtenBookInfo(stack)?.title ?? (plainMinecraftText(itemName(stack)||entryFor(stack)?.name)||`Ячейка ${slot+1}`);
-        button.title=itemTooltip(stack,label);
-        button.setAttribute('aria-label',button.title);
+          plainMinecraftText(itemName(stack)) || writtenBookInfo(stack)?.title || entry?.name || `Ячейка ${slot+1}`;
+        button.setAttribute('aria-label',label);
+        if (count) updateItemTooltip(button,stack,label,{entry});
         paintStack(button,stack,count);
         button.addEventListener('click',event=>click(position,event,false));
         button.addEventListener('contextmenu',event=>{event.preventDefault();click(position,event,true);});

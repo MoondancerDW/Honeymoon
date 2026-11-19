@@ -1,6 +1,7 @@
 const byId = id => document.getElementById(id);
 const game = byId('game');
 const fullscreen = byId('fullscreen-toggle');
+const fullscreenButtons = document.querySelectorAll('[data-fullscreen-toggle]');
 const fullscreenHelp = byId('fullscreen-help');
 const root = document.documentElement;
 const standalone = matchMedia('(display-mode: standalone)');
@@ -10,6 +11,7 @@ const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
 const isFullscreen = () => Boolean(document.fullscreenElement || document.webkitFullscreenElement);
 const fullscreenMethod = () => (document.fullscreenEnabled && root.requestFullscreen) ||
   (document.webkitFullscreenEnabled && root.webkitRequestFullscreen);
+let fullscreenOpener;
 
 if (touchFullscreen) byId('touch-pause').before(fullscreen);
 if (ios) {
@@ -22,25 +24,29 @@ function updateFullscreen() {
   const supported = typeof fullscreenMethod() === 'function';
   const installed = standalone.matches || navigator.standalone === true;
   const opensHelp = !active && !supported && touchFullscreen;
-  fullscreen.hidden = !active && (installed || (!supported && !opensHelp));
-  if (opensHelp) {
-    fullscreen.removeAttribute('aria-pressed');
-    fullscreen.setAttribute('aria-haspopup','dialog');
-    fullscreen.setAttribute('aria-controls',fullscreenHelp.id);
-  } else {
-    fullscreen.setAttribute('aria-pressed',String(active));
-    fullscreen.removeAttribute('aria-haspopup');
-    fullscreen.removeAttribute('aria-controls');
+  for (const control of fullscreenButtons) {
+    control.hidden = control!==fullscreen && !touchFullscreen || !active && (installed || (!supported && !opensHelp));
+    if (opensHelp) {
+      control.removeAttribute('aria-pressed');
+      control.setAttribute('aria-haspopup','dialog');
+      control.setAttribute('aria-controls',fullscreenHelp.id);
+    } else {
+      control.setAttribute('aria-pressed',String(active));
+      control.removeAttribute('aria-haspopup');
+      control.removeAttribute('aria-controls');
+    }
+    control.setAttribute('aria-label',active?'Выйти из полного экрана':'На весь экран');
+    control.title=control.getAttribute('aria-label');
   }
-  fullscreen.setAttribute('aria-label', active ? 'Выйти из полного экрана' : 'На весь экран');
-  fullscreen.title = fullscreen.getAttribute('aria-label');
 }
 
-function showFullscreenHelp() {
+function showFullscreenHelp(control) {
+  fullscreenOpener=control;
   if (!fullscreenHelp.open) fullscreenHelp.showModal();
 }
 
-fullscreen.addEventListener('click', async () => {
+async function toggleFullscreen(event) {
+  const control=event.currentTarget;
   try {
     if (isFullscreen()) {
       const exit = document.exitFullscreen ?? document.webkitExitFullscreen;
@@ -48,14 +54,15 @@ fullscreen.addEventListener('click', async () => {
     } else {
       const enter = fullscreenMethod();
       if (typeof enter === 'function') await enter.call(root);
-      else showFullscreenHelp();
+      else showFullscreenHelp(control);
     }
   } catch {
-    showFullscreenHelp();
+    showFullscreenHelp(control);
   }
-});
+}
+for (const control of fullscreenButtons) control.addEventListener('click',toggleFullscreen);
 fullscreenHelp.addEventListener('keydown',event=>event.stopPropagation());
-fullscreenHelp.addEventListener('close',()=>fullscreen.focus({preventScroll:true}));
+fullscreenHelp.addEventListener('close',()=>fullscreenOpener?.focus({preventScroll:true}));
 for (const event of ['fullscreenchange','webkitfullscreenchange']) document.addEventListener(event,updateFullscreen);
 standalone.addEventListener?.('change',updateFullscreen);
 updateFullscreen();

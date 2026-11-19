@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { relatedBlockStates } from '../world/block-interactions.mjs';
 import { containerSpec } from '../world/containers.mjs';
+import {publicItemText} from '../world/item-text.mjs';
 import { isRideableMinecart } from '../world/minecarts.mjs';
 import { isRideableBoat } from '../world/boats.mjs';
 import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
@@ -99,9 +100,15 @@ export function displayEntity(entity) {
     if (type === 'Painting') data.Motive = Motive;
     else {
       data.ItemRotation = ItemRotation;
+      const {MountSide,MountTurn}=entity.data??{};
+      if (Number.isInteger(MountSide)) data.MountSide=MountSide;
+      if (Number.isInteger(MountTurn)) data.MountTurn=MountTurn;
       if (entity.data?.Invisible === true || entity.data?.Invisible === 1) data.Invisible = true;
-      if (Number.isInteger(Item?.id)) data.Item = {id:Item.id,Damage:Number.isInteger(Item.Damage) ? Item.Damage : 0,
-        ...(Item.Block===true && {Block:true})};
+      if (Number.isInteger(Item?.id)) {
+        const tag=publicItemText(Item.tag,Item.id===387);
+        data.Item = {id:Item.id,Damage:Number.isInteger(Item.Damage) ? Item.Damage : 0,
+          ...(Item.Block===true && {Block:true}),...(tag && {tag})};
+      }
     }
   } else if (isRideableMinecart(entity)) {
     data.Type = 0;
@@ -110,7 +117,9 @@ export function displayEntity(entity) {
     const facing = entity.data?.Rotation?.[0];
     data.Rotation = [Number.isFinite(facing) ? 180-facing : 0,0];
   }
-  return { key: entity.key, position: entity.position, type, data };
+  return {key:entity.key,position:entity.position,type,data,
+    ...(type==='ItemFrame' && Number.isInteger(entity.revision) && {revision:entity.revision}),
+    ...(type==='ItemFrame' && entity.placed===true && {placed:true})};
 }
 
 function publicWorld(manifest, hash) {
@@ -222,6 +231,19 @@ export function loadBase(directory, {cleanSnow = true, partial} = {}) {
     return { key, object };
   }
 
+  function hydrateFrameItem(chunk,cx,cz,entity) {
+    const item=entity?.data?.Item;
+    if (entity?.type!=='ItemFrame' || !Number.isInteger(item?.id) || item.tag!==undefined ||
+        !chunk.local || !fullDetail?.hasChunk(cx,cz)) return entity;
+    // Older staged chunks omit Item.tag. Recover the text from the original packed region.
+    chunk.originalFrameItems ??= new Map(fullDetail.chunkAt(cx,cz).entities
+      .filter(entry=>entry.type==='ItemFrame' && entry.data?.Item?.tag!==undefined)
+      .map(entry=>[entry.key,entry.data.Item]));
+    const original=chunk.originalFrameItems.get(entity.key);
+    if (!original || item.id!==original.id || (item.Damage??0)!==(original.Damage??0)) return entity;
+    return {...entity,data:{...entity.data,Item:{...item,tag:original.tag}}};
+  }
+
   function publicChunk(cx, cz, highOnly=false) {
     if (partial && !installedDetail(cx,cz)) return null;
     if (highOnly && manifest.bounds.maxY<256) {
@@ -241,7 +263,8 @@ export function loadBase(directory, {cleanSnow = true, partial} = {}) {
       ...chunk.source,
       objects,
       entities: (partial && coordinates.has(`${cx}.${cz}`) ? chunk.source.entities.filter(entity=>
-        entity.type==='Painting' || entity.type==='ItemFrame' || isRideableMinecart(entity)) : chunk.source.entities).map(displayEntity),
+        entity.type==='Painting' || entity.type==='ItemFrame' || isRideableMinecart(entity)) : chunk.source.entities)
+        .map(entity=>displayEntity(hydrateFrameItem(chunk,cx,cz,entity))),
     };
     if (highOnly) {
       result.sections=result.sections.filter(section=>section.y>=16);
@@ -249,12 +272,14 @@ export function loadBase(directory, {cleanSnow = true, partial} = {}) {
       result.entities=result.entities.filter(entity=>entity.position[1]>=256);
       result.highOnly=true;
     }
+    if (result.entities.some(entity=>entity.type==='ItemFrame' && entity.data.Item)) result.frameItemText=true;
     return result;
   }
 
   function getEntity(x, z, key) {
     const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
-    return getChunk(cx, cz)?.source.entities.find(entity => entity.key === key);
+    const chunk=getChunk(cx,cz);
+    return chunk && hydrateFrameItem(chunk,cx,cz,chunk.source.entities.find(entity=>entity.key===key));
   }
 
   return { manifest:{...manifest,bounds}, publicManifest, hash, catalog, inBounds, getCell, getEntity, publicChunk,

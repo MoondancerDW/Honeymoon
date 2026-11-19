@@ -11,6 +11,17 @@ export const itemName=stack=>typeof stack?.nbt?.display?.Name==='string' ? stack
 export const itemLore=stack=>Array.isArray(stack?.nbt?.display?.Lore) ? stack.nbt.display.Lore.filter(value=>typeof value==='string') : [];
 export const bookPages=stack=>Array.isArray(stack?.nbt?.pages) && stack.nbt.pages.length ? stack.nbt.pages : [''];
 
+export function publicItemText(nbt,signedBook=false) {
+  const Name=itemName({nbt}), Lore=itemLore({nbt});
+  const title=signedBook && typeof nbt?.title==='string' ? nbt.title : '';
+  const author=signedBook && typeof nbt?.author==='string' ? nbt.author : '';
+  if (!Name && !Lore.length && !title && !author) return undefined;
+  return {
+    ...((Name || Lore.length) && {display:{...(Name && {Name}),...(Lore.length && {Lore})}}),
+    ...(title && {title}),...(author && {author}),
+  };
+}
+
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (!value || typeof value!=='object') return value;
