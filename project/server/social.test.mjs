@@ -66,19 +66,22 @@ test('chat preserves ordering, sends join and leave with the nickname and bounds
   const store = openStore(':memory:');
   const chat = createChat({store, publish:entry => sent.push(entry), recipients:() => ['near'], now:() => now});
   const profile = {id:'profile', nickname:'Искра'};
+  const point = {x:0,y:0,z:0};
   try {
-    assert.throws(() => chat.message(null, {text:'Привет'}), {code:'not_online'});
+    assert.throws(() => chat.message(null, {text:'Привет'}, 'sender', point), {code:'not_online'});
+    assert.throws(() => chat.message(profile, {text:'Привет'}, 'sender'), {code:'not_online'});
+    assert.throws(() => chat.message(profile, {text:'Привет'}, 'sender', {...point,x:NaN}), {code:'not_online'});
     chat.playerStatus(profile, true);
-    assert.throws(() => chat.message(profile, {text:'x'.repeat(241)}), {code:'invalid_chat'});
-    assert.throws(() => chat.message(profile, {text:'one\ntwo'}), {code:'invalid_chat'});
-    for (let i = 0; i < 5; i++) chat.message(profile, {text:'  Привет!  '});
-    assert.throws(() => chat.message(profile, {text:'Снова'}), {code:'chat_rate_limit'});
+    assert.throws(() => chat.message(profile, {text:'x'.repeat(241)}, 'sender', point), {code:'invalid_chat'});
+    assert.throws(() => chat.message(profile, {text:'one\ntwo'}, 'sender', point), {code:'invalid_chat'});
+    for (let i = 0; i < 5; i++) chat.message(profile, {text:'  Привет!  '}, 'sender', point);
+    assert.throws(() => chat.message(profile, {text:'Снова'}, 'sender', point), {code:'chat_rate_limit'});
     assert.equal(sent[5].text, 'Привет!');
     chat.playerStatus(profile, false);
-    assert.deepEqual(sent.at(-1), {id:7, kind:'leave', nickname:'Искра'});
+    assert.deepEqual(sent.at(-1), {id:7, kind:'leave', nickname:'Искра',day:'1970-01-01'});
     for (let i = 0; i < 105; i++) {
       now += 1000;
-      chat.message(profile, {text:'<img src=x>'});
+      chat.message(profile, {text:'<img src=x>'}, 'sender', point);
     }
     now += 1000;
     const local = chat.message(profile, {text:'Привет рядом', channel:'local'}, 'sender', {x:0, y:0, z:0});
@@ -86,5 +89,5 @@ test('chat preserves ordering, sends join and leave with the nickname and bounds
     assert.deepEqual(chat.history('near'), sent.slice(-100));
     assert.deepEqual(chat.history('sender').at(-1), local);
     assert.equal(chat.history('far').at(-1).text, '<img src=x>');
-  } finally { store.close(); }
+  } finally { chat.close(); store.close(); }
 });

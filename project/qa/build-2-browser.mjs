@@ -21,14 +21,17 @@ const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
 const controlsQa=test==='controls-update'||test==='controls-update-mobile';
 const touchGameplayQa=test==='touch-gameplay';
 const pauseQa=test==='pause-desktop'||test==='pause-mobile';
+const chatDayQa=test==='chat-day';
 const raceQa=test==='races-desktop'||test==='races-mobile';
 const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
+let chatDayClock=Date.parse('2026-11-19T20:59:30.000Z');
 const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
+  ...(chatDayQa&&{clock:()=>chatDayClock}),
   ...((onlineCacheQa||preloadQa||raceAdminQa&&!solo)&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
 app.server.listen(0,'127.0.0.1');
@@ -1060,6 +1063,54 @@ try {
       await page.waitForFunction(()=>!honeymoon.stats().flying);
     }
     result.checks.push({noActionOnSwipe:true,actions,orientationChecks:2,sprintAndFlight:true});
+  } else if (chatDayQa) {
+    await skipPreload();
+    await page.setViewportSize({width:1200,height:750});
+    await start();
+    const dock=page.locator('#pause-chat-slot > #chat.docked');
+    const input=dock.locator('#chat-input');
+    const transcript=dock.locator('#chat-log');
+    const yesterday='Сообщение в 23:59 по Москве';
+    const today='Сообщение после полуночи по Москве';
+    const nearby='Сегодняшнее сообщение в локальном чате';
+
+    async function openDock() {
+      await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+      await page.keyboard.press('Escape');
+      await input.waitFor({state:'visible'});
+    }
+
+    async function send(text,day,channel) {
+      await input.fill(text);
+      const [response]=await Promise.all([
+        page.waitForResponse(response=>new URL(response.url()).pathname==='/api/chat' &&
+          response.request().method()==='POST' && response.request().postDataJSON()?.text===text),
+        input.press('Enter'),
+      ]);
+      assert.equal(response.status(),200,await response.text());
+      const entry=await response.json();
+      assert.equal(entry.day,day);
+      assert.equal(entry.channel,channel);
+      assert.ok(!Object.hasOwn(entry,'position'));
+      await transcript.getByText(text,{exact:false}).waitFor({state:'visible'});
+    }
+
+    await openDock();
+    await send(yesterday,'2026-11-19','global');
+    await page.evaluate(()=>{window.chatDayPage=1;});
+    chatDayClock=Date.parse('2026-11-19T21:00:00.001Z');
+    await send(today,'2026-11-20','global');
+    assert.equal(await transcript.getByText(yesterday,{exact:false}).count(),0);
+    assert.equal(await page.evaluate(()=>window.chatDayPage),1);
+
+    await dock.locator('#chat-channel').click();
+    await send(nearby,'2026-11-20','local');
+    await start(false);
+    await openDock();
+    await transcript.getByText(today,{exact:false}).waitFor({state:'visible'});
+    await transcript.getByText(nearby,{exact:false}).waitFor({state:'visible'});
+    assert.equal(await transcript.getByText(yesterday,{exact:false}).count(),0);
+    result.checks.push({moscowMidnight:true,samePageCleared:true,reconnectedTodayOnly:true,localHistory:true});
   } else if (pauseQa) {
     await skipPreload();
     await start();

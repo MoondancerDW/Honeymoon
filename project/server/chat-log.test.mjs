@@ -8,27 +8,35 @@ import {createChat} from './chat.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import {openStore} from './store.mjs';
 
-test('chat logs rotate at local midnight and survive a drained shutdown or restart',async()=>{
+test('chat logs rotate at Moscow midnight and survive a drained shutdown or restart',async()=>{
   const logDirectory=await mkdtemp(join(tmpdir(),'honeymoon-chat-logs-'));
   const store=openStore(':memory:');
   const errors=[], published=[];
-  let now=Date.parse('2026-11-16T21:59:59.995Z');
-  const options={store, logDirectory,logTimeZone:'Europe/Sofia',now:()=>now,
+  let now=Date.parse('2026-11-16T20:59:59.995Z');
+  const options={store, logDirectory,now:()=>now,
     publish:(entry,audience)=>published.push({entry,audience}),recipients:()=>['near'],
     onLogError:error=>errors.push(error)};
   const chat=createChat(options);
   let restarted;
   const profile={id:'pony-one',nickname:'Лунный Ветер'};
   try {
+    store.recordChat({kind:'message',nickname:'Ранее',text:'Старая запись без даты',channel:'global'});
     chat.playerStatus(profile,true);
-    chat.message(profile,{channel:'global',text:'Всем привет 🌙'},'sender');
+    const sent=chat.message(profile,{channel:'global',text:'Всем привет 🌙'},'sender',{x:-5.125,y:67,z:21.75});
+    assert.ok(!Object.hasOwn(sent,'position'));
+    assert.equal(chat.history('sender').length,2);
     now+=5;
     chat.message(profile,{channel:'local',text:'Тихо\u2028рядом\u2029на мосту'},'sender',{x:1,y:66,z:2});
-    const rename=store.recordChat({kind:'rename',nickname:profile.nickname,newNickname:'Северный Свет',channel:'global'});
+    const rename=store.recordChat({kind:'rename',nickname:profile.nickname,newNickname:'Северный Свет',channel:'global',day:'2026-11-17'});
     chat.publishRecorded(rename);
     await chat.close();
 
+    now-=1;
     restarted=createChat(options);
+    assert.equal(restarted.snapshot('sender').day,'2026-11-17');
+    const corrected=restarted.message(profile,{text:'Коррекция часов'},'sender',{x:4,y:5,z:6});
+    assert.equal(corrected.day,'2026-11-17');
+    now+=1;
     restarted.playerDeath({...profile,nickname:rename.newNickname});
     now+=999;
     restarted.playerStatus({...profile,nickname:rename.newNickname},false);
@@ -41,23 +49,25 @@ test('chat logs rotate at local midnight and survive a drained shutdown or resta
       assert.ok(body.endsWith('\n'));
       assert.doesNotMatch(body,/[\u2028\u2029\r]/u);
       return body.trimEnd().split('\n').map(line=>{
-        const [timestamp,channel,kind,nickname,value]=line.split('\t');
-        return [timestamp,channel,kind,JSON.parse(nickname),JSON.parse(value)];
+        const [timestamp,channel,kind,nickname,value,position]=line.split('\t');
+        return [timestamp,channel,kind,JSON.parse(nickname),JSON.parse(value),JSON.parse(position)];
       });
     };
     assert.deepEqual(await rows('2026-11-16'),[
-      ['2026-11-16T23:59:59.995+02:00','system','join','Лунный Ветер',''],
-      ['2026-11-16T23:59:59.995+02:00','global','message','Лунный Ветер','Всем привет 🌙'],
+      ['2026-11-16T23:59:59.995+03:00','system','join','Лунный Ветер','',null],
+      ['2026-11-16T23:59:59.995+03:00','global','message','Лунный Ветер','Всем привет 🌙',{x:-5.125,y:67,z:21.75}],
+      ['2026-11-16T23:59:59.999+03:00','global','message','Лунный Ветер','Коррекция часов',{x:4,y:5,z:6}],
     ]);
     assert.deepEqual(await rows('2026-11-17'),[
-      ['2026-11-17T00:00:00.000+02:00','local','message','Лунный Ветер','Тихо\u2028рядом\u2029на мосту'],
-      ['2026-11-17T00:00:00.000+02:00','global','rename','Лунный Ветер','Северный Свет'],
-      ['2026-11-17T00:00:00.000+02:00','global','death','Северный Свет',''],
-      ['2026-11-17T00:00:00.999+02:00','system','leave','Северный Свет',''],
+      ['2026-11-17T00:00:00.000+03:00','local','message','Лунный Ветер','Тихо\u2028рядом\u2029на мосту',{x:1,y:66,z:2}],
+      ['2026-11-17T00:00:00.000+03:00','global','rename','Лунный Ветер','Северный Свет',null],
+      ['2026-11-17T00:00:00.000+03:00','global','death','Северный Свет','',null],
+      ['2026-11-17T00:00:00.999+03:00','system','leave','Северный Свет','',null],
     ]);
     assert.deepEqual(published.find(({entry})=>entry.channel==='local').audience,['sender','near']);
     assert.equal(restarted.history('sender').filter(entry=>entry.kind==='rename').length,1);
     assert.ok(!restarted.history('far').some(entry=>entry.channel==='local'));
+    assert.ok(restarted.history('sender').every(entry=>entry.day==='2026-11-17'&&!Object.hasOwn(entry,'position')));
   } finally {
     await Promise.all([chat.close(),restarted?.close()]);
     store.close();
@@ -70,9 +80,8 @@ test('disk-backed server writes private chat logs beside its save and drains the
   const directory=await mkdtemp(join(tmpdir(),'honeymoon-chat-server-'));
   const logDirectory=join(directory,'chat-logs');
   const state=join(directory,'world.sqlite');
-  const worldClock=Date.parse('2026-11-17T12:00:00.000Z');
-  const day=new Date(worldClock);
-  const name=[day.getFullYear(),day.getMonth()+1,day.getDate()].map(value=>String(value).padStart(2,'0')).join('-')+'.log';
+  const worldClock=Date.parse('2026-11-16T21:12:00.000Z');
+  const name='2026-11-17.log';
   const geometry={shapeFor:()=>[],collisionFor:()=>[]};
   const base={hash:'chat-log-test',
     manifest:{spawn:[8.5,1,8.5],bounds:{minX:0,maxX:31,minY:0,maxY:31,minZ:0,maxZ:31},compositions:{}},
@@ -96,9 +105,14 @@ test('disk-backed server writes private chat logs beside its save and drains the
     await post('profile',{nickname:'Тестовый гость'});
     feed=await fetch(origin+'/api/events?since=0&presence=1&social=1',{headers:{Cookie:cookie}});
     assert.equal(feed.status,200);
-    await post('presence',{yaw:0,pitch:0});
-    const message=await post('chat',{text:'Ночная проверка журнала',channel:'local'});
+    const {position}=await post('presence',{yaw:0,pitch:0});
+    const expected={...position,x:position.x+.125};
+    const movement=await post('position',{...expected,pose:{yaw:0,pitch:0}});
+    assert.deepEqual(movement.position,expected);
+    const message=await post('chat',{text:'Ночная проверка журнала',channel:'local',position:{x:0,y:0,z:0}});
     assert.equal(message.nickname,'Тестовый гость');
+    assert.equal(message.day,'2026-11-17');
+    assert.ok(!Object.hasOwn(message,'position'));
     await post('profile',{nickname:'Проверка имени'});
     const leaked=await fetch(origin+'/state/chat-logs/'+name,{headers:{Cookie:cookie}});
     assert.equal(leaked.status,404);
@@ -107,7 +121,9 @@ test('disk-backed server writes private chat logs beside its save and drains the
     await app.close();
     app=undefined;
     const body=await readFile(join(logDirectory,name),'utf8');
-    assert.match(body,/\tlocal\tmessage\t"Тестовый гость"\t"Ночная проверка журнала"/u);
+    const row=body.split('\n').find(line=>line.includes('\tlocal\tmessage\t'));
+    assert.deepEqual(row.split('\t'),['2026-11-17T00:12:00.000+03:00','local','message','"Тестовый гость"',
+      '"Ночная проверка журнала"',JSON.stringify(expected)]);
     assert.match(body,/\tglobal\trename\t"Тестовый гость"\t"Проверка имени"/u);
   } finally {
     await feed?.body?.cancel();

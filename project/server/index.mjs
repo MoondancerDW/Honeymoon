@@ -387,6 +387,7 @@ export function createHoneymoonServer({
   const chat = createChat({
     store,now:clock,logDirectory:state===':memory:'?undefined:join(dirname(state),'chat-logs'),
     publish: (entry, audience) => sendSocial('chat', entry, player => !audience || audience.includes(player)),
+    onDayChanged: data => sendSocial('chat-reset',data),
     recipients(origin) {
       return [...streams].filter(({player, social}) => {
         const point = social && presence.onlinePosition(player);
@@ -977,8 +978,9 @@ export function createHoneymoonServer({
         if (submittedSkin !== undefined) updates.ponyTraits={raceOverride:null,sizeOverride:null};
         const different = updates.nickname !== undefined || submittedSkin !== undefined;
         const drop=previousTraits && prepareRaceDrop(player,previousTraits.ponyType,nextSkinTraits.ponyType);
+        const renameDate=updates.nickname !== undefined ? chat.stamp() : undefined;
         const renamed = different && store.updateProfile(player, updates,
-          saved?.nickname ?? presence.onlineProfile(player)?.nickname,drop?.writeInventory);
+          saved?.nickname ?? presence.onlineProfile(player)?.nickname,drop?.writeInventory,renameDate?.day);
         let relocation, movementState;
         if (submittedSkin !== undefined) {
           const traits=rememberTraits(player,nextSkinTraits);
@@ -997,7 +999,7 @@ export function createHoneymoonServer({
           if (position) presence.update(player,position,{offhand:game.offhandPose(player)});
           publishProfileSetting(player,'profile-race',raceSnapshot(player,profile));
         }
-        if (renamed) chat.publishRecorded(renamed);
+        if (renamed) chat.publishRecorded(renamed,null,renameDate,presence.onlinePosition(player));
         return json(response, 200, {...profile,...relocation,...movementState,...game.abilityState(player),
           ...(survival.enabled && {gameMode:playerMode(player)})});
       }
@@ -1191,7 +1193,7 @@ export function createHoneymoonServer({
           if (nightVision) writeEvent(response,'profile-night-vision',{uid:player,...nightVision});
         }
         if (stream.social) {
-          writeEvent(response, 'chat-history', {entries:chat.history(player)});
+          writeEvent(response, 'chat-history', chat.snapshot(player));
           writeEvent(response, 'world-time', worldTime.snapshot());
           writeEvent(response, 'weather', worldTime.weatherSettings());
           if (survival.enabled) writeEvent(response,'game-mode',playerMode(player));

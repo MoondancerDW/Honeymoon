@@ -702,8 +702,15 @@ function stream() {
       if (reportedSeat?.entity !== seat.entity) setSeat(reportedSeat, feet);
     }
   });
-  feed.addEventListener('chat-history', event => social.history(JSON.parse(event.data).entries));
-  feed.addEventListener('chat', event => social.message(JSON.parse(event.data)));
+  source.addEventListener('chat-history', event => {
+    if (feed===source) social.history(JSON.parse(event.data));
+  });
+  source.addEventListener('chat-reset', event => {
+    if (feed===source) social.resetChat(JSON.parse(event.data));
+  });
+  source.addEventListener('chat', event => {
+    if (feed===source) social.message(JSON.parse(event.data));
+  });
   feed.addEventListener('world-time', event => {
     const time = JSON.parse(event.data);
     view.setWorldTime(time);

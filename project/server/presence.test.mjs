@@ -265,7 +265,8 @@ test('independent cookies share profiles and only confirmed movement, and retain
   assert.equal(renamed.status,200);
   assert.deepEqual(renamed.data, {...withoutMovement(chosen.data),nickname:'Другой ник'});
   const rename = (await observer.next('chat', entry => entry.kind === 'rename')).data;
-  assert.deepEqual(rename, {id:rename.id,kind:'rename',nickname:'Лунный Ветер',newNickname:'Другой ник',channel:'global'});
+  assert.match(rename.day,/^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(rename, {id:rename.id,kind:'rename',nickname:'Лунный Ветер',newNickname:'Другой ник',channel:'global',day:rename.day});
   assert.equal((await post('profile',{nickname:'Другой ник'}, b.cookie)).status,200);
   assert.equal((await observer.next('presence')).data.players[0].nickname,'Другой ник');
   await observed.close();
@@ -372,6 +373,40 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
   assert.deepEqual(remaining,{revision:2,warps:[]});
   await nearReconnect.close();
   await sender.feed.close();
+});
+
+test('connected browsers receive an empty new chat day at Moscow midnight without a message', {timeout:8000}, async t => {
+  t.mock.timers.enable({apis:['setTimeout']});
+  let now=Date.parse('2026-11-19T20:59:59.500Z');
+  const app=createHoneymoonServer({base,geometry,state:':memory:',clock:()=>now});
+  t.after(()=>app.close());
+  app.server.listen(0,'127.0.0.1');
+  await once(app.server,'listening');
+  const url='http://127.0.0.1:'+app.server.address().port;
+  const signal=AbortSignal.timeout(6000);
+  const post=(path,body,cookie)=>fetch(url+'/api/'+path,{method:'POST',signal,
+    headers:{'Content-Type':'application/json',Origin:url,...(cookie&&{Cookie:cookie})},body:JSON.stringify(body)});
+  const session=await post('session',{});
+  const cookie=session.headers.get('Set-Cookie').split(';')[0];
+  const live=await eventFeed(url,cookie,signal,true);
+  assert.deepEqual((await live.next('chat-history')).data,{day:'2026-11-19',entries:[]});
+  assert.equal((await post('presence',{yaw:0,pitch:0},cookie)).status,200);
+  const yesterday=await post('chat',{text:'До полуночи',channel:'global'},cookie).then(result=>result.json());
+  assert.equal(yesterday.day,'2026-11-19');
+  assert.ok(!Object.hasOwn(yesterday,'position'));
+  assert.deepEqual((await live.next('chat',entry=>entry.id===yesterday.id)).data,yesterday);
+
+  now+=500;
+  t.mock.timers.tick(500);
+  assert.deepEqual((await live.next('chat-reset')).data,{day:'2026-11-20'});
+  const joinedAfterMidnight=await eventFeed(url,cookie,signal,true);
+  assert.deepEqual((await joinedAfterMidnight.next('chat-history')).data,{day:'2026-11-20',entries:[]});
+  now-=100;
+  const corrected=await post('chat',{text:'После коррекции часов',channel:'global'},cookie).then(result=>result.json());
+  assert.equal(corrected.day,'2026-11-20');
+  assert.deepEqual((await live.next('chat',entry=>entry.id===corrected.id)).data,corrected);
+  assert.deepEqual((await joinedAfterMidnight.next('chat',entry=>entry.id===corrected.id)).data,corrected);
+  await Promise.all([live.close(),joinedAfterMidnight.close()]);
 });
 
 function resolveTestPath(directory) {

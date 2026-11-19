@@ -11,6 +11,7 @@ const teleportErrors = {
   action_pending:'Дождитесь завершения текущего действия',
 };
 const historyLimit = 100;
+const calendarDay = /^\d{4}-\d{2}-\d{2}$/;
 
 export function createSocialHud({post, notice, pause, resume, teleport, loadWarps, placeWarp, worldEditCommand, weatherChanged}) {
   const byId = id => document.getElementById(id);
@@ -50,7 +51,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   let pauseDock = false, openedFromPause = false, sendingChat = false;
   let peers = [];
   let channel = 'global';
-  let unread = 0;
+  let unread = 0, chatDay;
   let admin=false;
   let dynamicWeather=false;
   chatInput.disabled = chatSend.disabled = true;
@@ -60,6 +61,18 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     unreadBadge.hidden=!unread;
     unreadBadge.textContent=unread>99?'99+':String(unread);
     touchChat.setAttribute('aria-label',unread ? `Открыть чат. Непрочитанных: ${unread}` : 'Открыть чат');
+  }
+
+  function setChatDay(day) {
+    if (day === undefined) return chatDay === undefined;
+    if (typeof day !== 'string' || !calendarDay.test(day) || (chatDay && day < chatDay)) return false;
+    if (day !== chatDay) {
+      chatDay = day;
+      seen.clear();
+      log.replaceChildren();
+      updateUnread(0);
+    }
+    return true;
   }
 
   function updateChannel() {
@@ -98,8 +111,9 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     teleportForm.hidden = panel !== 'teleport';
   }
 
-  function entry({id, kind, cause, nickname, newNickname, text, channel:target = 'global'}, recent) {
-    if (seen.has(id)) return;
+  function entry({id, day, kind, cause, nickname, newNickname, text, channel:target = 'global'}, recent) {
+    if (!setChatDay(day)) return false;
+    if (seen.has(id)) return true;
     const readingChat = panel === 'chat' || chat.classList.contains('docked');
     const follow = !readingChat || log.scrollHeight - log.clientHeight - log.scrollTop < 8;
     seen.add(id);
@@ -136,6 +150,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       log.firstElementChild.remove();
     }
     if (follow) log.scrollTop = log.scrollHeight;
+    return true;
   }
 
   function close(continuePlaying = true) {
@@ -224,10 +239,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
         return;
       }
       const message = await submit('chat', {text, channel:destination}, 'Введите сообщение длиной до 240 символов');
-      if (message) {
-        entry(message, true);
-        if (chatInput.value.trim() === text) chatInput.value = '';
-      }
+      if (message && entry(message, true) && chatInput.value.trim() === text) chatInput.value = '';
     } finally {
       sendingChat = false;
       chatSend.disabled = !connected;
@@ -331,9 +343,11 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     warpsChanged:warpMenu.update,
     refreshWarps() { if (panel === 'warps') void warpMenu.refresh(); },
     profileUpdated(profile) { if (connected) roster(peers, profile); },
-    history(list) {
-      for (const message of list) entry(message, false);
+    history({day, entries}) {
+      if (!setChatDay(day)) return;
+      for (const message of entries) entry(message, false);
     },
+    resetChat({day}) { setChatDay(day); },
     message(message) { entry(message, true); },
     updateClock(tick, isFrozen) {
       const text = formatClock(tick);
