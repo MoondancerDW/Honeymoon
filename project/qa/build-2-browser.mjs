@@ -8,6 +8,7 @@ import * as geometry from '../world/geometry.mjs';
 import {stackRevision} from '../world/item-text.mjs';
 import {playerBody} from '../world/player-body.mjs';
 import {tickFromTime} from '../world/world-time.mjs';
+import {voxelBrush,voxelIndex,voxelKey,writeVoxelBrush} from '../world/voxel-chisel.mjs';
 
 const [outputArg='work/build-2-qa', test='mobile']=process.argv.slice(2);
 const expectedBuild=Number(process.env.HONEYMOON_QA_BUILD ?? 2);
@@ -360,7 +361,7 @@ try {
     assert.match(description,/Таблетки от головной боли/);
     assert.match(description,/Хранить вдали от жеребят\./);
     assert.match(description,/Избегать воздействия прямого солнечного света\./);
-    assert.equal(description.trim().split('\n').at(-1),'id 5771');
+    assert.equal(description.trim().split('\n').at(-1),'id 5771:0');
     const potion=page.locator('#container-menu [data-side="storage"][data-slot="3"]');
     await potion.hover();
     const remedy=await tooltip.innerText({timeout:1000});
@@ -402,7 +403,7 @@ try {
     await page.waitForFunction(()=>document.getElementById('selected-label').textContent==='Таблетки у игрока');
     const dropped=await hint();
     assert.match(dropped.details,/Строка описания предмета\./);
-    assert.equal(dropped.id,'id 5771');
+    assert.equal(dropped.id,'id 5771:0');
     await shot('world-item-ground');
     result.checks.push({framed,dropped});
   } else if (test==='pause-gravity') {
@@ -2094,7 +2095,22 @@ try {
       firstRepeatMs:repeat-presses[1],repeatIntervalsMs});
     await shot('hold-attack');
   } else if (test==='copy-corner') {
-    await start();
+    await skipPreload();
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка микроблоков'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await owner.json();
+    const samples=[
+      {x:3361,y:101,z:1467,size:1,id:'id 750:65568'},
+      {x:3361,y:101,z:1468,size:2,id:'id 750:65569'},
+    ];
+    const platform=[];
+    for (let x=3358;x<=3362;x++) for (let z=1466;z<=1469;z++) {
+      platform.push({x,y:100,z,cell:'legacy:1:0',object:null});
+    }
+    app.game.worldEdit.write(playerId,[...platform,...samples.map(({x,y,z,size})=>({
+      x,y,z,cell:voxelKey,object:null,voxels:writeVoxelBrush(null,voxelBrush(voxelIndex(0,0,4),size),'legacy:1:0'),
+    }))]);
+    await start(false);
     await hop(3360.5,72,1467.51);
     await page.waitForFunction(()=>Boolean(document.pointerLockElement));
     const selected=page.locator('#hotbar [aria-pressed="true"]');
@@ -2119,6 +2135,8 @@ try {
     const target=[3362,72,1467];
     await aim(3362.5,72.25,1467.75);
     await page.waitForFunction(()=>honeymoon.target()?.partSlot===9);
+    const microblockId='id 750:5123';
+    assert.equal(await page.locator('#selected-id').innerText(),microblockId);
     await page.waitForFunction(()=>!document.getElementById('toast').textContent);
     await page.mouse.down({button:'right'});
     await page.mouse.up({button:'right'});
@@ -2129,6 +2147,7 @@ try {
     assert.deepEqual(copied.part,{slot:9,shape:2,material:3});
     assert.equal(String(copied.inventory.selected),slot);
     await page.waitForFunction(()=>document.querySelector('#hotbar [aria-pressed="true"] canvas'));
+    assert.equal((await selected.getAttribute('aria-description'))?.trim().split('\n').at(-1),microblockId);
     await shot('copy-corner-selected');
     await edit('remove_part',()=>page.mouse.click(500,320));
     await page.waitForFunction(([x,y,z])=>!honeymoon.getCell(x,y,z)?.parts.some(part=>part.slot===9),target);
@@ -2140,8 +2159,23 @@ try {
     const placed=await edit('place_part',()=>page.mouse.click(500,320,{button:'right'}));
     await page.waitForFunction(([x,y,z])=>honeymoon.getCell(x,y,z)?.parts.length===2,target);
     assert.ok(placed.changes.some(change=>change.parts?.some(part=>part.sourceSlot===9 && part.material===3)));
-    result.checks.push({target,slot:Number(slot),part:copied.part});
+    result.checks.push({target,slot:Number(slot),part:copied.part,microblockId});
     await shot('copy-corner-placed');
+    await hop(3359.5,101,1467.5);
+    for (const {x,y,z,size,id} of samples) {
+      await page.evaluate(async ({x,y,z,size})=>{
+        const center=size/16;
+        for (let frame=0;frame<5;frame++) {
+          const [cx,cy,cz]=honeymoon.perspective().position;
+          const dx=x+center-cx, dy=y+size/8-cy, dz=z+.5+center-cz;
+          honeymoon.look(Math.atan2(-dx,-dz),Math.atan2(dy,Math.hypot(dx,dz)));
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      },{x,y,z,size});
+      await page.waitForFunction(id=>document.getElementById('selected-id').textContent===id,id,{timeout:10000});
+      await shot('chisel-sub-id-'+size);
+    }
+    result.checks.push({voxelSubIds:samples.map(({id})=>id)});
   } else if (test==='mobile') {
     let seeded=false;
     await page.route('**/api/session',async route=>{

@@ -36,7 +36,7 @@ import {canLogLiquid, liquidKind} from '../world/logged-fluid.mjs';
 import {FAKE_WATER,bucketCell,bucketKeys,fluidState} from '../world/fluid-state.mjs';
 import {detailCoverage} from '../world/full-detail.mjs';
 import {bookType,itemTooltip,plainMinecraftText,stackRevision} from '../world/item-text.mjs';
-import {formatMinecraftId,minecraftBlockCode,minecraftItemCode} from '../world/minecraft-id.mjs';
+import {formatMinecraftId,minecraftItemCode,minecraftTargetCode} from '../world/minecraft-id.mjs';
 import {containerSpec} from '../world/containers.mjs';
 import {chiselMaterialShape, coverBoxes, signFor} from '../world/geometry.mjs';
 import {creativeMicroblock,signItemKey,signPlacementCell} from '../world/creative-items.mjs';
@@ -2106,7 +2106,7 @@ function tick(now) {
     entry ? entry.name : [selected,interaction,fluidHint].filter(Boolean).join('  /  ');
   const sourceId=entry ? formatMinecraftId(minecraftItemCode(aimedItem,entry)) :
     editing || hitPlayer || npcTarget || frameTarget || seatTarget?.entity ? '' :
-      formatMinecraftId(minecraftBlockCode(selection?.voxelMaterial??selection?.cell));
+      formatMinecraftId(minecraftTargetCode(selection));
   if (selectionStatus.textContent !== status) selectionStatus.textContent = status;
   setTargetDetail(selectionDetails, entry ? itemTooltip(aimedItem,status,{withLore:true}).slice(status.length+1) : '');
   setTargetDetail(selectionAction,entry && framedItem && !dropTarget ? `${useHint} — повернуть` : '');
