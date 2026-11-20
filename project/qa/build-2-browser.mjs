@@ -24,14 +24,15 @@ const pauseQa=test==='pause-desktop'||test==='pause-mobile';
 const chatRetentionQa=test==='chat-retention';
 const chatToolsQa=test==='chat-tools'||test==='chat-tools-mobile';
 const raceQa=test==='races-desktop'||test==='races-mobile';
-const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile'].includes(test);
+const jumpChargeQa=test==='jump-charge-hud'||test==='jump-charge-hud-mobile';
+const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile','jump-charge-hud-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const startupQa=test==='startup-network';
 const state=solo || networkQa || startupQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
 let chatRetentionClock=Date.parse('2026-11-19T20:59:30.000Z');
-const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa?'game':'creative',
+const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa||jumpChargeQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
   ...(chatRetentionQa&&{clock:()=>chatRetentionClock}),
   ...((onlineCacheQa||preloadQa||raceAdminQa&&!solo)&&{inviteRequired:true,ownerOnPrimary:true}),
@@ -556,6 +557,80 @@ try {
       sizeOverride:true,adminOnHome:true,controlsInitiallyCollapsed:true,
       remoteNightVision:Boolean(guest),personalNightVision:Boolean(guest),
       alphabeticalProfiles:Boolean(guest),singleRowMoscowLastSeen:Boolean(guest),usedInviteAttribution:Boolean(guest),offhandDropped:Boolean(guest)});
+  } else if (jumpChargeQa) {
+    await skipPreload();
+    await start();
+    const indicator=page.locator('#jump-charge-status');
+    const icon=indicator.locator('svg.jump-charge-icon');
+    const cdp=mobileQa ? await page.context().newCDPSession(page) : null;
+    const ground=()=>page.waitForFunction(mobile=>{
+      const stats=honeymoon.stats();
+      return (mobile || Boolean(document.pointerLockElement)) && stats.ponyType==='earth' &&
+        stats.grounded && stats.movementSync.status==='ready';
+    },mobileQa,{timeout:10000});
+    async function jump() {
+      await ground();
+      if (mobileQa) {
+        const {x,y,width,height}=await page.locator('#jump').boundingBox();
+        await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:x+width/2,y:y+height/2}]});
+      } else await page.keyboard.down('Space');
+      try {await page.waitForTimeout(650);}
+      finally {
+        if (mobileQa) await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        else await page.keyboard.up('Space');
+      }
+    }
+    async function charge(count,minHeight,maxHeight) {
+      const value=await page.waitForFunction(({count,minHeight,maxHeight})=>{
+        const status=document.getElementById('jump-charge-status');
+        const clip=document.getElementById('jump-charge-fill');
+        if (status.hidden || !clip ||
+            status.querySelectorAll('.jump-charge-dot.ready').length!==count) return false;
+        const height=Number(clip.getAttribute('height'));
+        const y=Number(clip.getAttribute('y'));
+        return height>=minHeight && height<=maxHeight && {height,y};
+      },{count,minHeight,maxHeight},{timeout:8500});
+      const shape=await value.jsonValue();
+      await value.dispose();
+      assert.ok(Math.abs(shape.y+shape.height-26)<.1,'fill keeps the bottom edge fixed');
+      return shape;
+    }
+    await ground();
+    await indicator.waitFor({state:'visible'});
+    assert.equal(await indicator.locator('.jump-charge-dot').count(),2);
+    assert.equal(await icon.getAttribute('viewBox'),'0 0 24 26');
+    assert.match(await indicator.getAttribute('aria-label'),/Прыжок 2\/2/);
+    await charge(2,26,26);
+    await jump();
+    const first=await charge(1,1,21);
+    await page.waitForTimeout(950);
+    await jump();
+    const both=await charge(0,first.height-.5,22);
+    const almost=await charge(0,24.5,25.99);
+    const restarted=await charge(1,1,almost.height-.5);
+    await charge(2,26,26);
+    assert.ok(both.height>=first.height-.5 && almost.height>both.height && restarted.height<almost.height);
+    const layouts=mobileQa ? [[390,730],[667,300]] : [[1000,640]];
+    for (const [width,height] of layouts) {
+      if (mobileQa) await page.setViewportSize({width,height});
+      const hud=await indicator.boundingBox();
+      const symbol=await icon.boundingBox();
+      assert.ok(hud && hud.x>=0 && hud.y>=0 && hud.x+hud.width<=width && hud.y+hud.height<=height);
+      assert.ok(symbol && symbol.width>=15 && symbol.height>=15);
+      for (const dot of await indicator.locator('.jump-charge-dot').all()) {
+        const size=await dot.boundingBox();
+        assert.ok(size.width>=15 && size.height>=15,'larger charge dot');
+      }
+      if (mobileQa) for (const selector of ['#health','#connection-metrics','#jump']) {
+        const other=await page.locator(selector).boundingBox();
+        if (!other) continue;
+        assert.ok(hud.x+hud.width<=other.x || other.x+other.width<=hud.x ||
+          hud.y+hud.height<=other.y || other.y+other.height<=hud.y,
+        width+'×'+height+': jump charge indicator overlaps '+selector);
+      }
+      await shot(test+'-'+width);
+    }
+    result.checks.push({jumpChargeHud:{first,both,almost,restarted,fullyRecharged:true,layouts:layouts.length}});
   } else if (raceQa) {
     await skipPreload();
     await start();

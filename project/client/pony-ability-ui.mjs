@@ -1,4 +1,4 @@
-import {JUMP_CHARGE_LIMIT,ponyAbilities} from '../world/pony-abilities.mjs';
+import {JUMP_CHARGE_LIMIT,JUMP_CHARGE_RECHARGE_MS,ponyAbilities} from '../world/pony-abilities.mjs';
 
 export const raceLabels = Object.freeze({earth:'Земной пони',pegasus:'Пегас',unicorn:'Единорог',alicorn:'Аликорн'});
 const sizeLabels = {small:'низкий',normal:'обычный',tall:'высокий',large:'крупный'};
@@ -6,6 +6,8 @@ const sizeLabels = {small:'низкий',normal:'обычный',tall:'высо�
 export function createPonyAbilityUi(element) {
   const hud = element('pony-abilities');
   const charges = element('jump-charge-status');
+  const jumpFill = element('jump-charge-fill');
+  const jumpIconHeight = Number(jumpFill.getAttribute('height'));
   const magic = element('magic-cooldown-status');
   const magicButton = element('touch-magic');
   const label = element('pony-traits-label');
@@ -20,6 +22,7 @@ export function createPonyAbilityUi(element) {
   let replenishes = [];
   let magicReadyAt = 0;
   let nextPaint = 0;
+  let previousFill = jumpIconHeight;
 
   function sync({jumpCharge,magicCooldownMs} = {}) {
     const now = performance.now();
@@ -37,6 +40,13 @@ export function createPonyAbilityUi(element) {
     nextPaint = now+100;
     const count = chargeCount(now);
     const next = replenishes.find(at=>at>now);
+    const remaining = next===undefined ? 0 : next-now;
+    const fill = jumpIconHeight * (1 - Math.min(1,remaining / JUMP_CHARGE_RECHARGE_MS));
+    if (fill!==previousFill) {
+      jumpFill.setAttribute('y',jumpIconHeight-fill);
+      jumpFill.setAttribute('height',fill);
+      previousFill=fill;
+    }
     const seconds = cooldown(now);
     const jumpText = `Прыжок ${count}/${JUMP_CHARGE_LIMIT}${next ? ` · ${Math.ceil((next-now)/1000)} с` : ''}`;
     const magicText = seconds ? `Телепорт · ${seconds} с` : 'Телепорт готов';
