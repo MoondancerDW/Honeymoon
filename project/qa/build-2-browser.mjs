@@ -21,7 +21,7 @@ const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
 const controlsQa=test==='controls-update'||test==='controls-update-mobile';
 const touchGameplayQa=test==='touch-gameplay';
 const pauseQa=test==='pause-desktop'||test==='pause-mobile';
-const chatDayQa=test==='chat-day';
+const chatRetentionQa=test==='chat-retention';
 const chatToolsQa=test==='chat-tools'||test==='chat-tools-mobile';
 const raceQa=test==='races-desktop'||test==='races-mobile';
 const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile'].includes(test);
@@ -29,10 +29,10 @@ const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
-let chatDayClock=Date.parse('2026-11-19T20:59:30.000Z');
+let chatRetentionClock=Date.parse('2026-11-19T20:59:30.000Z');
 const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
-  ...(chatDayQa&&{clock:()=>chatDayClock}),
+  ...(chatRetentionQa&&{clock:()=>chatRetentionClock}),
   ...((onlineCacheQa||preloadQa||raceAdminQa&&!solo)&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
 app.server.listen(0,'127.0.0.1');
@@ -1064,16 +1064,20 @@ try {
       await page.waitForFunction(()=>!honeymoon.stats().flying);
     }
     result.checks.push({noActionOnSwipe:true,actions,orientationChecks:2,sprintAndFlight:true});
-  } else if (chatDayQa) {
+  } else if (chatRetentionQa) {
     await skipPreload();
     await page.setViewportSize({width:1200,height:750});
+    const hour=60*60*1000;
+    const lifetime=4*hour;
+    await page.clock.install({time:chatRetentionClock+8*hour});
+    let streamRequests=0;
+    page.on('request',request=>{
+      if (new URL(request.url()).pathname==='/api/events') streamRequests++;
+    });
     await start();
     const dock=page.locator('#pause-chat-slot > #chat.docked');
     const input=dock.locator('#chat-input');
     const transcript=dock.locator('#chat-log');
-    const yesterday='Сообщение в 23:59 по Москве';
-    const today='Сообщение после полуночи по Москве';
-    const nearby='Сегодняшнее сообщение в локальном чате';
 
     async function openDock() {
       await page.waitForFunction(()=>Boolean(document.pointerLockElement));
@@ -1081,7 +1085,13 @@ try {
       await input.waitFor({state:'visible'});
     }
 
-    async function send(text,day,channel) {
+    async function advanceClock(at) {
+      const elapsed=at-chatRetentionClock;
+      chatRetentionClock=at;
+      await page.clock.fastForward(elapsed);
+    }
+
+    async function send(text,channel) {
       await input.fill(text);
       const [response]=await Promise.all([
         page.waitForResponse(response=>new URL(response.url()).pathname==='/api/chat' &&
@@ -1090,28 +1100,48 @@ try {
       ]);
       assert.equal(response.status(),200,await response.text());
       const entry=await response.json();
-      assert.equal(entry.day,day);
+      assert.equal(entry.at,chatRetentionClock);
       assert.equal(entry.channel,channel);
       assert.ok(!Object.hasOwn(entry,'position'));
-      await transcript.getByText(text,{exact:false}).waitFor({state:'visible'});
+      const row=transcript.locator(`[data-message-id="${entry.id}"]`);
+      await row.waitFor({state:'visible'});
+      return {row,at:entry.at};
     }
 
     await openDock();
-    await send(yesterday,'2026-11-19','global');
-    await page.evaluate(()=>{window.chatDayPage=1;});
-    chatDayClock=Date.parse('2026-11-19T21:00:00.001Z');
-    await send(today,'2026-11-20','global');
-    assert.equal(await transcript.getByText(yesterday,{exact:false}).count(),0);
-    assert.equal(await page.evaluate(()=>window.chatDayPage),1);
+    const first=await send('Сообщение в 23:59 по Москве','global');
+    const initialStreamRequests=streamRequests;
+    assert.ok(initialStreamRequests>0);
+    await page.evaluate(()=>{window.chatRetentionPage=true;});
+    await advanceClock(Date.parse('2026-11-19T21:02:30.000Z'));
+    const second=await send('Сообщение после полуночи по Москве','global');
+    assert.ok(await first.row.isVisible());
 
+    await advanceClock(Date.parse('2026-11-19T21:05:30.000Z'));
     await dock.locator('#chat-channel').click();
-    await send(nearby,'2026-11-20','local');
+    const local=await send('Недавнее сообщение в локальном чате','local');
+    await advanceClock(first.at+lifetime-60_000);
+    assert.ok(await first.row.isVisible());
+
+    await advanceClock(first.at+lifetime+30_000);
+    await first.row.waitFor({state:'detached'});
+    assert.ok(await second.row.isVisible());
+    assert.ok(await local.row.isVisible());
+    await advanceClock(second.at+lifetime+30_000);
+    await second.row.waitFor({state:'detached'});
+    assert.ok(await local.row.isVisible());
+    assert.equal(await page.evaluate(()=>window.chatRetentionPage),true);
+    assert.equal(streamRequests,initialStreamRequests);
+
     await start(false);
     await openDock();
-    await transcript.getByText(today,{exact:false}).waitFor({state:'visible'});
-    await transcript.getByText(nearby,{exact:false}).waitFor({state:'visible'});
-    assert.equal(await transcript.getByText(yesterday,{exact:false}).count(),0);
-    result.checks.push({moscowMidnight:true,samePageCleared:true,reconnectedTodayOnly:true,localHistory:true});
+    await local.row.waitFor({state:'visible'});
+    assert.equal(await first.row.count(),0);
+    assert.equal(await second.row.count(),0);
+    await advanceClock(local.at+lifetime+30_000);
+    await local.row.waitFor({state:'detached'});
+    result.checks.push({moscowMidnightKeepsHistory:true,individualExpiryOnSameStream:true,recentHistoryAfterReload:true,
+      localExpiry:true,browserClockSkewHours:8});
   } else if (chatToolsQa) {
     await skipPreload();
     if (!mobileQa) await page.setViewportSize({width:1200,height:750});

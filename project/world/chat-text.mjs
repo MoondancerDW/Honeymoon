@@ -1,4 +1,5 @@
 export const CHAT_TEXT_LIMIT = 512;
+export const CHAT_RETENTION_MS = 4 * 60 * 60 * 1000;
 
 export function limitChatText(text) {
   if (text.length <= CHAT_TEXT_LIMIT) return text;

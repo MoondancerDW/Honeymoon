@@ -1,6 +1,6 @@
 import {appendFile, mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
-import {limitChatText} from '../world/chat-text.mjs';
+import {CHAT_RETENTION_MS, limitChatText} from '../world/chat-text.mjs';
 import {RequestError} from './errors.mjs';
 
 const rateWindow = 5000;
@@ -53,11 +53,17 @@ function createLog(directory, onError) {
 }
 
 export function createChat({store, publish, recipients, now = Date.now, logDirectory,
-                            isAdmin = () => false, onDayChanged = () => {}, onLogError = error=>console.error(error)}) {
+                            isAdmin = () => false, onLogError = error=>console.error(error)}) {
   const sent = new Map();
   const log = logDirectory ? createLog(logDirectory,onLogError) : undefined;
-  let activeDay = store.getState('chat','','day')?.value;
   let logDay, midnightTimer;
+  const cutoff = at => at - CHAT_RETENTION_MS;
+  store.pruneChat(cutoff(now()));
+  const pruneTimer = setInterval(() => {
+    try { store.pruneChat(cutoff(now())); }
+    catch (error) { console.error(error); }
+  },60_000);
+  pruneTimer.unref();
   function schedule(delay) {
     clearTimeout(midnightTimer);
     midnightTimer = setTimeout(() => {
@@ -71,22 +77,16 @@ export function createChat({store, publish, recipients, now = Date.now, logDirec
     },delay);
     midnightTimer.unref();
   }
-  function stamp(time = now()) {
-    const date = moscowDate(time);
+  function stamp(at = now()) {
+    if (!log) return {at};
+    const date = moscowDate(at);
     // Recheck periodically so wall-clock adjustments do not move midnight by hours.
-    if (!midnightTimer || date.day !== logDay) schedule(Math.min(60_000,Math.max(1,date.midnight - time)));
+    if (!midnightTimer || date.day !== logDay) schedule(Math.min(60_000,Math.max(1,date.midnight - at)));
     if (date.day !== logDay) {
       logDay = date.day;
-      log?.openDay(logDay);
+      log.openDay(logDay);
     }
-    // Once cleared, earlier history stays closed even after a clock correction or restart.
-    if (activeDay === undefined || date.day > activeDay) {
-      const previousDay = activeDay;
-      store.putState('chat','','day',1,date.day);
-      activeDay = date.day;
-      if (previousDay !== undefined) onDayChanged({day:activeDay});
-    }
-    return {...date,day:activeDay,logDay};
+    return {at,timestamp:date.timestamp,logDay};
   }
   stamp();
   function publishRecorded(entry, audience = null, date = stamp(), origin) {
@@ -95,20 +95,22 @@ export function createChat({store, publish, recipients, now = Date.now, logDirec
     return entry;
   }
   function add(message, audience = null, date = stamp(), origin) {
-    return publishRecorded(store.recordChat({...message,day:date.day},audience),audience,date,origin);
+    return publishRecorded(store.recordChat({...message,at:date.at},audience),audience,date,origin);
   }
-  function snapshot(player) {
-    const {day} = stamp();
-    return {day,entries:store.chatHistory(player).filter(entry=>entry.day===day)};
+  function snapshot(player, page) {
+    const serverAt = now();
+    return {entries:store.chatHistory(player,cutoff(serverAt),page),serverAt};
   }
   const author = (profile, player) => ({nickname:profile.nickname,...(isAdmin(player) && {admin:true})});
   return {
     history: player => snapshot(player).entries,
+    latestId: store.latestChatId,
     snapshot,
     stamp,
     publishRecorded,
     close() {
       clearTimeout(midnightTimer);
+      clearInterval(pruneTimer);
       return log?.flush();
     },
     playerDeath(profile,cause,player) {

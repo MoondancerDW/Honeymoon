@@ -705,9 +705,6 @@ function stream() {
   source.addEventListener('chat-history', event => {
     if (feed===source) social.history(JSON.parse(event.data));
   });
-  source.addEventListener('chat-reset', event => {
-    if (feed===source) social.resetChat(JSON.parse(event.data));
-  });
   source.addEventListener('chat', event => {
     if (feed===source) social.message(JSON.parse(event.data));
   });

@@ -61,7 +61,7 @@ test('weather fronts advance independently of the game clock, with wet and dry c
   } finally { store.close(); }
 });
 
-test('chat preserves ordering, sends join and leave with the nickname and bounds spam and history', () => {
+test('chat preserves ordering and four-hour history, announces player status and bounds spam', () => {
   const sent = [];
   let now = 1000;
   const store = openStore(':memory:');
@@ -79,15 +79,15 @@ test('chat preserves ordering, sends join and leave with the nickname and bounds
     assert.throws(() => chat.message(profile, {text:'Снова'}, 'sender', point), {code:'chat_rate_limit'});
     assert.equal(sent[5].text, 'Привет!');
     chat.playerStatus(profile, false);
-    assert.deepEqual(sent.at(-1), {id:7, kind:'leave', nickname:'Искра',day:'1970-01-01'});
+    assert.deepEqual(sent.at(-1), {id:7, kind:'leave', nickname:'Искра',at:now});
     for (let i = 0; i < 105; i++) {
       now += 1000;
       chat.message(profile, {text:'<img src=x>'}, 'sender', point);
     }
     now += 1000;
     const local = chat.message(profile, {text:'Привет рядом', channel:'local'}, 'sender', {x:0, y:0, z:0});
-    assert.equal(chat.history('near').length, 100);
-    assert.deepEqual(chat.history('near'), sent.slice(-100));
+    assert.ok(chat.history('near').length > 100);
+    assert.deepEqual(chat.history('near'), sent);
     assert.deepEqual(chat.history('sender').at(-1), local);
     assert.equal(chat.history('far').at(-1).text, '<img src=x>');
   } finally { chat.close(); store.close(); }

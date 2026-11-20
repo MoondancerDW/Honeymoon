@@ -387,11 +387,12 @@ export function createHoneymoonServer({
   const warps = createWarps(store);
   const chat = createChat({
     store,now:clock,isAdmin:access.isAdmin,logDirectory:state===':memory:'?undefined:join(dirname(state),'chat-logs'),
-    publish: (entry, audience) => sendSocial('chat', entry, player => !audience || audience.includes(player)),
-    onDayChanged: data => sendSocial('chat-reset',data),
+    publish: (entry, audience) => sendSocial('chat', entry, (player, stream) =>
+      !audience || audience.includes(player) && stream.presence),
     recipients(origin) {
-      return [...streams].filter(({player, social}) => {
-        const point = social && presence.onlinePosition(player);
+      return [...streams].filter(({player, social, presence: sharesPresence, response}) => {
+        if (!social || !sharesPresence || response.writableEnded || response.destroyed) return false;
+        const point = presence.onlinePosition(player);
         return point && Math.hypot(point.x - origin.x, point.y - origin.y, point.z - origin.z) <= 18;
       }).map(({player}) => player);
     },
@@ -579,7 +580,33 @@ export function createHoneymoonServer({
   }
 
   function sendSocial(name, data, receives = () => true) {
-    for (const stream of streams) if (stream.social && receives(stream.player)) writeEvent(stream.response, name, data);
+    for (const stream of streams) if (stream.social && receives(stream.player,stream)) writeEvent(stream.response, name, data);
+  }
+
+  function sendChatHistory({player,response}) {
+    const through = chat.latestId();
+    const limit = 32;
+    let after = 0;
+    function replay() {
+      try {
+        while (!response.writableEnded && !response.destroyed) {
+          if (response.writableNeedDrain) {
+            response.once('drain',replay);
+            return;
+          }
+          const snapshot = chat.snapshot(player,{after,through,limit});
+          const {entries} = snapshot;
+          if (entries.length || after === 0) writeEvent(response,'chat-history',snapshot);
+          if (entries.length < limit) return;
+          after = entries.at(-1).id;
+          if (after >= through) return;
+        }
+      } catch (error) {
+        console.error(error);
+        destroyStream(response,'chat_history_error');
+      }
+    }
+    replay();
   }
 
   function publishTeleport(player,result,yaw=0,pitch=0) {
@@ -980,7 +1007,7 @@ export function createHoneymoonServer({
         const different = updates.nickname !== undefined || submittedSkin !== undefined;
         const drop=previousTraits && prepareRaceDrop(player,previousTraits.ponyType,nextSkinTraits.ponyType);
         const renameDate=updates.nickname !== undefined ? chat.stamp() : undefined;
-        const renameChat=renameDate && {day:renameDate.day,admin:access.isAdmin(player)};
+        const renameChat=renameDate && {at:renameDate.at,admin:access.isAdmin(player)};
         const renamed = different && store.updateProfile(player, updates,
           saved?.nickname ?? presence.onlineProfile(player)?.nickname,drop?.writeInventory,renameChat);
         let relocation, movementState;
@@ -1195,7 +1222,6 @@ export function createHoneymoonServer({
           if (nightVision) writeEvent(response,'profile-night-vision',{uid:player,...nightVision});
         }
         if (stream.social) {
-          writeEvent(response, 'chat-history', chat.snapshot(player));
           writeEvent(response, 'world-time', worldTime.snapshot());
           writeEvent(response, 'weather', worldTime.weatherSettings());
           if (survival.enabled) writeEvent(response,'game-mode',playerMode(player));
@@ -1203,6 +1229,7 @@ export function createHoneymoonServer({
         if (stream.minecarts) writeEvent(response,'minecarts',game.minecartSnapshot(player));
         sendDroppedItems(stream,true);
         sendNpcs(stream);
+        if (stream.social) sendChatHistory(stream);
         return;
       }
       throw new RequestError(404, 'not_found');

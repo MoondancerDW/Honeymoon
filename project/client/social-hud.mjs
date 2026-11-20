@@ -1,5 +1,5 @@
 import {formatClock, tickFromTime} from '../world/world-time.mjs';
-import {CHAT_TEXT_LIMIT,limitChatText} from '../world/chat-text.mjs';
+import {CHAT_RETENTION_MS,CHAT_TEXT_LIMIT,limitChatText} from '../world/chat-text.mjs';
 import {createWarpMenu} from './warp-menu.mjs';
 
 const teleportErrors = {
@@ -11,8 +11,6 @@ const teleportErrors = {
   not_online:'Сначала войдите в мир',
   action_pending:'Дождитесь завершения текущего действия',
 };
-const historyLimit = 100;
-const calendarDay = /^\d{4}-\d{2}-\d{2}$/;
 const globalChatPreference = 'honeymoon-chat-global';
 const chatDraftKey = 'honeymoon-chat-draft';
 
@@ -28,6 +26,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   const globalToggle = byId('chat-global-toggle');
   const draftToggle = byId('chat-draft-toggle');
   const seen = new Set();
+  const unreadRows = new Set();
   const channelButton = byId('chat-channel');
   const chatForm = byId('chat-form');
   const chatInput = byId('chat-input');
@@ -59,7 +58,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   let globalEnabled = true;
   let draftProfile, keepDraft = false;
   const outgoingChannel = () => globalEnabled ? channel : 'local';
-  let unread = 0, chatDay;
+  let serverClock, expiryTimer, scheduledExpiry;
   let admin=false;
   let dynamicWeather=false;
   chatInput.disabled = chatSend.disabled = true;
@@ -107,23 +106,62 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     }
   }
 
-  function updateUnread(value) {
-    unread=value;
+  function updateUnread() {
+    const unread = unreadRows.size;
     unreadBadge.hidden=!unread;
     unreadBadge.textContent=unread>99?'99+':String(unread);
     touchChat.setAttribute('aria-label',unread ? `Открыть чат. Непрочитанных: ${unread}` : 'Открыть чат');
   }
 
-  function setChatDay(day) {
-    if (day === undefined) return chatDay === undefined;
-    if (typeof day !== 'string' || !calendarDay.test(day) || (chatDay && day < chatDay)) return false;
-    if (day !== chatDay) {
-      chatDay = day;
-      seen.clear();
-      log.replaceChildren();
-      updateUnread(0);
+  function markChatRead() {
+    unreadRows.clear();
+    updateUnread();
+  }
+
+  function chatTime() {
+    if (!serverClock) return Date.now();
+    // Wall time includes device sleep, while monotonic time protects against clock rollbacks.
+    const elapsed = Math.max(Date.now() - serverClock.wall, performance.now() - serverClock.monotonic);
+    return serverClock.at + elapsed;
+  }
+
+  function pruneChat(now) {
+    let unreadChanged = false;
+    let row;
+    while ((row = log.firstElementChild) && Number(row.dataset.expiresAt) <= now) {
+      seen.delete(Number(row.dataset.messageId));
+      if (unreadRows.delete(row)) unreadChanged = true;
+      row.remove();
     }
-    return true;
+    if (unreadChanged) updateUnread();
+  }
+
+  function scheduleChatExpiry(now, reschedule = false) {
+    const next = log.firstElementChild;
+    const expiresAt = next ? Number(next.dataset.expiresAt) : undefined;
+    if (!reschedule && expiresAt === scheduledExpiry) return;
+    clearTimeout(expiryTimer);
+    scheduledExpiry = expiresAt;
+    if (!next) return;
+    expiryTimer = setTimeout(refreshChatExpiry, Math.max(0, Math.ceil(expiresAt - now)));
+  }
+
+  function refreshChatExpiry() {
+    const now = chatTime();
+    pruneChat(now);
+    scheduleChatExpiry(now, true);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshChatExpiry();
+  });
+  window.addEventListener('pageshow', refreshChatExpiry);
+
+  function readingChat() {
+    return panel === 'chat' || chat.classList.contains('docked');
+  }
+
+  function followsChat() {
+    return !readingChat() || log.scrollHeight - log.clientHeight - log.scrollTop < 8;
   }
 
   function updateChannel() {
@@ -167,7 +205,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     chatHeader.hidden = chatForm.hidden = !showChat;
     chatClose.hidden = dockChat;
     if (dockChat && !wasDocked) {
-      updateUnread(0);
+      markChatRead();
       log.scrollTop = log.scrollHeight;
     }
     placePanel(clockForm, clockSlot, clockHome, dockClock);
@@ -175,14 +213,14 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     teleportForm.hidden = panel !== 'teleport';
   }
 
-  function entry({id, day, kind, cause, nickname, newNickname, text, admin, channel:target = 'system'}, recent) {
-    if (!setChatDay(day)) return false;
-    if (seen.has(id)) return true;
-    const readingChat = panel === 'chat' || chat.classList.contains('docked');
-    const follow = !readingChat || log.scrollHeight - log.clientHeight - log.scrollTop < 8;
+  function entry({id, at, kind, cause, nickname, newNickname, text, admin, channel:target = 'system'}, now, recent) {
+    if (!Number.isSafeInteger(id) || !Number.isFinite(at) || seen.has(id)) return false;
+    const expiresAt = at + CHAT_RETENTION_MS;
+    if (expiresAt <= now) return false;
     seen.add(id);
     const row = document.createElement('li');
     row.dataset.messageId = id;
+    row.dataset.expiresAt = expiresAt;
     row.dataset.chatChannel = target;
     row.hidden = !globalEnabled && target === 'global';
     if (target === 'global') {
@@ -204,20 +242,30 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     }
     if (recent) {
       row.classList.add('recent');
-      if (kind==='message' && !readingChat && !row.hidden) updateUnread(unread+1);
+      if (kind==='message' && !readingChat() && !row.hidden) {
+        unreadRows.add(row);
+        updateUnread();
+      }
       setTimeout(() => row.classList.add('fading'), 6500);
       setTimeout(() => row.classList.remove('recent', 'fading'), 8500);
     }
     let previous = log.lastElementChild;
-    while (previous && Number(previous.dataset.messageId) > id) previous = previous.previousElementSibling;
+    while (previous) {
+      const previousExpiry = Number(previous.dataset.expiresAt);
+      if (previousExpiry < expiresAt || (previousExpiry === expiresAt && Number(previous.dataset.messageId) < id)) break;
+      previous = previous.previousElementSibling;
+    }
     if (previous) previous.after(row);
     else log.prepend(row);
-    if (log.childElementCount > historyLimit) {
-      seen.delete(Number(log.firstElementChild.dataset.messageId));
-      log.firstElementChild.remove();
-    }
-    if (follow) log.scrollTop = log.scrollHeight;
     return true;
+  }
+
+  function receiveChat(message) {
+    const now = chatTime();
+    pruneChat(now);
+    const follow = followsChat();
+    if (entry(message, now, true) && follow) log.scrollTop = log.scrollHeight;
+    scheduleChatExpiry(now);
   }
 
   function close(continuePlaying = true) {
@@ -253,7 +301,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     if (panel === 'warps') return;
     if (panel === 'clock') clockInput.value = clockText;
     if (panel === 'chat') {
-      updateUnread(0);
+      markChatRead();
       if (game.classList.contains('touch')) log.focus({preventScroll:true});
       else chatInput.focus();
       log.scrollTop = log.scrollHeight;
@@ -312,7 +360,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       }
       const message = await submit('chat', {text, channel:destination}, `Введите сообщение длиной до ${CHAT_TEXT_LIMIT} символов`);
       if (message) {
-        entry(message, true);
+        receiveChat(message);
         finishSend(sentText);
       }
     } finally {
@@ -445,12 +493,18 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
     warpsChanged:warpMenu.update,
     refreshWarps() { if (panel === 'warps') void warpMenu.refresh(); },
     profileUpdated(profile) { if (connected) roster(peers, profile); },
-    history({day, entries}) {
-      if (!setChatDay(day)) return;
-      for (const message of entries) entry(message, false);
+    history({entries, serverAt}) {
+      // Batched snapshots can share the timestamp of the first packet.
+      const updateClock = Number.isFinite(serverAt) && serverAt !== serverClock?.at;
+      if (updateClock) serverClock = {at:serverAt, wall:Date.now(), monotonic:performance.now()};
+      const now = chatTime();
+      pruneChat(now);
+      const follow = followsChat();
+      for (const message of entries) entry(message, now, false);
+      if (follow) log.scrollTop = log.scrollHeight;
+      scheduleChatExpiry(chatTime(), updateClock);
     },
-    resetChat({day}) { setChatDay(day); },
-    message(message) { entry(message, true); },
+    message:receiveChat,
     updateClock(tick, isFrozen) {
       const text = formatClock(tick);
       if (clockText !== text || clockButton.classList.contains('frozen') !== isFrozen) {

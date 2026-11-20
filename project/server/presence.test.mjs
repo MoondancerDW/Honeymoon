@@ -8,6 +8,7 @@ import { crc32, deflateSync } from 'node:zlib';
 import { createHoneymoonServer } from './index.mjs';
 import { profileChanges, savedSkinSize, savedSkinTraits } from './presence-profile.mjs';
 import { createPresence, readPose } from './presence.mjs';
+import { CHAT_RETENTION_MS } from '../world/chat-text.mjs';
 
 const work = fileURLToPath(new URL('../work/', import.meta.url));
 const signature = Buffer.from('89504e470d0a1a0a', 'hex');
@@ -169,8 +170,9 @@ test('avatar eye offsets keep a bounded local camera and remain optional for old
   }
 });
 
-async function eventFeed(url, cookie, signal, social = false) {
-  const response = await fetch(url + '/api/events?since=0&presence=1' + (social ? '&social=1' : ''), {headers:{Cookie:cookie}, signal});
+async function eventFeed(url, cookie, signal, social = false, sharesPresence = true) {
+  const query = '?since=0' + (sharesPresence ? '&presence=1' : '') + (social ? '&social=1' : '');
+  const response = await fetch(url + '/api/events' + query, {headers:{Cookie:cookie}, signal});
   assert.equal(response.status, 200);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -265,8 +267,8 @@ test('independent cookies share profiles and only confirmed movement, and retain
   assert.equal(renamed.status,200);
   assert.deepEqual(renamed.data, {...withoutMovement(chosen.data),nickname:'Другой ник'});
   const rename = (await observer.next('chat', entry => entry.kind === 'rename')).data;
-  assert.match(rename.day,/^\d{4}-\d{2}-\d{2}$/);
-  assert.deepEqual(rename, {id:rename.id,kind:'rename',nickname:'Лунный Ветер',newNickname:'Другой ник',channel:'global',day:rename.day});
+  assert.ok(Number.isSafeInteger(rename.at));
+  assert.deepEqual(rename, {id:rename.id,kind:'rename',nickname:'Лунный Ветер',newNickname:'Другой ник',channel:'global',at:rename.at});
   assert.equal((await post('profile',{nickname:'Другой ник'}, b.cookie)).status,200);
   assert.equal((await observer.next('presence')).data.players[0].nickname,'Другой ник');
   await observed.close();
@@ -302,6 +304,12 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
     collisionFor: ({key}) => key === solid.key ? [{x0:0, y0:0, z0:0, x1:1, y1:1, z1:1}] : [],
   }});
   t.after(() => app.close());
+  const presenceResponses = new Map();
+  app.server.on('request',(request,response) => {
+    if (request.url.startsWith('/api/events?') && request.url.includes('presence=1')) {
+      presenceResponses.set(request.headers.cookie,response);
+    }
+  });
   app.server.listen(0,'127.0.0.1');
   await once(app.server,'listening');
   const url = `http://127.0.0.1:${app.server.address().port}`;
@@ -358,11 +366,19 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
   assert.deepEqual((await nextMessage(far.feed)).data,globalMessage);
   assert.equal((await post('teleport',point,far.cookie)).status,200);
   assert.equal((await post('teleport',{...edgePosition,y:1.1},near.cookie)).status,200);
+  const farClosed = once(presenceResponses.get(far.cookie),'close');
   await far.feed.close();
+  await farClosed;
+  const socialOnly = await eventFeed(url,far.cookie,signal,true,false);
+  const missed = 'Написано без игрока';
+  assert.equal((await post('chat',{text:missed,channel:'local'},sender.cookie)).status,200);
+  const onlineForAll = (await post('chat',{text:'Всем после выхода'},sender.cookie)).data;
+  assert.deepEqual((await nextMessage(socialOnly)).data,onlineForAll);
+  await socialOnly.close();
   const reconnect = await eventFeed(url,far.cookie,signal,true);
   const {data} = await reconnect.next('chat-history');
   assert.deepEqual(data.entries.find(entry => entry.text === global),globalMessage);
-  assert.ok(!data.entries.some(entry => entry.text === local));
+  assert.ok(!data.entries.some(entry => entry.text === local || entry.text === missed));
   await reconnect.close();
   await near.feed.close();
   const nearReconnect = await eventFeed(url,near.cookie,signal,true);
@@ -398,38 +414,54 @@ test('teleport validates body and playable chunks, and local chat uses confirmed
   await sender.feed.close();
 });
 
-test('connected browsers receive an empty new chat day at Moscow midnight without a message', {timeout:8000}, async t => {
-  t.mock.timers.enable({apis:['setTimeout']});
+test('chat history crosses Moscow midnight, replays in batches, and expires each entry after four hours', {timeout:12000}, async t => {
   let now=Date.parse('2026-11-19T20:59:59.500Z');
   const app=createHoneymoonServer({base,geometry,state:':memory:',clock:()=>now});
   t.after(()=>app.close());
   app.server.listen(0,'127.0.0.1');
   await once(app.server,'listening');
   const url='http://127.0.0.1:'+app.server.address().port;
-  const signal=AbortSignal.timeout(6000);
+  const signal=AbortSignal.timeout(9000);
   const post=(path,body,cookie)=>fetch(url+'/api/'+path,{method:'POST',signal,
     headers:{'Content-Type':'application/json',Origin:url,...(cookie&&{Cookie:cookie})},body:JSON.stringify(body)});
   const session=await post('session',{});
   const cookie=session.headers.get('Set-Cookie').split(';')[0];
   const live=await eventFeed(url,cookie,signal,true);
-  assert.deepEqual((await live.next('chat-history')).data,{day:'2026-11-19',entries:[]});
+  assert.deepEqual((await live.next('chat-history')).data,{serverAt:now,entries:[]});
   assert.equal((await post('presence',{yaw:0,pitch:0},cookie)).status,200);
   const yesterday=await post('chat',{text:'До полуночи',channel:'global'},cookie).then(result=>result.json());
-  assert.equal(yesterday.day,'2026-11-19');
+  assert.equal(yesterday.at,now);
   assert.ok(!Object.hasOwn(yesterday,'position'));
   assert.deepEqual((await live.next('chat',entry=>entry.id===yesterday.id)).data,yesterday);
 
   now+=500;
-  t.mock.timers.tick(500);
-  assert.deepEqual((await live.next('chat-reset')).data,{day:'2026-11-20'});
-  const joinedAfterMidnight=await eventFeed(url,cookie,signal,true);
-  assert.deepEqual((await joinedAfterMidnight.next('chat-history')).data,{day:'2026-11-20',entries:[]});
-  now-=100;
-  const corrected=await post('chat',{text:'После коррекции часов',channel:'global'},cookie).then(result=>result.json());
-  assert.equal(corrected.day,'2026-11-20');
-  assert.deepEqual((await live.next('chat',entry=>entry.id===corrected.id)).data,corrected);
-  assert.deepEqual((await joinedAfterMidnight.next('chat',entry=>entry.id===corrected.id)).data,corrected);
-  await Promise.all([live.close(),joinedAfterMidnight.close()]);
+  const today=await post('chat',{text:'После полуночи'},cookie).then(result=>result.json());
+  assert.equal(today.at,now);
+  assert.deepEqual((await live.next('chat',entry=>entry.id===today.id)).data,today);
+  const rest=[];
+  for (let index=0; index<35; index++) {
+    now+=2000;
+    const response=await post('chat',{text:'🌙'.repeat(512)},cookie);
+    assert.equal(response.status,200);
+    rest.push(await response.json());
+  }
+  now=yesterday.at+CHAT_RETENTION_MS-1;
+  const justBeforeExpiry=await eventFeed(url,cookie,signal,true);
+  const first=(await justBeforeExpiry.next('chat-history')).data;
+  const second=(await justBeforeExpiry.next('chat-history')).data;
+  assert.equal(first.serverAt,now);
+  assert.equal(second.serverAt,now);
+  assert.equal(first.entries.length,32);
+  assert.equal(first.entries[0].kind,'join');
+  assert.deepEqual([...first.entries.slice(1),...second.entries],[yesterday,today,...rest]);
+  await justBeforeExpiry.close();
+
+  now++;
+  const afterExpiry=await eventFeed(url,cookie,signal,true);
+  const current=(await afterExpiry.next('chat-history')).data;
+  assert.equal(current.serverAt,now);
+  assert.deepEqual([...current.entries,...(await afterExpiry.next('chat-history')).data.entries],[today,...rest]);
+  await Promise.all([live.close(),afterExpiry.close()]);
 });
 
 function resolveTestPath(directory) {

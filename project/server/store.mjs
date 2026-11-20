@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { publicMicroPart } from '../world/microblocks.mjs';
 
 const SCHEMA_VERSION = 11;
-const chatHistoryLimit = 100;
+const chatTimestamp = "CASE WHEN json_type(message,'$.at')='integer' THEN json_extract(message,'$.at') END";
 const MiB = 1024 * 1024;
 export const receiptLimits = Object.freeze({age:15*60_000,entryBytes:256*1024,
   playerRows:1024,playerBytes:8*MiB,totalRows:8192,totalBytes:64*MiB});
@@ -202,6 +202,7 @@ export function openStore(filename) {
     db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
     migrate(db);
     db.exec('CREATE INDEX IF NOT EXISTS edits_by_revision ON edits(revision)');
+    db.exec(`CREATE INDEX IF NOT EXISTS chat_by_timestamp ON chat_entries(${chatTimestamp})`);
   } catch (error) {
     db.close();
     throw error;
@@ -273,13 +274,15 @@ export function openStore(filename) {
   const listConflicts = statement('SELECT * FROM rebase_conflicts WHERE base_hash=? ORDER BY x,y,z');
 
   const writeChat = statement('INSERT INTO chat_entries(message,recipients) VALUES (?,?) RETURNING id');
+  const latestChat = statement('SELECT COALESCE(MAX(id),0) AS id FROM chat_entries');
   const listChat = statement(`SELECT id, message FROM chat_entries
-    WHERE recipients IS NULL OR EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?) ORDER BY id`);
-  const trimChat = statement('DELETE FROM chat_entries WHERE id <= (SELECT id FROM chat_entries ORDER BY id DESC LIMIT 1 OFFSET ?)');
+    WHERE id>? AND id<=? AND (${chatTimestamp})>?
+      AND (recipients IS NULL OR EXISTS (SELECT 1 FROM json_each(recipients) WHERE value=?))
+    ORDER BY id LIMIT ?`);
+  const trimChat = statement(`DELETE FROM chat_entries WHERE (${chatTimestamp}) IS NULL OR (${chatTimestamp})<=?`);
 
   function appendChat(message, recipients = null) {
     const {id} = writeChat.get(JSON.stringify(message), recipients && JSON.stringify(recipients));
-    trimChat.run(chatHistoryLimit);
     return {id, ...message};
   }
 
@@ -357,19 +360,22 @@ export function openStore(filename) {
         return {setting,changed:true};
       });
     },
-    updateProfile(player, { nickname, skin, ponyTraits }, previousNickname, writeInventory, {day,admin} = {}) {
+    updateProfile(player, { nickname, skin, ponyTraits }, previousNickname, writeInventory, {at,admin} = {}) {
       return transaction(db, () => {
         if (nickname !== undefined) writeNickname.run(player, nickname);
         if (skin !== undefined) writeSkin.run(player, skin?.hash ?? null, skin?.png ?? null);
         if (ponyTraits) writePonyTraits(player,ponyTraits);
         writeInventory?.();
         if (nickname !== undefined && previousNickname && nickname !== previousNickname) {
-          return appendChat({kind:'rename',nickname:previousNickname,newNickname:nickname,channel:'global',day,
+          return appendChat({kind:'rename',nickname:previousNickname,newNickname:nickname,channel:'global',at,
             ...(admin && {admin:true})});
         }
       });
     },
-    chatHistory: player => listChat.all(player).map(({id, message}) => ({id, ...JSON.parse(message)})),
+    latestChatId: () => latestChat.get().id,
+    chatHistory: (player, cutoff, {after=0,through=Number.MAX_SAFE_INTEGER,limit=-1} = {}) =>
+      listChat.all(after,through,cutoff,player,limit).map(({id, message}) => ({id, ...JSON.parse(message)})),
+    pruneChat: cutoff => trimChat.run(cutoff),
     recordChat: (message, recipients) => transaction(db, () => appendChat(message, recipients)),
     getSkin(hash) {
       return readSkin.get(hash)?.png ?? null;

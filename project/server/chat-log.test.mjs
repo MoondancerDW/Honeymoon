@@ -28,15 +28,16 @@ test('chat logs rotate at Moscow midnight and survive a drained shutdown or rest
     assert.equal(chat.history('sender').length,2);
     now+=5;
     chat.message(profile,{channel:'local',text:'Тихо\u2028рядом\u2029на мосту'},'sender',{x:1,y:66,z:2});
-    const rename=store.recordChat({kind:'rename',nickname:profile.nickname,newNickname:'Северный Свет',channel:'global',day:'2026-11-17'});
+    const rename=store.recordChat({kind:'rename',nickname:profile.nickname,newNickname:'Северный Свет',channel:'global',at:now});
     chat.publishRecorded(rename);
     await chat.close();
 
     now-=1;
     restarted=createChat(options);
-    assert.equal(restarted.snapshot('sender').day,'2026-11-17');
+    assert.equal(restarted.snapshot('sender').serverAt,now);
+    assert.equal(restarted.history('sender').length,4);
     const corrected=restarted.message(profile,{text:'Коррекция часов'},'sender',{x:4,y:5,z:6});
-    assert.equal(corrected.day,'2026-11-17');
+    assert.equal(corrected.at,now);
     now+=1;
     restarted.playerDeath({...profile,nickname:rename.newNickname},undefined,'sender');
     now+=999;
@@ -70,7 +71,7 @@ test('chat logs rotate at Moscow midnight and survive a drained shutdown or rest
     assert.equal(restarted.history('sender').find(entry=>entry.kind==='death').admin,true);
     assert.ok(!Object.hasOwn(restarted.history('sender').find(entry=>entry.kind==='rename'),'admin'));
     assert.ok(!restarted.history('far').some(entry=>entry.channel==='local'));
-    assert.ok(restarted.history('sender').every(entry=>entry.day==='2026-11-17'&&!Object.hasOwn(entry,'position')));
+    assert.ok(restarted.history('sender').every(entry=>Number.isSafeInteger(entry.at)&&!Object.hasOwn(entry,'position')));
   } finally {
     await Promise.all([chat.close(),restarted?.close()]);
     store.close();
@@ -114,7 +115,7 @@ test('disk-backed server writes private chat logs beside its save and drains the
     assert.deepEqual(movement.position,expected);
     const message=await post('chat',{text:'Ночная проверка журнала',channel:'local',position:{x:0,y:0,z:0}});
     assert.equal(message.nickname,'Тестовый гость');
-    assert.equal(message.day,'2026-11-17');
+    assert.equal(message.at,worldClock);
     assert.ok(!Object.hasOwn(message,'position'));
     const ascii='x'.repeat(512), astral='🌙'.repeat(512), escaped='🚀'.repeat(512);
     assert.equal((await post('chat',{text:ascii})).text,ascii);
