@@ -123,6 +123,8 @@ const npcBards=new Map();
 let nextBardCheck=0;
 let npcActionQueue=Promise.resolve();
 const positionInterval = 130;
+const afkDelay = 5 * 60_000;
+const presenceHeartbeat = 15_000;
 const physicsStep=.016;
 const mobileFrameMs = 1000/32;
 let nextMobileFrame;
@@ -150,6 +152,7 @@ let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualC
 let feed,feedRetry;
 let nearbyStream;
 let entered = false, multiplayer = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
+let activeAt = 0, activityTimer, lastPresenceActivity, nextPresenceHeartbeat = 0, lastPoseSequence = 0;
 let nextFallbackPresence=0;
 let horizontalSpeed = 0;
 let nextSprintDust = 0;
@@ -512,7 +515,7 @@ const messages = {
   bucket_required:'Для удаления жидкости нужно ведро', player_dead:'Сначала нажми «Ожить»',
   occupied: 'Здесь уже есть блок или игрок', stale_cell: 'Ячейка изменилась. Повторите действие.',
   out_of_reach: 'Цель вне досягаемости', not_visible: 'Блок закрыт', outside_bounds: 'Граница района',
-  reserved: 'Это часть контрольной механики', nothing_to_copy: 'Сначала скопируйте блок',
+  reserved: 'Это часть контрольной механики', nothing_to_copy: 'Выбранный блок больше недоступен',
   empty_cell: 'В ячейке нет блока', cannot_interact: 'С этим объектом нельзя взаимодействовать',
   movement_blocked: 'Позиция скорректирована сервером', outside_reach: 'Цель вне досягаемости',
   teleport_blocked: 'У цели нет свободного места для телепорта',
@@ -719,6 +722,7 @@ function stream() {
     connection.stream(true);
     startupDiagnostics.complete('sse');
     presenceDirty = true;
+    if (multiplayer && document.hidden) sendPresence(performance.now(),{immediate:true});
     social.refreshWarps();
     flushFlightPreference();
   });
@@ -744,7 +748,9 @@ function stream() {
   source.addEventListener('profile-inventory',event=>{
     if (feed===source) applyInventory(JSON.parse(event.data));
   });
-  feed.addEventListener('presence-motion', event => view.players.update(JSON.parse(event.data).players));
+  feed.addEventListener('presence-motion', event => {
+    if (feed===source) view.players.update(JSON.parse(event.data).players);
+  });
   feed.addEventListener('npcs',event=>applyNpcs(JSON.parse(event.data)));
   feed.addEventListener('npc-motion',event=>moveNpcs(JSON.parse(event.data)));
   feed.addEventListener('dropped-items',event=>world.setDroppedItems(JSON.parse(event.data).entities,performance.now()));
@@ -816,16 +822,48 @@ function playerPose() {
     typing:social.isChatOpen(), swing:hoofSwing, held:heldPonyItem(), groundSeat:seat?.kind === 'ground',
     offhand:hasOffhand() ? offhandProp : null,
     equipment:inventory.equipment,emote,
-    seq:Math.round(performance.timeOrigin + performance.now())};
+    seq:lastPoseSequence=Math.max(lastPoseSequence+1,Math.round(performance.timeOrigin + performance.now()))};
 }
 
-function sendPresence(now) {
-  if (!entered || presenceRequest || now < nextPresence) return;
-  const fallback=multiplayer && !connection.streamReady();
-  if (fallback) {
-    if (!connection.canMove() || movementSync.inspect().status!=='ready') return;
-  } else if (feed?.readyState!==EventSource.OPEN) return;
+function checkPlayerActivity() {
+  clearTimeout(activityTimer);
+  activityTimer=undefined;
+  if (document.hidden || !entered || !multiplayer) return;
+  const now=performance.now();
+  if (playing && (stick.x || stick.z)) activeAt=now;
+  const remaining=activeAt+afkDelay-now;
+  if (remaining>0) activityTimer=setTimeout(checkPlayerActivity,remaining);
+  else sendPresence(now,{immediate:true});
+}
+
+function notePlayerActivity() {
+  if (document.hidden || !entered || !multiplayer) return;
+  const now=performance.now();
+  const wasAway=now-activeAt>=afkDelay;
+  activeAt=now;
+  if (wasAway) sendPresence(now,{immediate:true});
+  if (activityTimer===undefined) checkPlayerActivity();
+}
+
+function updatePresenceVisibility(hidden=document.hidden) {
+  if (!entered || !multiplayer) return;
+  const now=performance.now();
+  clearTimeout(activityTimer);
+  activityTimer=undefined;
+  if (!hidden) {
+    activeAt=now;
+    checkPlayerActivity();
+  }
+  sendPresence(now,{immediate:true, hidden});
+}
+
+function sendPresence(now, {immediate=false, hidden=document.hidden} = {}) {
+  if (!entered || !immediate && (presenceRequest || now < nextPresence)) return;
+  const disconnected=multiplayer && !connection.streamReady();
+  const fallback=disconnected && connection.canMove() && movementSync.inspect().status==='ready';
+  if (!immediate && (disconnected ? !fallback : feed?.readyState!==EventSource.OPEN)) return;
   const {offhand,...pose} = playerPose();
+  const afk=multiplayer && (hidden || now-activeAt>=afkDelay);
   if (seat?.kind === 'boat') {
     pose.boatDrive = playing && !menuOpen() ? [Math.sign(forwardInput()),Math.sign(turnInput())] : [0,0];
   } else if (seat?.entity) {
@@ -840,12 +878,18 @@ function sendPresence(now) {
     pose.boatDrive?.[0] !== lastSentPose.boatDrive?.[0] || pose.boatDrive?.[1] !== lastSentPose.boatDrive?.[1] ||
     pose.boatDrive?.some(Boolean) ||
     Math.abs(pose.yaw - lastSentPose.yaw) > .03 || Math.abs(pose.pitch - lastSentPose.pitch) > .03;
-  if (!presenceDirty && !changed && !(fallback && now>=nextFallbackPresence)) return;
+  const activityChanged=multiplayer && (lastPresenceActivity?.afk!==afk || now>=nextPresenceHeartbeat);
+  if (!immediate && !presenceDirty && !changed && !activityChanged && !(fallback && now>=nextFallbackPresence)) return;
   nextPresence = now + positionInterval;
   if (fallback) nextFallbackPresence=now+1500;
+  if (multiplayer) nextPresenceHeartbeat=now+presenceHeartbeat;
   presenceDirty = false;
   const epoch = seatEpoch;
-  presenceRequest = post('presence',fallback ? {...pose,fallbackPage:movementSync.page} : pose,AbortSignal.timeout(3000)).then(({ok, body}) => {
+  const payload={...pose,...(fallback&&{fallbackPage:movementSync.page}),...(multiplayer&&{page:movementSync.page,afk})};
+  const request=post('presence',payload,AbortSignal.timeout(3000),immediate&&hidden).then(({ok, body}) => {
+    if (ok && multiplayer && (!lastPresenceActivity || pose.seq>=lastPresenceActivity.seq)) {
+      lastPresenceActivity={seq:pose.seq,afk};
+    }
     if (ok && (!lastSentPose || pose.seq >= lastSentPose.seq)) {
       lastSentPose = pose;
       if (epoch === seatEpoch && !acting && !resetting && Boolean(body.seat) !== Boolean(seat)) {
@@ -853,7 +897,10 @@ function sendPresence(now) {
       }
     }
     else presenceDirty = true;
-  }).catch(() => { presenceDirty = true; }).finally(() => { presenceRequest = null; });
+  }).catch(() => { presenceDirty = true; }).finally(() => {
+    if (presenceRequest===request) presenceRequest=null;
+  });
+  presenceRequest=request;
 }
 
 function updateCamera() {
@@ -931,6 +978,8 @@ function look(dx, dy, sensitivity = .0023) {
 
 function enterWorld() {
   entered = true;
+  activeAt=performance.now();
+  checkPlayerActivity();
   audio.setPlaying(true);
   presenceDirty = true;
   creativeToggle.disabled = spectator || !creativeAvailable || !modeUi.creative;
@@ -1759,7 +1808,7 @@ async function action(type, sneaking = false, tapTool = false) {
   if (type === 'frame_item') {
     if (heldCreativeItem) request.creativeItem = heldCreativeItem.key;
     else if (clipboard) request.cell = clipboard;
-    else { notice(messages.nothing_to_copy); return; }
+    else return;
   }
   if (removingVehicle) request.entity = target.entity;
   if (type === 'copy_part' || type === 'remove_part') request.partSlot = target.partSlot;
@@ -1780,7 +1829,7 @@ async function action(type, sneaking = false, tapTool = false) {
     if (heldCreativeItem?.kind === 'flat-item' && heldCreativeItem.key !== signItemKey && !bucket) {
       notice('Наведите прицел на рамку'); return;
     }
-    if (!clipboard) { notice(messages.nothing_to_copy); return; }
+    if (!clipboard) return;
     request.against = {x: target.x, y: target.y, z: target.z};
     const embedsInLiquid = getKey(target.cell) !== FAKE_WATER && liquidKind(target.cell) &&
       canLogLiquid(clipboard,neighbors,world.models);
@@ -2123,6 +2172,14 @@ function bindCacheStatus() {
 
 function bindControls() {
   const canvas = view.renderer.domElement;
+  const recordTrustedActivity=event=>{if (event.isTrusted) notePlayerActivity();};
+  for (const type of ['pointerdown','pointermove','keydown','wheel','input']) {
+    document.addEventListener(type,recordTrustedActivity,{capture:true,passive:true});
+  }
+  document.addEventListener('visibilitychange',()=>updatePresenceVisibility());
+  window.addEventListener('pagehide',()=>updatePresenceVisibility(true));
+  window.addEventListener('pageshow',()=>{if (!document.hidden) updatePresenceVisibility(false);});
+  window.addEventListener('focus',()=>{if (!document.hidden) notePlayerActivity();});
   const pickUpNearbyItem = () => {
     if (world.droppedItems.size) void inventoryAction('pickup_item',{eye:view.eyeOffset()});
   };

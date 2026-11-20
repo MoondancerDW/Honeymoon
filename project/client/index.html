@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
   <meta name="apple-mobile-web-app-title" content="Lilium Moonlight">
-  <meta name="honeymoon-build" content="32">
+  <meta name="honeymoon-build" content="33">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -237,13 +237,15 @@
                       <dt>Тап по миру</dt><dd>Поставить выбранный блок или взаимодействовать с тем, на что наведён прицел.</dd>
                       <dt>Стрелки / приседание</dt><dd>Прыгнуть или присесть. Для усиленного прыжка удерживайте кнопку ещё 0,1 с после вершины. Повторное касание в воздухе прерывает планирование.</dd>
                       <dt>Ботинок / крыло</dt><dd>Включить или выключить ускорение / полёт.</dd>
+                      <dt>Лежащий пони</dt><dd>Лечь или встать. В положении лёжа можно ползти.</dd>
                       <dt>Магическая вспышка</dt><dd>Телепортироваться по прицелу за единорога или аликорна.</dd>
                       <dt>Ладонь / меч</dt><dd>Взаимодействовать / ударить или сломать блок. Удерживайте меч для повторных ударов.</dd>
                       <dt>Строительство</dt><dd>Открыть кнопки установки и копирования блока.</dd>
                       <dt>Панель предметов / ячейка</dt><dd>Развернуть или свернуть панель, выбрать предмет нажатием на ячейку</dd>
                       <dt>Стрелки рядом с чатом</dt><dd>Поменять местами предметы в руках у единорогов и аликорнов.</dd>
+                      <dt>Камера</dt><dd>Переключить вид, как клавишей F5.</dd>
                       <dt>Чат / Меню / На весь экран</dt><dd>Открыть чат, главное меню или полноэкранный режим</dd>
-                      <dt>Ещё</dt><dd>Другое действие, ползти, сесть или встать, сменить вид, свободный обзор, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
+                      <dt>Ещё</dt><dd>Другое действие, сесть или встать, свободный обзор, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
                       <dt data-admin-control-hint hidden>Телепорт / Наблюдатель</dt><dd data-admin-control-hint hidden>Ввести координаты или переключить режим наблюдателя из меню «Ещё»</dd>
                     </dl>
                   </section>
@@ -581,15 +583,21 @@
       <button id="touch-swap-hands" type="button" class="icon-button touch-control" aria-label="Поменять предметы в руках" title="Поменять предметы в руках" hidden>
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 8h15m-4-4 4 4-4 4M20 16H5m4-4-4 4 4 4"/></svg>
       </button>
+      <button id="touch-camera" type="button" class="icon-button touch-control" aria-label="Сменить вид" title="Сменить вид">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h4l2-3h6l2 3h4v12H3z"/><circle cx="12" cy="13.5" r="3.5"/></svg>
+      </button>
       <div class="touch-actions" role="group" aria-label="Движение и действия">
-        <button id="touch-sprint" type="button" class="icon-button touch-control" aria-label="Ускорение" title="Ускорение" aria-pressed="false">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 8H4v8l-2 2v3h11a2 2 0 0 0 0-4h-2l-1-9Zm2-3h9m-3-3 3 3-3 3"/></svg>
+        <button id="touch-sprint" type="button" class="icon-button touch-control" aria-label="Спринт" title="Спринт" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h8v8a3 3 0 0 0 3 3h1a4 4 0 0 1 4 4v3H4zM4 18h16M9 7h3m-3 3h3m3-3h6m-2.5-2.5L21 7l-2.5 2.5"/></svg>
         </button>
         <button id="touch-flight" type="button" class="icon-button touch-control" aria-label="Полёт" title="Полёт" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 19c1-5 3-8 8-10 4-1 7-3 10-6 0 5-2 7-5 9l4-1c-1 4-4 6-8 6h3c-2 3-7 4-12 2Z"/></svg>
         </button>
         <button id="touch-magic" type="button" class="icon-button touch-control" aria-label="Магический телепорт" title="Магический телепорт" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3ZM19 3v4m-2-2h4M5 17v4m-2-2h4"/></svg>
+        </button>
+        <button id="touch-crawl" type="button" class="icon-button touch-control" aria-label="Лечь / встать" title="Лечь / встать" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 20h19M3 14l-1-2 2-2V7l3 3 2 2h8a3 3 0 0 1 3 3v3h-5l1-3m-7-3-2 2H3m6 1-2 3H4m5 0h3"/></svg>
         </button>
         <button id="jump" type="button" class="icon-button touch-control" aria-label="Прыжок" title="Прыжок">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7m-14 7 7-7 7 7"/></svg>
@@ -627,9 +635,7 @@
         </button>
       </div>
       <div id="touch-more-panel" aria-label="Дополнительные действия" hidden>
-        <button id="touch-crawl" type="button" aria-pressed="false">Ползти</button>
         <button id="touch-seat" type="button" aria-pressed="false">Сесть / встать</button>
-        <button id="touch-camera" type="button">Вид</button>
         <button id="touch-orbit" type="button" aria-pressed="false">Обзор</button>
         <button id="touch-spectator" type="button" aria-pressed="false">Наблюдатель</button>
         <button id="touch-inventory" type="button">Инвентарь</button>

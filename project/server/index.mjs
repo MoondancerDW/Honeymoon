@@ -1127,17 +1127,22 @@ export function createHoneymoonServer({
           const body = await readInput();
           const pose = readPose(body);
           const fallback=body.fallbackPage!==undefined;
-          if (fallback && (!isMovementPage(body.fallbackPage) ||
-              !game.movementChannel.state(player,credential.deviceId,body.fallbackPage))) {
+          const {afk,page}=body;
+          if (afk!==undefined && (typeof afk!=='boolean' || !isMovementPage(page) || pose.seq===undefined)) {
+            throw new RequestError(400,'invalid_pose');
+          }
+          const ownsPage=value=>game.movementChannel.owns(player,credential.deviceId,value);
+          if (fallback && (!isMovementPage(body.fallbackPage) || !ownsPage(body.fallbackPage))) {
             throw new RequestError(409,'movement_page_replaced');
           }
+          const activity=afk!==undefined && ownsPage(page) ? {afk,page,seq:pose.seq,deviceId:credential.deviceId} : undefined;
           if (body.cartDrive !== undefined && ![-1,0,1].includes(body.cartDrive)) throw new RequestError(400,'invalid_pose');
           if (body.boatDrive !== undefined && (!Array.isArray(body.boatDrive) || body.boatDrive.length !== 2 ||
               body.boatDrive.some(value => ![-1,0,1].includes(value)))) throw new RequestError(400,'invalid_pose');
           game.driveMinecart(player,pose,body.cartDrive,body.boatDrive);
           const {position, seat, stance} = game.session(player);
           presence.join(player, position, {...game.poseFor(player,pose),
-            ...(survival.enabled&&{death:survival.avatarDeath(player)})},{fallback});
+            ...(survival.enabled&&{death:survival.avatarDeath(player)})},{fallback,activity});
           return json(response, 200, {ok:true, position, seat, stance});
         }
         if (method === 'DELETE') {

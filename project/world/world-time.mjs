@@ -1,6 +1,7 @@
 export const dayTicks = 24000;
 const minutesPerDay = 1440;
-export const tickMilliseconds = minutesPerDay * 1000 / dayTicks;
+const millisecondsPerGameMinute = 2000;
+export const tickMilliseconds = minutesPerDay * millisecondsPerGameMinute / dayTicks;
 
 export function clockTick({tick, frozen}, elapsed) {
   return (tick + (frozen ? 0 : Math.max(0, elapsed) / tickMilliseconds)) % dayTicks;

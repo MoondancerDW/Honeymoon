@@ -35,13 +35,14 @@
 #game:not(.playing) #pony-abilities, #game.dead #pony-abilities { display: none; }
 
 #touch .touch-actions {
-  grid-template-areas: "sprint flight jump" "attack use lower";
+  grid-template-areas: "sprint crawl jump" "attack use lower";
   pointer-events: none;
 }
 
 #touch .touch-actions button:not([hidden]) { pointer-events: auto; }
 #touch-sprint { grid-area: sprint; }
 #touch-flight { grid-area: flight; }
+#touch-crawl { grid-area: crawl; }
 #jump { grid-area: jump; }
 #touch-remove { grid-area: attack; }
 #touch-use { grid-area: use; }
@@ -49,12 +50,21 @@
 #touch-magic { grid-area: magic; color: #e2bbff; }
 #touch-magic[data-cooldown] svg { opacity: .5; }
 
-#touch .touch-actions:has(#touch-flight[hidden]):has(#touch-magic:not([hidden])) {
-  grid-template-areas: "sprint magic jump" "attack use lower";
+#touch:has(#touch-flight:not([hidden]), #touch-magic:not([hidden])) {
+  --touch-extra-action-width: 49px;
 }
 
-#touch .touch-actions:has(#touch-flight:not([hidden])):has(#touch-magic:not([hidden])) {
-  grid-template-areas: ". magic ." "sprint flight jump" "attack use lower";
+#touch .touch-actions:has(#touch-flight:not([hidden]), #touch-magic:not([hidden])) {
+  grid-template-columns: repeat(4, 44px);
+  grid-template-areas: "sprint flight crawl jump" "magic attack use lower";
+}
+
+#touch .touch-actions:has(#touch-flight[hidden]):has(#touch-magic:not([hidden])) {
+  grid-template-areas: "sprint magic crawl jump" ". attack use lower";
+}
+
+@media (max-width: 400px) {
+  #touch .touch-actions { gap: 3px; }
 }
 
 @media (orientation: portrait) {
@@ -78,10 +88,6 @@
   #game.touch.playing:has(#pony-abilities:not([hidden])) .target-tag:has(#selected-label:not(:empty)) {
     top: calc(max(.5rem, env(safe-area-inset-top)) + 125px);
     margin-top: 0;
-  }
-
-  .touch #touch:has(#touch-flight:not([hidden])):has(#touch-magic:not([hidden])) #touch-build-panel:not([hidden]) {
-    bottom: calc(max(.4rem, env(safe-area-inset-bottom)) + 195px);
   }
 }
 

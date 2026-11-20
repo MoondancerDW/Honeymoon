@@ -26,6 +26,7 @@ const chatToolsQa=test==='chat-tools'||test==='chat-tools-mobile';
 const raceQa=test==='races-desktop'||test==='races-mobile';
 const jumpChargeQa=test==='jump-charge-hud'||test==='jump-charge-hud-mobile';
 const adminGameplayQa=test==='admin-gameplay'||test==='admin-gameplay-mobile';
+const afkQa=test==='afk-status';
 const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile','jump-charge-hud-mobile','admin-gameplay-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
@@ -36,7 +37,7 @@ let chatRetentionClock=Date.parse('2026-11-19T20:59:30.000Z');
 const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa||jumpChargeQa||adminGameplayQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
   ...(chatRetentionQa&&{clock:()=>chatRetentionClock}),
-  ...((onlineCacheQa||preloadQa||raceAdminQa&&!solo||adminGameplayQa)&&{inviteRequired:true,ownerOnPrimary:true}),
+  ...((onlineCacheQa||preloadQa||raceAdminQa&&!solo||adminGameplayQa||afkQa)&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
 app.server.listen(0,'127.0.0.1');
 await once(app.server,'listening');
@@ -200,6 +201,78 @@ try {
     await click('#self-mode-toggle');
     await page.waitForFunction(()=>!honeymoon.stats().spectator && honeymoon.health().mode==='game');
     result.checks.push({inventoryControls:true,worldModeIncludesSpectator:true,nightVision:true});
+  } else if (afkQa) {
+    await skipPreload();
+    await page.clock.install();
+    await page.addInitScript(()=>{
+      Object.defineProperties(document,{
+        hidden:{configurable:true,value:false},
+        visibilityState:{configurable:true,value:'visible'},
+      });
+    });
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка AFK'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await owner.json();
+    const {name,value}=await page.context().cookies(url).then(cookies=>cookies.find(cookie=>cookie.name==='honeymoon_device'));
+    const actorFeeds=new Set();
+    app.server.on('request',(request,response)=>{
+      if (request.url.startsWith('/api/events?') && request.headers.cookie?.split(/;\s*/).includes(name+'='+value)) {
+        actorFeeds.add(response);
+        response.once('close',()=>actorFeeds.delete(response));
+      }
+    });
+    const platform=[];
+    for (let x=3357; x<=3361; x++) for (let z=1465; z<=1470; z++) {
+      platform.push({x,y:100,z,cell:'legacy:1:0',object:null});
+    }
+    app.game.worldEdit.write(playerId,platform);
+    await start(false);
+    const actorName='Проверка AFK';
+    await hop(3359.5,101,1468.5);
+    const invite=await page.request.post(url+'api/admin/invites',{data:{kind:'player'}});
+    assert.equal(invite.status(),200,await invite.text());
+    const {code}=await invite.json();
+    const viewerContext=await browser.newContext({viewport:{width:800,height:550},hasTouch:true,isMobile:true});
+    await viewerContext.route(/\/api\/terrain-preload\?/,route=>route.fulfill({status:409}));
+    const session=await viewerContext.request.post(url+'api/session',{data:{invite:code,profileName:'Смотрит AFK'}});
+    assert.equal(session.status(),200,await session.text());
+    app.game.teleport((await session.json()).access.uid,{x:3359.5,y:101,z:1466.5});
+    const viewer=await viewerContext.newPage();
+    viewer.on('pageerror',error=>result.errors.push(error.message));
+    await viewer.goto(url,{waitUntil:'domcontentloaded'});
+    await viewer.waitForFunction(()=>globalThis.honeymoon?.stats().playable>0,undefined,{timeout:90000});
+    if (await viewer.locator('#play').isVisible()) await viewer.locator('#play').tap();
+    await viewer.evaluate(()=>honeymoon.look(Math.PI,.1));
+    const expectAfk=active=>viewer.waitForFunction(({name,active})=>honeymoon.players().some(player=>
+      player.nickname===name && player.visible && player.nameplate && player.afk===active && player.afkBadge===active),
+    {name:actorName,active},{timeout:15000});
+    const setHidden=hidden=>page.evaluate(hidden=>{
+      Object.defineProperties(document,{
+        hidden:{configurable:true,value:hidden},
+        visibilityState:{configurable:true,value:hidden?'hidden':'visible'},
+      });
+      document.dispatchEvent(new Event('visibilitychange'));
+    },hidden);
+    await expectAfk(false);
+    await setHidden(true);
+    await expectAfk(true);
+    await viewer.screenshot({path:join(output,'afk-hidden-tab.png')});
+    await setHidden(false);
+    await expectAfk(false);
+    await page.bringToFront();
+    await page.keyboard.press('Shift');
+    await page.clock.fastForward(301_000);
+    await expectAfk(true);
+    await page.keyboard.press('Shift');
+    await expectAfk(false);
+    assert.ok(actorFeeds.size,'the active player has an open event stream');
+    await page.context().setOffline(true);
+    for (const stream of actorFeeds) stream.destroy();
+    await expectAfk(true);
+    await page.context().setOffline(false);
+    await expectAfk(false);
+    result.checks.push({hiddenTab:true,fiveMinuteIdle:true,activityClears:true,connectionLoss:true,reconnectClears:true});
+    await viewerContext.close();
   } else if (test==='microblock-seam') {
     await skipPreload();
     await page.route('**/game.mjs',async route=>{
@@ -1045,7 +1118,8 @@ try {
     if (mobileQa) for (const [width,height] of [[320,610],[390,730],[667,300],[800,370]]) {
       await page.setViewportSize({width,height});
       const controls=['#jump','#touch-remove','#touch-use','#touch-lower','#touch-sprint','#touch-flight','#touch-magic',
-        '#touch-swap-hands','#touch-chat','#stick','#touch-build','#touch-more','#touch-pause','#fullscreen-toggle'];
+        '#touch-crawl','#touch-camera','#touch-swap-hands','#touch-chat','#stick','#touch-build','#touch-more',
+        '#touch-pause','#fullscreen-toggle'];
       const boxes=await Promise.all(controls.map(selector=>page.locator(selector).boundingBox()));
       for (const [index,box] of boxes.entries()) {
         assert.ok(box&&box.width>=44&&box.height>=44&&box.x>=0&&box.y>=0&&box.x+box.width<=width&&box.y+box.height<=height, controls[index]);
@@ -1210,10 +1284,15 @@ try {
     assert.equal(owner.status(),200,await owner.text());
     const {playerId}=await owner.json();
     const y=73, z=1467;
+    const runway=[];
+    for (let x=3358; x<=3361; x++) for (let z=1455; z<=1478; z++) {
+      runway.push({x,y:100,z,cell:'legacy:1:0',object:null});
+    }
     app.game.worldEdit.write(playerId,[
       {x:3361,y,z,cell:null,object:null},
       {x:3362,y,z,cell:'legacy:1:0',object:null},
       {x:3359,y,z,cell:'legacy:54:3',object:{key:`tile:3359:${y}:${z}`,type:'Chest',position:[3359,y,z],data:{Items:[]}}},
+      ...runway,
     ]);
     await start(false);
     await hop(3360.5,72,1467.51);
@@ -1257,6 +1336,12 @@ try {
     await page.locator('#container-close').tap();
     await page.locator('#container-menu').waitFor({state:'hidden'});
     await aim(3362,-Math.PI/2);
+    const toast=page.locator('#toast');
+    await page.waitForFunction(()=>!document.getElementById('toast').textContent);
+    await page.locator('#touch-build').tap();
+    await page.locator('#touch-place').tap();
+    assert.equal(await toast.textContent(),'');
+    await page.locator('#touch-build').tap();
     await page.keyboard.press('KeyO');
     await page.waitForFunction(()=>document.getElementById('toast')?.textContent.includes('Скопировано'));
     const beforeSlide=actions.length;
@@ -1281,29 +1366,57 @@ try {
     await page.locator('#container-close').tap();
     await page.locator('#container-menu').waitFor({state:'hidden'});
     assert.deepEqual(actions,['container_open','copy','place','remove','container_open']);
-    for (const [width,height] of [[390,730],[800,370]]) {
+
+    await hop(3359.5,101,1476.5);
+    await page.waitForFunction(()=>honeymoon.stats().grounded && honeymoon.stats().movementSync.status==='ready');
+    await page.evaluate(()=>honeymoon.look(0,0));
+    async function toggleWhileMoving(id,active) {
+      const pad=await page.locator('#stick').boundingBox();
+      const button=await page.locator('#'+id).boundingBox();
+      const thumb={x:pad.x+pad.width/2,y:pad.y+pad.height*.17,id:5};
+      const finger={x:button.x+button.width/2,y:button.y+button.height/2,id:6};
+      const before=(await stat()).position.z;
+      const advanceFrom=z=>page.waitForFunction(z=>honeymoon.stats().position.z<z-.3,z);
+      await touchEvent('touchStart',thumb);
+      try {
+        await advanceFrom(before);
+        const moving=(await stat()).position.z;
+        await touchEvent('touchStart',thumb,finger);
+        await page.waitForFunction(({id,active})=>document.getElementById(id).getAttribute('aria-pressed')===String(active) &&
+          (id!=='touch-flight' || honeymoon.stats().flying===active),{id,active});
+        await advanceFrom(moving);
+      } finally {await touchEvent('touchEnd');}
+    }
+    for (const id of ['touch-sprint','touch-flight']) {
+      await toggleWhileMoving(id,true);
+      await toggleWhileMoving(id,false);
+    }
+    await page.waitForFunction(()=>honeymoon.stats().grounded);
+    for (const [stance,pressed] of [['crawl','true'],['stand','false']]) {
+      await page.locator('#touch-crawl').tap();
+      await page.waitForFunction(({stance,pressed})=>honeymoon.stats().stance===stance &&
+        document.getElementById('touch-crawl').getAttribute('aria-pressed')===pressed,{stance,pressed});
+    }
+    for (const mode of ['back','front','first']) {
+      await page.locator('#touch-camera').tap();
+      await page.waitForFunction(mode=>honeymoon.perspective().mode===mode,mode);
+    }
+    for (const [width,height] of [[320,568],[390,730],[800,370]]) {
       await page.setViewportSize({width,height});
-      const ids=['jump','touch-lower','touch-sprint','touch-flight','touch-use','touch-remove'];
+      const ids=['jump','touch-lower','touch-sprint','touch-flight','touch-use','touch-remove','touch-crawl','touch-camera'];
       const buttons=await page.locator(ids.map(id=>'#'+id).join(',')).evaluateAll(buttons=>buttons.map(button=>{
         const {top,bottom,left,right,width,height}=button.getBoundingClientRect();
-        return {label:button.getAttribute('aria-label'),top,bottom,left,right,width,height};
+        const atCenter=document.elementFromPoint(left+width/2,top+height/2)?.closest('button');
+        return {id:button.id,label:button.getAttribute('aria-label'),top,bottom,left,right,width,height,reachable:atCenter===button};
       }));
       assert.equal(buttons.length,ids.length);
-      assert.ok(buttons.every(button=>button.label&&button.top>height/2&&button.left>width/2&&
-        button.right<=width&&button.bottom<=height&&button.width>=44&&button.height>=44));
-      const sprint=page.locator('#touch-sprint');
-      const flight=page.locator('#touch-flight');
-      await sprint.tap();
-      assert.equal(await sprint.getAttribute('aria-pressed'),'true');
-      await sprint.tap();
-      assert.equal(await sprint.getAttribute('aria-pressed'),'false');
-      await flight.tap();
-      await page.waitForFunction(()=>honeymoon.stats().flying);
+      assert.ok(buttons.every(button=>button.label&&button.reachable&&button.left>=0&&button.top>=0&&
+        (button.id==='touch-camera'||button.top>height/2)&&
+        button.right<=width&&button.bottom<=height&&button.width>=44&&button.height>=44),JSON.stringify(buttons));
       await shot('touch-gameplay-'+width);
-      await flight.tap();
-      await page.waitForFunction(()=>!honeymoon.stats().flying);
     }
-    result.checks.push({noActionOnSwipe:true,actions,orientationChecks:2,sprintAndFlight:true});
+    result.checks.push({noActionOnSwipe:true,silentEmptyPlacement:true,actions,orientationChecks:3,
+      sprintAndFlightWhileMoving:true,lieDown:true,cameraViews:3});
   } else if (chatRetentionQa) {
     await skipPreload();
     await page.setViewportSize({width:1200,height:750});
@@ -2004,6 +2117,12 @@ try {
       return reply.json();
     }
     const target=[3362,72,1467];
+    await aim(3362.5,72.25,1467.75);
+    await page.waitForFunction(()=>honeymoon.target()?.partSlot===9);
+    await page.waitForFunction(()=>!document.getElementById('toast').textContent);
+    await page.mouse.down({button:'right'});
+    await page.mouse.up({button:'right'});
+    assert.equal(await page.locator('#toast').textContent(),'');
     await aim(3362.5,72.25,1467.75);
     await page.waitForFunction(()=>honeymoon.target()?.partSlot===9);
     const copied=await edit('copy_part',()=>page.keyboard.press('KeyO'));

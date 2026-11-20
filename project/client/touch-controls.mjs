@@ -1,6 +1,5 @@
 const keyActions = {
-  'touch-flight':'KeyF', 'touch-camera':'KeyY','touch-orbit':'KeyU','touch-spectator':'KeyP',
-  'touch-crawl':'KeyV','touch-seat':'KeyX','touch-wave':'KeyB','touch-dance':'KeyZ',
+  'touch-orbit':'KeyU','touch-spectator':'KeyP','touch-seat':'KeyX','touch-wave':'KeyB','touch-dance':'KeyZ',
   'touch-drop':'KeyQ','touch-inventory':'KeyJ','touch-catalog':'KeyI','touch-chat':'KeyT',
   'touch-teleport':'KeyG','touch-clock':'KeyL','touch-chisel':'KeyK','touch-chisel-size':'KeyK',
 };
@@ -58,7 +57,7 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
   function hold(id,act,allowed=enabled) {
     const button=element(id);
     button.addEventListener('pointerdown',event=>{
-      if (!allowed() || captured.has(id)) return;
+      if (event.button!==0 || !allowed() || captured.has(id)) return;
       event.preventDefault();
       captured.set(id,event.pointerId);
       button.setPointerCapture(event.pointerId);
@@ -89,12 +88,18 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
   });
   hold('touch-remove',attack);
 
-  for (const [id,code] of Object.entries(keyActions)) element(id).addEventListener('click',()=>{
-    if (!enabled()) return;
+  function pressKey(id,code) {
     extra(false);
     sendKey(code,true,{shiftKey:id==='touch-chisel-size'});
     sendKey(code,false);
+  }
+
+  for (const [id,code] of Object.entries(keyActions)) element(id).addEventListener('click',()=>{
+    if (enabled()) pressKey(id,code);
   });
+  for (const [id,code] of [['touch-flight','KeyF'],['touch-camera','F5'],['touch-crawl','KeyV']]) {
+    hold(id,pressed=>{if (pressed) pressKey(id,code);});
+  }
   for (const [id,type] of [['touch-copy','copy'],['touch-rotate','rotate']]) {
     element(id).addEventListener('click',()=>{if(enabled()) block(type);});
   }
@@ -108,8 +113,8 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
     extra(false);
   });
   element('touch-pause').addEventListener('click',()=>{if (enabled()) pause();});
-  sprintButton.addEventListener('click',()=>{
-    if (!enabled()) return;
+  hold('touch-sprint',pressed=>{
+    if (!pressed) return;
     sprint=!sprint;
     sprintButton.setAttribute('aria-pressed',String(sprint));
   });

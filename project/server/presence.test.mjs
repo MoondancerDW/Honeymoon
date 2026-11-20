@@ -187,6 +187,50 @@ test('verified HTTP presence renews visibility during a lost stream and expires 
   assert.equal(server.onlinePosition('player'),undefined);
 });
 
+test('AFK marks tab reports and silent connections, recovers on reconnect, then expires after a prolonged disconnect',()=>{
+  let time=0;
+  const messages=[];
+  const server=createPresence({store:{getProfile:()=>undefined},now:()=>time,
+    send:(response,name,data)=>{if (response==='observer') messages.push({name,data});}});
+  const observer={player:'observer',response:'observer'};
+  const page='eb988a08-6c9d-4755-b35d-21cd63db7acd';
+  const player={player:'player',response:'player',deviceId:'device',movementPage:page};
+  for (const stream of [observer,player]) server.connect(stream,server.prepare(stream.player));
+  const pose=readPose({yaw:0,pitch:0});
+  const report=(afk,seq)=>server.join(player.player,point,pose,{activity:{afk,seq,page,deviceId:player.deviceId}});
+  const state=()=>{server.flush();return messages.at(-1).data.players[0]?.afk;};
+
+  report(false,1);
+  assert.equal(state(),false);
+  report(true,3);
+  report(false,2);
+  assert.equal(state(),true,'an older request cannot remove the label');
+  report(false,4);
+  assert.equal(state(),false);
+
+  time+=44999;
+  assert.equal(state(),false);
+  time++;
+  assert.equal(state(),true,'a half-open event stream is detected by the missing activity lease');
+  report(false,5);
+  assert.equal(state(),false);
+
+  server.disconnect(player);
+  assert.equal(state(),true);
+  time+=9999;
+  assert.equal(state(),true);
+  server.connect(player,server.prepare(player.player));
+  assert.equal(state(),false);
+  report(true,6);
+  server.disconnect(player);
+  server.connect(player,server.prepare(player.player));
+  assert.equal(state(),true,'reopening the stream does not clear a hidden or idle tab');
+  server.disconnect(player);
+  time+=10000;
+  assert.equal(state(),undefined);
+  assert.equal(server.onlinePosition(player.player),undefined);
+});
+
 const air = {key:'air', object:null};
 const base = {
   hash:'presence-test',
@@ -257,6 +301,34 @@ test('HTTP-only presence requires a movement page bound to the authenticated pla
   const nextPage='5d48b81c-960c-4dff-a4a8-cc8cb04cf0aa';
   assert.equal((await post('position-state',{page:nextPage,start:true},player)).status,200);
   assert.equal((await post('presence',fallback,player)).status,409);
+});
+
+test('authenticated presence reports only change AFK from the active movement page',async t=>{
+  const app=createHoneymoonServer({base,geometry,state:':memory:'});
+  t.after(()=>app.close());
+  app.server.listen(0,'127.0.0.1');
+  await once(app.server,'listening');
+  const url=`http://127.0.0.1:${app.server.address().port}`;
+  const signal=AbortSignal.timeout(8000);
+  const post=(path,body,cookie)=>fetch(url+'/api/'+path,{method:'POST',signal,
+    headers:{'Content-Type':'application/json',...(cookie&&{Cookie:cookie})},body:JSON.stringify(body)});
+  const session=async()=>(await post('session',{})).headers.get('Set-Cookie').split(';')[0];
+  const player=await session(), observer=await session();
+  const page='8b228308-9d9e-4e02-87c3-dd6ca091de0b', stalePage='21e6b0b3-3862-4eaf-85ea-97451ab883db';
+  const basePose={yaw:0,pitch:0};
+  assert.equal((await post('position-state',{page,start:true},player)).status,200);
+  assert.equal((await post('presence',{...basePose,afk:false,page,seq:0})).status,401);
+  assert.equal((await post('presence',{...basePose,afk:'false',page,seq:0},player)).status,400);
+  const observed=await eventFeed(url,player,signal);
+  const firstObserver=await eventFeed(url,observer,signal);
+  assert.equal((await post('presence',{...basePose,afk:true,page,seq:1},player)).status,200);
+  assert.equal((await firstObserver.next('presence',event=>event.players.some(p=>p.afk))).data.players[0].afk,true);
+  assert.equal((await post('presence',{...basePose,afk:false,page:stalePage,seq:2},player)).status,200);
+  const afterStale=await eventFeed(url,observer,signal);
+  assert.equal((await afterStale.next('presence')).data.players[0].afk,true);
+  assert.equal((await post('presence',{...basePose,afk:false,page,seq:3},player)).status,200);
+  assert.equal((await afterStale.next('presence-motion')).data.players[0].afk,false);
+  await Promise.all([observed.close(),firstObserver.close(),afterStale.close()]);
 });
 
 test('independent cookies share profiles and only confirmed movement, and retain skins after restart', {timeout:20000}, async t => {

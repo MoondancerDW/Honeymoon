@@ -122,11 +122,26 @@
 }
 .touch .touch-quick .fullscreen-toggle { position: static; }
 #touch .touch-quick button { width: 44px; height: 44px; line-height: 1; padding: .15rem; }
-#touch-chat {
+:is(#touch-chat, #touch-camera) {
   position: absolute;
   z-index: 3;
   top: max(.5rem, env(safe-area-inset-top));
+}
+#touch-chat {
   left: max(.5rem, env(safe-area-inset-left));
+}
+#touch-camera {
+  left: calc(max(.5rem, env(safe-area-inset-left)) + 49px);
+}
+#touch:has(#touch-swap-hands:not([hidden])) #touch-camera {
+  left: calc(max(.5rem, env(safe-area-inset-left)) + 98px);
+}
+@media (max-width: 350px) {
+  #touch:has(#touch-swap-hands:not([hidden])) #touch-camera {
+    top: calc(max(.5rem, env(safe-area-inset-top)) + 76px);
+    left: auto;
+    right: max(.5rem, env(safe-area-inset-right));
+  }
 }
 #touch-chat i { width: 17px; height: 12px; border: 1.5px solid; border-radius: 3px; }
 #touch-chat i::after {
@@ -179,7 +194,7 @@
 #touch-lower:not([data-flight]) .touch-descend-icon,
 #touch-lower[data-flight] .touch-crouch-icon { display: none; }
 .touch #touch-build-panel:not([hidden]) {
-  right: calc(max(.55rem, env(safe-area-inset-right)) + 150px);
+  right: calc(max(.55rem, env(safe-area-inset-right)) + 150px + var(--touch-extra-action-width, 0px));
   grid-template-columns: repeat(2, 44px);
 }
 .touch #stick {
@@ -324,6 +339,12 @@
 }
 @media (orientation: landscape) and (max-height: 460px) {
   .touch .hud-hotbar-row #hotbar { --gui-px: clamp(1.25px, 4dvh / 6, 1.85px); }
+}
+@media (orientation: landscape) and (max-width: 450px) {
+  .touch #touch-build-panel:not([hidden]) {
+    bottom: calc(max(.4rem, env(safe-area-inset-bottom)) + 146px);
+    right: max(.55rem, env(safe-area-inset-right));
+  }
 }
 @media (max-width: 375px) {
   #touch .touch-quick { gap: .16rem; }

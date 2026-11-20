@@ -101,6 +101,7 @@ export function createMovementChannel(positionState) {
       const channel = get(player,device,page);
       return channel && snapshot(channel,player);
     },
+    owns: (player,device,page) => Boolean(get(player,device,page)),
     invalidate(player) {
       const channel = channels.get(player);
       if (channel) reset(channel);

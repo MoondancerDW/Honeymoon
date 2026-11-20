@@ -17,14 +17,18 @@ test('all 1440 clock minutes round trip and the shared clock freezes, resumes an
     let now = 1000;
     const clock = createWorldTime(store, () => now);
     assert.equal(clock.snapshot().tick, 6000);
+    now += 1999;
+    assert.equal(formatClock(clock.snapshot().tick), '12:00');
+    now += 1;
+    assert.equal(formatClock(clock.snapshot().tick), '12:01');
     assert.deepEqual(clock.set({tick:23999, frozen:true}), {tick:23999, frozen:true});
     now += 105;
     assert.deepEqual(clock.snapshot(), {tick:23999, frozen:true});
     assert.deepEqual(createWorldTime(store, () => now).snapshot(), clock.snapshot());
     clock.set({frozen:false});
-    now += 180;
+    now += 360;
     assert.deepEqual(clock.snapshot(), {tick:2, frozen:false});
-    now += 60000;
+    now += 120000;
     assert.equal(formatClock(clock.snapshot().tick), '07:00');
     assert.throws(() => clock.set({tick:24000}), {code:'invalid_world_time'});
   } finally { store.close(); }

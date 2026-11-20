@@ -7,22 +7,31 @@ const maxNameplateDistance = 64;
 const corner = Math.PI * 2;
 const angleBetween = (from, to) => ((to - from + Math.PI) % corner + corner) % corner - Math.PI;
 
-function nameTexture(nickname, typing) {
+function nameTexture(nickname, typing, afk) {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
   const font = 'bold 18px monospace';
   context.font = font;
-  const width = Math.max(30, Math.ceil(context.measureText(nickname).width) + 8);
-  const height = typing ? 46 : 24;
+  const width = Math.max(afk ? 36 : 30, Math.ceil(context.measureText(nickname).width) + 8);
+  const afkHeight = afk ? 20 : 0;
+  const height = (typing ? 46 : 24) + afkHeight;
   canvas.width = width;
   canvas.height = height;
   context.fillStyle = 'rgba(0, 0, 0, .28)';
   context.fillRect(0, height - 24, width, 24);
   if (typing) {
     const left = Math.round(width / 2) - 12;
-    context.fillRect(left - 2, 0, 28, 18);
+    context.fillRect(left - 2, afkHeight, 28, 18);
     context.fillStyle = '#fff';
-    for (let i = 0; i < 3; i++) context.fillRect(left + 4 + i * 8, 8, 4, 4);
+    for (let i = 0; i < 3; i++) context.fillRect(left + 4 + i * 8, afkHeight + 8, 4, 4);
+  }
+  if (afk) {
+    context.fillStyle = 'rgba(12, 18, 23, .85)';
+    context.fillRect(Math.round(width / 2) - 18, 0, 36, 17);
+    context.textAlign = 'center';
+    context.font = 'bold 14px monospace';
+    context.fillStyle = '#ffd889';
+    context.fillText('AFK', width / 2, 13);
   }
   context.font = font;
   context.textBaseline = 'alphabetic';
@@ -39,8 +48,8 @@ function nameTexture(nickname, typing) {
 }
 
 function setNameplate(player) {
-  if (player.labelName === player.nickname && player.labelTyping === player.typing) return;
-  const texture = nameTexture(player.nickname, player.typing);
+  if (player.labelName === player.nickname && player.labelTyping === player.typing && player.labelAfk === player.afk) return;
+  const texture = nameTexture(player.nickname, player.typing, player.afk);
   const {label} = player;
   label.material.map?.dispose();
   label.material.map = texture;
@@ -49,6 +58,7 @@ function setNameplate(player) {
   label.center.set(.5,0);
   player.labelName = player.nickname;
   player.labelTyping = player.typing;
+  player.labelAfk = player.afk;
 }
 
 function setProfile(player,{nickname,skin,size}) {
@@ -81,6 +91,7 @@ function setPose(player, pose) {
   player.spectator = pose.spectator === true;
   player.avatar.setGhost(player.spectator);
   player.typing = pose.typing === true;
+  player.afk = pose.afk === true;
   player.swing = pose.swing ?? 0;
   player.held = pose.held;
   player.offhand = pose.offhand;
@@ -199,7 +210,8 @@ export class RemotePlayers {
       player.avatar.ragdoll(death?.cause==='lava'?null:death,dt);
       const ash=player.avatar.lavaDeath(death,now);
       if (ash) this.burnPlayer?.(ash,object.position,now);
-      player.label.visible = !player.spectator && !death && player.stance === 'stand' && distance < maxNameplateDistance ** 2;
+      player.label.visible = !player.spectator && !death && (player.stance === 'stand' || player.afk) &&
+        distance < maxNameplateDistance ** 2;
       player.label.position.y = player.avatar.labelHeight - .12;
       object.updateMatrixWorld(true);
     }
@@ -212,12 +224,13 @@ export class RemotePlayers {
       this.projected.y += .85;
       this.projected.project(this.camera);
       const {x, y, z} = this.projected;
+      const nameplate=object.visible && player.label.visible;
       let meshCount = 0;
       player.avatar.object.traverse(mesh => { if (mesh.isMesh && mesh.visible) meshCount++; });
       return {...player.avatar.inspect(), id, nickname:player.nickname, skin:player.skin, position:{x:target.x, y:target.y, z:target.z},
         yaw:player.yaw, bodyYaw:object.rotation.y, pitch:player.pitch, motion:player.motion, visible:object.visible, meshCount,
         equipment:player.spectator ? undefined : player.equipment,spectator:player.spectator,ghost:player.spectator,
-        typing:player.typing, nameplate:object.visible && player.label.visible,
+        typing:player.typing, nameplate, afk:player.afk, afkBadge:nameplate && player.labelAfk===true,
         onScreen:object.visible && Math.abs(x) <= 1 && Math.abs(y) <= 1 && z >= -1 && z <= 1};
     });
   }

@@ -6,6 +6,8 @@ import { isMicroPart, publicMicroPart } from '../world/microblocks.mjs';
 const poses = new Set(['idle', 'walk', 'run', 'air', 'fly', 'swim', 'sit']);
 const reconnectGrace = 2000;
 const fallbackLease = 5000;
+const afkReconnectGrace = 10_000;
+const activityLease = 45_000;
 const maxEntries = 128;
 const heldKey = /^[a-z0-9][a-z0-9:_-]{0,95}$/;
 
@@ -68,13 +70,13 @@ export function createPresence({store, profileFor = player => publicProfile(play
     return players.get(player);
   }
 
-  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, offhand, spectator, stance, boost,equipment,groundSeat,emote,death}) => ({
+  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, offhand, spectator, stance, boost,equipment,groundSeat,emote,death,afk}) => ({
     id:profile.id, position, yaw, pitch, motion, lookYaw,
     ...(typing !== undefined && {typing}), ...(swing !== undefined && {swing}), ...(held !== undefined && {held}),
     ...(offhand && {offhand}),
     ...(spectator !== undefined && {spectator}), ...(stance !== undefined && {stance}), ...(boost !== undefined && {boost}),
     ...(equipment !== undefined && {equipment}), ...(groundSeat !== undefined && {groundSeat}),
-    ...(emote !== undefined && {emote}),...(death !== undefined && {death})});
+    ...(emote !== undefined && {emote}),...(death !== undefined && {death}),...(afk !== undefined && {afk})});
   function snapshot(viewer) {
     const admin=canSeeSpectators(viewer);
     return [...players].flatMap(([player,entry])=>player!==viewer && entry.visible && (admin || !entry.spectator)
@@ -88,6 +90,27 @@ export function createPresence({store, profileFor = player => publicProfile(play
     entry.visible = visible;
     rosterChanged = true;
     onVisibility?.(entry.profile, visible, player,Boolean(entry.spectator));
+  }
+
+  function updateAfk(player, entry, time) {
+    const activity=entry.activity;
+    if (!activity) return;
+    const afk=activity.afk || activity.disconnected || time-activity.seen>=activityLease;
+    if (entry.afk===afk) return;
+    entry.afk=afk;
+    if (entry.visible) changed.add(player);
+  }
+
+  function isActivityStream(stream, activity) {
+    return stream.deviceId===activity.deviceId && stream.movementPage===activity.page;
+  }
+
+  function recordActivity(player, entry, report) {
+    const current=entry.activity;
+    if (current?.page===report.page && current.deviceId===report.deviceId && current.seq>report.seq) return;
+    const time=now();
+    entry.activity={...report,seen:time,disconnected:false};
+    updateAfk(player,entry,time);
   }
 
   function update(player, position, pose) {
@@ -164,13 +187,25 @@ export function createPresence({store, profileFor = player => publicProfile(play
     connect(stream, entry) {
       listeners.add(stream);
       entry.connections++;
+      if (entry.activity && isActivityStream(stream,entry.activity)) {
+        entry.activity.seen=now();
+        entry.activity.disconnected=false;
+        updateAfk(stream.player,entry,entry.activity.seen);
+      }
       if (entry.position) visibility(stream.player, entry, true);
       send(stream.response, 'presence', roster(stream));
     },
     disconnect(stream) {
       if (!listeners.delete(stream)) return;
       const entry = players.get(stream.player);
-      if (entry && --entry.connections === 0) entry.until = now() + reconnectGrace;
+      if (!entry) return;
+      const time=now();
+      if (--entry.connections===0) entry.until=time+(entry.visible && entry.activity ? afkReconnectGrace : reconnectGrace);
+      if (entry.activity && (!entry.connections || isActivityStream(stream,entry.activity) &&
+          ![...listeners].some(other=>other.player===stream.player && isActivityStream(other,entry.activity)))) {
+        entry.activity.disconnected=true;
+        updateAfk(stream.player,entry,time);
+      }
     },
     profile(player, profile) {
       const entry = players.get(player);
@@ -179,7 +214,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
         if (entry.visible) rosterChanged = true;
       }
     },
-    join(player, position, pose, {fallback=false} = {}) {
+    join(player, position, pose, {fallback=false,activity} = {}) {
       const entry = entryFor(player);
       if (!entry.connections) {
         if (fallback) entry.until = now() + fallbackLease;
@@ -195,6 +230,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
         entry.emote = entry.offhand = undefined;
       }
       update(player, position, pose);
+      if (activity) recordActivity(player,entry,activity);
       if (entry.connections || fallback) visibility(player, entry, true);
     },
     leave(player) {
@@ -204,6 +240,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
       entry.position = undefined;
       entry.confirmedPosition = undefined;
       entry.seq = undefined;
+      entry.activity = entry.afk = undefined;
     },
     update,
     refreshRoster() { rosterChanged=true; },
@@ -211,9 +248,16 @@ export function createPresence({store, profileFor = player => publicProfile(play
       const time = now();
       for (const [player, entry] of players) {
         if (!entry.connections && entry.until <= time) {
-          players.delete(player);
-          visibility(player, entry, false);
+          if (entry.visible && entry.activity && !entry.activity.disconnected) {
+            entry.activity.disconnected=true;
+            entry.until=time+afkReconnectGrace;
+          } else {
+            players.delete(player);
+            visibility(player,entry,false);
+            continue;
+          }
         }
+        updateAfk(player,entry,time);
       }
       if (rosterChanged) {
         for (const stream of listeners) send(stream.response, 'presence', roster(stream));
