@@ -5,6 +5,7 @@ import { isMicroPart, publicMicroPart } from '../world/microblocks.mjs';
 
 const poses = new Set(['idle', 'walk', 'run', 'air', 'fly', 'swim', 'sit']);
 const reconnectGrace = 2000;
+const fallbackLease = 5000;
 const maxEntries = 128;
 const heldKey = /^[a-z0-9][a-z0-9:_-]{0,95}$/;
 
@@ -173,9 +174,12 @@ export function createPresence({store, profileFor = player => publicProfile(play
         if (entry.visible) rosterChanged = true;
       }
     },
-    join(player, position, pose) {
+    join(player, position, pose, {fallback=false} = {}) {
       const entry = entryFor(player);
-      if (!entry.connections && !entry.visible) entry.until = now() + reconnectGrace;
+      if (!entry.connections) {
+        if (fallback) entry.until = now() + fallbackLease;
+        else if (!entry.visible) entry.until = now() + reconnectGrace;
+      }
       if (!entry.position) {
         entry.position = roundPosition(position);
         entry.confirmedPosition = position;
@@ -185,7 +189,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
         entry.typing = entry.swing = entry.held = entry.spectator = entry.stance = entry.boost = entry.equipment = entry.groundSeat = undefined;
         entry.emote = entry.offhand = undefined;
       }
-      if (entry.connections) visibility(player, entry, true);
+      if (entry.connections || fallback) visibility(player, entry, true);
       update(player, position, pose);
     },
     leave(player) {

@@ -260,6 +260,7 @@ export function createHoneymoonServer({
   base = loadBase(join(generated, 'world'),{partial:soloCache}),
   secure = false,
   allowedOrigin,
+  comparisonOrigin,
   publicOrigin = allowedOrigin,
   inviteRequired = secure,
   singlePlayer = false,
@@ -1036,13 +1037,18 @@ export function createHoneymoonServer({
         if (method === 'POST') {
           const body = await readInput();
           const pose = readPose(body);
+          const fallback=body.fallbackPage!==undefined;
+          if (fallback && (!isMovementPage(body.fallbackPage) ||
+              !game.movementChannel.state(player,credential.deviceId,body.fallbackPage))) {
+            throw new RequestError(409,'movement_page_replaced');
+          }
           if (body.cartDrive !== undefined && ![-1,0,1].includes(body.cartDrive)) throw new RequestError(400,'invalid_pose');
           if (body.boatDrive !== undefined && (!Array.isArray(body.boatDrive) || body.boatDrive.length !== 2 ||
               body.boatDrive.some(value => ![-1,0,1].includes(value)))) throw new RequestError(400,'invalid_pose');
           game.driveMinecart(player,pose,body.cartDrive,body.boatDrive);
           const {position, seat, stance} = game.session(player);
           presence.join(player, position, {...game.poseFor(player,pose),
-            ...(survival.enabled&&{death:survival.avatarDeath(player)})});
+            ...(survival.enabled&&{death:survival.avatarDeath(player)})},{fallback});
           return json(response, 200, {ok:true, position, seat, stance});
         }
         if (method === 'DELETE') {
@@ -1318,12 +1324,15 @@ export function createHoneymoonServer({
     if (!filename || !await serveFile(request, response, filename)) throw new RequestError(404, 'not_found');
   }
 
+  const comparisonHost = secure && comparisonOrigin ? new URL(comparisonOrigin).host : undefined;
   function listener(privatePort) {
     const http=createServer({requestTimeout:15000},(request,response)=>{
       const owner=(privatePort || ownerOnPrimary&&!secure) && ownerRequest(request,http.address());
       if (singlePlayer&&!owner) return json(response,403,{error:'local_only'});
       if (privatePort&&!owner) return json(response,403,{error:'owner_only'});
-      dispatch(request,response,owner,!privatePort&&secure,privatePort?undefined:allowedOrigin).catch(error=>{
+      const requestOrigin=privatePort ? undefined :
+        comparisonHost && request.headers.host===comparisonHost ? comparisonOrigin : allowedOrigin;
+      dispatch(request,response,owner,!privatePort&&secure,requestOrigin).catch(error=>{
         if (response.destroyed) return;
         if (response.headersSent) return destroyStream(response,'handler_error');
         if (error instanceof RequestError) return json(response,error.status,{error:error.code,...error.details});
@@ -1350,7 +1359,7 @@ export function createHoneymoonServer({
     for (const stream of streams) {
       const {player,response}=stream;
       game.touch(player);
-      writeStream(response,': heartbeat\n\n');
+      writeEvent(response,'stream-heartbeat',{});
       loadLog?.heartbeat(response);
       sendStudyHeartbeat(stream);
     }

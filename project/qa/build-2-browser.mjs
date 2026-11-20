@@ -27,7 +27,8 @@ const raceQa=test==='races-desktop'||test==='races-mobile';
 const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
-const state=solo || networkQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
+const startupQa=test==='startup-network';
+const state=solo || networkQa || startupQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
 let chatRetentionClock=Date.parse('2026-11-19T20:59:30.000Z');
 const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa?'game':'creative',
@@ -1110,8 +1111,7 @@ try {
 
     await openDock();
     const first=await send('Сообщение в 23:59 по Москве','global');
-    const initialStreamRequests=streamRequests;
-    assert.ok(initialStreamRequests>0);
+    assert.ok(streamRequests>0);
     await page.evaluate(()=>{window.chatRetentionPage=true;});
     await advanceClock(Date.parse('2026-11-19T21:02:30.000Z'));
     const second=await send('Сообщение после полуночи по Москве','global');
@@ -1131,7 +1131,6 @@ try {
     await second.row.waitFor({state:'detached'});
     assert.ok(await local.row.isVisible());
     assert.equal(await page.evaluate(()=>window.chatRetentionPage),true);
-    assert.equal(streamRequests,initialStreamRequests);
 
     await start(false);
     await openDock();
@@ -1140,7 +1139,7 @@ try {
     assert.equal(await second.row.count(),0);
     await advanceClock(local.at+lifetime+30_000);
     await local.row.waitFor({state:'detached'});
-    result.checks.push({moscowMidnightKeepsHistory:true,individualExpiryOnSameStream:true,recentHistoryAfterReload:true,
+    result.checks.push({moscowMidnightKeepsHistory:true,individualExpiryOnSamePage:true,recentHistoryAfterReload:true,
       localExpiry:true,browserClockSkewHours:8});
   } else if (chatToolsQa) {
     await skipPreload();
@@ -2582,6 +2581,111 @@ try {
     assert.ok(records.some(record=>record.kind==='heartbeat' && record.position.length===3));
     result.checks.push({records,stats:await stat()});
     await shot('solo-play');
+  } else if (startupQa) {
+    await skipPreload();
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка входа'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const rejectSession=route=>route.fulfill({status:503});
+    await page.route('**/api/session',rejectSession);
+    await page.goto(url,{waitUntil:'domcontentloaded'});
+    await page.locator('#connection-retry').waitFor({state:'visible'});
+    const queued=await page.evaluate(()=>JSON.parse(localStorage.getItem('honeymoon-startup-diagnostics:v1')));
+    assert.ok(queued.some(event=>event.phase==='authorization' && event.outcome==='failed' && event.status===503));
+    await page.unroute('**/api/session',rejectSession);
+    await start(false);
+    let report;
+    const until=Date.now()+12000;
+    do {
+      const response=await page.request.get(url+'api/admin/network-diagnostics?hours=1');
+      assert.equal(response.status(),200,await response.text());
+      report=(await response.json()).startup;
+      if (report.byRoute.local?.world?.ok) break;
+      await page.waitForTimeout(250);
+    } while(Date.now()<until);
+    const phases=report.byRoute.local;
+    assert.ok(phases.authorization.failed>=1 && phases.authorization.ok>=1);
+    for (const phase of ['document','bootstrap','world','sse','position']) assert.ok(phases[phase]?.ok,phase);
+    result.checks.push({startupPhases:phases,keptPreAuthFailureAfterReload:true});
+  } else if (test==='network-fallback') {
+    await skipPreload();
+    let blockEvents=false, blockPing=false, failedStreams=0;
+    await page.route(/\/api\/events(?:\?|$)/,route=>{
+      if (!blockEvents) return route.continue();
+      failedStreams++;
+      return route.abort('failed');
+    });
+    await page.route('**/api/ping',route=>blockPing ? route.fulfill({status:503}) : route.continue());
+    await page.addInitScript(()=>{
+      let stream;
+      window.EventSource=class extends EventSource {
+        constructor(...args) {
+          super(...args);
+          if (new URL(this.url).pathname==='/api/events') stream=this;
+        }
+      };
+      window.qaEventsOpen=()=>stream?.readyState===EventSource.OPEN;
+      window.qaCutEvents=()=>{
+        stream.close();
+        stream.dispatchEvent(new Event('error'));
+      };
+    });
+    await start();
+
+    async function sit() {
+      await page.keyboard.press('KeyX');
+      await page.waitForFunction(()=>honeymoon.stats().seat?.kind==='ground' &&
+        honeymoon.stats().movementSync.status==='ready');
+    }
+    async function standByMoving() {
+      const request=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/seat' &&
+        response.request().postDataJSON()?.ground===false,{timeout:10_000});
+      await page.keyboard.down('KeyW');
+      try {
+        const reply=await request;
+        assert.equal(reply.status(),200,await reply.text());
+        await page.waitForFunction(()=>!honeymoon.stats().seat);
+      } finally {
+        await page.keyboard.up('KeyW');
+      }
+    }
+    await sit();
+    await page.evaluate(()=>{
+      const alert=document.getElementById('connection-alert');
+      window.qaReconnectNotices=[];
+      new MutationObserver(()=>{
+        const text=document.getElementById('connection-message').textContent;
+        if (!alert.hidden && /Восстанавливаем|недоступен/.test(text)) qaReconnectNotices.push(text);
+      }).observe(alert,{attributes:true,attributeFilter:['hidden'],childList:true,subtree:true});
+    });
+
+    blockEvents=true;
+    await page.evaluate(()=>qaCutEvents());
+    const verified=[];
+    for (let sample=0;sample<4;sample++) {
+      const state=await page.waitForResponse(response=>new URL(response.url()).pathname==='/api/position-state' &&
+        response.status()===200,{timeout:10_000});
+      assert.ok((await state.json()).movement?.epoch);
+      verified.push(performance.now());
+    }
+    assert.ok(verified.at(-1)-verified[0]>=3500,'HTTP confirmations continue through an idle SSE outage');
+    assert.ok(failedStreams>0);
+    assert.equal(await page.evaluate(()=>qaEventsOpen()),false);
+    await standByMoving();
+    assert.deepEqual(await page.evaluate(()=>qaReconnectNotices),[]);
+
+    blockEvents=false;
+    await page.waitForFunction(()=>qaEventsOpen(),undefined,{timeout:12_000});
+    await page.waitForFunction(()=>/\d/.test(document.getElementById('connection-ping').textContent));
+    await sit();
+    blockPing=true;
+    await page.waitForResponse(response=>new URL(response.url()).pathname==='/api/ping' && response.status()===503);
+    await page.waitForFunction(()=>document.getElementById('connection-ping').textContent==='Пинг —');
+    assert.equal(await page.evaluate(()=>qaEventsOpen()),true);
+    await standByMoving();
+    assert.deepEqual(await page.evaluate(()=>qaReconnectNotices),[]);
+    result.checks.push({failedStreams,authoritativeHttpChecks:verified.length,
+      httpOnlyIdleMs:Math.round(verified.at(-1)-verified[0]),stoodDuringSseOutage:true,
+      sseReopened:true,stoodDuringPingFailure:true,reconnectNotices:0});
   } else if (networkQa) {
     let simulatedFailures=0, delayed=0;
     const events=[];

@@ -20,3 +20,16 @@ test('terrain downloads back off on spikes relative to the connection and resume
   network.sample(385,41_250);
   assert.equal(network.constrained(41_250),false);
 });
+
+test('background work stays paused throughout recovery and respects any remaining latency backoff', () => {
+  const network = createTerrainNetwork();
+  network.setRecovery(true);
+  network.sample(120,100);
+  assert.equal(network.backgroundPaused(),true);
+  assert.equal(network.constrained(10_000),true);
+  network.sample(null,10_000);
+  network.setRecovery(false);
+  assert.equal(network.backgroundPaused(),false);
+  assert.equal(network.constrained(11_000),true);
+  assert.equal(network.constrained(13_000),false);
+});

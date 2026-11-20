@@ -1,3 +1,5 @@
+import {startupDiagnostics} from './startup-diagnostics.mjs';
+
 const errors={
   invite_required:'Для входа откройте ссылку-приглашение.',
   profile_name_required:'Введите имя профиля.',
@@ -41,6 +43,26 @@ export function createAccessUi({element,post}) {
   const profile=element('access-profile');
   let invitation;
 
+  async function requestAccess(path,credentials) {
+    startupDiagnostics.begin('authorization');
+    try {
+      const response=await post(path,credentials,AbortSignal.timeout(10000));
+      const {ok,status,body}=response;
+      const code=body?.error;
+      if (body?.access?.activeElsewhere || code==='profile_active_elsewhere') {
+        startupDiagnostics.fail('authorization',{why:'occupied',status});
+      } else if (ok && body?.access) startupDiagnostics.complete('authorization');
+      else if (ok) startupDiagnostics.fail('authorization',{why:'bad_response',status});
+      else if (body?.ownerBootstrap || ['profile_name_required','invite_required','already_authenticated'].includes(code)) {
+        startupDiagnostics.fail('authorization',{why:'input_required',status});
+      } else startupDiagnostics.fail('authorization',{why:status===401 || status===403 ? 'credentials' : 'http',status});
+      return response;
+    } catch (error) {
+      startupDiagnostics.fail('authorization',error);
+      throw error;
+    }
+  }
+
   function hint(code,reason) {
     status.textContent=errors[code]??'Не удалось войти. Проверьте ссылку или попробуйте снова.';
     if (code==='profile_banned' && typeof reason==='string' && reason) status.append(' Причина блокировки — '+reason);
@@ -74,7 +96,7 @@ export function createAccessUi({element,post}) {
         credentials.deviceName=browserLabel();
         if (profileName) credentials.profileName=profileName;
         try {
-          const response=await post(path,credentials,AbortSignal.timeout(10000));
+          const response=await requestAccess(path,credentials);
           if (response.ok) {
             form.onsubmit=null;
             form.reset();
@@ -107,7 +129,7 @@ export function createAccessUi({element,post}) {
         if (submit.disabled) return;
         submit.disabled=true;
         try {
-          const response=await post('session',{},AbortSignal.timeout(10000));
+          const response=await requestAccess('session',{});
           if (response.ok && !response.body.access?.activeElsewhere) {
             form.onsubmit=null;
             resolve(response);
@@ -120,9 +142,9 @@ export function createAccessUi({element,post}) {
 
   async function acquire() {
     invitation=new URLSearchParams(location.hash.slice(1)).get('invite');
-    let attempt=await post('session',invitation?{invite:invitation,deviceName:browserLabel()}:{},AbortSignal.timeout(10000));
+    let attempt=await requestAccess('session',invitation?{invite:invitation,deviceName:browserLabel()}:{});
     if (invitation && attempt.body?.error==='already_authenticated') {
-      attempt=await post('session',{},AbortSignal.timeout(10000));
+      attempt=await requestAccess('session',{});
     }
     let ready=attempt;
     if (!attempt.ok) {

@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import {test} from 'node:test';
 import {createHoneymoonServer} from './index.mjs';
-import {createLoadLog} from './load-log.mjs';
+import {connectionReport,createLoadLog,networkPlayerTag} from './load-log.mjs';
 import {loadPlayerDiagnostics} from './player-diagnostics.mjs';
 import {reviewNetworkDiagnostics} from './network-diagnostics-review.mjs';
 import * as geometry from '../world/geometry.mjs';
@@ -22,6 +22,34 @@ async function directory(t) {
 function rows(value) {
   return value.trim().split('\n').map(line=>JSON.parse(line));
 }
+
+test('authenticated startup diagnostics expose only bounded phase data and deduplicate retries by event ID',async t=>{
+  const path=await directory(t);
+  const at=Date.parse('2026-11-20T10:44:00Z');
+  const log=createLoadLog({directory:path,now:()=>at,intervalMs:0});
+  t.after(()=>log.close());
+  log.start();
+  const failure={kind:'startup_phase',id:'0000000000000123.1',phase:'document',outcome:'failed',route:'compare',
+    why:'unavailable',durationMs:312,at:at-8000};
+  const authorization={...failure,id:'0000000000000321.2',phase:'authorization',outcome:'waiting',why:'input_required',
+    at:at-4000,status:401,build:28};
+  const active={...failure,id:'0000000000000321.3',phase:'position',outcome:'ok',why:undefined,at:at-1000,build:28};
+  for (const invalid of [{...failure,invite:'never log'}, {...failure,route:'https://address.invalid'},
+    {...failure,phase:'backend_unknown'},{...failure,why:'private message'},{...authorization,phase:'position'},
+    {...active,durationMs:undefined},{...failure,at:at-86_400_001}]) {
+    assert.throws(()=>connectionReport({events:[invalid]},at),{message:'invalid_connection_report'});
+  }
+  log.clientReport('private-device',connectionReport({events:[failure,authorization]},at),false,'private-user');
+  log.clientReport('private-device',connectionReport({events:[failure,active]},at),false,'private-user');
+  const report=await log.networkDiagnostics(1);
+  assert.equal(report.players[0].player,networkPlayerTag('private-user'));
+  assert.deepEqual(report.startup.byRoute,{compare:{document:{ok:0,waiting:0,failed:1,maxMs:312},
+    authorization:{ok:0,waiting:1,failed:0,maxMs:312},position:{ok:1,waiting:0,failed:0,maxMs:312}}});
+  assert.deepEqual(report.startup.events.map(({id})=>id),[failure.id,authorization.id,active.id]);
+  const rendered=JSON.stringify(report);
+  assert.doesNotMatch(rendered,/private-user|private-device/);
+  await log.close();
+});
 
 test('load samples follow local midnight, retain 30 days, and summarize requests without personal data',async t=>{
   const path=await directory(t);

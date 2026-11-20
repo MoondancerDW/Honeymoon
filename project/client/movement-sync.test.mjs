@@ -46,12 +46,13 @@ test('SSE advances movement while HTTP waits, then position-state recovers a mis
   sync.pump();
   assert.equal(sync.queued.length,1);
   const oldState=channel.state('pony','device',sync.page);
-  time+=1500;
-  assert.equal(sync.canPredict(time),true);
-  time+=410;
-  assert.equal(sync.canPredict(time),false);
-  assert.ok(requests.at(-1).signal.aborted===false);
+  time+=799;
   sync.pump();
+  assert.equal(requests.at(-1).path,'position');
+  time++;
+  assert.equal(sync.canPredict(time),true);
+  sync.pump();
+  assert.equal(requests.at(-1).path,'position-state');
   await tick();
   assert.equal(sync.queued.length,0);
   assert.equal(sync.inspect().ackSource,'state');
@@ -68,6 +69,97 @@ test('SSE advances movement while HTTP waits, then position-state recovers a mis
   assert.deepEqual(sync.inspect().pos,[40,65,0]);
   assert.deepEqual(corrected,[]);
   assert.equal(statuses.includes('reopen'),false);
+});
+
+test('early recovery adapts to measured latency and resends only the original missing packet', async ()=>{
+  let time=0;
+  let position={x:0,y:65,z:0};
+  const channel=createMovementChannel(()=>({position,stance:'stand'}));
+  const firstReply=Promise.withResolvers();
+  const packets=[], probes=[];
+  const metrics={requests:0,errors:0,corrections:0};
+  const sync=createMovementSync({
+    now:()=>time,
+    async post(path,input,signal) {
+      if (path==='position-state') {
+        probes.push(input);
+        return {ok:true,body:{movement:channel.open('pony','device',input.page,input.start)}};
+      }
+      packets.push({input,signal});
+      if (packets.length===2) {
+        return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));
+      }
+      const movement=channel.receive('pony','device',input,()=>{ position={...position,x:input.x}; return {}; });
+      if (packets.length===1) await firstReply.promise;
+      return {ok:true,body:{movement}};
+    },
+    pose:()=>undefined,correct:()=>assert.fail('valid pending movement was corrected'),commit:()=>{},
+    reopen:()=>assert.fail('a responsive state route does not require reopening SSE'),
+    report:{fail:()=>assert.fail('the intentional abort is not reported as a transport failure'),recover:()=>{}},metrics,
+  });
+  sync.reset(position,'stand');
+  await sync.pump();
+  sync.record({x:.1,y:65,z:0},'stand');
+  const initialAck=sync.pump();
+  time+=650;
+  firstReply.resolve();
+  await initialAck;
+
+  sync.record({x:.2,y:65,z:0},'stand');
+  sync.pump();
+  time+=1199;
+  sync.pump();
+  assert.equal(probes.length,1);
+  assert.equal(packets[1].signal.aborted,false);
+  time++;
+  assert.equal(sync.canPredict(time),true);
+  sync.pump();
+  sync.pump();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(probes.length,2);
+  assert.equal(probes[1].restart,undefined);
+  assert.equal(packets.length,3);
+  assert.equal(packets[1].signal.aborted,true);
+  assert.deepEqual(packets[2].input,packets[1].input);
+  assert.equal(sync.queued.length,0);
+  assert.equal(metrics.errors,0);
+  assert.equal(position.x,.2);
+});
+
+test('idle fallback reports successful state responses without overlapping movement or probes', async ()=>{
+  let time=0;
+  const position={x:0,y:65,z:0};
+  const channel=createMovementChannel(()=>({position,stance:'stand'}));
+  let stateRequests=0, ready=0;
+  const sync=createMovementSync({
+    now:()=>time,
+    async post(path,input) {
+      assert.equal(path,'position-state');
+      stateRequests++;
+      return {ok:true,body:{movement:channel.open('pony','device',input.page,input.start)}};
+    },
+    onReady:()=>{ready++;},pose:()=>undefined,correct:()=>{},commit:()=>{},reopen:()=>{},
+    report:{fail:()=>{},recover:()=>{}},metrics:{requests:0,errors:0,corrections:0},
+  });
+  sync.verifyConnection();
+  assert.equal(stateRequests,0);
+  sync.reset(position,'stand');
+  await sync.pump();
+  assert.equal(ready,1);
+  time+=1500;
+  const pending=sync.verifyConnection();
+  assert.equal(sync.verifyConnection(),pending);
+  await pending;
+  assert.equal(stateRequests,2);
+  assert.equal(ready,2);
+  time+=1000;
+  sync.verifyConnection();
+  assert.equal(stateRequests,2);
+
+  time+=1500;
+  sync.record({x:.1,y:65,z:0},'stand');
+  sync.verifyConnection();
+  assert.equal(stateRequests,2);
 });
 
 test('ordered server acceptance drains a bounded gap and makes duplicate delivery passive', ()=>{
@@ -101,7 +193,8 @@ test('after a 40-second outage the client discards expired paths and resumes at 
   const position={x:0,y:65,z:0};
   const metrics={requests:0,errors:0,corrections:0};
   const channel=createMovementChannel(()=>({position,stance:'stand',seat:null}));
-  const rejected=[];
+  const rejected=[], probes=[];
+  let reconnects=0;
   const sync=createMovementSync({
     now:()=>time,
     post(path,input) {
@@ -109,6 +202,7 @@ test('after a 40-second outage the client discards expired paths and resumes at 
         rejected.push(input);
         return Promise.reject(new Error('offline'));
       }
+      probes.push(time);
       if (!online) return Promise.reject(new Error('offline'));
       const state=input.restart
         ? channel.restart('pony','device',input.page,input.restart)
@@ -116,19 +210,26 @@ test('after a 40-second outage the client discards expired paths and resumes at 
       return Promise.resolve({ok:true,body:state});
     },
     pose:()=>undefined, correct:state=>assert.deepEqual(state.position,position),
-    commit:()=>{}, reopen:()=>{}, report:{fail:()=>{},recover:()=>{}},metrics,
+    commit:()=>{}, reopen:()=>{reconnects++;}, report:{fail:()=>{},recover:()=>{}},metrics,
   });
   sync.reset(position,'stand');
   await sync.pump();
   online=false;
   sync.record({x:.1,y:65,z:0},'stand');
   await sync.pump();
-  time+=2100;
+  const tick=()=>new Promise(resolve=>{sync.pump();setImmediate(resolve);});
+  time+=800;
+  await tick();
+  time+=1499;
+  await tick();
+  assert.deepEqual(probes,[100,900]);
+  time++;
+  await tick();
+  assert.equal(reconnects,1);
   assert.equal(sync.canPredict(time),false);
-  await new Promise(resolve=>{ sync.pump(); setImmediate(resolve); });
   online=true;
-  time+=37900;
-  await new Promise(resolve=>{ sync.pump(); setImmediate(resolve); });
+  time=40100;
+  await tick();
   assert.equal(sync.canPredict(time),true);
   assert.equal(sync.inspect().status,'ready');
   assert.equal(sync.queued.length,0);

@@ -54,7 +54,12 @@ function internetRoute() {
   ]));
   const port=[443,8443,10000].find(candidate=>!inUse.has(String(candidate)));
   if (!port) throw new Error('Tailscale ports 443, 8443 and 10000 are already in use.');
-  return {command,port,url:`https://${hostname}${port===443?'':':'+port}`};
+  const compareHost=hostname+':8443';
+  const compareProxy=routes?.Web?.[compareHost]?.Handlers?.['/']?.Proxy;
+  const comparisonOrigin=values.internet && routes?.TCP?.['8443']?.HTTPS &&
+    !configurations.some(config=>config?.AllowFunnel?.[compareHost]) &&
+    compareProxy?.replace(/\/$/,'')==='http://127.0.0.1:'+requestedPort ? 'https://'+compareHost : undefined;
+  return {command,port,url:`https://${hostname}${port===443?'':':'+port}`,comparisonOrigin};
 }
 
 function openBrowser(url) {
@@ -112,6 +117,7 @@ if (!instance.primary) {
       geometry,
       secure:Boolean(remote),
       allowedOrigin:remote?.url,
+      comparisonOrigin:remote?.comparisonOrigin,
       publicOrigin:() => remote?.url ?? availableLanOrigin ?? localOrigin,
       inviteRequired:true,
       monitorNetwork:values.internet,
@@ -136,6 +142,9 @@ if (!instance.primary) {
       const route=values.internet?'funnel':'serve';
       console.log(`Owner access: ${url}`);
       console.log(`Player address: ${remote.url}/ (${route}, invitation required)`);
+      if (remote.comparisonOrigin && gamePort===requestedPort) {
+        console.log(`Comparison address: ${remote.comparisonOrigin}/ (Tailscale network, invitation required)`);
+      }
       tunnel = spawn(remote.command,[route,`--https=${remote.port}`,gameUrl],{stdio:'inherit',windowsHide:true});
       if (!values['no-browser']) openBrowser(url);
       const [code] = await once(tunnel,'exit');

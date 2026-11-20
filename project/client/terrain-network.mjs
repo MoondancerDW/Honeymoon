@@ -4,6 +4,7 @@ const backoffDuration = 3_000;
 export function createTerrainNetwork() {
   const samples = [];
   let rtt, baseline, backoffUntil = 0;
+  let recovering = false;
 
   return {
     urgent: false,
@@ -19,8 +20,14 @@ export function createTerrainNetwork() {
       baseline = ordered[Math.floor((ordered.length - 1) / 4)];
       if (ms > baseline + Math.max(35, baseline * .25)) backoffUntil = now + backoffDuration;
     },
+    setRecovery(active) {
+      recovering = active;
+    },
+    backgroundPaused() {
+      return recovering;
+    },
     constrained(now = performance.now()) {
-      return now < backoffUntil;
+      return recovering || now < backoffUntil;
     },
     status() {
       return {rtt, baseline, constrained:this.constrained(), urgent:this.urgent};

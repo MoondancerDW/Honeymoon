@@ -158,8 +158,9 @@ function evidenceFor(incident,probes,resources,streams) {
 
 export async function reviewNetworkDiagnostics(directory,{now=Date.now(),hours=6,studyFileLimit=32*1024*1024,
   fileLimit=8*1024*1024}={}) {
-  const from=now-hours*3_600_000, probes=[], resources=[], streams=[], points=[];
-  const playerTotals=new Map(), seenSamples=new Set();
+  const from=now-hours*3_600_000, probes=[], resources=[], streams=[], points=[], startupEvents=[];
+  const playerTotals=new Map(), seenSamples=new Set(), seenStartupEvents=new Set();
+  const startupByRoute={};
   let discardedPoints=0;
   function addPoint(range,record) {
     if (!range || !overlaps(from,now,...range)) return;
@@ -176,9 +177,29 @@ export async function reviewNetworkDiagnostics(directory,{now=Date.now(),hours=6
     if (event==='server_network_probe') probes.push({...row,at:Number.isSafeInteger(row.at)?row.at:time});
     if (event==='sample' || event==='shutdown') resources.push({...row,at:time});
     if (event==='player_study_sse_open' || event==='player_study_sse_close') streams.push({...row,at:time});
-    if (event!=='player_study_client' || !playerPattern.test(player??'')) continue;
+    if (!['player_study_client','player_startup_connection'].includes(event) || !playerPattern.test(player??'')) continue;
     const summary=playerTotals.get(player)??newPlayer(player);
     if (!playerTotals.has(player)) playerTotals.set(player,summary);
+    if (event==='player_startup_connection') {
+      for (const phase of row.events??[]) {
+        if (!overlaps(from,now,phase.at,phase.at)) continue;
+        const id=player+':'+phase.id;
+        if (seenStartupEvents.has(id)) continue;
+        if (seenStartupEvents.size>=65_536) seenStartupEvents.delete(seenStartupEvents.values().next().value);
+        seenStartupEvents.add(id);
+        summary.lastSeenAt=Math.max(summary.lastSeenAt,phase.at);
+        const phases=startupByRoute[phase.route]??={};
+        const totals=phases[phase.phase]??={ok:0,waiting:0,failed:0,maxMs:0};
+        totals[phase.outcome]++;
+        totals.maxMs=Math.max(totals.maxMs,phase.durationMs);
+        startupEvents.push({player,device,...phase});
+        if (startupEvents.length>=2*recentLimit) {
+          startupEvents.sort((a,b)=>a.at-b.at);
+          startupEvents.splice(0,recentLimit);
+        }
+      }
+      continue;
+    }
     for (const sample of row.samples??[]) {
       if (!overlaps(from,now,sample.at,sample.at)) continue;
       const sampleId=`${player}:${sample.page}:${sample.at}`;
@@ -209,6 +230,7 @@ export async function reviewNetworkDiagnostics(directory,{now=Date.now(),hours=6
   return {generatedAt:now,from,matchToleranceMs,players,limits:{dailyDetailedBytes:studyFileLimit,missedLogEntries,archivesRotated,
     observationsTruncated:missedLogEntries>0||archivesRotated>0||discardedPoints>0||all.length>selected.length},
     incidents,sharedIncidents:sharedIncidents(incidents,from,now),
+    startup:{byRoute:startupByRoute,events:startupEvents.sort((a,b)=>a.at-b.at).slice(-recentLimit)},
     server:{probes:probes.sort((a,b)=>a.at-b.at).slice(-recentLimit),
       resources:resources.sort((a,b)=>a.at-b.at).slice(-recentLimit),
       streams:streams.sort((a,b)=>a.at-b.at).slice(-recentLimit)}};

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {once} from 'node:events';
+import {request as httpRequest} from 'node:http';
 import {mkdtempSync,mkdirSync,rmSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
@@ -68,6 +69,37 @@ async function request(url,path,{body,cookie,origin,headers={}}={}) {
 }
 const code=(reply,expected=200)=>{assert.equal(reply.status,expected,JSON.stringify(reply.json));return reply.json;};
 const legacy=token=>`honeymoon_guest=${token}`;
+
+test('the private comparison ingress accepts same-origin sessions and rejects cross-origin writes',async t=>{
+  const comparisonOrigin=external+':8443';
+  const urls=await fixture(t).start({comparisonOrigin});
+  const owner=await request(urls.owner,'/api/access/owner',{body:{key:secret,profileName:'Local owner'}});
+  code(owner);
+  const invite=code(await request(urls.owner,'/api/admin/invites',{body:{kind:'player'},cookie:owner.cookie}));
+  const body={invite:invite.code,profileName:'Private route guest'};
+  async function compare(origin) {
+    const payload=JSON.stringify(body);
+    const response=await new Promise((resolve,reject)=>{
+      const outgoing=httpRequest(urls.public+'/api/session',{method:'POST',headers:{
+        Host:new URL(comparisonOrigin).host, Origin:origin, 'Content-Type':'application/json',
+        'Content-Length':Buffer.byteLength(payload),
+      }},resolve);
+      outgoing.once('error',reject);
+      outgoing.end(payload);
+    });
+    let text='';
+    for await (const part of response.setEncoding('utf8')) text+=part;
+    const flags=response.headers['set-cookie']?.[0];
+    return {status:response.statusCode,json:JSON.parse(text),flags,cookie:flags?.split(';')[0]};
+  }
+  assert.equal(code(await compare(external),403).error,'origin_denied');
+  assert.equal(code(await request(urls.public,'/api/session',{origin:comparisonOrigin,body}),403).error,'origin_denied');
+  const guest=await compare(comparisonOrigin);
+  assert.equal(code(guest).access.role,'player');
+  assert.match(guest.flags,/; Secure/);
+  assert.equal(code(await request(urls.public,'/api/session',{origin:external,body:{},cookie:guest.cookie})).access.uid,
+    guest.json.access.uid);
+});
 
 const legacyStack=(size,slot,stack)=>Array.from({length:size},(_,index)=>index===slot?stack:null);
 function stageLegacy(store,uid,nickname,stack,{selected=7,ender=null}={}) {

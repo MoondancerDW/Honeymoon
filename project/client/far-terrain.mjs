@@ -645,6 +645,8 @@ export class FarTerrain {
     this.prepareBiomeTile();
     const busy = [...this.pending.values(),...this.decoded].map(({key}) => key);
     const network = this.display.terrainNetwork;
+    const recovering = network?.backgroundPaused();
+    const centerLod = recovering && keyOf(packAt(this.cx),packAt(this.cz));
     const constrained = network?.constrained(now);
     if (constrained && (network.urgent || now - (this.lastRequest ?? -Infinity) < 500)) return;
     const maxFetch = constrained || network?.urgent ? 1 : MAX_FETCH;
@@ -652,6 +654,7 @@ export class FarTerrain {
     const direction = this.display.viewDirection;
     let closest, score = Infinity;
     for (const [key,region] of this.targets) {
+      if (recovering && key!==centerVista && key!==centerLod) continue;
       if (!region.vista && (this.display.startupChunks || this.altitude==='landing')) continue;
       const loaded = this.packs.get(key);
       if (loaded && (!loaded.coarse || region.coarse) || busy.includes(key) || (this.failed.get(key) ?? 0) > now) continue;

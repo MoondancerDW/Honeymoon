@@ -23,6 +23,18 @@
     <button id="retry" type="button">Повторить подключение</button>
   </main>
   <script>
+    if (['/','/index.html','/client/index.html'].includes(location.pathname)) {
+      try {
+        const key='honeymoon-startup-diagnostics:v1';
+        const stored=JSON.parse(localStorage.getItem(key));
+        const entries=(Array.isArray(stored)?stored:[]).slice(-31);
+        const attempt=Array.from(crypto.getRandomValues(new Uint8Array(8)),byte=>byte.toString(16).padStart(2,'0')).join('');
+        const route=['localhost','127.0.0.1','[::1]'].includes(location.hostname)?'local':location.port==='8443'?'compare':'primary';
+        entries.push({kind:'startup_phase',id:`${attempt}.0`,phase:'document',outcome:'failed',at:Date.now(),
+          durationMs:Math.round(performance.now()),why:navigator.onLine===false?'offline':'unavailable',route});
+        localStorage.setItem(key,JSON.stringify(entries));
+      } catch { /* the fallback page stays usable without local storage */ }
+    }
     document.getElementById('retry').addEventListener('click',()=>location.reload());
     async function reconnect() {
       try {

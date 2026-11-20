@@ -49,6 +49,7 @@ import {createPlayerModeUi} from './player-mode-ui.mjs';
 import {createConnectionStatus} from './connection-status.mjs';
 import {connectionFailure,createConnectionReport} from './connection-report.mjs';
 import {createPlayerDiagnostics} from './player-diagnostics.mjs';
+import {startupDiagnostics} from './startup-diagnostics.mjs';
 import {createTerrainNetwork} from './terrain-network.mjs';
 import {configureTerrainCache,readTerrain,terrainCacheUsage} from './terrain-cache.mjs';
 import {createTerrainPreload} from './terrain-preload.mjs';
@@ -60,7 +61,8 @@ const terrainNetwork = createTerrainNetwork();
 const connectionReport=createConnectionReport();
 const diagnostics=createPlayerDiagnostics();
 const connection=createConnectionStatus({element,report:connectionReport,diagnostics,onRecover:()=>{if (!metrics.playable) location.reload();},
-  onLatency:ms=>terrainNetwork.sample(ms),active:()=>Boolean(view) && !document.hidden});
+  onLatency:ms=>terrainNetwork.sample(ms),onRecovery:active=>terrainNetwork.setRecovery(active),
+  onStreamStale:reopenFeed,active:()=>Boolean(view) && !document.hidden});
 const entry = element('entry');
 const loading = element('loading');
 const button = element('play');
@@ -147,6 +149,7 @@ let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualC
 let feed,feedRetry;
 let nearbyStream;
 let entered = false, multiplayer = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
+let nextFallbackPresence=0;
 let horizontalSpeed = 0;
 let nextSprintDust = 0;
 const movementSync=createMovementSync({
@@ -170,17 +173,16 @@ const movementSync=createMovementSync({
     if (data.changes?.length) changes(data.changes,data.worldRevision);
     effects(data);
   },
-  reopen() {
-    const now=performance.now();
-    if (now-feedReopenAt>=15000) {
-      feedReopenAt=now;
-      stream();
-    }
-  },
+  reopen:reopenFeed,
   onAck(pose,state) {
+    connection.positionConfirmed();
     diagnostics.positionAck();
     if (pose && (!lastSentPose || pose.seq>=lastSentPose.seq)) lastSentPose=pose;
     ponyUi.sync(state);
+  },
+  onReady() {
+    connection.positionConfirmed();
+    startupDiagnostics.complete('position');
   },
   report:connectionReport, metrics:positionMetrics,
 });
@@ -663,27 +665,46 @@ async function refresh() {
   if (snapshot.droppedItems) world.setDroppedItems(snapshot.droppedItems,performance.now());
 }
 
+function reopenFeed() {
+  const now=performance.now();
+  if (now-feedReopenAt<15000) return;
+  feedReopenAt=now;
+  stream();
+}
+
 function stream() {
   clearTimeout(feedRetry);
   feed?.close();
+  connection.streamConnecting();
   const page=diagnostics.page();
   const epoch=worldCheckpoint?.epoch();
+  startupDiagnostics.begin('sse');
   const source=feed=new EventSource('/api/events?since=' + worldRevision + '&presence=1&social=1&minecarts=1&droppedItems=1&npcs=1&movement='+movementSync.page+
     (page?'&diag='+page:'')+(epoch?'&epoch='+encodeURIComponent(epoch):''));
-  source.addEventListener('movement-ack',event=>movementSync.received(JSON.parse(event.data).movement));
+  source.addEventListener('movement-ack',event=>{
+    if (feed!==source) return;
+    connection.streamActivity();
+    movementSync.received(JSON.parse(event.data).movement);
+  });
+  source.addEventListener('stream-heartbeat',()=>{
+    if (feed===source) connection.streamActivity();
+  });
   if (page) source.addEventListener('diagnostics-heartbeat',event=>{
     if (feed===source) diagnostics.heartbeat(JSON.parse(event.data));
   });
   feed.addEventListener('open', () => {
     if (feed!==source) return;
     connection.stream(true);
+    startupDiagnostics.complete('sse');
     presenceDirty = true;
     social.refreshWarps();
     flushFlightPreference();
   });
   feed.addEventListener('error',()=>{
     if (feed!==source) return;
-    connection.stream(false,source.readyState===EventSource.CLOSED ? 'closed' : connectionFailure().why);
+    const why=source.readyState===EventSource.CLOSED ? 'closed' : connectionFailure().why;
+    connection.stream(false,why);
+    startupDiagnostics.fail('sse',{why});
     if (source.readyState===EventSource.CLOSED) feedRetry=setTimeout(stream,2500);
   });
   feed.addEventListener('presence', event => {
@@ -733,6 +754,8 @@ function stream() {
   });
   feed.addEventListener('reset', () => refresh().catch(error => notice(error.message)));
   feed.addEventListener('ready', event => {
+    if (feed!==source) return;
+    connection.streamActivity();
     const {contentHash} = JSON.parse(event.data);
     if (contentHash && contentHash !== world.manifest.contentHash) location.reload();
   });
@@ -765,7 +788,11 @@ function playerPose() {
 }
 
 function sendPresence(now) {
-  if (!entered || presenceRequest || now < nextPresence || feed?.readyState !== EventSource.OPEN) return;
+  if (!entered || presenceRequest || now < nextPresence) return;
+  const fallback=multiplayer && !connection.streamReady();
+  if (fallback) {
+    if (!connection.canMove() || movementSync.inspect().status!=='ready') return;
+  } else if (feed?.readyState!==EventSource.OPEN) return;
   const {offhand,...pose} = playerPose();
   if (seat?.kind === 'boat') {
     pose.boatDrive = playing && !menuOpen() ? [Math.sign(forwardInput()),Math.sign(turnInput())] : [0,0];
@@ -781,11 +808,12 @@ function sendPresence(now) {
     pose.boatDrive?.[0] !== lastSentPose.boatDrive?.[0] || pose.boatDrive?.[1] !== lastSentPose.boatDrive?.[1] ||
     pose.boatDrive?.some(Boolean) ||
     Math.abs(pose.yaw - lastSentPose.yaw) > .03 || Math.abs(pose.pitch - lastSentPose.pitch) > .03;
-  if (!presenceDirty && !changed) return;
+  if (!presenceDirty && !changed && !(fallback && now>=nextFallbackPresence)) return;
   nextPresence = now + positionInterval;
+  if (fallback) nextFallbackPresence=now+1500;
   presenceDirty = false;
   const epoch = seatEpoch;
-  presenceRequest = post('presence', pose, AbortSignal.timeout(3000)).then(({ok, body}) => {
+  presenceRequest = post('presence',fallback ? {...pose,fallbackPage:movementSync.page} : pose,AbortSignal.timeout(3000)).then(({ok, body}) => {
     if (ok && (!lastSentPose || pose.seq >= lastSentPose.seq)) {
       lastSentPose = pose;
       if (epoch === seatEpoch && !acting && !resetting && Boolean(body.seat) !== Boolean(seat)) {
@@ -1868,7 +1896,10 @@ function tick(now) {
       biome:view.climate?.biomeAt(position.x,position.z),night:hour > 13000 && hour < 23000,
       windStrength:windAt(now,view.weather).strength});
   }
-  if (!resetting && teleportLoading.hidden && !acting) movementSync.pump();
+  if (!resetting && teleportLoading.hidden && !acting) {
+    movementSync.pump();
+    if (multiplayer && entered && !document.hidden && !connection.streamReady()) movementSync.verifyConnection();
+  }
   if (!movementSync.busy() || presenceDirty) sendPresence(now);
   const intended=Boolean(automaticTravel || forwardInput() || turnInput() || keys.has('Space') || flying &&
     (keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC')));
@@ -2437,12 +2468,19 @@ async function streamChunks(chunks, scenery) {
     ...scenery.map(chunk => ({chunk, visualOnly:true}))];
   const priority = ({chunk, visualOnly}) => distanceToChunk(chunk) + (visualOnly ? 4 : 0);
   while (remaining.length) {
-    let best = 0;
-    for (let i = 1; i < remaining.length; i++) {
-      if (priority(remaining[i]) < priority(remaining[best])) best = i;
+    const paused=terrainNetwork.backgroundPaused();
+    let best=-1;
+    for (let i=0;i<remaining.length;i++) {
+      if (paused && distanceToChunk(remaining[i].chunk)>2) continue;
+      if (best===-1 || priority(remaining[i])<priority(remaining[best])) best=i;
     }
-    const next = remaining[best];
+    if (best===-1) {
+      await new Promise(resolve=>setTimeout(resolve,80));
+      continue;
+    }
+    const next=remaining[best];
     await view.waitForStreamSlot(!next.visualOnly && distanceToChunk(next.chunk) <= 2);
+    if (terrainNetwork.backgroundPaused() && distanceToChunk(next.chunk)>2) continue;
     try {
       await addChunk(next.chunk, next.visualOnly);
       remaining.splice(best, 1);
@@ -2505,8 +2543,8 @@ function streamNearby(scenery) {
       updateArea();
       const now = performance.now();
       const available = ({key}) => !ready(key) && (retryAt.get(key) ?? 0) <= now;
-      const preloadFirst=touchMode && terrainPreload?.prioritizing();
-      const next = planned.find(entry => (!preloadFirst || entry.distance<=2) && !inFlight.has(entry.key) && available(entry));
+      const prioritizeNearby=terrainNetwork.backgroundPaused() || touchMode && terrainPreload?.prioritizing();
+      const next = planned.find(entry => (!prioritizeNearby || entry.distance<=2) && !inFlight.has(entry.key) && available(entry));
       terrainNetwork.urgent = planned.some(entry => entry.distance <= 2 && available(entry));
       if (!next || terrainNetwork.constrained(now) &&
           (inFlight.size > 0 || next.distance > 2 && now - lastBackgroundRequest < 200)) {
@@ -2519,10 +2557,11 @@ function streamNearby(scenery) {
       try {
         await view.waitForStreamSlot(!next.visualOnly && needed(next.coordinate) && next.distance <= 2);
         updateArea();
-        if (!controller.signal.aborted) {
-          if (distanceToChunk(next.coordinate) > 2) lastBackgroundRequest = performance.now();
+        const nearby=distanceToChunk(next.coordinate)<=2;
+        if (!controller.signal.aborted && (nearby || !terrainNetwork.backgroundPaused())) {
+          if (!nearby) lastBackgroundRequest = performance.now();
           await addChunk(next.coordinate, next.visualOnly, () => !controller.signal.aborted && needed(next.coordinate),
-            AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),requestHigh,next.distance<=2);
+            AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),requestHigh,nearby);
         }
         retryAt.delete(next.key);
       } catch (error) {
@@ -2579,6 +2618,7 @@ async function start() {
   const sessionBody = await accessUi.acquire();
   if (!sessionBody) return;
   multiplayer=!sessionBody.access?.singlePlayer;
+  if (multiplayer && sessionBody.access?.authenticated) startupDiagnostics.enable(sessionBody.playerDiagnostics?.serverAt);
   profileUid=sessionBody.access?.uid ?? sessionBody.playerId;
   social.setChatProfile(profileUid);
   audio.setDefaultAltitudeMusic(sessionBody.altitudeMusic);
@@ -2602,6 +2642,7 @@ async function start() {
   modeUi.setSelf(sessionBody.access?.uid??sessionBody.profile?.id);
   setWorldAdmin(sessionBody.access?.role==='admin');
   if (sessionBody.access?.role==='admin') npcUi.setAccess(true);
+  startupDiagnostics.begin('world');
   const manifest = await json('/generated/world/world.json');
   const lowDevice=localStorage.getItem(lowDevicePreference)==='1';
   if (!sessionBody.access?.singlePlayer && manifest.chunkCacheVersion) {
@@ -2656,6 +2697,7 @@ async function start() {
   await view.prepareGraphics();
   const altitudeMap=bindControls();
   stream();
+  startupDiagnostics.begin('position');
   movementSync.pump();
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
@@ -2696,6 +2738,7 @@ async function start() {
   }));
   loading.textContent = 'Подготавливаем графику…';
   await view.whenReady(near,{position});
+  startupDiagnostics.complete('world');
   restoreFlight(session.body);
   metrics.playable = performance.now() - metrics.started;
   const mapWarmup=altitudeMap?.prepare();
@@ -2719,9 +2762,11 @@ async function start() {
   }
 }
 
+startupDiagnostics.complete('bootstrap');
 void connection.check();
 start().catch(async error => {
   console.error(error);
+  startupDiagnostics.failPending(error);
   const reachable=await connection.check();
   if (!reachable || error.status>=502 && error.status<=504) {
     loading.textContent='Сервер недоступен';

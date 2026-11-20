@@ -6,7 +6,9 @@ const maxPredictedSteps=256;
 const predictionMs=1850;
 const predictionBlocks=52;
 const movementInterval=130;
-const recoveryMs=1900;
+const minimumRecoveryMs=800;
+const maximumRecoveryMs=1200;
+const recoveryCadenceMs=1500;
 const expirationMs=6500;
 const pointTuple = ({x,y,z}) => [x,y,z];
 const pause = ms => new Promise(resolve=>setTimeout(resolve,ms));
@@ -15,7 +17,7 @@ function randomId() {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
 }
 
-export function createMovementSync({now=()=>performance.now(),post,pose,correct,commit,reopen,report,metrics,onAck}) {
+export function createMovementSync({now=()=>performance.now(),post,pose,correct,commit,reopen,report,metrics,onAck,onReady}) {
   const token=randomId();
   const page=[token.slice(0,8),token.slice(8,12),token.slice(12,16),token.slice(16,20),token.slice(20)].join('-');
   const queued=[];
@@ -25,7 +27,11 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
   const acks={sse:0,http:0,state:0};
   let confirmed, epoch, accepted=0, submitted=0, actionEpoch=0, start=true;
   let probe, nextProbe=0, failures=0, nextSend=0, dispatched=-Infinity, lastProgress=0;
-  let status='binding', ackSource, lastCommit=0;
+  let status='binding', ackSource, confirmedRoundTrip, lastCommit=0;
+
+  function recoveryDelay() {
+    return Math.min(maximumRecoveryMs,Math.max(minimumRecoveryMs,2*(confirmedRoundTrip ?? 0)+200));
+  }
 
   function clearPending(now) {
     queued.length=0;
@@ -69,9 +75,10 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     confirmed=[...pointTuple(state.position),state.stance];
     queued.splice(0,count);
     accepted=state.accepted;
-    let lastPose;
+    let lastPose, latestEntry;
     for (const [first,entry] of sent) {
       if (entry.last>accepted) continue;
+      latestEntry=entry;
       if (entry.payload.pose) lastPose=entry.payload.pose;
       active.get(entry)?.controller.abort();
       sent.delete(first);
@@ -79,6 +86,11 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     ackSource=source;
     acks[source]++;
     lastProgress=now();
+    // State probes and resends cannot identify the timing of the original confirmation.
+    if (source!=='state' && latestEntry?.attempted!==undefined && !latestEntry.retried) {
+      const observed=lastProgress-latestEntry.attempted;
+      confirmedRoundTrip=confirmedRoundTrip===undefined ? observed : .75*confirmedRoundTrip+.25*observed;
+    }
     failures=0;
     report.recover('movement');
     onAck?.(lastPose,state);
@@ -89,6 +101,7 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     if (active.size>=maxInFlight || active.has(entry)) return;
     const generation=actionEpoch;
     metrics.requests++;
+    entry.retried=entry.attempted!==undefined;
     entry.attempted=now();
     const controller=new AbortController();
     const signal=AbortSignal.any([controller.signal,AbortSignal.timeout(3000)]);
@@ -106,7 +119,7 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
         accept(body.movement,'http');
       }
     }).catch(error=>{
-      if (generation===actionEpoch && entry.last>accepted) {
+      if (!controller.signal.aborted && generation===actionEpoch && entry.last>accepted) {
         metrics.errors++;
         report.fail('movement',connectionFailure(error));
       }
@@ -117,11 +130,25 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     return completed;
   }
 
+  function retryOldest() {
+    const entry=sent.values().next().value;
+    const time=now();
+    if (!entry || time-entry.attempted<recoveryDelay() || time-lastProgress>=expirationMs) return;
+    const pending=active.get(entry);
+    if (!pending) return dispatch(entry);
+    // The server still needs this packet. Reuse its original sequence and request ID.
+    pending.controller.abort();
+    void pending.completed.then(()=>{
+      if (sent.get(entry.payload.first)===entry && now()-lastProgress<expirationMs) dispatch(entry);
+    });
+  }
+
   function reconcile(time) {
     if (probe || time<nextProbe) return probe;
     const generation=actionEpoch;
+    const acceptedWhenProbed=accepted;
     const restart=epoch && sent.size && time-lastProgress>=expirationMs ? epoch : undefined;
-    nextProbe=time+recoveryMs;
+    nextProbe=time+recoveryCadenceMs;
     probe=post('position-state',{page,start,restart},AbortSignal.timeout(2300)).then(({ok,body})=>{
       if (generation!==actionEpoch) return;
       if (body?.error==='movement_page_replaced') {
@@ -133,14 +160,12 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
       failures=0;
       if (body.previousMovement) accept(body.previousMovement,'state');
       if (body.movement.epoch!==epoch) adopt(body.movement);
-      else if (!accept(body.movement,'state')) {
-        const entry=sent.values().next().value;
-        if (entry && now()-entry.attempted>=recoveryMs) dispatch(entry);
-      }
+      else if (!accept(body.movement,'state') && body.movement.accepted===accepted) retryOldest();
+      onReady?.(body.movement);
     }).catch(()=>{
-      if (generation!==actionEpoch) return;
+      if (generation!==actionEpoch || accepted!==acceptedWhenProbed) return;
       failures++;
-      nextProbe=now()+Math.min(5000,400*2**failures);
+      nextProbe=Math.max(nextProbe,now()+Math.min(5000,400*2**failures));
       if (failures===2 && epoch && queued.length) reopen();
     }).finally(()=>{probe=undefined;});
     return probe;
@@ -152,7 +177,7 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     if (!epoch) return reconcile(time);
     if (!queued.length) return;
     const stalledFor=sent.size ? time-lastProgress : 0;
-    if (stalledFor>=recoveryMs) reconcile(time);
+    if (stalledFor>=recoveryDelay()) reconcile(time);
     if (stalledFor>=expirationMs) return;
     if (sent.size>=maxInFlight || active.size>=maxInFlight || time<nextSend) return;
     const offset=submitted-accepted, end=limit ? queued.indexOf(limit)+1 : queued.length;
@@ -181,6 +206,9 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
 
   return {
     page,queued,reset,pump,
+    verifyConnection() {
+      if (status==='ready' && !queued.length) return reconcile(now());
+    },
     canPredict(time) {
       if (status!=='ready' || !epoch || queued.length>=maxPredictedSteps) return false;
       if (!queued.length) return true;

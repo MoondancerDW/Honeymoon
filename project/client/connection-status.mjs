@@ -2,23 +2,45 @@ import {connectionFailure} from './connection-report.mjs';
 
 const pingInterval=5000;
 const recoveryInterval=2000;
+const positionFreshness=3500;
+const streamFreshness=33_000;
+const warningDelay=550;
 
-export function createConnectionStatus({element,onRecover,onLatency,active,report,diagnostics}) {
+export function createConnectionStatus({element,onRecover,onLatency,onRecovery,onStreamStale,active,report,diagnostics,
+  now=()=>performance.now()}) {
   const fps=element('connection-fps'),ping=element('connection-ping');
   const alert=element('connection-alert'),message=element('connection-message'),retry=element('connection-retry');
-  let reachable,live,wasLive=false,predictionPaused=false,terrainWaiting=false,startupStopped=false,autoReload=false,request,timer,warmed=false;
+  let reachable,live,wasPlayable=false,predictionPaused=false,terrainWaiting=false,startupStopped=false,autoReload=false,request,timer,warmed=false;
+  let lastStreamAt=-Infinity,lastPositionAt=-Infinity,recovering=false,warningAt=Infinity;
   let lastFrameCount,lastFrameSample,local=false;
 
-  function paint() {
+  const streamReady = (time=now()) => live===true && time-lastStreamAt<streamFreshness;
+  const canMove = (time=now()) => streamReady(time) || time-lastPositionAt<positionFreshness;
+
+  function loseStream(why) {
+    live=false;
+    diagnostics?.stream(false,why);
+    report?.fail('sse',{why});
+  }
+
+  function paint(time=now()) {
+    const stale=live===true && !streamReady(time);
+    if (stale) loseStream('timeout');
+    const needsRecovery=wasPlayable && (predictionPaused || !canMove(time));
+    if (needsRecovery!==recovering) {
+      recovering=needsRecovery;
+      warningAt=recovering ? time+warningDelay : Infinity;
+      onRecovery?.(recovering);
+    }
     const text=startupStopped && !autoReload ? 'Сервер недоступен. Повторите подключение.' :
-      startupStopped || (!wasLive && (reachable===false || live===false)) ? 'Сервер недоступен. Подключаемся повторно…' :
-      predictionPaused ? 'Восстанавливаем связь…' :
+      startupStopped || (!wasPlayable && (reachable===false || live===false)) ? 'Сервер недоступен. Подключаемся повторно…' :
       terrainWaiting==='solo-unavailable' ? 'Район ещё не скачан. Подключите интернет для загрузки.' :
       terrainWaiting ? 'Загружаем ближайший участок…' :
-      (live===false || reachable===false ? 'Нестабильная связь. Восстанавливаем соединение…' : '');
+      recovering && time>=warningAt ? (predictionPaused ? 'Восстанавливаем связь…' : 'Нестабильная связь. Восстанавливаем соединение…') : '';
     if (message.textContent!==text) message.textContent=text;
-    alert.hidden=!text;
-    retry.hidden=!startupStopped;
+    if (alert.hidden!==!text) alert.hidden=!text;
+    if (retry.hidden!==!startupStopped) retry.hidden=!startupStopped;
+    if (stale) onStreamStale?.();
   }
 
   function schedule(delay) {
@@ -71,11 +93,13 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
   }
 
   function stream(online,why) {
-    live=online;
-    wasLive||=online;
-    diagnostics?.stream(online,why);
-    if (online) report?.recover('sse');
-    else report?.fail('sse',{why});
+    if (online) {
+      live=true;
+      wasPlayable=true;
+      lastStreamAt=now();
+      diagnostics?.stream(true);
+      report?.recover('sse');
+    } else loseStream(why);
     paint();
     if (!online) void check();
     else schedule(0);
@@ -101,6 +125,7 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
     warmed=false;
     ping.textContent='Пинг —';
     report?.fail('ping',{why:'offline'});
+    onLatency(null);
     paint();
   });
   document.addEventListener('visibilitychange',()=>{
@@ -108,10 +133,23 @@ export function createConnectionStatus({element,onRecover,onLatency,active,repor
     if (!document.hidden) void check();
   });
 
-  return {check,frames,stream,streamReady:()=>live===true,canMove:()=>live!==false && reachable!==false,
+  return {check,frames,stream,streamReady,canMove,
+    streamConnecting() {
+      live=undefined;
+      paint();
+    },
+    streamActivity() {
+      if (!live) return;
+      lastStreamAt=now();
+      paint(lastStreamAt);
+    },
+    positionConfirmed() {
+      wasPlayable=true;
+      lastPositionAt=now();
+      paint(lastPositionAt);
+    },
     setLocal(value) { local=value; void check(); },
     movementWaiting(waiting, terrain=false) {
-      if (predictionPaused===waiting && terrainWaiting===terrain) return;
       predictionPaused=waiting;
       terrainWaiting=terrain;
       paint();

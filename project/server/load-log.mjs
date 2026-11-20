@@ -22,6 +22,10 @@ const reportKinds = new Set(['ping_failed','ping_recovered','sse_error','sse_ope
   'storage_failed','storage_recovered']);
 const reportReasons = new Set(['timeout','network','http','offline','closed','position_pending']);
 const reportFields = new Set(['kind','at','why','status','durationMs']);
+const startupFields=new Set([...reportFields,'id','phase','outcome','route','build']);
+const startupPhases=new Set(['document','bootstrap','authorization','world','sse','position']);
+const startupRoutes=new Set(['primary','compare','local']);
+const startupReasons=new Set(['timeout','network','http','offline','closed','unavailable','module','bad_response','client_error','occupied','credentials']);
 const socketErrorCodes = new Set(['ECONNRESET','EPIPE','ETIMEDOUT','ERR_HTTP_REQUEST_TIMEOUT',
   'HPE_HEADER_OVERFLOW','HPE_CHUNK_EXTENSIONS_OVERFLOW','HPE_INVALID_METHOD','HPE_INVALID_URL',
   'HPE_INVALID_VERSION','HPE_INVALID_HEADER_TOKEN','HPE_INVALID_CONTENT_LENGTH','HPE_UNEXPECTED_CONTENT_LENGTH',
@@ -60,15 +64,27 @@ export function connectionReport(body, now=Date.now()) {
     throw new RequestError(400,'invalid_connection_report');
   }
   for (const event of events) {
-    if (!event||typeof event!=='object'||Array.isArray(event)||Object.keys(event).some(key=>!reportFields.has(key))||
-        !reportKinds.has(event.kind)||!Number.isSafeInteger(event.at)||event.at<now-dayMs||event.at>now+futureSkewMs||
-        (event.why!==undefined&&!reportReasons.has(event.why))||
+    if (!event||typeof event!=='object'||Array.isArray(event)||!Number.isSafeInteger(event.at)||
+        event.at<now-dayMs||event.at>now+futureSkewMs||
         (event.status!==undefined&&(!Number.isInteger(event.status)||event.status<100||event.status>599))||
         (event.durationMs!==undefined&&(!Number.isInteger(event.durationMs)||event.durationMs<0||event.durationMs>dayMs))) {
       throw new RequestError(400,'invalid_connection_report');
     }
+    if (event.kind==='startup_phase' ? !validStartupPhase(event) :
+      !reportKinds.has(event.kind)||Object.keys(event).some(key=>!reportFields.has(key))||
+      (event.why!==undefined&&!reportReasons.has(event.why))) throw new RequestError(400,'invalid_connection_report');
   }
   return events;
+}
+
+function validStartupPhase(event) {
+  const {id,phase,route,outcome,why,build,durationMs}=event;
+  const reasonAllowed=(outcome==='ok' && why===undefined) ||
+    (outcome==='waiting' && phase==='authorization' && why==='input_required') ||
+    (outcome==='failed' && startupReasons.has(why));
+  return Object.keys(event).every(key=>startupFields.has(key)) && typeof id==='string' && /^[a-f0-9]{16}\.\d{1,5}$/.test(id) &&
+    startupPhases.has(phase) && startupRoutes.has(route) && reasonAllowed && Number.isInteger(durationMs) &&
+    (build===undefined || Number.isSafeInteger(build) && build>0 && build<100_000);
 }
 
 function percentile(counts,total) {
@@ -388,7 +404,14 @@ export function createLoadLog({directory,onlineStreams=()=>0,now=Date.now,monoto
       if (count>=4||reports>=128) throw new RequestError(429,'connection_report_limit');
       reportCounts.set(deviceId,count+1);
       reports++;
-      const fields={device:deviceTag(deviceId),events};
+      const device=deviceTag(deviceId);
+      const startup=events.filter(event=>event.kind==='startup_phase');
+      if (startup.length && player) {
+        record('player_startup_connection',{device,player:networkPlayerTag(player),events:startup},true,true);
+      }
+      const other=events.filter(event=>event.kind!=='startup_phase');
+      if (!other.length) return;
+      const fields={device,events:other};
       record('client_connection',fields,true);
       if (study) record('player_study_connection',{...fields,player:player && networkPlayerTag(player)},true,true);
     },

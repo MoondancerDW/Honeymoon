@@ -152,6 +152,41 @@ test('presence batches updates and drops expired connections while preserving a 
   assert.deepEqual(messages.at(-1), {listener:'a', name:'presence', data:{players:[]}});
 });
 
+test('verified HTTP presence renews visibility during a lost stream and expires without a renewal', () => {
+  let time=0;
+  const changes=[];
+  const server=createPresence({store:{getProfile:()=>undefined},now:()=>time,send() {},
+    onVisibility:(_profile,visible,player)=>changes.push([player,visible])});
+  const pose=readPose({yaw:0,pitch:0});
+  server.join('player',point,pose);
+  assert.equal(server.onlinePosition('player'),undefined);
+  assert.deepEqual(changes,[]);
+
+  server.join('player',point,pose,{fallback:true});
+  assert.deepEqual(server.onlinePosition('player'),point);
+  time=4000;
+  server.flush();
+  server.join('player',{...point,x:9},pose,{fallback:true});
+  time=8999;
+  server.flush();
+  assert.equal(server.onlinePosition('player').x,9);
+  time=9000;
+  server.flush();
+  assert.equal(server.onlinePosition('player'),undefined);
+  assert.deepEqual(changes,[['player',true],['player',false]]);
+
+  server.join('player',point,pose,{fallback:true});
+  server.leave('player');
+  assert.equal(server.onlinePosition('player'),undefined);
+  server.join('player',point,pose,{fallback:true});
+  const stream={player:'player',response:'player'};
+  server.connect(stream,server.prepare('player'));
+  server.disconnect(stream);
+  time+=2000;
+  server.flush();
+  assert.equal(server.onlinePosition('player'),undefined);
+});
+
 const air = {key:'air', object:null};
 const base = {
   hash:'presence-test',
@@ -197,6 +232,32 @@ async function eventFeed(url, cookie, signal, social = false, sharesPresence = t
     close:()=>reader.cancel(),
   };
 }
+
+test('HTTP-only presence requires a movement page bound to the authenticated player', async t => {
+  const app=createHoneymoonServer({base,geometry,state:':memory:'});
+  t.after(()=>app.close());
+  app.server.listen(0,'127.0.0.1');
+  await once(app.server,'listening');
+  const url=`http://127.0.0.1:${app.server.address().port}`;
+  function post(path,body,cookie) {
+    return fetch(url+'/api/'+path,{method:'POST',headers:{'Content-Type':'application/json',
+      ...(cookie && {Cookie:cookie})},body:JSON.stringify(body)});
+  }
+  const player=(await post('session',{})).headers.get('Set-Cookie').split(';')[0];
+  const other=(await post('session',{})).headers.get('Set-Cookie').split(';')[0];
+  const page='84389918-fc0a-4ba0-a968-f57390daf157';
+  const fallback={yaw:0,pitch:0,fallbackPage:page};
+  assert.equal((await post('presence',fallback)).status,401);
+  assert.equal((await post('presence',fallback,player)).status,409);
+  assert.equal((await post('position-state',{page,start:true},player)).status,200);
+  assert.equal((await post('presence',fallback,other)).status,409);
+  assert.equal((await post('presence',fallback,player)).status,200);
+  assert.equal((await post('chat',{channel:'global',text:'HTTP fallback test'},player)).status,200);
+
+  const nextPage='5d48b81c-960c-4dff-a4a8-cc8cb04cf0aa';
+  assert.equal((await post('position-state',{page:nextPage,start:true},player)).status,200);
+  assert.equal((await post('presence',fallback,player)).status,409);
+});
 
 test('independent cookies share profiles and only confirmed movement, and retain skins after restart', {timeout:20000}, async t => {
   mkdirSync(work, {recursive:true});

@@ -1,4 +1,4 @@
-const cacheName='honeymoon-offline-v1';
+const cacheName='honeymoon-offline-v2';
 const fallback='/offline.html';
 const entryPages=new Set(['/','/index.html','/client/index.html']);
 
