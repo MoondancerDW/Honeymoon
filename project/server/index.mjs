@@ -53,7 +53,7 @@ const MAX_BULK_COMMIT = 3 * 1024 * 1024;
 const MAX_WORLD_RESPONSES = 224;
 const MAX_WORLD_CACHE_BYTES = 48 * 1024 * 1024;
 // Bump when the public chunk format or server-side projection changes.
-const CHUNK_CACHE_FORMAT = 1;
+const CHUNK_CACHE_FORMAT = 2;
 const gzipWorld = promisify(gzip);
 const privateNpcFiles = new Set(['original.json']);
 const MIME = {
@@ -1401,7 +1401,11 @@ export function createHoneymoonServer({
       if (version && version !== chunkCacheVersion) throw new RequestError(404, 'chunk_version_changed');
       const x = Number(chunk.groups.x);
       const z = Number(chunk.groups.z);
-      if (streamedWorld && base.worldCoverage?.(x,z)) await ensureSoloFile(soloRegionFile(x,z),15);
+      if (streamedWorld && base.worldCoverage?.(x,z)) {
+        await ensureSoloFile(soloRegionFile(x,z),15);
+        const ground = game.resolveLogGround(x,z);
+        if (ground) broadcast(null,ground);
+      }
       const highOnly=url.searchParams.get('height')==='upper';
       return serveWorld(request, response, `chunk:${x}.${z}${highOnly?':upper':''}`, () => base.publicChunk(x, z, highOnly),
         version ? 'private, max-age=2592000, immutable' : undefined);

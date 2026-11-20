@@ -19,7 +19,7 @@ import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
   microblockRemoval, partBoxesOverlapBox, partBoxesOverlapVoxels, PART_SLOT_LIMIT, publicMicroPart } from '../world/microblocks.mjs';
 import { BED_SURFACE_HEIGHT, chiselMaterialShape, coverBoxes } from '../world/geometry.mjs';
-import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, MINECRAFT_JUMP_HEIGHT, POSITION_BATCH_LIMIT, POSITION_FLIGHT_DROP_LIMIT, POSITION_STEP_LIMIT,
+import { CRAWL_SPEED, FLIGHT_SPRINT_SPEED, FREE_FALL_START_SPEED, GROUND_SPRINT_SPEED, MINECRAFT_JUMP_HEIGHT, POSITION_BATCH_LIMIT, POSITION_FLIGHT_DROP_LIMIT, POSITION_STEP_LIMIT,
   POSITION_TRAIL_LIMIT, POSITION_VERTICAL_STEP_LIMIT, WORLD_GRAVITY, flightPositionCost, isPlayerStance,
   playerBody } from '../world/player-body.mjs';
 import { bedMate, seatFor, SEATED_EYE, SEATED_HEIGHT } from '../world/seats.mjs';
@@ -38,6 +38,7 @@ import { isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBr
 import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxelAtHit } from '../world/chisel-surface.mjs';
 import {JUMP_CHARGE_BONUS,JUMP_CHARGE_LIMIT,JUMP_CHARGE_RECHARGE_MS,MAGIC_TELEPORT_COOLDOWN_MS,MAGIC_TELEPORT_HORIZONTAL,
   MAGIC_TELEPORT_VERTICAL,ponyAbilities} from '../world/pony-abilities.mjs';
+import {grassBlock, isTreeLog, plainDirt} from '../world/tree-logs.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
@@ -65,6 +66,11 @@ const receiptCleanupInterval=60_000;
 const lavaDamageInterval=1000;
 const jumpValidationHeight=1.4; // The regular tick-based jump reaches 1.252 blocks.
 const magicRetryMs=500;
+function potentialLogGround({x,y,z,cell}) {
+  if (cell===plainDirt) return {x,y,z};
+  if (isTreeLog(cell)) return {x,y:y-1,z};
+  return null;
+}
 
 function point(input, integers = false) {
   const valid = integers ? Number.isSafeInteger : Number.isFinite;
@@ -274,12 +280,13 @@ export function createGame(base, store, geometry, {
   const [sx, sy, sz] = base.manifest.spawn;
   const spawn = Object.freeze({ x: sx, y: sy, z: sz });
   const {minY,maxY} = base.manifest.bounds;
-  const maximumFallSpeed = Math.sqrt(2 * WORLD_GRAVITY * (maxY + 1 - minY));
+  const maximumFallSpeed = Math.sqrt(FREE_FALL_START_SPEED ** 2 + 2 * WORLD_GRAVITY * (maxY + 1 - minY));
   const diagnostic = mechanics.find(module => module.id === 'diagnostic');
   const catalog = new Set([...(base.catalog ?? []), ...creativeBlocks]);
   catalog.add('legacy:9:0');
   catalog.add('legacy:11:0');
   for (const item of creativeItems.values()) if (item.blockKey) catalog.add(item.blockKey);
+  if (catalog.has(plainDirt)) catalog.add(grassBlock);
   for (const key of creativeBlocks) {
     const [id] = blockState(key);
     for (const variant of relatedBlockStates(key)) catalog.add(variant);
@@ -302,7 +309,8 @@ export function createGame(base, store, geometry, {
     && y >= Math.floor(sy) && y <= Math.floor(sy + PLAYER.height);
   const originalAt = (x, y, z) => JSON.stringify(base.getCell(x, y, z));
   const conflicts = store.rebase({...base, catalog}, reserved, originalAt);
-  occupiedDetectors = new Map(store.edits().filter(cell => {
+  const savedEdits = store.edits();
+  occupiedDetectors = new Map(savedEdits.filter(cell => {
     const [id,meta] = blockState(cell);
     return id === 28 && Boolean(meta & 8);
   }).map(({x,y,z}) => [cellAddress(x,y,z),[x,y,z]]));
@@ -340,6 +348,62 @@ export function createGame(base, store, geometry, {
     const parts = change.parts ?? (base.manifest.chunkPalettes ? base.manifest.compositions?.[change.cell]?.parts : undefined);
     return {...change, ...(parts && {parts}), object:displayObject(object)};
   }
+
+  function logGroundChanges(candidates, read) {
+    const changes=new Map();
+    for (const {x,y,z} of candidates) {
+      if (!base.inBounds(x,y,z) || !base.inBounds(x,y+1,z) || reserved(x,y,z) || spawnProtected(x,y,z) ||
+          base.hasPlayableChunk && !base.hasPlayableChunk(x>>4,z>>4)) continue;
+      const ground=read(x,y,z);
+      if (ground.cell===plainDirt && !ground.object && !ground.parts && !ground.voxels && !ground.fluid &&
+          isTreeLog(read(x,y+1,z).cell)) changes.set(cellAddress(x,y,z),{...ground,cell:grassBlock});
+    }
+    return changes;
+  }
+
+  function withLogGround(cells) {
+    const candidates=cells.map(potentialLogGround).filter(Boolean);
+    if (!candidates.length) return cells;
+    const staged=new Map(cells.map(cell=>[cellAddress(cell.x,cell.y,cell.z),cell]));
+    const changes=logGroundChanges(candidates,(x,y,z)=>staged.get(cellAddress(x,y,z)) ?? getCurrent(x,y,z));
+    if (!changes.size) return cells;
+    const updated=cells.map(cell=>{
+      const address=cellAddress(cell.x,cell.y,cell.z);
+      const grass=changes.get(address);
+      changes.delete(address);
+      return grass ?? cell;
+    });
+    return [...updated,...changes.values()];
+  }
+
+  function migrateLogGround(candidates) {
+    const changes=logGroundChanges(candidates,getCurrent);
+    if (!changes.size) return;
+    return store.atomic(()=>{
+      const worldRevision=store.nextRevision();
+      const edits=[...changes.values()].map(cell=>{
+        const edit={...cell,revision:worldRevision};
+        store.writeEdit(edit,originalAt(edit.x,edit.y,edit.z));
+        return publicChange(edit);
+      });
+      return {worldRevision,changes:edits,effects:[]};
+    });
+  }
+
+  const pendingLogGround=new Map();
+  const availableLogGround=[];
+  for (const edit of savedEdits) {
+    const candidate=potentialLogGround(edit);
+    if (!candidate) continue;
+    const cx=candidate.x>>4, cz=candidate.z>>4;
+    if (!base.hasPlayableChunk || base.hasPlayableChunk(cx,cz)) availableLogGround.push(candidate);
+    else if (base.worldCoverage?.(cx,cz)) {
+      const key=`${cx}.${cz}`;
+      if (!pendingLogGround.has(key)) pendingLogGround.set(key,[]);
+      pendingLogGround.get(key).push(candidate);
+    }
+  }
+  migrateLogGround(availableLogGround);
 
   const cellAt = (x, y, z) => {
     const current = getCurrent(x, y, z);
@@ -465,14 +529,22 @@ export function createGame(base, store, geometry, {
   }
 
   function spentJumps(player,now) {
-    if (!jumpReadyAt.has(player)) jumpReadyAt.set(player,store.getState('pony-abilities',player,'jumps')?.value ?? []);
+    if (!jumpReadyAt.has(player)) {
+      const saved=store.getState('pony-abilities',player,'jumps');
+      const ready=(saved?.value??[]).filter(at=>at>now).sort((a,b)=>a-b);
+      if (saved?.version===1 && ready.length>1) {
+        for (let i=1;i<ready.length;i++) ready[i]=Math.max(ready[i],ready[i-1]+JUMP_CHARGE_RECHARGE_MS);
+        store.putState('pony-abilities',player,'jumps',2,ready);
+      }
+      jumpReadyAt.set(player,ready);
+    }
     return jumpReadyAt.get(player).filter(ready=>ready>now);
   }
 
   function jumpCharge(player,now) {
     if (!abilitiesFor(player).chargedJump) return {charges:0,readyInMs:[]};
     const ready=spentJumps(player,now);
-    return {charges:Math.max(0,JUMP_CHARGE_LIMIT-ready.length),readyInMs:ready.sort((a,b)=>a-b).map(at=>Math.ceil(at-now))};
+    return {charges:Math.max(0,JUMP_CHARGE_LIMIT-ready.length),readyInMs:ready.map(at=>Math.ceil(at-now))};
   }
 
   function magicCooldownMs(player,now) {
@@ -740,9 +812,10 @@ export function createGame(base, store, geometry, {
   }
 
   function writePlan(module, plan, placement) {
-    const revision = plan.cells?.length ? store.nextRevision() : store.worldRevision();
+    const cells=withLogGround(plan.cells ?? []);
+    const revision = cells.length ? store.nextRevision() : store.worldRevision();
     const changes = [];
-    for (const {moveOwner,preserveParts,...cell} of plan.cells ?? []) {
+    for (const {moveOwner,preserveParts,...cell} of cells) {
       const { x, y, z } = cell;
       const reservedCell = module.reserved?.(x, y, z);
       const previous = reservedCell ? null : store.getEdit(x,y,z);
@@ -1920,8 +1993,8 @@ export function createGame(base, store, geometry, {
     const entry = observing ? passivePosition(target) : enterPosition(player, target, previous,stance);
     if (chargesSpent) {
       const ready=spentJumps(player,now);
-      for (let i=0;i<chargesSpent;i++) ready.push(now+JUMP_CHARGE_RECHARGE_MS);
-      store.putState('pony-abilities',player,'jumps',1,ready);
+      for (let i=0;i<chargesSpent;i++) ready.push((ready.at(-1)??now)+JUMP_CHARGE_RECHARGE_MS);
+      store.putState('pony-abilities',player,'jumps',2,ready);
       jumpReadyAt.set(player,ready);
     }
     positions.set(player, {position:target, stance, updated:now, seen:now, budget:budget-distance, requestId,
@@ -2057,6 +2130,13 @@ export function createGame(base, store, geometry, {
 
   return {
     action,
+    resolveLogGround(cx,cz) {
+      const key=`${cx}.${cz}`;
+      if (!pendingLogGround.has(key) || !base.hasPlayableChunk(cx,cz)) return;
+      const result=migrateLogGround(pendingLogGround.get(key));
+      pendingLogGround.delete(key);
+      return result;
+    },
     clearInventory(player) {
       const {slots,equipment,selected}=inventory.read(player);
       return inventory.replace(player,{slots:Array(slots.length).fill(null),equipment:Array(equipment.length).fill(null),
@@ -2114,11 +2194,12 @@ export function createGame(base, store, geometry, {
         }
         const result=store.atomic(()=>{
           const revision=cells.length?store.nextRevision():store.worldRevision();
-          const changes=cells.map(cell=>{
+          const changes=withLogGround(cells).map((cell,index)=>{
             const {x,y,z,parts}=cell;
             const edit={...cell,revision};
+            const explicit=index<cells.length;
             const owned=parts?.map(part=>({...publicMicroPart(part),owner:player})) ?? null;
-            store.writeEdit(edit,originalAt(x,y,z),edit.cell===null?null:player,owned,false);
+            store.writeEdit(edit,originalAt(x,y,z),explicit && edit.cell!==null?player:null,owned,!explicit);
             return publicChange(edit);
           });
           const framesView=frames.removeSupportedMany(cells.filter(cell=>cell.cell===null));

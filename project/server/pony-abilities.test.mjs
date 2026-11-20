@@ -20,7 +20,7 @@ function scenario(t, race) {
     inBounds:(x,y,z)=>x>=bounds.minX && x<=bounds.maxX && y>=bounds.minY && y<=bounds.maxY && z>=bounds.minZ && z<=bounds.maxZ,
     getCell:(x,y)=>({key:y===0 || x===12 && y<=6 ? 'legacy:1:0' : 'air',object:null})};
   const open=()=>createGame(base,store,geometry,{modules:[],clock,playerPonyType,survival});
-  return {id,spawn,survival,open,game:open(),advance:ms=>now+=ms,raceTo:value=>{race=value;}};
+  return {id,spawn,survival,store,open,game:open(),advance:ms=>now+=ms,raceTo:value=>{race=value;}};
 }
 
 test('race changes preserve damage and only winged survival ponies may fly or ignore landing damage',t=>{
@@ -62,7 +62,7 @@ test('race changes preserve damage and only winged survival ponies may fly or ig
   assert.equal(survival.status(id).health,before);
 });
 
-test('only a second rise at the apex spends a charge and two charges replenish independently',t=>{
+test('only a second rise at the apex spends a charge and two charges replenish in order',t=>{
   const {id,spawn,game,open,advance}=scenario(t,'earth');
   let request=0;
   function move(fromHeight, heights, charged = false) {
@@ -80,8 +80,9 @@ test('only a second rise at the apex spends a charge and two charges replenish i
     advance(100);
     move(0,[.3,.6,.9,1.25]);
     advance(200);
-    move(1.25,[1.31,1.5,1.75],true);
-    assert.throws(()=>move(1.75,[1.8],true),{code:'movement_blocked'});
+    move(1.25,[1.31,1.5,1.75,2.05],true);
+    assert.throws(()=>move(2.05,[2.09],true),{code:'movement_blocked'});
+    assert.throws(()=>move(2.05,[2.25]),{code:'movement_blocked'});
     game.teleport(id,spawn);
   }
   spend();
@@ -89,14 +90,26 @@ test('only a second rise at the apex spends a charge and two charges replenish i
   advance(1400);
   spend();
   assert.equal(game.abilityState(id).jumpCharge.charges,0);
-  assert.deepEqual(open().abilityState(id).jumpCharge,{charges:0,readyInMs:[4300,6000]});
+  assert.deepEqual(open().abilityState(id).jumpCharge,{charges:0,readyInMs:[4300,10300]});
   advance(100);
   move(0,[.3,.6,.9,1.25]);
   assert.throws(()=>move(1.25,[1.31],true),{code:'movement_blocked'});
   advance(4200);
-  assert.deepEqual(game.abilityState(id).jumpCharge,{charges:1,readyInMs:[1700]});
-  advance(1700);
+  assert.deepEqual(game.abilityState(id).jumpCharge,{charges:1,readyInMs:[6000]});
+  advance(5999);
+  assert.deepEqual(game.abilityState(id).jumpCharge,{charges:1,readyInMs:[1]});
+  advance(1);
   assert.deepEqual(game.abilityState(id).jumpCharge,{charges:2,readyInMs:[]});
+});
+
+test('pending charges from a previous save switch to a queue while already restored charges remain ready',t=>{
+  const {id,store,open}=scenario(t,'earth');
+  store.putState('pony-abilities',id,'jumps',1,[5400,6200]);
+  assert.deepEqual(open().abilityState(id).jumpCharge,{charges:0,readyInMs:[4400,10400]});
+  assert.deepEqual(store.getState('pony-abilities',id,'jumps'),{version:2,value:[5400,11400]});
+  assert.deepEqual(open().abilityState(id).jumpCharge,{charges:0,readyInMs:[4400,10400]});
+  store.putState('pony-abilities',id,'jumps',1,[999,6200]);
+  assert.deepEqual(open().abilityState(id).jumpCharge,{charges:1,readyInMs:[5200]});
 });
 
 test('magic stops on the near side of a wall, honors both ranges, and keeps its cooldown after reconnect',t=>{

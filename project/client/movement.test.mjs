@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {cameraClearance, movementSpeed, Movement, pick, pickMinecart} from './movement.mjs';
-import {POSITION_STEP_LIMIT,playerBody} from '../world/player-body.mjs';
+import {FREE_FALL_START_SPEED,POSITION_STEP_LIMIT,WORLD_GRAVITY,playerBody} from '../world/player-body.mjs';
+import {JUMP_CHARGE_HEIGHT} from '../world/pony-abilities.mjs';
 
 const manifest = {bounds:{minX:-8,maxX:8,minY:0,maxY:15,minZ:-8,maxZ:8}};
 function worldFor(obstacles) {
@@ -160,7 +161,7 @@ test('only a continuous hold through a tenth of a second at the apex uses a char
     assert.deepEqual(empty.heights,normal.heights);
     assert.deepEqual(held.heights.slice(0,30),normal.heights.slice(0,30));
     assert.ok(Math.abs(earlyRelease.apex-normal.apex)<.002);
-    assert.ok(Math.abs(held.apex-normal.apex-(charged ? .5 : 0))<.002);
+    assert.ok(Math.abs(held.apex-(charged ? JUMP_CHARGE_HEIGHT : normal.apex))<.002);
     assert.equal(held.charges,Number(charged));
     if (charged) {
       assert.equal(held.boostAt,40);
@@ -169,9 +170,10 @@ test('only a continuous hold through a tenth of a second at the apex uses a char
     }
     if (movement.gliding) {
       movement.cancelSlowFall();
+      assert.equal(movement.fall,-FREE_FALL_START_SPEED);
       movement.update(position,0,0,false,.1);
       assert.equal(movement.gliding,false);
-      assert.ok(movement.fall<-2.3);
+      assert.ok(Math.abs(movement.fall+FREE_FALL_START_SPEED+WORLD_GRAVITY*.1)<1e-6);
     }
   }
   const pressedAgain=sample('earth',i=>i<12 || i>=20);
@@ -185,9 +187,29 @@ test('only a continuous hold through a tenth of a second at the apex uses a char
   assert.ok(Math.abs(highRoof.apex-1.5)<.002);
 });
 
+test('a charged jump can land on a two-block ledge at walking speed', () => {
+  const world = worldFor(new Map([['0,1,0','legacy:1:0'],['0,2,0','legacy:1:0']]));
+  for (const ponyType of ['earth','alicorn']) for (const size of ['small','normal','large','tall']) {
+    for (const dt of [.008,.016,.033]) {
+      const movement = new Movement(world);
+      movement.ponyType = ponyType;
+      movement.size = size;
+      movement.grounded = true;
+      const position = {x:-.6,y:1,z:.5};
+      for (let i=0; i<Math.ceil(1.5/dt); i++) {
+        const speed = position.x<.5 ? 3.8 : 0;
+        movement.update(position,speed,0,i===0,dt,{chargeHeld:true,availableCharge:()=>true});
+        if (movement.grounded) break;
+      }
+      assert.ok(position.x>0 && movement.grounded && Math.abs(position.y-3)<.001,
+        `${ponyType} ${size} ${dt}s landed at ${JSON.stringify(position)}`);
+    }
+  }
+});
+
 test('race multipliers affect ground sprint and only ordinary Pegasus flight below the overview', () => {
   const sprint=movementSpeed({sprint:true});
-  for (const [ponyType,ratio] of [['earth',1.3],['pegasus',.7],['unicorn',.85],['alicorn',1.3]]) {
+  for (const [ponyType,ratio] of [['earth',1.25],['pegasus',.7],['unicorn',.85],['alicorn',1.25]]) {
     assert.equal(movementSpeed({sprint:true,ponyType}),sprint*ratio);
     for (const y of [64,255.9,256,258,500]) {
       assert.equal(movementSpeed({flying:true,y,ponyType}),movementSpeed({flying:true,y})*(ponyType==='pegasus'&&y<256?.8:1));
@@ -196,7 +218,9 @@ test('race multipliers affect ground sprint and only ordinary Pegasus flight bel
   }
 });
 
-test('flight-off and cliff free fall keep world gravity for all pony species', () => {
+test('flight-off and cliff free fall start at speed and accelerate at world gravity for every race', () => {
+  const dt = .016;
+  const dropAt = elapsed => FREE_FALL_START_SPEED*elapsed + .5*WORLD_GRAVITY*elapsed**2;
   for (const ponyType of ['earth','unicorn','pegasus','alicorn']) {
     for (const cliff of [true,false]) {
       const world=worldFor(new Map(cliff ? [['0,400,0','legacy:1:0']] : []));
@@ -207,17 +231,18 @@ test('flight-off and cliff free fall keep world gravity for all pony species', (
       const position={x:cliff ? 1.22 : .5,y:start,z:.5};
       if (cliff) {
         movement.grounded=true;
-        movement.update(position,7,0,false,.016);
+        movement.update(position,7,0,false,dt);
         assert.ok(position.x>1.3 && Math.abs(position.y-start)<1e-6);
       } else {
-        movement.fly(position,0,0,0,.016);
+        movement.fly(position,0,0,0,dt);
       }
       let step=0;
       do {
-        movement.update(position,0,0,false,.016);
-        if (++step===125) assert.ok(Math.abs(position.y-(start-.5*9.81*2**2))<1e-6);
+        movement.update(position,0,0,false,dt);
+        if (++step===1 || step===125) assert.ok(Math.abs(position.y-(start-dropAt(step*dt)))<1e-6);
       } while (!movement.grounded && step<575);
-      assert.equal(step,565);
+      assert.ok(dropAt((step-1)*dt)<400 && dropAt(step*dt)>=400);
+      assert.ok(Math.abs(position.y-1)<.001);
     }
   }
 });

@@ -26,7 +26,7 @@ async function layout(directory,spawn=[8.5,1,8.5]) {
   await mkdir(join(directory,'server'));
   await cp(join(project,'world'),join(directory,'world'),{recursive:true});
   await cp(join(project,'portable','single-instance.mjs'),join(directory,'single-instance.mjs'));
-  for (const module of ['backup','base','full-detail','snow-cleanup','solo-assets']) {
+  for (const module of ['backup','base','full-detail','log-ground','snow-cleanup','solo-assets']) {
     await cp(join(project,'server',module+'.mjs'),join(directory,'server',module+'.mjs'));
   }
   const bounds={minX:0,minY:0,minZ:0,maxX:15,maxY:15,maxZ:15};

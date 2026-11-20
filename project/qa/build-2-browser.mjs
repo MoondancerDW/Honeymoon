@@ -400,6 +400,7 @@ try {
     const {playerId}=await owner.json();
     const x=3359,y=85,z=1467;
     app.game.worldEdit.write(playerId,[{x,y,z,cell:'legacy:17:0',object:null},{x,y:y+1,z,cell:'legacy:17:0',object:null},
+      {x:x+1,y:y-1,z,cell:'legacy:3:0',object:null},
       {x:x+1,y,z,cell:null,object:null},{x:x+2,y,z,cell:null,object:null}]);
     await start(false);
     await page.keyboard.press('KeyF');
@@ -422,7 +423,8 @@ try {
     await page.waitForFunction(at=>{
       const cell=honeymoon.getCell(at[0]+1,at[1],at[2]);
       const key=typeof cell==='string'?cell:cell?.key;
-      return key?.startsWith('legacy:17:') && honeymoon.qaLogMesh(...at)?.bevels===0 &&
+      return key?.startsWith('legacy:17:') && honeymoon.getCell(at[0]+1,at[1]-1,at[2])==='legacy:2:0' &&
+        honeymoon.qaLogMesh(...at)?.bevels===0 &&
         honeymoon.qaLogMesh(at[0]+1,at[1],at[2])?.bevels===0;
     },at,{timeout:15_000});
     const joined=await mesh();
@@ -435,7 +437,14 @@ try {
     await page.mouse.down();
     await page.mouse.up();
     await page.waitForFunction(at=>honeymoon.getCell(at[0]+1,at[1],at[2])===null&&honeymoon.qaLogMesh(...at)?.bevels>0,at);
-    result.checks.push({alignedTrunk:isolated,sideJoin:joined,afterRemoval:await mesh(),chunkBoundary:true});
+    assert.equal(await page.evaluate(([x,y,z])=>honeymoon.getCell(x+1,y-1,z),at),'legacy:2:0');
+    result.checks.push({alignedTrunk:isolated,sideJoin:joined,afterRemoval:await mesh(),chunkBoundary:true,grassAfterRemoval:true});
+    await hop(-143.67,65,-219.39);
+    await page.evaluate(()=>honeymoon.look(-.38,-.45));
+    await page.waitForFunction(()=>honeymoon.getCell(-143,65,-222)==='legacy:17:0' &&
+      honeymoon.getCell(-143,64,-222)==='legacy:2:0' && honeymoon.qaLogMesh(-143,65,-222)?.bevels>0);
+    await shot('rounded-logs-grass');
+    result.checks.push({importedLog:[-143,65,-222],importedGrass:[-143,64,-222]});
   } else if (raceAdminQa) {
     await skipPreload();
     await start();
@@ -666,7 +675,22 @@ try {
       alphabeticalProfiles:Boolean(guest),singleRowMoscowLastSeen:Boolean(guest),usedInviteAttribution:Boolean(guest),offhandDropped:Boolean(guest)});
   } else if (jumpChargeQa) {
     await skipPreload();
-    await start();
+    const wall = {x:3359,y:100,z:1467};
+    if (!mobileQa) {
+      const owner = await page.request.post(url+'api/access/owner', {data:{key:ownerKey,profileName:'Проверка прыжка'}});
+      assert.equal(owner.status(),200,await owner.text());
+      const {playerId} = await owner.json();
+      const cells = [];
+      const stone = (x,y,z) => ({x,y,z,cell:'legacy:1:0',object:null});
+      for (let dx=-2; dx<=2; dx++) {
+        for (let dz=-2; dz<=4; dz++) cells.push(stone(wall.x+dx,wall.y,wall.z+dz));
+        for (let dy=1; dy<=2; dy++) {
+          for (let dz=-2; dz<=0; dz++) cells.push(stone(wall.x+dx,wall.y+dy,wall.z+dz));
+        }
+      }
+      app.game.worldEdit.write(playerId,cells);
+    }
+    await start(mobileQa);
     const indicator=page.locator('#jump-charge-status');
     const icon=indicator.locator('svg.jump-charge-icon');
     const cdp=mobileQa ? await page.context().newCDPSession(page) : null;
@@ -695,7 +719,7 @@ try {
             status.querySelectorAll('.jump-charge-dot.ready').length!==count) return false;
         const height=Number(clip.getAttribute('height'));
         const y=Number(clip.getAttribute('y'));
-        return height>=minHeight && height<=maxHeight && {height,y};
+        return height>=minHeight && height<=maxHeight && {height,y,at:performance.now()};
       },{count,minHeight,maxHeight},{timeout:8500});
       const shape=await value.jsonValue();
       await value.dispose();
@@ -715,7 +739,9 @@ try {
     const both=await charge(0,first.height-.5,22);
     const almost=await charge(0,24.5,25.99);
     const restarted=await charge(1,1,almost.height-.5);
-    await charge(2,26,26);
+    const full=await charge(2,26,26);
+    const remainingRechargeMs=full.at-restarted.at;
+    assert.ok(remainingRechargeMs>=4800 && remainingRechargeMs<7500,JSON.stringify({restarted,full}));
     assert.ok(both.height>=first.height-.5 && almost.height>both.height && restarted.height<almost.height);
     const layouts=mobileQa ? [[390,730],[667,300]] : [[1000,640]];
     for (const [width,height] of layouts) {
@@ -737,7 +763,30 @@ try {
       }
       await shot(test+'-'+width);
     }
-    result.checks.push({jumpChargeHud:{first,both,almost,restarted,fullyRecharged:true,layouts:layouts.length}});
+    result.checks.push({jumpChargeHud:{first,both,almost,restarted,fullyRecharged:true,remainingRechargeMs,layouts:layouts.length}});
+    if (!mobileQa) {
+      await hop(wall.x+.5,wall.y+1,wall.z+2.35);
+      await ground();
+      await page.evaluate(()=>honeymoon.look(0,0));
+      await page.keyboard.down('KeyW');
+      await page.keyboard.down('Space');
+      try {
+        await page.waitForFunction(({z})=>{
+          const {position,jumpCharges}=honeymoon.stats();
+          return position.z<z+.92 && jumpCharges===1;
+        },wall,{timeout:6000});
+      } finally {
+        await page.keyboard.up('KeyW');
+        await page.keyboard.up('Space');
+      }
+      await page.waitForFunction(({y,z})=>{
+        const {grounded,position,movementSync}=honeymoon.stats();
+        return grounded && Math.abs(position.y-y-3)<.005 && position.z<z+.92 &&
+          Math.abs(movementSync.confirmed[1]-position.y)<.01;
+      },wall,{timeout:6000});
+      result.checks.push({twoBlockWall:true,landed:(await stat()).position});
+      await shot('earth-pony-two-block-wall');
+    }
   } else if (raceQa) {
     await skipPreload();
     await start();
@@ -861,7 +910,7 @@ try {
     assert.ok(Math.abs(normal-released)<.06,JSON.stringify({normal,released}));
     assert.equal((await stat()).jumpCharges,2);
     const charged=await sampleApex(650);
-    assert.ok(normal>1.2 && normal<1.27 && Math.abs(normal+.5-charged)<.06,JSON.stringify({normal,charged}));
+    assert.ok(normal>1.2 && normal<1.27 && charged>=2 && charged<2.1,JSON.stringify({normal,charged}));
     await page.waitForFunction(()=>honeymoon.stats().jumpCharges===1);
     await chargeDots(1);
     const second=await sampleApex(650);

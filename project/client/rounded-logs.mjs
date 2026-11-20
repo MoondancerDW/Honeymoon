@@ -1,5 +1,4 @@
-// Full tree logs from the imported block registry, including the modded woods.
-export const isTreeLog = key => /^legacy:(?:17|245|701|2163|2176|3251):\d+$/.test(key);
+export {isTreeLog} from '../world/tree-logs.mjs';
 
 export function logAxis(faces) {
   // The registry stores the actual face pair after metadata and mod rotations.

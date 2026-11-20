@@ -3,7 +3,7 @@ import {once} from 'node:events';
 import {test} from 'node:test';
 import {Movement, movementSpeed} from '../client/movement.mjs';
 import {positionBatch} from '../client/position-packet.mjs';
-import {POSITION_TRAIL_LIMIT, WORLD_GRAVITY} from '../world/player-body.mjs';
+import {FREE_FALL_START_SPEED, POSITION_TRAIL_LIMIT, WORLD_GRAVITY} from '../world/player-body.mjs';
 import * as geometry from '../world/geometry.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import {createGame} from './game.mjs';
@@ -122,7 +122,7 @@ test('positions validate body changes at their own step and do not stand through
   assert.throws(() => send(edge,[[4.31,1,.5,'crouch']],'try-edge-step'),{code:'movement_blocked'});
 });
 
-test('a world-height fall accelerates at normal gravity and arrives through valid batches', t => {
+test('a world-height fall starts at Minecraft speed, accelerates and arrives through valid batches', t => {
   const store = openStore(':memory:');
   t.after(() => store.close());
   const bounds = {minX:-4,maxX:4,minY:0,maxY:511,minZ:-4,maxZ:4};
@@ -148,7 +148,8 @@ test('a world-height fall accelerates at normal gravity and arrives through vali
     }
     now += 128;
     if (!movement.grounded) {
-      const expected = start[1] - .5 * WORLD_GRAVITY * (now/1000)**2;
+      const elapsed = now / 1000;
+      const expected = start[1] - FREE_FALL_START_SPEED * elapsed - .5 * WORLD_GRAVITY * elapsed**2;
       assert.ok(Math.abs(feet.y-expected) < 1e-7, `height ${feet.y} instead of ${expected} at ${now} ms`);
     }
     const batch = positionBatch(from,samples);
@@ -161,7 +162,8 @@ test('a world-height fall accelerates at normal gravity and arrives through vali
     from = tuple(state.position);
   }
   assert.ok(largestDrop > 12);
-  assert.ok(Math.abs(now/1000 - Math.sqrt(2 * (start[1]-1) / WORLD_GRAVITY)) < .128);
+  const duration = (Math.sqrt(FREE_FALL_START_SPEED**2 + 2*WORLD_GRAVITY*(start[1]-1)) - FREE_FALL_START_SPEED) / WORLD_GRAVITY;
+  assert.ok(Math.abs(now/1000 - duration) < .128);
   assert.ok(movement.grounded);
   assert.ok(Math.abs(from[1]-1) < .005);
 });

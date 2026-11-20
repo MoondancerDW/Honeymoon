@@ -8,6 +8,7 @@ import { isRideableMinecart } from '../world/minecarts.mjs';
 import { isRideableBoat } from '../world/boats.mjs';
 import { isWestCellarHatch, westCellarHatch, westCellarLadder } from '../world/west-cellar.mjs';
 import { loadSnowCleanup } from './snow-cleanup.mjs';
+import { applyLogGround } from './log-ground.mjs';
 import { loadFullDetail } from './full-detail.mjs';
 import { soloRegionFile } from './solo-assets.mjs';
 
@@ -185,9 +186,11 @@ export function loadBase(directory, {cleanSnow = true, partial} = {}) {
     }
     const source = local ? JSON.parse(readFileSync(join(directory,'chunks',`${chunkKey}.json`),'utf8')) : fullDetail.chunkAt(cx,cz);
     if (source.x !== cx || source.z !== cz) throw new Error(`Mismatched chunk coordinates ${chunkKey}`);
+    const originalPalette = manifest.chunkPalettes ? source.palette : manifest.palette;
+    if (!Array.isArray(originalPalette) || originalPalette[0] !== 'air') throw new Error(`Malformed palette in ${chunkKey}`);
     cleanup?.apply(source,manifest.palette);
-    const palette = manifest.chunkPalettes ? source.palette : manifest.palette;
-    if (!Array.isArray(palette) || palette[0] !== 'air') throw new Error(`Malformed palette in ${chunkKey}`);
+    applyLogGround(source,originalPalette);
+    const palette = source.palette ?? originalPalette;
     const sections = new Map(source.sections.map(section=>[section.y,section.indices]));
     const objects = new Map(source.objects.map(object => [cellAddress(...object.position), object]));
     const chunk = { source, palette, sections, objects, local };

@@ -1,7 +1,7 @@
 import * as geometry from '../world/geometry.mjs';
 import {extractedModel} from '../world/extracted-models.mjs';
 import {fluidAt,fluidCurrent,movementMedium} from '../world/block-movement.mjs';
-import {CRAWL_SPEED, FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, GROUND_SPRINT_SPEED, HIGH_FLIGHT_Y, HIGH_FLIGHT_SPEED,
+import {CRAWL_SPEED, FLIGHT_SPEED, FLIGHT_SPRINT_SPEED, FREE_FALL_START_SPEED, GROUND_SPRINT_SPEED, HIGH_FLIGHT_Y, HIGH_FLIGHT_SPEED,
   MINECRAFT_JUMP_HEIGHT,
   HIGH_FLIGHT_SPRINT_SPEED, PLAYER, POSITION_STEP_LIMIT, POSITION_VERTICAL_STEP_LIMIT, WALK_SPEED, WORLD_GRAVITY,
   isPlayerStance, playerBody} from '../world/player-body.mjs';
@@ -300,6 +300,7 @@ export class Movement {
 
   cancelSlowFall() {
     if (this.jumpArc) this.jumpArc.slowDescent = false;
+    if (this.gliding) this.fall = Math.min(this.fall,-FREE_FALL_START_SPEED);
     this.gliding = false;
   }
 
@@ -321,7 +322,7 @@ export class Movement {
     }
   }
 
-  dryVerticalDelta(y, remaining, availableCharge) {
+  dryVerticalDelta({x,y,z}, remaining, availableCharge) {
     let delta = 0;
     while (this.jumpArc && remaining > 0) {
       const arc = this.jumpArc;
@@ -384,6 +385,11 @@ export class Movement {
       return delta + this.fall * remaining;
     }
     if (remaining <= 0) return delta;
+    // Ground contact was resolved before the last horizontal step, so check
+    // for support again when starting a fall from a ledge.
+    if (this.fall === 0 && !(this.grounded && this.blocked(x,y-.002,z))) {
+      this.fall = -FREE_FALL_START_SPEED;
+    }
     const initial = this.fall;
     this.fall -= (initial > 0 ? JUMP_ASCENT_GRAVITY : WORLD_GRAVITY) * remaining;
     if (initial > 0 && this.fall < 0) {
@@ -401,7 +407,7 @@ export class Movement {
     if (!this.medium && jump && this.grounded) {
       this.startJump(position.y,chargeHeld && this.canChargeJump && availableCharge?.());
     }
-    const fastestDrop = (Math.max(0,-this.fall) + WORLD_GRAVITY * dt) * dt;
+    const fastestDrop = (Math.max(FREE_FALL_START_SPEED,-this.fall) + WORLD_GRAVITY * dt) * dt;
     const n = Math.max(1, Math.ceil(dt / .016), Math.ceil(fastestDrop / VERTICAL_STEP));
     const step = dt / n;
     for (let i = 0; i < n; i++) {
@@ -423,7 +429,7 @@ export class Movement {
       } else if (startMedium === 'lava') {
         this.fall = descend ? -1.04 : rise ? 1.15 : Math.max(-.63,this.fall-3.5*step);
       } else {
-        deltaY = this.dryVerticalDelta(position.y,step,availableCharge);
+        deltaY = this.dryVerticalDelta(position,step,availableCharge);
       }
       // Resolve Y before X and Z, including when leaving a ledge or climbing
       // past a ceiling. Contact with a wall can start ascent on the next step.

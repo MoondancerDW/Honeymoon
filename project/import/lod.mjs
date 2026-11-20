@@ -7,6 +7,7 @@ import {gzipSync} from 'node:zlib';
 import {buildRegion,makeMaterials,outerChunk,sampleChunk,OUTER_STEP,TILE_CHUNKS} from './lod-mesh.mjs';
 import {LOD_VERSION,lodDistance} from '../client/far-tile-format.mjs';
 import {loadSnowCleanup} from '../server/snow-cleanup.mjs';
+import {applyLogGround} from '../server/log-ground.mjs';
 
 const DEFAULT_WORLD = fileURLToPath(new URL('../generated/world',import.meta.url));
 const DEFAULT_OUTPUT = fileURLToPath(new URL('../generated/lod',import.meta.url));
@@ -71,6 +72,7 @@ export function buildLod(worldDir = DEFAULT_WORLD, outputDir = DEFAULT_OUTPUT, p
       const source = JSON.parse(readFileSync(join(world,'chunks',`${key}.json`),'utf8'));
       if (source.x!==x || source.z!==z) throw new Error(`Unexpected coordinates in chunk ${key}`);
       snow.apply(source,manifest.palette);
+      applyLogGround(source,manifest.palette);
       sources.set(key,{...source, palette:source.palette ?? manifest.palette,
         compositions:source.compositions ?? manifest.compositions});
     }
