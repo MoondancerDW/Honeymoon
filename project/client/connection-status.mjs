@@ -10,7 +10,8 @@ export function createConnectionStatus({element,onRecover,onLatency,onRecovery,o
   now=()=>performance.now()}) {
   const fps=element('connection-fps'),ping=element('connection-ping');
   const alert=element('connection-alert'),message=element('connection-message'),retry=element('connection-retry');
-  let reachable,live,wasPlayable=false,predictionPaused=false,terrainWaiting=false,startupStopped=false,autoReload=false,request,timer,warmed=false;
+  let reachable,live,wasPlayable=false,predictionPaused=false,terrainWaiting=false,startupStopped=false,retryWhenOnline=false,request,timer,warmed=false;
+  let gameReady=false;
   let lastStreamAt=-Infinity,lastPositionAt=-Infinity,recovering=false,warningAt=Infinity;
   let lastFrameCount,lastFrameSample,local=false;
 
@@ -32,14 +33,15 @@ export function createConnectionStatus({element,onRecover,onLatency,onRecovery,o
       warningAt=recovering ? time+warningDelay : Infinity;
       onRecovery?.(recovering);
     }
-    const text=startupStopped && !autoReload ? 'Сервер недоступен. Повторите подключение.' :
-      startupStopped || (!wasPlayable && (reachable===false || live===false)) ? 'Сервер недоступен. Подключаемся повторно…' :
+    const text=startupStopped ? 'Ожидаем связи с сервером…' :
+      (!wasPlayable && (reachable===false || live===false)) ? 'Подключаемся к серверу…' :
       terrainWaiting==='solo-unavailable' ? 'Район ещё не скачан. Подключите интернет для загрузки.' :
       terrainWaiting ? 'Загружаем ближайший участок…' :
       recovering && time>=warningAt ? (predictionPaused ? 'Восстанавливаем связь…' : 'Нестабильная связь. Восстанавливаем соединение…') : '';
     if (message.textContent!==text) message.textContent=text;
     if (alert.hidden!==!text) alert.hidden=!text;
-    if (retry.hidden!==!startupStopped) retry.hidden=!startupStopped;
+    const showRetry=gameReady && recovering && time>=warningAt;
+    if (retry.hidden!==!showRetry) retry.hidden=!showRetry;
     if (stale) onStreamStale?.();
   }
 
@@ -78,7 +80,10 @@ export function createConnectionStatus({element,onRecover,onLatency,onRecovery,o
           ping.textContent='Пинг '+latency+' мс';
           onLatency(latency);
         }
-        if (startupStopped && autoReload) onRecover();
+        if (startupStopped && retryWhenOnline) {
+          retryWhenOnline=false;
+          onRecover();
+        }
       } else {
         ping.textContent='Пинг —';
         onLatency(null);
@@ -156,7 +161,16 @@ export function createConnectionStatus({element,onRecover,onLatency,onRecovery,o
     },
     startupFailed(waitForServer) {
       startupStopped=true;
-      autoReload=waitForServer;
+      retryWhenOnline=waitForServer;
+      paint();
+    },
+    startupResumed() {
+      startupStopped=retryWhenOnline=false;
+      paint();
+    },
+    startupFinished() {
+      gameReady=true;
+      startupStopped=retryWhenOnline=false;
       paint();
     }};
 }

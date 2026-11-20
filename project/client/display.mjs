@@ -38,6 +38,8 @@ const boxTriangles = [0,2,1, 1,2,3, 4,5,6, 5,7,6, 0,4,2, 4,6,2,
   1,3,5, 3,7,5, 0,1,4, 1,5,4, 2,6,3, 3,6,7];
 const perspectives = ['first', 'back', 'front'];
 const LANDING_VISTA_WAIT_MS = 1250;
+const GRAPHICS_READY_MS = 30_000;
+const MESH_JOB_STALLED_MS = 10_000;
 
 function partGeometry(pointsPerBox) {
   const geometry = new THREE.BufferGeometry();
@@ -209,22 +211,10 @@ export class Display {
     this.ready = [];
     this.active = new Map();
     this.workerCatalogs = new Map();
+    this.failedWorkers = new Set();
     this.workerFailure = null;
     const workers = Math.max(1, Math.min(3, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
-    this.workers = Array.from({length: workers}, () => {
-      const worker = new Worker('/mesh-worker.mjs', {type: 'module'});
-      worker.onmessage = ({data}) => {
-        this.active.delete(worker);
-        this.ready.push(data);
-      };
-      worker.onerror = event => {
-        this.active.delete(worker);
-        this.fail(new Error(event.message));
-      };
-      worker.postMessage({type: 'init', palette: world.palette, compositions: world.manifest.compositions || {}, models: world.models});
-      this.workerCatalogs.set(worker, world.palette.length);
-      return worker;
-    });
+    this.workers = Array.from({length:workers},()=>this.createMeshWorker());
     this.meshTimes = [];
     this.visibleEdits = new Map();
     this.frameTimes = [];
@@ -395,19 +385,93 @@ export class Display {
     return this.pending.size + this.active.size + this.ready.length + this.uploads.length;
   }
 
+  createMeshWorker() {
+    const worker=new Worker('/mesh-worker.mjs',{type:'module'});
+    worker.onmessage=({data})=>{
+      const job=this.active.get(worker);
+      if (!job || data?.id!==job.id || data.version!==job.version || this.failedWorkers.has(worker)) return;
+      this.active.delete(worker);
+      this.ready.push(data);
+    };
+    worker.onerror=event=>{
+      event.preventDefault?.();
+      this.failMeshWorker(worker,new Error(event.message || 'Terrain mesh worker failed'));
+    };
+    worker.onmessageerror=()=>this.failMeshWorker(worker,new Error('Terrain mesh result could not be read'));
+    try {
+      const {palette,manifest,models}=this.world;
+      worker.postMessage({type:'init',palette,compositions:manifest.compositions || {},models});
+      this.workerCatalogs.set(worker,palette.length);
+    } catch (error) {
+      worker.terminate();
+      throw error;
+    }
+    return worker;
+  }
+
+  failMeshWorker(worker,error) {
+    this.failedWorkers.add(worker);
+    this.fail(error);
+  }
+
   fail(error) {
     this.workerFailure ??= error;
     this.onError?.(error);
   }
 
+  retryGraphics(chunks,{position}={}) {
+    if (this.renderer.getContext().isContextLost()) {
+      throw Object.assign(new Error('Graphics context is still recovering'),{code:'graphics_context_lost'});
+    }
+    const now=performance.now();
+    for (const [index,worker] of this.workers.entries()) {
+      const job=this.active.get(worker);
+      if (!this.failedWorkers.has(worker) && !(job && now-job.startedAt>=MESH_JOB_STALLED_MS)) continue;
+      // A stuck worker may still have references to transferred buffers. Rebuild
+      // its job from the resident world after replacing the worker.
+      this.workers[index]=this.createMeshWorker();
+      worker.onmessage=worker.onerror=worker.onmessageerror=null;
+      worker.terminate();
+      this.workerCatalogs.delete(worker);
+      this.failedWorkers.delete(worker);
+      this.active.delete(worker);
+      if (job && this.versions.get(job.id)===job.version) this.pending.set(job.id,job);
+    }
+    this.workerFailure=null;
+    if (!chunks) return;
+    const queued=new Map();
+    for (const job of [...this.active.values(),...this.ready,...this.uploads.flatMap(({result})=>result ? [result] : [])]) {
+      if (this.versions.get(job.id)===job.version) queued.set(job.id,job.version);
+    }
+    const overlookGround=this.usesOverview(position) && this.altitudeOverview.mesh;
+    for (const [cx,cz] of chunks) {
+      const key=chunkKey(cx,cz);
+      const chunk=this.world.chunks.get(key);
+      if (!chunk) continue;
+      const levels=this.preciseLevels.get(key) ?? chunk.sections.keys();
+      for (const cy of levels) {
+        if (cy<16 && overlookGround) continue;
+        const id=sectionKey(cx,cy,cz);
+        const version=this.versions.get(id);
+        if (version!==undefined && (this.installedVersions.get(id)===version ||
+            this.pending.get(id)?.version===version || queued.get(id)===version)) continue;
+        this.schedule(cx,cy,cz,!chunk.sections.has(cy));
+      }
+    }
+  }
+
   async whenReady(chunks,{position,isCurrent=()=>true}={}) {
     const startup=chunks && new Set(chunks.map(([cx, cz]) => chunkKey(cx, cz)));
     this.startupChunks=startup;
-    const deadline=performance.now()+30_000;
+    let previous=performance.now(),remaining=GRAPHICS_READY_MS;
     try {
       while (isCurrent() && !this.workerFailure && (chunks ? !this.chunksReady(chunks,position) : this.pendingWork > 0)) {
-        if (performance.now()>deadline) throw new Error('World graphics did not become ready');
+        if (remaining<=0) throw Object.assign(new Error('World graphics did not become ready'),{code:'graphics_timeout'});
         await new Promise(resolve => requestAnimationFrame(resolve));
+        const now=performance.now();
+        // Background tabs may receive no animation frames at all.
+        if (!document.hidden) remaining-=Math.min(now-previous,1000);
+        previous=now;
       }
       if (this.workerFailure) throw this.workerFailure;
     } finally { if (this.startupChunks===startup) this.startupChunks=null; }
@@ -1006,7 +1070,7 @@ export class Display {
       for (const batch of batches) {
         const [gx, gz] = batch.split(',').map(Number);
         const id = 'lod:' + radius + ':' + batch;
-        if (this.groups.has(id) || this.pending.has(id) || [...this.active.values()].includes(id)) continue;
+        if (this.groups.has(id) || this.pending.has(id) || [...this.active.values()].some(job=>job.id===id)) continue;
         this.versions.set(id, 1);
         this.pending.set(id, {id, type: 'coarse', version: 1, radius, stride: step, cx: gx * 4, cy: 0, cz: gz * 4});
       }
@@ -1404,6 +1468,7 @@ export class Display {
     if (!this.uploads.length) return;
     const finished = [];
     const staged = [];
+    const attempted = [];
     let bytes = 0, count = 0;
     try {
       while (this.uploads.length && count < 30 && performance.now() < deadline) {
@@ -1427,6 +1492,7 @@ export class Display {
         const map = mesh.material.map;
         if (map && (mesh.userData.sign || !job.result && !job.far)) this.renderer.initTexture(map);
         job.meshes.shift();
+        attempted.push({job,mesh});
         bytes += size;
         count++;
         if (!job.meshes.length) finished.push(this.uploads.shift());
@@ -1440,6 +1506,8 @@ export class Display {
         this.renderer.render(this.uploadScene, this.camera);
       }
     } catch (error) {
+      for (const {job,mesh} of attempted.reverse()) job.meshes.unshift(mesh);
+      this.uploads.unshift(...finished);
       this.fail(error);
       return;
     } finally {
@@ -1508,11 +1576,13 @@ export class Display {
       return distance * (visible ? .8 : 1.2) + (job.type === 'coarse' ? 260 : job.visualOnly ? 100 : 0) -
         (job.edit || startup || landingCore ? 500 : 0);
     };
+    const activeIds=new Set([...this.active.values()].map(job=>job.id));
     for (const worker of this.workers) {
       if (this.active.size >= workerLimit || performance.now() >= deadline || this.ready.length > 5 || this.uploads.length > 32) break;
       if (this.active.has(worker) || !this.pending.size) continue;
       let job, priority = Infinity;
       for (const candidate of this.pending.values()) {
+        if (activeIds.has(candidate.id)) continue;
         const next = score(candidate);
         if (next < priority && (candidate.type !== 'precise' || this.allowProvisional(candidate) || this.neighborsLoaded(candidate))) {
           job = candidate;
@@ -1521,49 +1591,61 @@ export class Display {
       }
       if (!job) return;
       this.pending.delete(job.id);
-      this.active.set(worker, job.id);
-      if (job.type === 'precise') {
-        const halo = this.world.halo(job.cx, job.cy, job.cz);
-        if (job.reduced) {
-          halo.objects=[];
-          halo.microblocks=[];
-          halo.sculpted=[];
-          halo.logged=undefined;
-        }
-        const known = this.workerCatalogs.get(worker);
-        let paletteAppend;
-        if (!halo.palette && this.world.palette.length > known) {
-          paletteAppend = this.world.palette.slice(known);
-          this.workerCatalogs.set(worker, this.world.palette.length);
-        }
-        worker.postMessage({id: job.id, type: job.type, version: job.version, paletteAppend,reduced:job.reduced,
-          collectVisibility:this.sectionVisibility.enabled,
-          foliage:this.foliageEnabled && !job.reduced && !this.lowDevice && !job.visualOnly ? [job.cx*16,job.cy*16,job.cz*16] : null,
-          biomeTints:this.climate.columnTints(job.cx,job.cz),
-          atlasRows: this.atlasRows, connectedTextures: this.connectedTextures,
-          chiselConnectedTextures: this.chiselConnectedTextures, carpentryModel: this.carpentryModel, ...halo},
-          [halo.indices.buffer, halo.light.buffer]);
-      } else {
-        const chunks = [];
-        for (let dz = -1; dz < 5; dz++) {
-          for (let dx = -1; dx < 5; dx++) {
-            const key = chunkKey(job.cx + dx, job.cz + dz);
-            for (const [radius, ring] of this.ringData) {
-              const chunk = ring.chunks.get(key);
-              if (chunk && (radius <= this.requestedDistance || radius === job.radius)) {
-                chunks.push({chunk, palette: ring.palette});
-                break;
-              }
-            }
-          }
-        }
-        worker.postMessage({id: job.id, type: job.type, version: job.version,
-          atlasRows: this.atlasRows, chunks, stride: job.stride, origin: [job.cx * 16, 0, job.cz * 16]});
+      job.startedAt=performance.now();
+      this.active.set(worker,job);
+      activeIds.add(job.id);
+      try {
+        this.dispatchMesh(worker,job);
+      } catch (error) {
+        this.failMeshWorker(worker,error);
+        return;
       }
     }
   }
 
+  dispatchMesh(worker,job) {
+    if (job.type === 'precise') {
+      const halo = this.world.halo(job.cx, job.cy, job.cz);
+      if (job.reduced) {
+        halo.objects=[];
+        halo.microblocks=[];
+        halo.sculpted=[];
+        halo.logged=undefined;
+      }
+      const known = this.workerCatalogs.get(worker);
+      let paletteAppend;
+      if (!halo.palette && this.world.palette.length > known) {
+        paletteAppend = this.world.palette.slice(known);
+        this.workerCatalogs.set(worker, this.world.palette.length);
+      }
+      worker.postMessage({id: job.id, type: job.type, version: job.version, paletteAppend,reduced:job.reduced,
+        collectVisibility:this.sectionVisibility.enabled,
+        foliage:this.foliageEnabled && !job.reduced && !this.lowDevice && !job.visualOnly ? [job.cx*16,job.cy*16,job.cz*16] : null,
+        biomeTints:this.climate.columnTints(job.cx,job.cz),
+        atlasRows: this.atlasRows, connectedTextures: this.connectedTextures,
+        chiselConnectedTextures: this.chiselConnectedTextures, carpentryModel: this.carpentryModel, ...halo},
+        [halo.indices.buffer, halo.light.buffer]);
+    } else {
+      const chunks = [];
+      for (let dz = -1; dz < 5; dz++) {
+        for (let dx = -1; dx < 5; dx++) {
+          const key = chunkKey(job.cx + dx, job.cz + dz);
+          for (const [radius, ring] of this.ringData) {
+            const chunk = ring.chunks.get(key);
+            if (chunk && (radius <= this.requestedDistance || radius === job.radius)) {
+              chunks.push({chunk, palette: ring.palette});
+              break;
+            }
+          }
+        }
+      }
+      worker.postMessage({id: job.id, type: job.type, version: job.version,
+        atlasRows: this.atlasRows, chunks, stride: job.stride, origin: [job.cx * 16, 0, job.cz * 16]});
+    }
+  }
+
   allowProvisional({cx, cz}) {
+    if (this.startupChunks?.has(chunkKey(cx,cz))) return true;
     const area=this.streamArea;
     return area && Math.max(Math.abs(cx-area.x),Math.abs(cz-area.z))<=1;
   }

@@ -2588,7 +2588,7 @@ try {
     const rejectSession=route=>route.fulfill({status:503});
     await page.route('**/api/session',rejectSession);
     await page.goto(url,{waitUntil:'domcontentloaded'});
-    await page.locator('#connection-retry').waitFor({state:'visible'});
+    await page.locator('#startup-reconnect').waitFor({state:'visible'});
     const queued=await page.evaluate(()=>JSON.parse(localStorage.getItem('honeymoon-startup-diagnostics:v1')));
     assert.ok(queued.some(event=>event.phase==='authorization' && event.outcome==='failed' && event.status===503));
     await page.unroute('**/api/session',rejectSession);
@@ -2606,6 +2606,100 @@ try {
     assert.ok(phases.authorization.failed>=1 && phases.authorization.ok>=1);
     for (const phase of ['document','bootstrap','world','sse','position']) assert.ok(phases[phase]?.ok,phase);
     result.checks.push({startupPhases:phases,keptPreAuthFailureAfterReload:true});
+  } else if (['startup-reconnect','startup-reconnect-session','startup-reconnect-chunk'].includes(test)) {
+    await skipPreload();
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка переподключения'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const sessionFault=test==='startup-reconnect-session';
+    const chunkFault=test==='startup-reconnect-chunk';
+    const chunkPath=/^\/generated\/world\/chunks\/(?:[^/]+\/)?-?\d+\.-?\d+\.json$/;
+    const requests=new Map(), loadedChunks=new Set();
+    const count=path=>requests.get(path)??0;
+    let failedChunk, retrying=false, documents=0;
+    page.on('request',request=>{
+      const path=new URL(request.url()).pathname;
+      requests.set(path,count(path)+1);
+      if (request.isNavigationRequest() && request.frame()===page.mainFrame()) documents++;
+    });
+    page.on('response',response=>{
+      const path=new URL(response.url()).pathname;
+      if (response.ok() && chunkPath.test(path)) loadedChunks.add(path);
+    });
+    if (sessionFault) await page.route('**/api/session',route=>retrying ? route.continue() : route.fulfill({status:503}));
+    else if (chunkFault) await page.route(urlPath=>chunkPath.test(urlPath.pathname),route=>{
+      const path=new URL(route.request().url()).pathname;
+      failedChunk??=path;
+      return !retrying && path===failedChunk ? route.fulfill({status:503}) : route.continue();
+    });
+    else await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='await view.whenReady(near,{position});';
+      assert.equal(source.split(marker).length,2,'the startup graphics await must have exactly one fault-injection point');
+      await route.fulfill({response,body:source.replace(marker,`
+        if (!globalThis.qaStartupGraphicsFailed) {
+          ${marker}
+          globalThis.qaStartupGraphicsFailed=true;
+          throw new Error('World graphics did not become ready');
+        }
+        ${marker}
+      `)});
+    });
+    await page.goto(url,{waitUntil:'domcontentloaded'});
+    const reconnect=page.locator('#startup-reconnect');
+    await reconnect.waitFor({state:'visible',timeout:60_000});
+    assert.match(await reconnect.textContent(),/Переподключиться/i);
+    assert.equal(await page.locator('#play').isEnabled(),false);
+    const timeOrigin=await page.evaluate(()=>performance.timeOrigin);
+    if (!sessionFault) {
+      await page.waitForFunction(()=>{
+        const state=globalThis.honeymoon?.stats();
+        return state?.residentChunks>0 && state.renderedFrames>0 && state.triangles>0;
+      });
+      await page.evaluate(()=>{
+        globalThis.qaCanvasBeforeReconnect=document.querySelector('#scene canvas');
+      });
+      assert.ok(await page.locator('#scene canvas').isVisible());
+      if (!chunkFault) assert.equal(await page.evaluate(()=>globalThis.qaStartupGraphicsFailed),true);
+    }
+    const reusableAssets=['/generated/world/world.json','/generated/textures/atlas.png'];
+    const before=new Map([...reusableAssets,...loadedChunks].map(path=>[path,count(path)]));
+    const sessionRequests=count('/api/session');
+    assert.equal(sessionRequests,1);
+    const chunksBefore=loadedChunks.size;
+    if (!sessionFault) {
+      assert.ok(chunksBefore>0);
+      for (const path of reusableAssets) assert.ok(before.get(path)>0,path);
+    }
+    const missingRequests=failedChunk ? count(failedChunk) : 0;
+    retrying=true;
+    await reconnect.click();
+    await ready();
+    await reconnect.waitFor({state:'hidden'});
+    assert.equal(await page.evaluate(()=>performance.timeOrigin),timeOrigin);
+    assert.equal(documents,1);
+    assert.equal(count('/api/session'),sessionFault ? 2 : sessionRequests);
+    if (!sessionFault) {
+      assert.equal(await page.evaluate(()=>globalThis.qaCanvasBeforeReconnect===document.querySelector('#scene canvas')),true);
+      for (const [path,requestsBefore] of before) assert.equal(count(path),requestsBefore,`reused ${path}`);
+    }
+    if (chunkFault) {
+      assert.ok(failedChunk && missingRequests>0);
+      assert.equal(count(failedChunk),missingRequests+1);
+      assert.ok(loadedChunks.has(failedChunk));
+    }
+    if (await visible('#play')) await click('#play');
+    else await page.locator('#scene canvas').click();
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement) && honeymoon.stats().movementSync.status==='ready' &&
+      !document.getElementById('chat-toggle').disabled);
+    const seat=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/seat' &&
+      response.request().postDataJSON()?.ground===true);
+    await page.keyboard.press('KeyX');
+    const reply=await seat;
+    assert.equal(reply.status(),200,await reply.text());
+    await page.waitForFunction(()=>honeymoon.stats().seat?.kind==='ground');
+    result.checks.push({sameDocument:true,keptCanvas:!sessionFault,sessionRequests:count('/api/session'),
+      keptChunks:chunksBefore,retriedMissingChunk:chunkFault,translatedReconnect:true,actionAfterRetry:true});
   } else if (test==='network-fallback') {
     await skipPreload();
     let blockEvents=false, blockPing=false, failedStreams=0;

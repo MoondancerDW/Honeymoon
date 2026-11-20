@@ -25,14 +25,14 @@ export function createWorldCheckpoint(key) {
   let saved, initialized=false, pending=Promise.resolve();
   void cache.prune();
 
-  async function load() {
+  async function load(signal) {
     if (saved===undefined) saved=await readCheckpoint(key);
     const query=new URLSearchParams({delta:'1'});
     if (saved) {
       query.set('epoch',saved.epoch);
       query.set('since',String(saved.revision));
     }
-    const snapshot=await json('/api/world?'+query);
+    const snapshot=await json('/api/world?'+query,{signal});
     if (!Array.isArray(snapshot.edits)) return snapshot;
     if (initialized && snapshot.complete) return {...snapshot,restart:true};
     const edits=snapshot.complete ? editMap(snapshot.edits) : saved.edits;
@@ -51,8 +51,8 @@ export function createWorldCheckpoint(key) {
   }
 
   return {
-    refresh() {
-      const next=pending.then(load);
+    refresh(signal) {
+      const next=pending.then(()=>load(signal));
       pending=next.catch(()=>{});
       return next;
     },

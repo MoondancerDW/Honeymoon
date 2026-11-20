@@ -60,12 +60,13 @@ const game = element('game');
 const terrainNetwork = createTerrainNetwork();
 const connectionReport=createConnectionReport();
 const diagnostics=createPlayerDiagnostics();
-const connection=createConnectionStatus({element,report:connectionReport,diagnostics,onRecover:()=>{if (!metrics.playable) location.reload();},
+const connection=createConnectionStatus({element,report:connectionReport,diagnostics,onRecover:reconnect,
   onLatency:ms=>terrainNetwork.sample(ms),onRecovery:active=>terrainNetwork.setRecovery(active),
   onStreamStale:reopenFeed,active:()=>Boolean(view) && !document.hidden});
 const entry = element('entry');
 const loading = element('loading');
 const button = element('play');
+const startupReconnect=element('startup-reconnect');
 const surface = element('scene');
 const toast = element('toast');
 const selectionStatus = element('selected-label');
@@ -654,8 +655,8 @@ function changes(list = [], revision = 0, frames) {
   worldRevision = Math.max(worldRevision, revision);
 }
 
-async function refresh() {
-  const snapshot = worldCheckpoint ? await worldCheckpoint.refresh() : await json('/api/world');
+async function refresh(signal) {
+  const snapshot = worldCheckpoint ? await worldCheckpoint.refresh(signal) : await json('/api/world',{signal});
   if (snapshot.restart || snapshot.contentHash && snapshot.contentHash !== world.manifest.contentHash) {
     location.reload();
     return;
@@ -665,9 +666,9 @@ async function refresh() {
   if (snapshot.droppedItems) world.setDroppedItems(snapshot.droppedItems,performance.now());
 }
 
-function reopenFeed() {
+function reopenFeed(delay=15000) {
   const now=performance.now();
-  if (now-feedReopenAt<15000) return;
+  if (now-feedReopenAt<delay) return;
   feedReopenAt=now;
   stream();
 }
@@ -2614,9 +2615,17 @@ function bindSoloWorld(kind) {
   });
 }
 
-async function start() {
-  const sessionBody = await accessUi.acquire();
-  if (!sessionBody) return;
+let startupSession, startupManifest, startupMap;
+let startupStep=0, startupRequest, failedStartupStep;
+const startupModels=new Map();
+
+async function acquireStartupSession() {
+  startupSession=await accessUi.acquire();
+  if (!startupSession) return false;
+}
+
+function initializeStartupSession() {
+  const sessionBody=startupSession;
   multiplayer=!sessionBody.access?.singlePlayer;
   if (multiplayer && sessionBody.access?.authenticated) startupDiagnostics.enable(sessionBody.playerDiagnostics?.serverAt);
   profileUid=sessionBody.access?.uid ?? sessionBody.playerId;
@@ -2637,44 +2646,57 @@ async function start() {
       terrainUrgent:terrain.urgent,terrainConstrained:terrain.constrained,
       ...(chunks&&{chunksMissing:chunks.missing,chunksLoading:chunks.loading})};
   });
-  const session = {body:sessionBody};
   adminUi.setAccess(sessionBody.access);
   modeUi.setSelf(sessionBody.access?.uid??sessionBody.profile?.id);
   setWorldAdmin(sessionBody.access?.role==='admin');
   if (sessionBody.access?.role==='admin') npcUi.setAccess(true);
   startupDiagnostics.begin('world');
-  const manifest = await json('/generated/world/world.json');
+}
+
+async function loadStartupManifest() {
+  startupManifest=await json('/generated/world/world.json',{signal:AbortSignal.timeout(15000)});
+}
+
+async function createStartupWorld() {
+  const session=startupSession;
+  const manifest=startupManifest;
   const lowDevice=localStorage.getItem(lowDevicePreference)==='1';
-  if (!sessionBody.access?.singlePlayer && manifest.chunkCacheVersion) {
+  const models=await Promise.allSettled((session.modelFamilies ?? []).filter(family=>!startupModels.has(family)).map(async family=>{
+    const model=await json(`/generated/models/${family}.json`,{signal:AbortSignal.timeout(15000)});
+    startupModels.set(family,model);
+  }));
+  const failed=models.find(result=>result.status==='rejected');
+  if (failed) throw failed.reason;
+  if (!session.access?.singlePlayer && manifest.chunkCacheVersion) {
     await configureTerrainCache({mobile:touchMode,lowDevice,altitudeBuild});
     worldCheckpoint=createWorldCheckpoint(manifest.chunkCacheVersion);
   }
-  creativeAvailable = session.body.creative;
-  profile.initialize(session.body.profile);
-  if (session.body.sounds) void audio.load();
   world = new World(manifest);
-  world.boatTexture = session.body.boatTexture === true;
-  world.models = Object.fromEntries(await Promise.all((session.body.modelFamilies ?? []).map(async family =>
-    [family, await json(`/generated/models/${family}.json`)])));
-  const p = session.body.position;
-  const [x, y, z] = session.body.spawn || manifest.spawn;
+  world.boatTexture = session.boatTexture === true;
+  world.models = Object.fromEntries(startupModels);
+  const p = session.position;
+  const [x, y, z] = session.spawn || manifest.spawn;
   position = p ? {...p} : {x, y, z};
   movement = new Movement(world);
-  movement.stance = session.body.stance ?? 'stand';
+  movement.stance = session.stance ?? 'stand';
   movementSync.reset(position,movement.stance);
   crawlRequested = movement.stance === 'crawl';
   touchCrouching = touchMode && movement.stance === 'crouch';
-  view = new Display(surface, world, session.body.dayTick,{mobile:touchMode,
+  view = new Display(surface, world, session.dayTick,{mobile:touchMode,
     lowDevice,terrainNetwork,persistentTerrain:Boolean(worldCheckpoint),altitudeBuild});
-  restoreNightVision(session.body.nightVision);
-  modeUi.update(session.body.gameMode);
-  applyPonyTraits(session.body);
+  startupModels.clear();
+  creativeAvailable = session.creative;
+  profile.initialize(session.profile);
+  if (session.sounds) void audio.load();
+  restoreNightVision(session.nightVision);
+  modeUi.update(session.gameMode);
+  applyPonyTraits(session);
   if (new URLSearchParams(location.search).get('occlusion') === '1') view.setOcclusion(true);
-  if (session.body.seat) setSeat(session.body.seat, p,session.body.stance);
-  if (session.body.time) view.setWorldTime(session.body.time);
-  const weather=session.body.weatherSettings??session.body.weather;
+  if (session.seat) setSeat(session.seat, p,session.stance);
+  if (session.time) view.setWorldTime(session.time);
+  const weather=session.weatherSettings??session.weather;
   if (weather) updateWeather(weather);
-  const reportLocalError = sessionBody.access?.singlePlayer && recordLocalDiagnostics(view.renderer.domElement,()=>({
+  const reportLocalError = session.access?.singlePlayer && recordLocalDiagnostics(view.renderer.domElement,()=>({
     position:[position.x,position.y,position.z],mesh:view.renderer.info.render.triangles,chunks:world.chunks.size,
     lastChunk:metrics.lastChunk,
   }));
@@ -2691,11 +2713,15 @@ async function start() {
   if ([...distance.options].some(option => Number(option.value) === savedDetail)) distance.value = String(savedDetail);
   else if (touchMode) distance.value='12';
   distance.disabled = !farSupported || view.lowDevice;
+}
+
+async function loadStartupTextures() {
   await Promise.all([view.loadTextures(),creativeAvailable ? loadCreative().catch(console.error) : null]);
   void refreshNpcs();
-  await refresh();
-  await view.prepareGraphics();
-  const altitudeMap=bindControls();
+}
+
+function startScene() {
+  startupMap=bindControls();
   stream();
   startupDiagnostics.begin('position');
   movementSync.pump();
@@ -2727,51 +2753,114 @@ async function start() {
     time: () => ({tick:view.dayTick(performance.now()), frozen:view.worldTime.frozen,
       sun:view.sky.material.uniforms.sunDirection.value.toArray()}),
   });
+}
+
+async function prepareFirstArea(retrying) {
   const spawnChunk=[Math.floor(position.x/16),Math.floor(position.z/16)];
   const upperStart=view.usesOverview(position);
   if (upperStart) void view.altitudeOverview.prepare(performance.now());
   const near = world.playableAround(...spawnChunk,1);
-  const buffered = world.playableAround(...spawnChunk,2);
-  const startup = [...buffered].sort((a, b) => distanceToChunk(a) - distanceToChunk(b));
-  await Promise.all(Array.from({length: 4}, async () => {
-    while (startup.length) await addChunk(startup.shift(),false,undefined,undefined,upperStart && position.y>=308,true);
+  const highOnly=upperStart && position.y>=308;
+  const missing=near.filter(([x,z])=>{
+    const chunk=world.chunks.get(chunkKey(x,z));
+    return !chunk || chunk.highOnly && !highOnly;
+  }).sort((a,b)=>distanceToChunk(a)-distanceToChunk(b));
+  let failure;
+  await Promise.all(Array.from({length:Math.min(4,missing.length)},async ()=>{
+    while (missing.length && !failure) {
+      try { await addChunk(missing.shift(),false,undefined,AbortSignal.timeout(15000),highOnly,true); }
+      catch (error) { failure??=error; }
+    }
   }));
+  if (failure) throw failure;
   loading.textContent = 'Подготавливаем графику…';
+  if (retrying) view.retryGraphics(near,{position});
   await view.whenReady(near,{position});
+}
+
+function finishStartup() {
+  const manifest=startupManifest;
+  const farSupported=supportsFarTerrain(manifest) && manifest.lod.maxDistance===32;
   startupDiagnostics.complete('world');
-  restoreFlight(session.body);
-  metrics.playable = performance.now() - metrics.started;
-  const mapWarmup=altitudeMap?.prepare();
-  loading.textContent = 'Можно войти в мир';
-  button.disabled = false;
-  const horizon = farSupported ? view.setDetailedLodDistance(Number(distance.value)) : view.setDistance(4);
+  restoreFlight(startupSession);
+  const mapWarmup=startupMap?.prepare();
+  const horizon = farSupported ? view.setDetailedLodDistance(Number(element('detail-distance').value)) : view.setDistance(4);
   horizon.catch(console.error);
   if (worldCheckpoint && (manifest.vista || manifest.lod)) {
     terrainPreload=createTerrainPreload({manifest,build:altitudeBuild,mobile:touchMode,
       backgroundBusy:()=>document.hidden || terrainNetwork.urgent || terrainNetwork.constrained()});
     if (mapWarmup) void mapWarmup.then(()=>terrainPreload.setMode(view.lowDevice));
-    else terrainPreload.setMode(lowDevice);
+    else terrainPreload.setMode(view.lowDevice);
   }
   if (manifest.chunkPalettes) nearbyStream = streamNearby(manifest.visualChunks ?? []);
-  const pending = nearbyStream?.done ?? streamChunks(manifest.chunks.filter(chunk => !buffered.includes(chunk)), manifest.visualChunks ?? []);
+  const pending = nearbyStream?.done ?? streamChunks(manifest.chunks.filter(([x,z])=>!world.chunks.has(chunkKey(x,z))),manifest.visualChunks ?? []);
   pending.catch(console.error);
-  if (sessionBody.access?.authenticated && sessionBody.access?.inviteRequired) {
+  loading.textContent = 'Можно войти в мир';
+  button.hidden=false;
+  button.disabled=false;
+  startupReconnect.hidden=true;
+  metrics.playable = performance.now() - metrics.started;
+  connection.startupFinished();
+  if (startupSession.access?.authenticated && startupSession.access?.inviteRequired) {
     document.addEventListener('pointerdown',()=>audio.enable(),{once:true,capture:true});
     setPlaying(true);
     if (!touchMode) notice('Нажмите на игру, чтобы управлять обзором мышью');
   }
 }
 
-startupDiagnostics.complete('bootstrap');
-void connection.check();
-start().catch(async error => {
-  console.error(error);
-  startupDiagnostics.failPending(error);
-  const reachable=await connection.check();
-  if (!reachable || error.status>=502 && error.status<=504) {
-    loading.textContent='Сервер недоступен';
-    connection.startupFailed(!reachable);
+const startupSteps=[
+  ['Подключаемся к серверу…',acquireStartupSession],
+  ['Открываем игровой профиль…',initializeStartupSession],
+  ['Загружаем карту мира…',loadStartupManifest],
+  ['Подготавливаем модели…',createStartupWorld],
+  ['Загружаем текстуры…',loadStartupTextures],
+  ['Сверяем состояние мира…',()=>refresh(AbortSignal.timeout(15000))],
+  ['Подготавливаем графику…',()=>view.prepareGraphics()],
+  ['Запускаем игру…',startScene],
+  ['Загружаем ближайший район…',prepareFirstArea],
+  ['Открываем мир…',finishStartup],
+];
+
+async function start() {
+  while (startupStep<startupSteps.length) {
+    const [message,step]=startupSteps[startupStep];
+    loading.textContent=message;
+    if (await step(startupStep===failedStartupStep)===false) return;
+    startupStep++;
+  }
+}
+
+function reconnect() {
+  if (metrics.playable) {
+    if (!connection.streamReady()) reopenFeed(1500);
+    movementSync.pump();
+    movementSync.verifyConnection();
+    void connection.check();
     return;
   }
-  loading.textContent = 'Ошибка загрузки. ' + error.message;
-});
+  if (startupRequest) return startupRequest;
+  connection.startupResumed();
+  startupReconnect.disabled=true;
+  if (feed && !connection.streamReady()) reopenFeed(1500);
+  startupRequest=start().then(()=>{
+    startupReconnect.hidden=true;
+    button.hidden=false;
+  }).catch(async error=>{
+    console.error(error);
+    failedStartupStep=startupStep;
+    startupDiagnostics.failPending(error);
+    button.hidden=true;
+    startupReconnect.hidden=false;
+    loading.textContent=startupSession ? 'Не удалось закончить загрузку. Можно продолжить.' : 'Не удалось подключиться к серверу.';
+    if (!await connection.check()) connection.startupFailed(true);
+  }).finally(()=>{
+    startupRequest=undefined;
+    startupReconnect.disabled=false;
+  });
+  return startupRequest;
+}
+
+startupReconnect.addEventListener('click',reconnect);
+startupDiagnostics.complete('bootstrap');
+void connection.check();
+void reconnect();

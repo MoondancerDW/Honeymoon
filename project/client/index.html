@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
   <meta name="apple-mobile-web-app-title" content="Lilium Moonlight">
-  <meta name="honeymoon-build" content="28">
+  <meta name="honeymoon-build" content="29">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -87,7 +87,7 @@
     </div>
     <section id="connection-alert" aria-label="Соединение с сервером" hidden>
       <span id="connection-message" role="status"></span>
-      <button id="connection-retry" type="button" hidden>Повторить подключение</button>
+      <button id="connection-retry" type="button" hidden>Переподключиться</button>
     </section>
     <section id="death-screen" aria-labelledby="death-title" hidden>
       <h2 id="death-title">Помер</h2>
@@ -141,6 +141,7 @@
             <span id="pony-traits-label" class="skin-status" hidden></span>
           </div>
           <button id="play" type="button" disabled>Войти в мир</button>
+          <button id="startup-reconnect" type="button" aria-describedby="loading" hidden>Переподключиться</button>
           <button class="solo-entry-button" type="button" aria-haspopup="dialog" aria-controls="solo-entry" hidden>Одиночная игра</button>
           <div id="entry-world-switch">
             <button id="solo-world-switch" type="button" aria-describedby="solo-world-status" hidden>Тестовый полигон</button>
