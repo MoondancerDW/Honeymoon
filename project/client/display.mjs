@@ -1734,8 +1734,8 @@ export class Display {
       this.sky.position.copy(this.camera.position);
       this.sky.updateMatrixWorld();
       this.sky.material.uniforms.windTime.value = now * .001;
-      const ponies = [...this.players.entries.values()];
-      if (this.localAvatar) ponies.push({object:this.localAvatar.object, avatar:this.localAvatar});
+      const ponies = [...this.players.entries.values()].filter(player=>!player.spectator);
+      if (this.localAvatar && !this.spectating) ponies.push({object:this.localAvatar.object, avatar:this.localAvatar});
       this.heldLights.update(ponies, this.camera.position, this.spectating ? null : this.localAvatar);
       if (isPrecipitating(this.weather)) {
         this.rain ??= new Rain(this.scene,this.world,this.climate);

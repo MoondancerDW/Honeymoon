@@ -27,7 +27,9 @@ test('race changes preserve damage and only winged survival ponies may fly or ig
   const {game,id,spawn,survival,raceTo,advance}=scenario(t,'earth');
   assert.equal(survival.status(id).health,12);
   assert.throws(()=>game.setFlight(id,'device',{enabled:true,sequence:1}),{code:'flight_unavailable'});
-  assert.throws(()=>game.setSpectator(id,{enabled:true}),{code:'creative_required'});
+  assert.equal(game.setSpectator(id,{enabled:true}).spectator,true);
+  assert.equal(survival.mode(id),'game');
+  assert.equal(game.setSpectator(id,{enabled:false}).spectator,false);
   survival.damage(id,3,spawn,spawn.y);
   raceTo('unicorn');
   game.reconcileRace(id);

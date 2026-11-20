@@ -1,9 +1,10 @@
 import {basicRecipes} from '../world/survival-tools.mjs';
 
-const labels={game:'Игровой',creative:'Креатив'};
+const labels={game:'Игровой',creative:'Креатив',spectator:'Наблюдатель'};
 function selectMode(value,inherit=false) {
   const select=document.createElement('select');
   for (const [mode,title] of [...(inherit?[['','Как на сервере']]:[]),...Object.entries(labels)]) {
+    if (mode==='spectator' && !inherit) continue;
     const option=document.createElement('option');
     option.value=mode;
     option.textContent=title;
@@ -13,7 +14,7 @@ function selectMode(value,inherit=false) {
   return select;
 }
 
-export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,changed,pause,notice}) {
+export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,changed,pause,notice,receiveSpectator}) {
   const health=element('health'), death=element('death-screen'), deathTitle=element('death-title'), reviveButton=element('revive');
   const admin=element('mode-menu'), administrator=element('mode-toggle'), list=element('mode-players');
   const selfMode=element('self-mode-toggle');
@@ -24,7 +25,7 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
   function update(next) {
     if (!next) return;
     state=next;
-    health.hidden=next.mode!=='game'||Boolean(next.death);
+    health.hidden=next.mode!=='game'||Boolean(next.death)||next.spectator;
     const maxHealth=next.maxHealth??10;
     if (cells.length!==maxHealth) {
       cells=Array.from({length:maxHealth},()=>document.createElement('span'));
@@ -36,8 +37,8 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     administrator.hidden=!next.admin;
     selfMode.hidden=!next.admin||!selfUid;
     selfMode.disabled=pending;
-    selfMode.textContent=`Режим: ${labels[next.mode]}`;
-    craftToggle.hidden=next.mode!=='game';
+    selfMode.textContent=`Режим: ${labels[next.spectator?'spectator':next.mode]}`;
+    craftToggle.hidden=next.mode!=='game'||next.spectator;
     death.hidden=!next.death;
     deathTitle.textContent=next.death?.cause==='lava'?'Сгорел':'Помер';
     if (deathTime!==next.death?.at) {
@@ -60,11 +61,11 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     list.replaceChildren(...config.players.map(profile=>{
       const row=document.createElement('details'), summary=document.createElement('summary');
       const label=document.createElement('label');
-      const mode=selectMode(profile.override,true);
+      const mode=selectMode(profile.spectator?'spectator':profile.override,true);
       row.className='mode-player-management';
       row.dataset.modePlayerUid=profile.id;
       row.open=openRows.has(profile.id);
-      summary.textContent=`${profile.nickname} · ${labels[profile.mode??config.mode]}`;
+      summary.textContent=`${profile.nickname} · ${labels[profile.spectator?'spectator':profile.mode??config.mode]}`;
       label.append('Изменить режим',mode);
       row.append(summary,label);
       mode.addEventListener('change',()=>void change({target:profile.id,mode:mode.value||null}));
@@ -83,6 +84,7 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
       const result=await changeMode(fields);
       if (!result.ok) throw new Error(result.body.error);
       if (result.body.selfMode) update(result.body.selfMode);
+      if (result.body.observing?.uid===selfUid) await receiveSpectator(result.body.observing);
       if (admin.open) render(result.body);
     } catch {
       right.textContent='Не удалось обновить режим';
@@ -94,7 +96,7 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     }
   }
   selfMode.addEventListener('click',()=>{
-    if (state?.admin&&selfUid) void change({target:selfUid,mode:state.mode==='creative'?'game':'creative'});
+    if (state?.admin&&selfUid) void change({target:selfUid,mode:state.spectator?'game':state.mode==='game'?'creative':'spectator'});
   });
   administrator.addEventListener('click',async()=>{
     if (!state?.admin||admin.open) return;
@@ -139,7 +141,11 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     catch {notice('Не удалось ожить');}
     finally {reviveButton.disabled=false;}
   });
-  return {update,setSelf(uid){selfUid=uid;},get active(){return Boolean(state);},get creative(){return state?.mode!=='game';},
+  return {update,setSelf(uid){selfUid=uid;},
+    setAdmin(allowed) {if(state && state.admin!==allowed) update({...state,admin:allowed});},
+    setSpectator(enabled) {if(state && state.spectator!==enabled) update({...state,spectator:enabled});},
+    changeSelf(mode) {if(state?.admin && selfUid) return change({target:selfUid,mode});},
+    get active(){return Boolean(state);},get creative(){return state?.mode!=='game';},
     get admin(){return Boolean(state?.admin);},get death(){return state?.mode==='game'?state.death:null;},
     isOpen:()=>admin.open||craftMenu.open};
 }

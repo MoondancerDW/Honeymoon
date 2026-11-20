@@ -79,6 +79,7 @@ function setPose(player, pose) {
   player.boost = pose.boost === true;
   player.groundSeat = pose.groundSeat === true;
   player.spectator = pose.spectator === true;
+  player.avatar.setGhost(player.spectator);
   player.typing = pose.typing === true;
   player.swing = pose.swing ?? 0;
   player.held = pose.held;
@@ -86,7 +87,8 @@ function setPose(player, pose) {
   player.equipment = pose.equipment;
   player.emote = pose.emote;
   player.death = pose.death;
-  setNameplate(player);
+  if (player.spectator) player.label.visible=false;
+  else setNameplate(player);
 }
 
 export class RemotePlayers {
@@ -165,7 +167,7 @@ export class RemotePlayers {
       const overlapsCamera = Math.abs(eye.y - target.y - PLAYER.eye) < .75 &&
         Math.hypot(target.x - eye.x, target.z - eye.z) < .4;
       const distance = eye.distanceToSquared(target);
-      object.visible = !player.spectator && distance < maxVisibleDistance ** 2 && !overlapsCamera;
+      object.visible = distance < maxVisibleDistance ** 2 && !overlapsCamera;
       const {x, z} = object.position;
       object.position.lerp(target, mix);
       player.drawnLookYaw += angleBetween(player.drawnLookYaw, player.lookYaw) * mix;
@@ -178,7 +180,8 @@ export class RemotePlayers {
       }
       player.drawnPitch += (player.pitch - player.drawnPitch) * mix;
       const speed = dt > 0 ? Math.min(FLIGHT_SPRINT_SPEED, Math.hypot(object.position.x - x, object.position.z - z) / dt) : 0;
-      if (player.landing) {
+      if (player.spectator) player.landing=0;
+      else if (player.landing) {
         this.groundDust?.(target,playerBody(player.size,player.stance),[0,0],player.landing,now);
         player.landing = 0;
       } else if (player.motion === 'run' && speed > 3 && now >= (player.nextDust ?? 0)) {
@@ -186,16 +189,17 @@ export class RemotePlayers {
         this.groundDust?.(object.position,playerBody(player.size,player.stance),
           [(object.position.x-x)/dt,(object.position.z-z)/dt],0,now);
       }
+      const equipment=player.spectator ? {} : {swing:player.swing,held:player.held,offhand:player.offhand,
+        equipment:player.equipment,itemAssets:this.itemAssets?.(),emote:player.emote};
+      const death=player.spectator ? undefined : player.death;
       player.avatar.animate({time: now / 1000, dt, speed, pitch: player.drawnPitch,
         yawOffset:facing.yawOffset, forward:facing.forward, strafe:facing.strafe,
         motion:player.motion, stance:player.stance, boost:player.boost, groundSeat:player.groundSeat,
-        position:object.position,
-        swing:player.swing, held:player.held, offhand:player.offhand,
-        equipment:player.equipment, itemAssets:this.itemAssets?.(), emote:player.emote});
-      player.avatar.ragdoll(player.death?.cause==='lava'?null:player.death,dt);
-      const ash=player.avatar.lavaDeath(player.death,now);
+        position:object.position,...equipment});
+      player.avatar.ragdoll(death?.cause==='lava'?null:death,dt);
+      const ash=player.avatar.lavaDeath(death,now);
       if (ash) this.burnPlayer?.(ash,object.position,now);
-      player.label.visible = !player.death && player.stance === 'stand' && distance < maxNameplateDistance ** 2;
+      player.label.visible = !player.spectator && !death && player.stance === 'stand' && distance < maxNameplateDistance ** 2;
       player.label.position.y = player.avatar.labelHeight - .12;
       object.updateMatrixWorld(true);
     }
@@ -212,7 +216,7 @@ export class RemotePlayers {
       player.avatar.object.traverse(mesh => { if (mesh.isMesh && mesh.visible) meshCount++; });
       return {...player.avatar.inspect(), id, nickname:player.nickname, skin:player.skin, position:{x:target.x, y:target.y, z:target.z},
         yaw:player.yaw, bodyYaw:object.rotation.y, pitch:player.pitch, motion:player.motion, visible:object.visible, meshCount,
-        equipment:player.equipment,
+        equipment:player.spectator ? undefined : player.equipment,spectator:player.spectator,ghost:player.spectator,
         typing:player.typing, nameplate:object.visible && player.label.visible,
         onScreen:object.visible && Math.abs(x) <= 1 && Math.abs(y) <= 1 && z >= -1 && z <= 1};
     });

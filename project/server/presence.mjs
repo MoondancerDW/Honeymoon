@@ -51,7 +51,8 @@ function roundPosition({x, y, z}) {
   return {x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000, z: Math.round(z * 1000) / 1000};
 }
 
-export function createPresence({store, profileFor = player => publicProfile(player,store.getProfile(player)), send, onVisibility, now = Date.now}) {
+export function createPresence({store, profileFor = player => publicProfile(player,store.getProfile(player)), send, onVisibility,
+                               canSeeSpectators=()=>false, now = Date.now}) {
   const players = new Map();
   const listeners = new Set();
   const changed = new Set();
@@ -74,8 +75,11 @@ export function createPresence({store, profileFor = player => publicProfile(play
     ...(spectator !== undefined && {spectator}), ...(stance !== undefined && {stance}), ...(boost !== undefined && {boost}),
     ...(equipment !== undefined && {equipment}), ...(groundSeat !== undefined && {groundSeat}),
     ...(emote !== undefined && {emote}),...(death !== undefined && {death})});
-  const snapshot = except => [...players].flatMap(([player, entry]) => player !== except && entry.visible
-    ? [{ ...entry.profile, ...motionOf(entry) }] : []);
+  function snapshot(viewer) {
+    const admin=canSeeSpectators(viewer);
+    return [...players].flatMap(([player,entry])=>player!==viewer && entry.visible && (admin || !entry.spectator)
+      ? [{...entry.profile,...motionOf(entry),...(admin&&{uid:player})}] : []);
+  }
   const roster = stream => ({players:snapshot(stream.player),
     ...(stream.social && {selfOnline:Boolean(players.get(stream.player)?.visible)})});
 
@@ -83,7 +87,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
     if (Boolean(entry.visible) === visible) return;
     entry.visible = visible;
     rosterChanged = true;
-    onVisibility?.(entry.profile, visible, player);
+    onVisibility?.(entry.profile, visible, player,Boolean(entry.spectator));
   }
 
   function update(player, position, pose) {
@@ -96,6 +100,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
     if (dirty) entry.position = next;
     for (const key of ['spectator','stance','death']) {
       if (pose?.[key] !== undefined && entry[key] !== pose[key]) {
+        if (key==='spectator' && Boolean(entry.spectator)!==pose[key] && entry.visible) rosterChanged=true;
         entry[key] = pose[key];
         dirty = true;
       }
@@ -189,8 +194,8 @@ export function createPresence({store, profileFor = player => publicProfile(play
         entry.typing = entry.swing = entry.held = entry.spectator = entry.stance = entry.boost = entry.equipment = entry.groundSeat = undefined;
         entry.emote = entry.offhand = undefined;
       }
-      if (entry.connections || fallback) visibility(player, entry, true);
       update(player, position, pose);
+      if (entry.connections || fallback) visibility(player, entry, true);
     },
     leave(player) {
       const entry = players.get(player);
@@ -201,6 +206,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
       entry.seq = undefined;
     },
     update,
+    refreshRoster() { rosterChanged=true; },
     flush() {
       const time = now();
       for (const [player, entry] of players) {
@@ -214,10 +220,11 @@ export function createPresence({store, profileFor = player => publicProfile(play
       } else if (changed.size) {
         const motions = [...changed].flatMap(player => {
           const entry = players.get(player);
-          return entry?.visible ? [{player, state:motionOf(entry)}] : [];
+          return entry?.visible ? [{player,spectator:entry.spectator,state:motionOf(entry)}] : [];
         });
         for (const {player, response} of listeners) {
-          const others = motions.filter(item => item.player !== player).map(item => item.state);
+          const admin=canSeeSpectators(player);
+          const others=motions.filter(item=>item.player!==player && (admin || !item.spectator)).map(item=>item.state);
           if (others.length) send(response, 'presence-motion', {players:others});
         }
       }

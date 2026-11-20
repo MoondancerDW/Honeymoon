@@ -74,10 +74,14 @@ test('continuous lava contact deals one point per second and a lava death revive
   assert.equal(tick(999),6);
   assert.equal(tick(1),5);
 
-  assert.throws(()=>game.setSpectator(id,{enabled:true}),{code:'creative_required'});
+  game.teleport(id,lava);
+  game.setSpectator(id,{enabled:true});
+  assert.equal(tick(5000),5);
+  game.setSpectator(id,{enabled:false});
   game.teleport(id,lava);
   assert.equal(tick(4900),1);
   assert.equal(tick(100),0);
+  assert.throws(()=>game.setSpectator(id,{enabled:true}),{code:'player_dead'});
   assert.equal(tick(5000),0);
   const death=survival.status(id).death;
   assert.deepEqual(death,{at:time-5000,position:lava,floor:1,cause:'lava'});

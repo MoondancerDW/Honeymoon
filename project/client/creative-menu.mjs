@@ -33,6 +33,7 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   const slotsPanel = byId('inventory-slots'), previewCanvas = byId('inventory-preview');
   const storageMode = () => active === 'inventory';
   let catalog, allCards, pending, active = 'buildingBlocks', tabPage = 0;
+  let catalogEnabled=true;
   let matches = [], firstRow = -1, dragging, picked, requestedSlot, underCursor, openedFromPause;
   let state = {slots:Array(inventorySize).fill(null), selected:0, equipment:Array(equipmentLabels.length).fill(null), offhand:null};
   let offhandAvailable = false;
@@ -406,8 +407,8 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   }
 
   function updateTabs() {
-    const available = catalog.tabs.filter(tab=>tab.id === 'all' || tab.id === 'inventory' ||
-      (tab.index < 12 ? tabPage === 0 : Math.floor((tab.index-12)/10)+1 === tabPage));
+    const available = catalog.tabs.filter(tab=>tab.id==='inventory' || catalogEnabled &&
+      (tab.id==='all' || (tab.index<12 ? tabPage===0 : Math.floor((tab.index-12)/10)+1===tabPage)));
     const current = new Set(available.map(tab=>tab.id));
     for (const tab of tabsBar.children) {
       const selected = tab.dataset.tab === active;
@@ -417,13 +418,13 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
       if (selected) list.setAttribute('aria-labelledby',tab.id);
     }
     const pages = Math.max(0,...catalog.tabs.map(tab=>Math.floor((tab.index-12)/10)+1));
-    previousPage.hidden = nextPage.hidden = pages === 0;
+    previousPage.hidden = nextPage.hidden = !catalogEnabled || pages===0;
     previousPage.disabled = tabPage === 0;
     nextPage.disabled = tabPage >= pages;
   }
 
   function setPage(page) {
-    if (!catalog || page < 0) return;
+    if (!catalog || !catalogEnabled || page < 0) return;
     const first = catalog.tabs.find(tab=>tab.id !== 'all' && tab.id !== 'inventory' &&
       (tab.index < 12 ? page === 0 : Math.floor((tab.index-12)/10)+1 === page));
     if (!first) return;
@@ -506,6 +507,16 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
     }
   }
 
+  function setCatalogEnabled(enabled) {
+    if (catalogEnabled===enabled) return;
+    catalogEnabled=enabled;
+    if (!enabled && active!=='inventory') {
+      active='inventory';
+      setPicked(null);
+    }
+    if (dialog.open) render();
+  }
+
   toggle.addEventListener('click',()=>open());
   byId('inventory-toggle').addEventListener('click',()=>open(true));
   byId('creative-close').addEventListener('click',()=>close());
@@ -557,7 +568,8 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   paintInventory();
 
   return {
-    open:()=>open(), openInventory:()=>open(true), close, isOpen:()=>dialog.open, setInventory, setOffhandAvailable, refreshPreview, selectSlot,
+    open:()=>open(),openInventory:()=>open(true),close,isOpen:()=>dialog.open,setInventory,setOffhandAvailable,
+    setCatalogEnabled,refreshPreview,selectSlot,
     scrollHotbar(direction) {
       if (direction) return selectSlot(((requestedSlot ?? state.selected)+Math.sign(direction)+columns)%columns);
     },

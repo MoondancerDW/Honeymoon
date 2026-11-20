@@ -11,6 +11,7 @@ import { loadBase } from './base.mjs';
 import { RequestError } from './errors.mjs';
 import { createGame } from './game.mjs';
 import { createChat } from './chat.mjs';
+import { createAdminCommands } from './admin-commands.mjs';
 import { connectionReport, createLoadLog, networkPlayerTag } from './load-log.mjs';
 import { startNetworkProbe } from './network-probe.mjs';
 import {diagnosticPagePattern,diagnosticTracePattern,loadPlayerDiagnostics,parsePlayerDiagnostics,
@@ -398,14 +399,15 @@ export function createHoneymoonServer({
       }).map(({player}) => player);
     },
   });
-  const presence = createPresence({store, profileFor:player=>avatarProfile(profileFor(player)), send:writeEvent, onVisibility(profile, online, player) {
+  const presence = createPresence({store,profileFor:player=>avatarProfile(profileFor(player)),send:writeEvent,
+    canSeeSpectators:access.isAdmin,onVisibility(profile,online,player,spectator) {
     loadLog?.player(player,online);
     if (!online) {
       game.leaveSeat(player);
       game.clearLavaContact(player);
       npcs.leave(player);
     }
-    try { chat.playerStatus(profile, online, player); }
+    try { if (!spectator) chat.playerStatus(profile,online,player); }
     catch (error) { console.error(error); }
   } });
   const npcs=createNpcs({generated,store,creativeBlocks:creative?.placeable,creativeItems:creative?.items,
@@ -492,7 +494,7 @@ export function createHoneymoonServer({
 
   function playerMode(player) {
     const {flight,flightAllowed}=game.abilityState(player);
-    return {...survival.status(player),admin:npcs.isAdmin(player),flight,flightAllowed};
+    return {...survival.status(player),admin:npcs.isAdmin(player),spectator:game.isSpectator(player),flight,flightAllowed};
   }
 
   function raceSnapshot(player,profile=profileFor(player)) {
@@ -536,13 +538,13 @@ export function createHoneymoonServer({
     sendSocial('game-mode',{...state,admin:npcs.isAdmin(player),flight,flightAllowed},id=>id===player);
     const position=presence.onlinePosition(player);
     if (position) presence.update(player,game.session(player).position,{death:survival.avatarDeath(player)});
-    if (state.death) chat.playerDeath(profileFor(player),state.death.cause,player);
+    if (state.death && !game.isSpectator(player)) chat.playerDeath(profileFor(player),state.death.cause,player);
   }
 
   function modeAdministration() {
     if (inviteRequired) return {mode:survival.defaultMode(),players:access.profiles().map(({uid,nickname,profileName})=>({
       id:uid,uid,nickname:nickname??profileName,profileName,online:Boolean(presence.onlineProfile(uid)),
-      mode:survival.mode(uid),override:survival.override(uid),
+      mode:survival.mode(uid),override:survival.override(uid),spectator:game.isSpectator(uid),
     }))};
     const players=[...new Set([...streams].map(stream=>stream.player))].flatMap(player=>{
       const profile=presence.onlineProfile(player);
@@ -619,6 +621,83 @@ export function createHoneymoonServer({
   function teleportPlayer(player,target) {
     return publishTeleport(player,game.teleport(player,target));
   }
+
+  function adminTeleport(actor,uid,anchor) {
+    if (!access.isAdmin(actor)) throw new RequestError(403,'admin_required');
+    if (uid===anchor) throw new RequestError(400,'admin_target_self');
+    if (uid!==actor) access.adminTarget(actor,uid,true);
+    if (!presence.onlinePosition(actor) || !presence.onlinePosition(uid) || !presence.onlinePosition(anchor)) {
+      throw new RequestError(409,'not_online');
+    }
+    const teleport={...publishTeleport(uid,game.teleportNear(uid,anchor)),teleportId:randomUUID()};
+    publishProfileSetting(uid,'admin-teleport',teleport);
+    return {uid,teleport};
+  }
+
+  const spectatorRevisions=new Map();
+  let spectatorRevision=0;
+  function spectatorSnapshot(player) {
+    const {position,seat,stance,spectator,flight,flightAllowed}=game.session(player);
+    return {uid:player,position,seat,stance,spectator,flight,flightAllowed,
+      spectatorRevision:spectatorRevisions.get(player)??0};
+  }
+
+  function setPlayerSpectator(player,enabled,pose) {
+    const previous=game.isSpectator(player);
+    const result=game.setSpectator(player,{enabled});
+    if (result.spectator!==previous) {
+      spectatorRevision=Math.max(Date.now(),spectatorRevision+1);
+      spectatorRevisions.set(player,spectatorRevision);
+      presence.update(player,result.position,{...game.poseFor(player,pose),spectator:result.spectator});
+      presence.flush();
+      publishProfileSetting(player,'profile-spectator',{uid:player,...result,spectatorRevision});
+      sendSocial('game-mode',playerMode(player),candidate=>candidate===player);
+    }
+    return {uid:player,...result,spectatorRevision:spectatorRevisions.get(player)??0};
+  }
+
+  function changePlayerMode(member,mode) {
+    survival.setMode(member,mode);
+    const observing=member && game.isSpectator(member) ? setPlayerSpectator(member,false) : undefined;
+    for (const id of member?[member]:new Set([...streams].map(stream=>stream.player))) {
+      if (!survival.isGame(id)) game.clearLavaContact(id);
+      if (!survival.isGame(id)&&survival.status(id).death) survival.reset(id);
+      game.reconcileFlight(id);
+      sendSocial('game-mode',playerMode(id),recipient=>recipient===id);
+      const position=presence.onlinePosition(id);
+      if (position) presence.update(id,game.session(id).position,{death:survival.avatarDeath(id)});
+    }
+    return member ? {uid:member,gameMode:playerMode(member),...(observing&&{observing})} : {};
+  }
+
+  function updateWorldTime(body) {
+    const value=worldTime.set(body);
+    sendSocial('world-time',value);
+    return value;
+  }
+
+  function updateWorldWeather(body) {
+    const previous=worldTime.weatherSettings();
+    const value=worldTime.setWeather(body);
+    if (value.mode!==previous.mode || value.dynamic!==previous.dynamic || value.nextChangeAt!==previous.nextChangeAt) {
+      sendSocial('weather',value);
+    }
+    return value;
+  }
+
+  const adminCommands=createAdminCommands({
+    isAdmin:access.isAdmin,profiles:access.profiles,teleport:adminTeleport,
+    toggleSpectator(actor,target) {
+      if (target!==actor) access.adminTarget(actor,target,true);
+      if (!presence.onlinePosition(target)) throw new RequestError(409,'not_online');
+      return setPlayerSpectator(target,!game.isSpectator(target));
+    },
+    toggleCreative(actor,target) {
+      if (target!==actor) access.adminTarget(actor,target,true);
+      return changePlayerMode(target,survival.isGame(target)?'creative':'game');
+    },
+    setTime:updateWorldTime,getWeather:worldTime.weather,setWeather:updateWorldWeather,
+  });
 
   function sendNpcs(stream) {
     if (!stream.npcs || stream.response.writableLength>64*1024) return;
@@ -834,7 +913,8 @@ export function createHoneymoonServer({
         const panel=access.listAdmin(credential,presence.onlineProfile);
         for (const row of panel.profiles) {
           const {ponyType,size,raceOverride,sizeOverride}=playerTraits(row.uid);
-          Object.assign(row,{ponyType,size,raceOverride,sizeOverride,nightVision:store.getNightVision(row.uid)?.enabled??null});
+          Object.assign(row,{ponyType,size,raceOverride,sizeOverride,mode:survival.mode(row.uid),
+            nightVision:store.getNightVision(row.uid)?.enabled??null});
         }
         return json(response,200,panel);
       }
@@ -873,6 +953,18 @@ export function createHoneymoonServer({
         if (!access.account(uid)) throw new RequestError(404,'player_missing');
         return json(response,200,setNightVision(uid,enabled));
       }
+      if (path==='/api/admin/profiles/role' && method==='POST') {
+        const {uid,role}=await readInput();
+        const result=access.setRole(player,uid,role);
+        if (result.changed) {
+          if (role==='player' && game.isSpectator(uid)) setPlayerSpectator(uid,false);
+          presence.refreshRoster();
+          presence.flush();
+          publishProfileSetting(uid,'profile-access',{uid,role});
+          sendSocial('game-mode',playerMode(uid),candidate=>candidate===uid);
+        }
+        return json(response,200,result);
+      }
       if (path==='/api/admin/invites' && method==='POST')
         return json(response,200,access.issue(player,await readInput()));
       if (path==='/api/admin/invites/revoke' && method==='POST') {
@@ -905,16 +997,16 @@ export function createHoneymoonServer({
         if (direction!=='to'&&direction!=='bring') throw new RequestError(400,'invalid_admin_teleport');
         const bring=direction==='bring';
         const member=access.adminTarget(player,target,bring);
-        const online=uid=>presence.onlineProfile(uid) && [...streams].some(stream=>stream.player===uid &&
-          stream.presence && !stream.response.destroyed && !stream.response.writableEnded);
-        if (!online(player)||!online(member)) throw new RequestError(409,'not_online');
-        const uid=bring?member:player;
-        const anchor=bring?player:member;
-        const teleport={...publishTeleport(uid,game.teleportNear(uid,anchor)),teleportId:randomUUID()};
-        for (const stream of streams) if (stream.player===uid&&stream.presence) {
-          writeEvent(stream.response,'admin-teleport',teleport);
-        }
-        return json(response,200,{uid,teleport});
+        return json(response,200,adminTeleport(player,bring?member:player,bring?player:member));
+      }
+      if (path==='/api/admin/inventory/clear' && method==='POST') {
+        await readInput();
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        const inventory=game.clearInventory(player);
+        const position=presence.onlinePosition(player);
+        if (position) presence.update(player,position,{equipment:inventory.equipment,offhand:null});
+        publishProfileSetting(player,'profile-inventory',inventory);
+        return json(response,200,{inventory});
       }
       if (path==='/api/worldedit' && method==='GET') return json(response,200,worldEdit.read(player));
       if (path==='/api/worldedit' && method==='POST') {
@@ -943,27 +1035,27 @@ export function createHoneymoonServer({
       }
       if (path==='/api/modes' && survival.enabled) {
         if (!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
+        let observing;
         if (method==='POST') {
           const {mode,target}=await readInput();
+          if (!npcs.isAdmin(player)) throw new RequestError(403,'admin_required');
           const member=target===undefined ? undefined : access.account(target)?.uid??[...streams].map(stream=>stream.player)
             .find(id=>presence.onlineProfile(id)?.id===target);
           if (target!==undefined&&!member) throw new RequestError(404,'player_missing');
-          survival.setMode(member,mode);
-          for (const id of member?[member]:new Set([...streams].map(stream=>stream.player))) {
-            if (!survival.isGame(id)) game.clearLavaContact(id);
-            if (!survival.isGame(id)&&survival.status(id).death) survival.reset(id);
-            game.reconcileFlight(id);
-            sendSocial('game-mode',playerMode(id),recipient=>recipient===id);
-            const position=presence.onlinePosition(id);
-            if (position) presence.update(id,game.session(id).position,{death:survival.avatarDeath(id)});
+          if (member && member!==player) access.adminTarget(player,member,true);
+          if (mode==='spectator') {
+            if (!member || !presence.onlinePosition(member)) throw new RequestError(409,'not_online');
+            observing=setPlayerSpectator(member,true);
+          } else {
+            ({observing}=changePlayerMode(member,mode));
           }
         }
-        return json(response,200,{...modeAdministration(),selfMode:playerMode(player)});
+        return json(response,200,{...modeAdministration(),selfMode:playerMode(player),...(observing&&{observing})});
       }
       if (path==='/api/combat' && method==='POST' && survival.enabled) {
         const {target}=await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
-        const defender=[...streams].map(stream=>stream.player).find(id=>presence.onlineProfile(id)?.id===target);
+        const defender=[...streams].map(stream=>stream.player).find(id=>!game.isSpectator(id) && presence.onlineProfile(id)?.id===target);
         if (!defender) throw new RequestError(404,'player_missing');
         return json(response,200,{hit:Boolean(game.hitPlayer(player,defender))});
       }
@@ -974,25 +1066,21 @@ export function createHoneymoonServer({
       }
       if (path === '/api/chat' && method === 'POST') {
         const body = await readInput(MAX_CHAT_BODY);
+        const command=await adminCommands.execute(player,body?.text);
+        if (command) return json(response,200,command);
+        if (game.isSpectator(player)) throw new RequestError(403,'spectator_action');
         return json(response, 200, chat.message(presence.onlineProfile(player), body, player, presence.onlinePosition(player)));
       }
       if (path === '/api/time' && method === 'POST') {
-        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
         const body = await readInput();
-        const time = worldTime.set(body);
-        sendSocial('world-time', time);
-        return json(response, 200, time);
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        return json(response,200,updateWorldTime(body));
       }
       if (path === '/api/weather' && method === 'GET') return json(response,200,worldTime.weatherSettings());
       if (path === '/api/weather' && method === 'POST') {
-        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
         const body=await readInput();
-        const previous=worldTime.weatherSettings();
-        const value=worldTime.setWeather(body);
-        if (value.mode!==previous.mode || value.dynamic!==previous.dynamic || value.nextChangeAt!==previous.nextChangeAt) {
-          sendSocial('weather',value);
-        }
-        return json(response,200,value);
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
+        return json(response,200,updateWorldWeather(body));
       }
       if (path === '/api/profile' && method === 'POST') {
         const updates = await profileChanges(await readInput(MAX_PROFILE_BODY));
@@ -1007,8 +1095,9 @@ export function createHoneymoonServer({
         if (submittedSkin !== undefined) updates.ponyTraits={raceOverride:null,sizeOverride:null};
         const different = updates.nickname !== undefined || submittedSkin !== undefined;
         const drop=previousTraits && prepareRaceDrop(player,previousTraits.ponyType,nextSkinTraits.ponyType);
-        const renameDate=updates.nickname !== undefined ? chat.stamp() : undefined;
-        const renameChat=renameDate && {at:renameDate.at,admin:access.isAdmin(player)};
+        const silentRename=game.isSpectator(player);
+        const renameDate=updates.nickname!==undefined && !silentRename ? chat.stamp() : undefined;
+        const renameChat=silentRename ? {announce:false} : renameDate && {at:renameDate.at,admin:access.isAdmin(player)};
         const renamed = different && store.updateProfile(player, updates,
           saved?.nickname ?? presence.onlineProfile(player)?.nickname,drop?.writeInventory,renameChat);
         let relocation, movementState;
@@ -1137,11 +1226,10 @@ export function createHoneymoonServer({
       }
       if (path === '/api/spectator' && method === 'POST') {
         const body = await readInput();
+        if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
         if (!presence.onlineProfile(player)) throw new RequestError(409, 'not_online');
         const pose = readPose(body.pose);
-        const result = game.setSpectator(player, body);
-        presence.update(player, result.position, {...pose, stance:result.stance, spectator:result.spectator});
-        return json(response, 200, result);
+        return json(response,200,setPlayerSpectator(player,body.enabled,pose));
       }
       if (path === '/api/warps' && method === 'GET') {
         if (!access.isAdmin(player)) throw new RequestError(403,'admin_required');
@@ -1223,6 +1311,9 @@ export function createHoneymoonServer({
         }
         if (presenceEntry) {
           presence.connect(stream, presenceEntry);
+          const role=access.account(player)?.role;
+          if (role) writeEvent(response,'profile-access',{uid:player,role});
+          if (spectatorRevisions.has(player)) writeEvent(response,'profile-spectator',spectatorSnapshot(player));
           writeEvent(response,'profile-race',raceSnapshot(player));
           const nightVision=store.getNightVision(player);
           if (nightVision) writeEvent(response,'profile-night-vision',{uid:player,...nightVision});

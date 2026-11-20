@@ -226,7 +226,8 @@ function resume() {
   try { Promise.resolve(canvas.requestPointerLock()).catch(rejected); }
   catch { rejected(); }
 }
-const social = createSocialHud({post, notice, pause, resume, teleport, placeWarp,weatherChanged:updateWeather,
+const social = createSocialHud({post,notice,pause,resume,teleport,teleportPlayer:teleportFromRoster,placeWarp,weatherChanged:updateWeather,
+  commandResult:applyAdminCommand,
   worldEditCommand:command=>worldEdit.command(command),
   loadWarps:()=>json('/api/warps',{signal:AbortSignal.timeout(5000)})});
 pauseMenu.setSocialDock(social.setPauseDock);
@@ -246,7 +247,7 @@ const npcUi=createNpcUi({command:npcCommand,onTeleport:receiveNpcTeleport,
   position:()=>position,lookYaw:()=>heading.yaw,isPlaying:()=>playing,
   preview:(canvas,appearance)=>view.npcs?.preview(canvas,appearance,performance.now()),
   clearPreview:canvas=>view.npcs?.clearPreview(canvas),pause,resume,notice});
-const modeUi=createPlayerModeUi({element,notice,pause,changed:updateGameMode,revive:revivePlayer,
+const modeUi=createPlayerModeUi({element,notice,pause,changed:updateGameMode,revive:revivePlayer,receiveSpectator:applySpectatorState,
   fetchModes:()=>json('/api/modes',{signal:AbortSignal.timeout(5000)}),
   changeMode:fields=>post('modes',fields,AbortSignal.timeout(5000)),
   async craft(recipe) {
@@ -290,7 +291,7 @@ const creative = createCreativeMenu({load:loadCreative,
   preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin),
   editItem:itemDocuments.openItem,readBook:itemDocuments.openBook,
   swap:swapHands,
-  canCopy:()=>modeUi.creative,
+  canCopy:()=>modeUi.creative&&!spectator,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
 const soloDownloadUi=createSoloDownloadUi({element});
 let soloStreaming=false, unavailableSoloTerrainUntil=0, switchingSoloWorld=false;
@@ -299,24 +300,44 @@ const menuOpen = () => social.isOpen() || creative.isOpen() || signEditor.open |
   soloDownloadUi.isOpen() || switchingSoloWorld;
 
 let worldAdmin = false;
+let currentAccess, spectatorRevision=-1, nightVisionPending=false;
 function setWorldAdmin(allowed) {
   worldAdmin = Boolean(allowed);
   element('weather').disabled = !worldAdmin;
   social.setAdmin(worldAdmin);
+  updateInventoryControls();
+}
+
+function applyAccess({uid,role}) {
+  if (uid!==profileUid || !currentAccess || !['admin','player'].includes(role)) return;
+  currentAccess={...currentAccess,role};
+  adminUi.setAccess(currentAccess);
+  npcUi.setAccess(role==='admin');
+  modeUi.setAdmin(role==='admin');
+  setWorldAdmin(role==='admin');
+}
+
+function updateInventoryControls() {
+  const mode=element('inventory-mode-toggle'), observing=element('inventory-spectator-toggle');
+  mode.hidden=observing.hidden=element('inventory-clear').hidden=!worldAdmin;
+  element('inventory-night-vision').hidden=false;
+  mode.setAttribute('aria-pressed',String(modeUi.creative&&!spectator));
+  observing.setAttribute('aria-pressed',String(spectator));
 }
 
 function updateGameMode(next) {
+  creative.setCatalogEnabled(modeUi.creative&&!spectator);
   creativeToggle.disabled=spectator||!creativeAvailable||!modeUi.creative;
   creativeToggle.hidden=modeUi.active&&!modeUi.creative;
   element('touch-catalog').hidden=modeUi.active&&!modeUi.creative;
   element('touch-copy').hidden=modeUi.active&&!modeUi.creative;
-  element('touch-spectator').hidden=!modeUi.creative;
+  element('touch-spectator').hidden=!next.admin;
+  inventoryToggle.disabled=spectator&&!next.admin;
   setWorldAdmin(next.admin);
   game.classList.toggle('dead',Boolean(next.death));
   if (!view) return;
   element('touch-flight').hidden=!canFly();
-  if (!modeUi.creative && spectator) setSpectator(false);
-  if (!canFly() && (flying || pendingFlight?.enabled)) stopFlight();
+  if (!spectator && !canFly() && (flying || pendingFlight?.enabled)) stopFlight();
   if (next.death&&!deathOrbit) {
     deathOrbit={perspective:view.perspective,heading:orbitHeading};
     orbitHeading={...heading,pitch:-.22};
@@ -709,9 +730,19 @@ function stream() {
     if (source.readyState===EventSource.CLOSED) feedRetry=setTimeout(stream,2500);
   });
   feed.addEventListener('presence', event => {
+    if (feed!==source) return;
     const {players, selfOnline} = JSON.parse(event.data);
     view.players.replace(players);
     social.roster(players, selfOnline && profile.confirmed);
+  });
+  source.addEventListener('profile-access',event=>{
+    if (feed===source) applyAccess(JSON.parse(event.data));
+  });
+  source.addEventListener('profile-spectator',event=>{
+    if (feed===source) applySpectatorState(JSON.parse(event.data)).catch(error=>notice(error.message));
+  });
+  source.addEventListener('profile-inventory',event=>{
+    if (feed===source) applyInventory(JSON.parse(event.data));
   });
   feed.addEventListener('presence-motion', event => view.players.update(JSON.parse(event.data).players));
   feed.addEventListener('npcs',event=>applyNpcs(JSON.parse(event.data)));
@@ -903,7 +934,7 @@ function enterWorld() {
   audio.setPlaying(true);
   presenceDirty = true;
   creativeToggle.disabled = spectator || !creativeAvailable || !modeUi.creative;
-  inventoryToggle.disabled = spectator;
+  inventoryToggle.disabled = spectator&&!modeUi.admin;
   npcUi.setAvailable(npcEditorAvailable);
 }
 
@@ -966,6 +997,27 @@ function applyRaceUpdate(body) {
 function showNightVision(enabled) {
   view.setNightVision(enabled);
   element('night-vision').setAttribute('aria-pressed',String(enabled));
+  element('inventory-night-vision').setAttribute('aria-pressed',String(enabled));
+}
+
+async function toggleNightVision() {
+  if (nightVisionPending || !view) return;
+  const previous=view.nightVision, before=nightVisionRevision;
+  const buttons=[element('night-vision'),element('inventory-night-vision')];
+  nightVisionPending=true;
+  for (const button of buttons) button.disabled=true;
+  showNightVision(!previous);
+  try {
+    const result=await post('night-vision',{enabled:!previous},AbortSignal.timeout(5000));
+    if (!result.ok) throw new Error('night vision update rejected');
+    applyNightVision(result.body);
+  } catch {
+    if (before===nightVisionRevision) showNightVision(previous);
+    notice('Не удалось сохранить ночное зрение');
+  } finally {
+    nightVisionPending=false;
+    for (const button of buttons) button.disabled=false;
+  }
 }
 
 function applyNightVision(state) {
@@ -1050,10 +1102,10 @@ function restoreFlight(session) {
   } catch {}
   if (seat || modeUi.death || !canFly()) {
     if (pendingFlight) finishFlightPreference(pendingFlight);
-  } else {
+  } else if (!session.spectator) {
     setFlight(pendingFlight?.enabled ?? session.flight===true);
   }
-  if (session.spectator && modeUi.creative) setSpectator(true);
+  if (session.spectator) setSpectator(true);
   flushFlightPreference();
 }
 
@@ -1074,17 +1126,30 @@ function setSpectator(active) {
     view.perspective = spectatorReturn.perspective;
   }
   spectator = active;
-  setFlight(active || spectatorReturn.flying);
+  setFlight(active || spectatorReturn.flying&&canFly());
   keys.clear();
   game.classList.toggle('spectating', active);
+  element('touch-spectator').setAttribute('aria-pressed',String(active));
+  creative.setCatalogEnabled(modeUi.creative&&!active);
   element('spectator-status').hidden = !active;
   creativeToggle.disabled = active || !creativeAvailable||!modeUi.creative;
-  inventoryToggle.disabled = active;
+  inventoryToggle.disabled = active&&!modeUi.admin;
+  updateInventoryControls();
   updateCameraHint();
 }
 
+async function applySpectatorState(body) {
+  if (body?.uid!==profileUid || typeof body.spectator!=='boolean' || !Number.isSafeInteger(body.spectatorRevision) ||
+      body.spectatorRevision<=spectatorRevision || !view) return;
+  spectatorRevision=body.spectatorRevision;
+  setSpectator(body.spectator);
+  modeUi.setSpectator(body.spectator);
+  if (body.relocated) await receiveNpcTeleport(body);
+  else setSeat(body.seat,body.position,body.stance);
+}
+
 async function toggleSpectator() {
-  if (!modeUi.creative || resetting || acting || seatPending) return;
+  if (!modeUi.admin || resetting || acting || seatPending) return;
   resetting = true;
   try {
     await flushPosition();
@@ -1093,10 +1158,7 @@ async function toggleSpectator() {
       notice(messages[body.error] ?? body.error);
       return;
     }
-    seatEpoch++;
-    setSpectator(body.spectator);
-    if (body.relocated) await arriveAt(body.position,body.stance);
-    else setSeat(null, body.position,body.stance);
+    await applySpectatorState(body);
   } catch {
     notice('Связь с сервером прервалась');
   } finally {
@@ -1223,6 +1285,44 @@ async function receiveAdminTeleport(body) {
   handledAdminTeleports.add(id);
   if (handledAdminTeleports.size>32) handledAdminTeleports.delete(handledAdminTeleports.values().next().value);
   await receiveNpcTeleport(body);
+}
+
+async function teleportFromRoster(uid) {
+  if (!modeUi.admin) return;
+  if (resetting || acting || seatPending) {
+    notice('Дождитесь завершения текущего действия');
+    return;
+  }
+  try {
+    const result=await post('admin/teleport',{target:uid,direction:'to'},AbortSignal.timeout(8000));
+    if (result.ok) await receiveAdminTeleport(result.body.teleport);
+    else notice(messages[result.body.error]??'Не удалось телепортироваться к игроку');
+  } catch { notice('Не удалось телепортироваться к игроку'); }
+}
+
+async function applyAdminCommand({command,result}) {
+  if (!result) return;
+  if (command==='tp' && result.uid===profileUid) await receiveAdminTeleport(result.teleport);
+  else if (command==='vanish' && result.uid===profileUid) await applySpectatorState(result);
+  else if (command==='creative' && result.uid===profileUid) {
+    modeUi.update(result.gameMode);
+    if (result.observing) await applySpectatorState(result.observing);
+  } else if (command==='time') {
+    view.setWorldTime(result);
+    social.clockState(result);
+  } else if (command==='weather') updateWeather(result);
+}
+
+function clearInventory() {
+  if (!modeUi.admin || !confirm('Удалить все предметы из инвентаря и экипировки?')) return;
+  const button=element('inventory-clear');
+  button.disabled=true;
+  inventoryRequest=inventoryRequest.then(async ()=>{
+    const result=await post('admin/inventory/clear',{},AbortSignal.timeout(5000));
+    if (!result.ok) throw new Error(result.body.error);
+    applyInventory(result.body.inventory);
+    notice('Инвентарь очищен');
+  }).catch(()=>notice('Не удалось очистить инвентарь')).finally(()=>{button.disabled=false;});
 }
 
 async function placeWarp(title) {
@@ -2148,7 +2248,7 @@ function bindControls() {
       if (!event.repeat) button.click();
       return;
     }
-    if (event.code === 'KeyP' && playing && !menuOpen()) {
+    if (event.code === 'KeyP' && modeUi.admin && playing && !menuOpen()) {
       event.preventDefault();
       if (!event.repeat) toggleSpectator();
       return;
@@ -2180,7 +2280,10 @@ function bindControls() {
     keys.add(event.code);
     if (event.repeat) return;
     if (event.code === 'Space') pressJump();
-    if (spectator) return;
+    if (spectator) {
+      if (modeUi.admin && event.code==='KeyJ' && !event.repeat) creative.openInventory();
+      return;
+    }
     if (event.code === 'KeyF' && !resetting && !seat) {
       if (!canFly()) { notice('В игровом режиме для полёта нужны крылья'); return; }
       const previous=flying;
@@ -2332,20 +2435,11 @@ function bindControls() {
     } catch (error) {notice(error.message);}
     finally {paintLowDevice(); lowDevice.disabled=false;}
   });
-  night.addEventListener('click',async()=>{
-    const previous=view.nightVision;
-    const before=nightVisionRevision;
-    night.disabled=true;
-    showNightVision(!previous);
-    try {
-      const result=await post('night-vision',{enabled:!previous},AbortSignal.timeout(5000));
-      if (!result.ok) throw new Error('night vision update rejected');
-      applyNightVision(result.body);
-    } catch {
-      if (before===nightVisionRevision) showNightVision(previous);
-      notice('Не удалось сохранить ночное зрение');
-    } finally {night.disabled=false;}
-  });
+  night.addEventListener('click',toggleNightVision);
+  element('inventory-night-vision').addEventListener('click',toggleNightVision);
+  element('inventory-mode-toggle').addEventListener('click',()=>modeUi.changeSelf(modeUi.creative&&!spectator?'game':'creative'));
+  element('inventory-spectator-toggle').addEventListener('click',toggleSpectator);
+  element('inventory-clear').addEventListener('click',clearInventory);
   const weather = element('weather');
   weather.addEventListener('change',async()=>{
     weather.disabled = true;
@@ -2646,7 +2740,8 @@ function initializeStartupSession() {
       terrainUrgent:terrain.urgent,terrainConstrained:terrain.constrained,
       ...(chunks&&{chunksMissing:chunks.missing,chunksLoading:chunks.loading})};
   });
-  adminUi.setAccess(sessionBody.access);
+  currentAccess=sessionBody.access;
+  adminUi.setAccess(currentAccess);
   modeUi.setSelf(sessionBody.access?.uid??sessionBody.profile?.id);
   setWorldAdmin(sessionBody.access?.role==='admin');
   if (sessionBody.access?.role==='admin') npcUi.setAccess(true);

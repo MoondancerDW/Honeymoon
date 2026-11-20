@@ -13,8 +13,19 @@ const teleportErrors = {
 };
 const globalChatPreference = 'honeymoon-chat-global';
 const chatDraftKey = 'honeymoon-chat-draft';
+const chatErrors={
+  invalid_admin_command:'Проверь команду и её аргументы',
+  player_missing:'Игрок не найден',
+  player_ambiguous:'Имя неоднозначно. Уточни ник или имя профиля.',
+  not_online:'Игрок сейчас вне игры',
+  admin_target_self:'Нельзя телепортироваться к самому себе',
+  teleport_blocked:'Рядом с игроком нет свободного места',
+  owner_required:'Этого игрока может переместить или изменить только владелец',
+  spectator_action:'Наблюдатель может отправлять команды администратора',
+};
 
-export function createSocialHud({post, notice, pause, resume, teleport, loadWarps, placeWarp, worldEditCommand, weatherChanged}) {
+export function createSocialHud({post,notice,pause,resume,teleport,teleportPlayer,loadWarps,placeWarp,worldEditCommand,
+  weatherChanged,commandResult}) {
   const byId = id => document.getElementById(id);
   const game = byId('game');
   const chat = byId('chat');
@@ -46,6 +57,8 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   const coordinateInputs = ['x','y','z'].map(axis => [axis, byId(`teleport-${axis}`)]);
   const online = byId('online');
   const names = byId('online-names');
+  const pausePlayers=byId('pause-player-list'), pausePlayerCount=byId('pause-players-count');
+  const emptyPausePlayers=byId('pause-players-empty');
   const chatSlot = byId('pause-chat-slot'), clockSlot = byId('pause-clock-slot');
   const chatHome = document.createComment('gameplay chat');
   const clockHome = document.createComment('gameplay clock');
@@ -53,7 +66,7 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
   clockForm.before(clockHome);
   let panel, onlineVisible = false, connected = false, players = [], clockText, writingTime = false;
   let pauseDock = false, openedFromPause = false, sendingChat = false;
-  let peers = [];
+  let peers = [], selfProfile, teleporting;
   let channel = 'global';
   let globalEnabled = true;
   let draftProfile, keepDraft = false;
@@ -318,8 +331,9 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
 
   function roster(others, self) {
     peers = others;
-    players = [...(self ? [self] : []), ...peers].map(({nickname}) => nickname)
-      .sort((a, b) => a.localeCompare(b, 'ru'));
+    selfProfile=self;
+    const profiles=[...(self ? [self] : []), ...peers].sort((a,b)=>a.nickname.localeCompare(b.nickname,'ru'));
+    players=profiles.map(({nickname})=>nickname);
     connected = Boolean(self);
     byId('online-count').textContent = String(players.length);
     names.replaceChildren(...players.map(nick => {
@@ -327,16 +341,45 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       item.textContent = nick;
       return item;
     }));
+    paintPausePlayers(profiles);
     chatToggle.disabled = chatInput.disabled = !connected;
     chatSend.disabled = sendingChat || !connected;
     clockButton.disabled=teleportButton.disabled=warpButton.disabled=!connected||!admin;
+  }
+
+  function paintPausePlayers(profiles) {
+    pausePlayerCount.textContent=String(profiles.length);
+    emptyPausePlayers.hidden=profiles.length!==0;
+    pausePlayers.replaceChildren(...profiles.map(profile=>{
+      const row=document.createElement('tr');
+      const name=document.createElement('td');
+      const label=profile.spectator ? profile.nickname+' · наблюдатель' : profile.nickname;
+      if (admin && profile.uid && profile!==selfProfile) {
+        const link=document.createElement('button');
+        link.type='button';
+        link.className='pause-player-link';
+        link.textContent=label;
+        link.title='Телепортироваться к игроку «'+profile.nickname+'»';
+        link.setAttribute('aria-label',link.title);
+        link.addEventListener('click',async ()=>{
+          if (teleporting || !admin) return;
+          teleporting=link.disabled=true;
+          try {await teleportPlayer(profile.uid);}
+          finally {teleporting=link.disabled=false;}
+        });
+        name.append(link);
+      } else name.textContent=label;
+      row.append(name);
+      return row;
+    }));
   }
 
   async function submit(path, payload, fallback) {
     try {
       const result = await post(path, payload, AbortSignal.timeout(5000));
       if (result.ok) return result.body;
-      notice(result.body.error === 'chat_rate_limit' ? 'Подожди несколько секунд перед отправкой' : fallback);
+      notice(result.body.error === 'chat_rate_limit' ? 'Подожди несколько секунд перед отправкой' :
+        chatErrors[result.body.error] ?? fallback);
     } catch {
       notice('Связь с сервером прервана');
     }
@@ -360,8 +403,12 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       }
       const message = await submit('chat', {text, channel:destination}, `Введите сообщение длиной до ${CHAT_TEXT_LIMIT} символов`);
       if (message) {
-        receiveChat(message);
         finishSend(sentText);
+        if (message.command) {
+          if (message.feedback) notice(message.feedback);
+          try {await commandResult(message);}
+          catch {notice('Не удалось применить ответ сервера');}
+        } else receiveChat(message);
       }
     } finally {
       sendingChat = false;
@@ -447,11 +494,13 @@ export function createSocialHud({post, notice, pause, resume, teleport, loadWarp
       setKeepingDraft(Boolean(text.trim()));
     },
     setAdmin(allowed) {
+      const changed=admin!==Boolean(allowed);
       admin=Boolean(allowed);
       if (!admin&&panel&&panel!=='chat') close(false);
       clockButton.disabled=teleportButton.disabled=warpButton.disabled=!connected||!admin;
       teleportButton.hidden=warpButton.hidden=byId('touch-teleport').hidden=!admin;
       for (const hint of document.querySelectorAll('[data-admin-control-hint]')) hint.hidden=!admin;
+      if (changed) roster(peers,selfProfile);
     },
     isOpen: () => !!panel,
     isChatOpen: () => panel === 'chat',

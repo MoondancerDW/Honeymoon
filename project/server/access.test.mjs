@@ -9,6 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {crc32,deflateSync} from 'node:zlib';
 import * as geometry from '../world/geometry.mjs';
 import {offhandSlot} from '../world/item-stack.mjs';
+import {createAccess} from './access.mjs';
 import {createHoneymoonServer} from './index.mjs';
 import {normalizeLegacyPlayerName} from './legacy-player.mjs';
 import {openStore} from './store.mjs';
@@ -69,6 +70,32 @@ async function request(url,path,{body,cookie,origin,headers={}}={}) {
 }
 const code=(reply,expected=200)=>{assert.equal(reply.status,expected,JSON.stringify(reply.json));return reply.json;};
 const legacy=token=>`honeymoon_guest=${token}`;
+
+test('only the owner can change administrator roles and signed-in devices use the current role after reopening',t=>{
+  const {state}=fixture(t);
+  let store=openStore(state);
+  try {
+    let access=createAccess(store,{ownerKey:secret,inviteRequired:true});
+    const {credential:owner}=access.bootstrap({key:secret,profileName:'Local owner'});
+    const invite=access.issue(owner.uid,{kind:'player'});
+    const {credential:guest,token}=access.signIn({invite:invite.code,profileName:'Guest player'});
+    assert.throws(()=>access.setRole(guest.uid,guest.uid,'admin'),{code:'admin_required'});
+    assert.throws(()=>access.setRole(owner.uid,owner.uid,'player'),{code:'owner_role_protected'});
+    assert.throws(()=>access.setRole(owner.uid,guest.uid,'owner'),{code:'invalid_profile_role'});
+    assert.deepEqual(access.setRole(owner.uid,guest.uid,'admin'),{uid:guest.uid,role:'admin',changed:true});
+    assert.deepEqual(access.setRole(owner.uid,guest.uid,'admin'),{uid:guest.uid,role:'admin',changed:false});
+    assert.equal(access.authenticate(token).role,'admin');
+    assert.throws(()=>access.setRole(guest.uid,guest.uid,'player'),{code:'owner_required'});
+    store.close();
+    store=openStore(state);
+    access=createAccess(store,{ownerKey:secret,inviteRequired:true});
+    const active=access.authenticate(token);
+    assert.equal(active.role,'admin');
+    assert.deepEqual(access.setRole(owner.uid,active.uid,'player'),{uid:active.uid,role:'player',changed:true});
+    assert.throws(()=>access.listUids(active.uid),{code:'admin_required'});
+    assert.equal(access.authenticate(token).role,'player');
+  } finally {store.close();}
+});
 
 test('the private comparison ingress accepts same-origin sessions and rejects cross-origin writes',async t=>{
   const comparisonOrigin=external+':8443';

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#141f25">
   <meta name="apple-mobile-web-app-title" content="Lilium Moonlight">
-  <meta name="honeymoon-build" content="30">
+  <meta name="honeymoon-build" content="31">
   <link rel="icon" type="image/png" href="/honeymoon-icon-192.png">
   <link rel="apple-touch-icon" href="/honeymoon-icon-192.png">
   <link rel="manifest" href="/honeymoon.webmanifest">
@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="/pause-ui.css">
   <link rel="stylesheet" href="/pony-abilities.css">
   <link rel="stylesheet" href="/offhand.css">
+  <link rel="stylesheet" href="/inventory-controls.css">
   <script>
     {
       const key='honeymoon-startup-diagnostics:v1';
@@ -121,21 +122,6 @@
     </header>
     <section id="entry" class="entry">
       <p id="pause-brand">Lilium Moonlight</p>
-      <aside id="pause-side" aria-label="Игровой мир и чат">
-        <div id="pause-world-quick">
-          <button id="pause-clock" type="button" aria-controls="clock-form" aria-expanded="false" disabled>Время · 12:00</button>
-          <label class="pause-setting" for="weather"><span>Погода</span>
-            <select id="weather" disabled>
-              <option value="clear">Ясно</option><option value="cloudy">Облачно</option>
-              <option value="rain">Дождь</option><option value="snow">Снег</option>
-            </select>
-          </label>
-          <div id="pause-clock-slot"></div>
-        </div>
-        <div id="pause-chat-slot">
-          <button id="chat-toggle" type="button" title="Чат · T / Enter" aria-controls="chat" disabled>Чат</button>
-        </div>
-      </aside>
       <div class="panel">
         <div id="entry-start">
           <h1>Lilium Moonlight</h1>
@@ -257,8 +243,8 @@
                       <dt>Панель предметов / ячейка</dt><dd>Развернуть или свернуть панель, выбрать предмет нажатием на ячейку</dd>
                       <dt>Стрелки рядом с чатом</dt><dd>Поменять местами предметы в руках у единорогов и аликорнов.</dd>
                       <dt>Чат / Меню / На весь экран</dt><dd>Открыть чат, главное меню или полноэкранный режим</dd>
-                      <dt>Ещё</dt><dd>Другое действие, ползти, сесть или встать, сменить вид, свободный обзор, наблюдатель, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
-                      <dt data-admin-control-hint hidden>Телепорт</dt><dd data-admin-control-hint hidden>Открыть ввод координат из меню «Ещё»</dd>
+                      <dt>Ещё</dt><dd>Другое действие, ползти, сесть или встать, сменить вид, свободный обзор, инвентарь, предметы, часы, выбросить, резец, размер резца, поворот, приветствие и танец</dd>
+                      <dt data-admin-control-hint hidden>Телепорт / Наблюдатель</dt><dd data-admin-control-hint hidden>Ввести координаты или переключить режим наблюдателя из меню «Ещё»</dd>
                     </dl>
                   </section>
                   <h2>Клавиатура и мышь</h2>
@@ -269,7 +255,7 @@
                     <dt>Ctrl / C</dt><dd>Спуститься в полёте</dd>
                     <dt>Shift</dt><dd>Ускориться</dd>
                     <dt>H / Shift+H</dt><dd>Автодвижение / автоспринт. H или ручное движение отключают режим.</dd>
-                    <dt>F / P</dt><dd>Полёт крылатых пони или в креативе / режим наблюдателя в креативе</dd>
+                    <dt>F</dt><dd>Полёт крылатых пони или в креативе</dd>
                     <dt>M</dt><dd>Магический телепорт по прицелу за единорога или аликорна</dd>
                     <dt>C / V / X</dt><dd>Присесть или подобрать предмет / ползти / сесть или встать</dd>
                     <dt>F5 или Y / U</dt><dd>Сменить вид / свободный обзор</dd>
@@ -285,7 +271,7 @@
                     <dt>B / Z</dt><dd>Помахать копытом / танцевать</dd>
                     <dt>T / Enter</dt><dd>Открыть чат в игре</dd>
                     <dt>Tab</dt><dd>Показать список игроков, пока клавиша нажата</dd>
-                    <dt data-admin-control-hint hidden>G / L</dt><dd data-admin-control-hint hidden>Телепорт / настройка игрового времени</dd>
+                    <dt data-admin-control-hint hidden>G / L / P</dt><dd data-admin-control-hint hidden>Телепорт / настройка игрового времени / режим наблюдателя</dd>
                     <dt>Esc / Enter</dt><dd>Открыть или закрыть меню, вернуться к игре</dd>
                   </dl>
                   <h2>Инвентарь и карта</h2>
@@ -298,6 +284,15 @@
                     <dt>Колесо / двойной клик</dt><dd>Изменить масштаб карты</dd>
                     <dt>+ / − / 0</dt><dd>Приблизить, отдалить или показать всю карту. На телефоне масштаб меняется двумя пальцами.</dd>
                   </dl>
+                  <section data-admin-control-hint hidden>
+                    <h2>Команды в чате</h2>
+                    <dl>
+                      <dt><code>/tp Ник</code><br><code>/tp Ник1 Ник2</code></dt><dd>Переместиться к игроку или переместить первого ко второму. Подходит ник и имя профиля. Имя с пробелами можно взять в кавычки.</dd>
+                      <dt><code>/vanish</code><br><code>/creative</code></dt><dd>Переключить режим наблюдателя или креатив. После команды можно указать имя другого игрока.</dd>
+                      <dt><code>/time 8</code><br><code>/time stop</code><br><code>/time go</code></dt><dd>Установить час, заморозить или запустить время. Команда без часа ставит полдень.</dd>
+                      <dt><code>/weather</code></dt><dd>Следующая погода. Чтобы выбрать конкретную, добавьте <code>clear</code>, <code>rain</code>, <code>cloud</code> или <code>snow</code>.</dd>
+                    </dl>
+                  </section>
                   <div class="context-keys">
                     <span id="micro-hint" hidden>ПКМ — поставить деталь · R — выбрать позицию · E — действие</span>
                     <span id="chisel-hint" role="status" hidden>Резец 1/8 · Shift+K — сменить размер · ЛКМ — убрать · ПКМ — добавить · O/СКМ — взять материал</span>
@@ -315,6 +310,30 @@
           </footer>
         </section>
       </div>
+      <aside id="pause-side" aria-label="Игровой мир и чат">
+        <div id="pause-world-quick">
+          <button id="pause-clock" type="button" aria-controls="clock-form" aria-expanded="false" disabled>Время · 12:00</button>
+          <label class="pause-setting" for="weather"><span>Погода</span>
+            <select id="weather" disabled>
+              <option value="clear">Ясно</option><option value="cloudy">Облачно</option>
+              <option value="rain">Дождь</option><option value="snow">Снег</option>
+            </select>
+          </label>
+          <div id="pause-clock-slot"></div>
+        </div>
+        <div id="pause-chat-slot">
+          <button id="chat-toggle" type="button" title="Чат · T / Enter" aria-controls="chat" disabled>Чат</button>
+        </div>
+      </aside>
+      <section id="pause-players" aria-labelledby="pause-players-heading">
+        <h3 id="pause-players-heading">Игроки онлайн <span id="pause-players-count">0</span></h3>
+        <div class="pause-players-scroll">
+          <p id="pause-players-empty">Сейчас никого нет в мире</p>
+          <table aria-labelledby="pause-players-heading">
+            <tbody id="pause-player-list"></tbody>
+          </table>
+        </div>
+      </section>
       <aside id="pause-commands" aria-label="Команды управления"></aside>
     </section>
     <span id="selected" class="target-tag"><span id="selected-label"></span><span id="selected-details" hidden></span><small id="selected-action" hidden></small><small id="selected-id" hidden></small></span>
@@ -402,6 +421,12 @@
         <button id="inventory-trash" type="button" aria-label="Корзина" title="Перетащить сюда, чтобы удалить"><span aria-hidden="true"></span></button>
         <button id="inventory-edit" type="button" title="Перетащите предмет сюда, чтобы изменить название и описание" hidden>Изменить название и описание</button>
       </section>
+      <div id="inventory-controls" role="group" aria-label="Управление инвентарём">
+        <button id="inventory-mode-toggle" type="button" aria-pressed="false" hidden>Креатив</button>
+        <button id="inventory-night-vision" type="button" aria-pressed="false" hidden>Ночное зрение</button>
+        <button id="inventory-spectator-toggle" type="button" aria-pressed="false" hidden>Наблюдатель</button>
+        <button id="inventory-clear" type="button" hidden>Очистить инвентарь</button>
+      </div>
       <div id="inventory-carried" aria-hidden="true" hidden></div>
       <button id="fullscreen-inventory-toggle" class="icon-button fullscreen-toggle fullscreen-panel-toggle" type="button" aria-label="На весь экран" data-fullscreen-toggle hidden><i aria-hidden="true"></i></button>
       <button id="creative-close" type="button" aria-label="Закрыть" title="Закрыть · Esc">× Закрыть</button>

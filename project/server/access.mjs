@@ -97,6 +97,7 @@ export function createAccess(store,{inviteRequired=false,singlePlayer=false,owne
       AND claimed.owner=json_extract(imported.value,'$.uid')
     WHERE imported.module='legacy-player' AND imported.key='import'`);
   const updateAccount=prepare('UPDATE players SET profile_name=COALESCE(profile_name,?),access_role=? WHERE id=?');
+  const updateRole=prepare('UPDATE players SET access_role=? WHERE id=? AND access_role<>?');
   const updateInitialNick=prepare(`INSERT INTO player_profiles(player,nickname) VALUES (?,?)
     ON CONFLICT(player) DO UPDATE SET nickname=COALESCE(player_profiles.nickname,excluded.nickname)`);
   const inviteColumns=`id,kind,player AS profileUid,issuer,label,created_at AS createdAt,
@@ -151,6 +152,18 @@ export function createAccess(store,{inviteRequired=false,singlePlayer=false,owne
     if (target===actor) throw new RequestError(400,'admin_target_self');
     if (control) manageProfile(actor,target);
     return target;
+  }
+
+  function setRole(actor,uid,role) {
+    authorize(actor);
+    if (actor!==owner()) throw new RequestError(403,'owner_required');
+    if (role!=='admin' && role!=='player') throw new RequestError(400,'invalid_profile_role');
+    if (typeof uid!=='string' || !uidPattern.test(uid) || !account.get(uid)) {
+      throw new RequestError(404,'player_missing');
+    }
+    if (uid===owner() && role!=='admin') throw new RequestError(403,'owner_role_protected');
+    const changed=updateRole.run(role,uid,role).changes===1;
+    return {uid,role,changed};
   }
 
   function setBan(actor,uid,reason,banned) {
@@ -372,7 +385,7 @@ export function createAccess(store,{inviteRequired=false,singlePlayer=false,owne
     return {ok:true};
   }
 
-  return {authenticate,signIn,bootstrap,view,isAdmin,requireUnbanned,adminTarget,setBan,listAdmin,listUids,issue,revokeInvite,revokeDevice,profiles:()=>profileList.all(),account:uid=>
+  return {authenticate,signIn,bootstrap,view,isAdmin,requireUnbanned,adminTarget,setRole,setBan,listAdmin,listUids,issue,revokeInvite,revokeDevice,profiles:()=>profileList.all(),account:uid=>
     typeof uid==='string'&&uidPattern.test(uid)?account.get(uid):undefined,
   npcEditor:{available:singlePlayer||Boolean(expected),isAdmin,require(uid) {
     if (!isAdmin(uid)) throw new RequestError(403,'npc_editor_required');

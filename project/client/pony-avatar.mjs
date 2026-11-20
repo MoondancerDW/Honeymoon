@@ -206,7 +206,7 @@ function geometryFor(model, names, position, rotation = [0, 0, 0], hornScale = 1
   return geometry;
 }
 
-function sampleSkinFaces(shader) {
+function sampleSkinFaces(shader, ghost = false) {
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', '#include <common>\nattribute vec4 skinUvBounds;\nflat varying vec4 vSkinUvBounds;')
     .replace('#include <uv_vertex>', '#include <uv_vertex>\nvSkinUvBounds = skinUvBounds;');
@@ -226,7 +226,8 @@ function sampleSkinFaces(shader) {
         vec2 center = (vSkinUvBounds.xy + vSkinUvBounds.zw) * 0.5;
         vec2 low = min(center, (ceil(vSkinUvBounds.xy * mipSize) + 0.5) / mipSize);
         vec2 high = max(center, (floor(vSkinUvBounds.zw * mipSize) - 0.5) / mipSize);
-        diffuseColor *= textureLod(map, clamp(vMapUv, low, high), lod);
+        vec4 faceColor = textureLod(map, clamp(vMapUv, low, high), lod);
+        diffuseColor *= ${ghost ? 'vec4(vec3(1.0), faceColor.a)' : 'faceColor'};
       #endif
     `);
 }
@@ -342,6 +343,8 @@ export function createPonyAvatar(isAir) {
   let bodyFall;
   let burn;
   const charredColor=0x171410;
+  const ghostColor=0x93daff, ghostOpacity=.36;
+  let ghost=false;
   const eyePosition = new THREE.Vector3();
   const magicPosition = new THREE.Vector3();
   const wingTarget = new THREE.Vector3();
@@ -862,7 +865,7 @@ export function createPonyAvatar(isAir) {
   }
 
   function applyLight() {
-    const color=burn ? charredColor : lightColor;
+    const color=ghost ? ghostColor : burn ? charredColor : lightColor;
     for (const material of materials) material.color.setHex(color, THREE.SRGBColorSpace);
     armor.setLight(color);
   }
@@ -871,6 +874,22 @@ export function createPonyAvatar(isAir) {
     if (lightColor === color) return;
     lightColor = color;
     if (!burn) applyLight();
+  }
+
+  function setGhost(active) {
+    if (ghost===active) return;
+    ghost=active;
+    for (const material of materials) {
+      material.transparent=active;
+      material.depthWrite=!active;
+      material.alphaToCoverage=!active;
+      material.forceSinglePass=active;
+      material.opacity=active ? ghostOpacity : 1;
+      material.alphaTest=.25*material.opacity;
+      material.onBeforeCompile=active ? shader=>sampleSkinFaces(shader,true) : shader=>sampleSkinFaces(shader);
+      material.needsUpdate=true;
+    }
+    applyLight();
   }
 
   function dispose() {
@@ -888,5 +907,5 @@ export function createPonyAvatar(isAir) {
   }
   return {object, get labelHeight() {
     return rig.labelHeight - rig.head.position.y * rig.headScale;
-  }, get ragdollDrop() {return bodyFall?.drop??0;},setSkin, setLight, animate,ragdoll,lavaDeath,setFirstPerson, eyesWorldPosition, heldLight, inspect, dispose};
+  }, get ragdollDrop() {return bodyFall?.drop??0;},setSkin, setLight, setGhost, animate,ragdoll,lavaDeath,setFirstPerson, eyesWorldPosition, heldLight, inspect, dispose};
 }

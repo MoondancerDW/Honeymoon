@@ -25,17 +25,18 @@ const chatRetentionQa=test==='chat-retention';
 const chatToolsQa=test==='chat-tools'||test==='chat-tools-mobile';
 const raceQa=test==='races-desktop'||test==='races-mobile';
 const jumpChargeQa=test==='jump-charge-hud'||test==='jump-charge-hud-mobile';
-const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile','jump-charge-hud-mobile'].includes(test);
+const adminGameplayQa=test==='admin-gameplay'||test==='admin-gameplay-mobile';
+const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile','jump-charge-hud-mobile','admin-gameplay-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const startupQa=test==='startup-network';
 const state=solo || networkQa || startupQa ? join(await mkdtemp(join(output,`${test}-`)),'honeymoon.sqlite') : ':memory:';
 const ownerKey='qa-local-owner';
 let chatRetentionClock=Date.parse('2026-11-19T20:59:30.000Z');
-const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa||jumpChargeQa?'game':'creative',
+const app=createHoneymoonServer({geometry,state,singlePlayer:solo,initialMode:solo||lavaQa||raceQa||raceAdminQa||jumpChargeQa||adminGameplayQa?'game':'creative',
   generated:process.env.HONEYMOON_QA_GENERATED,npcAdminKey:ownerKey,
   ...(chatRetentionQa&&{clock:()=>chatRetentionClock}),
-  ...((onlineCacheQa||preloadQa||raceAdminQa&&!solo)&&{inviteRequired:true,ownerOnPrimary:true}),
+  ...((onlineCacheQa||preloadQa||raceAdminQa&&!solo||adminGameplayQa)&&{inviteRequired:true,ownerOnPrimary:true}),
   ...(test==='altitude-server'&&{inviteRequired:true,ownerOnPrimary:true,altitudeMusic:process.env.HONEYMOON_QA_AUDIO})});
 app.server.listen(0,'127.0.0.1');
 await once(app.server,'listening');
@@ -93,7 +94,113 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (test==='microblock-seam') {
+  if (adminGameplayQa) {
+    await skipPreload();
+    if (!mobileQa) await page.setViewportSize({width:1300,height:760});
+    await start();
+    async function openPause() {
+      if (!await visible('#pause-menu')) {
+        if (mobileQa) await click('#touch-pause');
+        else await page.keyboard.press('Escape');
+        await page.locator('#pause-menu').waitFor({state:'visible'});
+      }
+      if (!mobileQa) await page.waitForFunction(()=>!document.pointerLockElement);
+    }
+    async function command(text) {
+      const input=page.locator('#pause-chat-slot #chat-input');
+      await input.fill(text);
+      const [response]=await Promise.all([page.waitForResponse(r=>r.url()===url+'api/chat'),input.press('Enter')]);
+      assert.equal(response.status(),200,await response.text());
+      return response.json();
+    }
+    if (!mobileQa) {
+      const issued=await page.request.post(url+'api/admin/invites',{data:{kind:'player'}});
+      assert.equal(issued.status(),200);
+      const {code}=await issued.json();
+      const guests=await browser.newContext({viewport:{width:800,height:560}});
+      await guests.route(/\/api\/terrain-preload\?/,route=>route.fulfill({status:409}));
+      const enrolled=await guests.request.post(url+'api/session',{data:{invite:code,profileName:'Второй игрок'}});
+      assert.equal(enrolled.status(),200,await enrolled.text());
+      const guestUid=(await enrolled.json()).access.uid;
+      const guest=await guests.newPage();
+      guest.on('pageerror',error=>result.errors.push(error.message));
+      await guest.goto(url,{waitUntil:'domcontentloaded'});
+      await guest.waitForFunction(()=>globalThis.honeymoon?.stats().playable>0 &&
+        !document.getElementById('chat-toggle').disabled,undefined,{timeout:90000});
+      await guest.waitForFunction(()=>honeymoon.players().some(player=>player.nickname==='Проверка игры'));
+      await page.bringToFront();
+      await openPause();
+      const link=page.locator('#pause-player-list').getByRole('button',{name:'Телепортироваться к игроку «Второй игрок»',exact:true});
+      const [teleported]=await Promise.all([
+        page.waitForResponse(r=>r.url()===url+'api/admin/teleport'),link.click(),
+      ]);
+      assert.equal(teleported.status(),200,await teleported.text());
+      const destination=(await teleported.json()).teleport.position;
+      await page.waitForFunction(({x,y,z})=>{
+        const at=honeymoon.stats().position;
+        return Math.hypot(at.x-x,at.y-y,at.z-z)<.6 && document.getElementById('teleport-loading').hidden;
+      },destination);
+      assert.equal((await command('/vanish')).command,'vanish');
+      await page.waitForFunction(()=>honeymoon.stats().spectator);
+      await guest.waitForFunction(()=>!honeymoon.players().some(player=>player.nickname==='Проверка игры'));
+      await guest.evaluate(target=>{
+        const from=honeymoon.stats().position;
+        honeymoon.look(Math.atan2(from.x-target.x,from.z-target.z),-.27);
+      },destination);
+      await click('#admin-toggle');
+      const guestProfile=page.locator('[data-profile-uid="'+guestUid+'"]');
+      await guestProfile.locator('.admin-profile-summary').click();
+      await guestProfile.getByRole('button',{name:'Выдать права администратора',exact:true}).click();
+      await guest.waitForFunction(()=>honeymoon.players().some(player=>player.nickname==='Проверка игры' &&
+        player.ghost && player.visible && !player.nameplate));
+      await guest.screenshot({path:join(output,'admin-ghost.png')});
+      await guestProfile.getByRole('button',{name:'Включить креатив',exact:true}).click();
+      await guest.waitForFunction(()=>honeymoon.health().mode==='creative');
+      await guestProfile.getByRole('button',{name:'Снять права администратора',exact:true}).click();
+      await guest.waitForFunction(()=>!honeymoon.players().some(player=>player.nickname==='Проверка игры'));
+      await click('#admin-close');
+      assert.equal((await command('/vanish')).command,'vanish');
+      await page.waitForFunction(()=>!honeymoon.stats().spectator);
+      await guest.waitForFunction(()=>honeymoon.players().some(player=>player.nickname==='Проверка игры'&&!player.ghost));
+      await guests.close();
+      result.checks.push({rosterTeleport:true,hiddenFromPlayers:true,visibleGhostToAdmins:true,liveGrantAndRevoke:true});
+    }
+    await openPause();
+    await click('#inventory-toggle');
+    const toggles=['#inventory-mode-toggle','#inventory-night-vision','#inventory-spectator-toggle','#inventory-clear'];
+    for (const selector of toggles) assert.ok(await visible(selector),selector);
+    await click('#inventory-mode-toggle');
+    await page.waitForFunction(()=>honeymoon.health().mode==='creative');
+    await click('#inventory-night-vision');
+    await page.waitForFunction(()=>honeymoon.stats().nightVision);
+    const give=await page.request.post(url+'api/action',{data:{requestId:crypto.randomUUID(),
+      type:'inventory_give',slot:0,key:'legacy:50:0',count:3}});
+    assert.equal(give.status(),200,await give.text());
+    assert.ok((await give.json()).inventory.slots[0]);
+    if (mobileQa) for (const [width,height] of [[390,730],[667,300]]) {
+      await page.setViewportSize({width,height});
+      for (const selector of toggles) {
+        const area=await page.locator(selector).boundingBox();
+        assert.ok(area && area.x>=0 && area.y>=0 && area.x+area.width<=width && area.y+area.height<=height,selector);
+      }
+    }
+    page.once('dialog',dialog=>dialog.accept());
+    const [cleared]=await Promise.all([page.waitForResponse(r=>r.url()===url+'api/admin/inventory/clear'),click('#inventory-clear')]);
+    assert.equal(cleared.status(),200,await cleared.text());
+    assert.ok((await cleared.json()).inventory.slots.every(item=>item===null));
+    await click('#inventory-spectator-toggle');
+    await page.waitForFunction(()=>honeymoon.stats().spectator);
+    await shot(test+'-inventory');
+    await click('#inventory-spectator-toggle');
+    await page.waitForFunction(()=>!honeymoon.stats().spectator);
+    await click('#creative-close');
+    await pauseSection('world');
+    await click('#self-mode-toggle');
+    await page.waitForFunction(()=>honeymoon.stats().spectator);
+    await click('#self-mode-toggle');
+    await page.waitForFunction(()=>!honeymoon.stats().spectator && honeymoon.health().mode==='game');
+    result.checks.push({inventoryControls:true,worldModeIncludesSpectator:true,nightVision:true});
+  } else if (test==='microblock-seam') {
     await skipPreload();
     await page.route('**/game.mjs',async route=>{
       const response=await route.fetch();
@@ -656,8 +763,16 @@ try {
     async function changeMode(mode) {
       await pauseGame();
       await pauseSection('world');
-      await click('#self-mode-toggle');
-      await page.waitForFunction(want=>honeymoon.health().mode===want,mode);
+      const currentMode=()=>page.evaluate(()=>honeymoon.stats().spectator?'spectator':honeymoon.health().mode);
+      for (let step=0;step<3 && await currentMode()!==mode;step++) {
+        const previous=await currentMode();
+        await click('#self-mode-toggle');
+        await page.waitForFunction(before=>{
+          const mode=honeymoon.stats().spectator?'spectator':honeymoon.health().mode;
+          return mode!==before;
+        },previous);
+      }
+      assert.equal(await currentMode(),mode);
       await click('#play');
       await activeGame();
     }

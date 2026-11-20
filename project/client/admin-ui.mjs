@@ -36,7 +36,10 @@ const textErrors={
   invalid_race:'Выберите расу из списка.',
   invalid_pony_size:'Выберите размер из списка.',
   invalid_night_vision:'Выберите состояние ночного зрения.',
+  invalid_profile_role:'Выберите права игрока или администратора.',
+  invalid_game_mode:'Выберите игровой или творческий режим.',
   owner_protected:'Профиль владельца защищён от блокировки.',
+  owner_role_protected:'Права владельца защищены.',
   admin_target_self:'Выберите профиль другого игрока.',
 };
 const date=new Intl.DateTimeFormat('ru-RU',{dateStyle:'short',timeStyle:'short'});
@@ -167,6 +170,29 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
   function profileActions(person,manageable) {
     const actions=node('div','admin-actions');
     const other=person.uid!==access.uid;
+    if (manageable && ['game','creative'].includes(person.mode)) {
+      const creative=person.mode==='creative';
+      const toggleMode=button(creative?'Выключить креатив':'Включить креатив',()=>{
+        const mode=creative?'game':'creative';
+        void submit('modes',{target:person.uid,mode},()=>{
+          tell(`Креатив для ${nameOf(person)} ${creative?'выключен':'включён'}.`);
+        });
+      });
+      toggleMode.dataset.profileCreative=String(creative);
+      actions.append(toggleMode);
+    }
+    if (access.singlePlayer) return actions;
+    if (access.owner && other && !person.owner) {
+      const admin=person.role==='admin';
+      const changeRole=button(admin?'Снять права администратора':'Выдать права администратора',()=>{
+        const role=admin?'player':'admin';
+        void submit('admin/profiles/role',{uid:person.uid,role},()=>{
+          tell(`Права администратора для ${nameOf(person)} ${admin?'сняты':'выданы'}.`);
+        });
+      },admin?'admin-danger':'');
+      changeRole.dataset.profileRole=person.role;
+      actions.append(changeRole);
+    }
     if (other && person.online && !person.ban) {
       actions.append(button('Телепортироваться к игроку',()=>teleportProfile(person,'to')));
       if (manageable) actions.append(button('Телепортировать игрока к себе',()=>teleportProfile(person,'bring')));
@@ -297,11 +323,11 @@ export function createAdminUi({element,load,loadUids,post,pause,worldSettings,te
     row.append(details);
     for (const [key,trait] of Object.entries(ponyTraits)) management.append(ponyTraitForm(person,key,trait));
     management.append(nightVisionControls(person));
-    if (access.singlePlayer) return row;
     const actions=profileActions(person,manageable);
-    if (manageable && !person.ban) actions.prepend(button('Привязать устройство',
+    if (!access.singlePlayer && manageable && !person.ban) actions.prepend(button('Привязать устройство',
       ()=>void submit('admin/invites',{kind:'device',profileUid:person.uid},reply=>createdLink(reply,person))));
     if (actions.childElementCount) management.append(actions);
+    if (access.singlePlayer) return row;
     if (banTarget===person.uid) management.append(banForm(person));
     if (devices.length) {
       const devicesPanel=node('details');

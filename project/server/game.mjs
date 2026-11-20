@@ -437,7 +437,6 @@ export function createGame(base, store, geometry, {
     !publicSeat(player) && !survival?.dead(player);
 
   function reconcileFlight(player) {
-    if (!creativeMode(player) && spectators.has(player)) setSpectator(player,{enabled:false});
     if (flightAllowed(player)) return;
     if (flightPreference(player).enabled) {
       forceFlight(player,false);
@@ -1744,7 +1743,7 @@ export function createGame(base, store, geometry, {
 
   function setSpectator(player, body) {
     if (typeof body?.enabled !== 'boolean') throw new RequestError(400, 'invalid_spectator');
-    if (body.enabled && !creativeMode(player)) throw new RequestError(403,'creative_required');
+    if (body.enabled && survival?.dead(player)) throw new RequestError(409,'player_dead');
     const previous = playerAt(player);
     if (spectators.has(player) === body.enabled) {
       return {...passivePosition(previous), seat:publicSeat(player), stance:stanceFor(player), spectator:body.enabled, relocated:false};
@@ -1764,8 +1763,10 @@ export function createGame(base, store, geometry, {
       }
       spectators.delete(player);
     }
+    survival?.clearFall(player);
+    lavaDamageAt.delete(player);
     movePlayer(player, position);
-    return {...passivePosition(position), seat:null, stance:'stand', spectator:body.enabled, relocated};
+    return {...passivePosition(position),seat:null,stance:'stand',spectator:body.enabled,relocated,...abilityState(player)};
   }
 
   function enterPosition(player, position, previous, stance) {
@@ -2056,6 +2057,11 @@ export function createGame(base, store, geometry, {
 
   return {
     action,
+    clearInventory(player) {
+      const {slots,equipment,selected}=inventory.read(player);
+      return inventory.replace(player,{slots:Array(slots.length).fill(null),equipment:Array(equipment.length).fill(null),
+        selected,offhand:null});
+    },
     craft,
     damageFromNpc:(player,amount)=>damagePlayer(player,amount),
     healFromNpc(player) {
@@ -2080,6 +2086,7 @@ export function createGame(base, store, geometry, {
     teleport,
     teleportNear,
     setSpectator,
+    isSpectator:player=>spectators.has(player),
     advance,
     advanceLava,
     clearLavaContact:player=>lavaDamageAt.delete(player),
