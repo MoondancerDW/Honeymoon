@@ -3,6 +3,38 @@ import assert from 'node:assert/strict';
 import {createMovementSync} from './movement-sync.mjs';
 import {createMovementChannel} from '../server/movement-channel.mjs';
 
+test('a block edit flushes its last short movement without waiting for the periodic send',async ()=>{
+  let time=0, position={x:0,y:65,z:0};
+  const channel=createMovementChannel(()=>({position,stance:'stand'}));
+  const dispatched=[];
+  const sync=createMovementSync({
+    now:()=>time,
+    async post(path,input) {
+      if (path==='position-state') return {ok:true,body:{movement:channel.open('pony','device',input.page,input.start)}};
+      dispatched.push(time);
+      const movement=channel.receive('pony','device',input,({x,y,z})=>{
+        position={x,y,z};
+        return {};
+      });
+      return {ok:true,body:{movement}};
+    },
+    pose:()=>undefined,correct:()=>assert.fail('unexpected correction'),commit:()=>{},
+    reopen:()=>assert.fail('unexpected reconnect'),
+    report:{fail:()=>assert.fail('unexpected movement failure'),recover:()=>{}},
+    metrics:{requests:0,errors:0,corrections:0},
+  });
+  sync.reset(position,'stand');
+  await sync.pump();
+  sync.record({x:.08,y:65,z:0},'stand');
+  await sync.pump();
+  time=40;
+  sync.record({x:.20,y:65,z:0},'stand');
+  assert.equal(sync.pump(),undefined);
+  assert.equal(await sync.flush({urgent:true}),true);
+  assert.deepEqual(dispatched,[0,40]);
+  assert.deepEqual(sync.inspect().pos,[.20,65,0]);
+});
+
 test('SSE advances movement while HTTP waits, then position-state recovers a missed confirmation', async ()=>{
   let time=10, position={x:0,y:65,z:0};
   let loseReplies=true, loseEvents=false;

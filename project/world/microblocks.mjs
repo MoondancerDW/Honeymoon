@@ -213,13 +213,20 @@ function snapped(value) {
   return Math.abs(value - round) < 1e-6 ? round : value;
 }
 
+const guidedHit = hit => axes.map(axis => snapped(hit[axis] * 16) / 2);
+
+export function guidedMicroblockHitKey({hit,offset}) {
+  return guidedHit(hit).map((value,index) => offset[index]>0 ? Math.ceil(value) :
+    offset[index]<0 ? Math.floor(value) : Math.floor(value*2)).join(',');
+}
+
 export function guidedMicroblock(selection, part, pattern, orientation) {
   const normalAxis = selection.offset.findIndex(Boolean);
   const normal = selection.offset[normalAxis];
   const rotated = rotatedPattern(pattern, orientation);
   if (!rotated || !normal) return null;
   const size = dimensions(rotated);
-  const hit = axes.map(axis => snapped(selection.hit[axis] * 8));
+  const hit = guidedHit(selection.hit);
   const plane = normal > 0 ? Math.ceil(hit[normalAxis]) : Math.floor(hit[normalAxis]);
   const start = normal > 0 ? plane : plane - size[normalAxis];
   const normalCell = Math.floor((normal > 0 ? plane : plane - 1) / 8);

@@ -1,12 +1,26 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as geometry from './geometry.mjs';
-import { isMicroPart, microblockAddition, microblockKey, microblockPattern, microblockPlacement, microblockRemoval } from './microblocks.mjs';
+import { guidedMicroblock, guidedMicroblockHitKey, isMicroPart, microblockAddition, microblockKey, microblockPattern,
+  microblockPlacement, microblockRemoval } from './microblocks.mjs';
 import { voxelIndex, writeVoxel } from './voxel-chisel.mjs';
 import { physics } from '../server/physics.mjs';
 
 const part = (slot, shape = 0, material = 2) => ({slot, shape, material});
 const multipart = parts => ({key: microblockKey, parts});
+
+test('the guided preview updates at half-eighth boundaries, matching the placement bounds',()=>{
+  const pattern=[[0,0,0,2,2,2]];
+  const held={slot:6,shape:1,material:3};
+  const aim=x=>({x:8,y:0,z:10,hit:{x,y:1,z:10.4},offset:[0,1,0]});
+  const bounds=x=>guidedMicroblock(aim(x),held,pattern,0).part.bounds;
+  assert.equal(Math.floor(8.4*8),Math.floor(8.47*8));
+  assert.notEqual(guidedMicroblockHitKey(aim(8.4)),guidedMicroblockHitKey(aim(8.47)));
+  assert.deepEqual(bounds(8.4),[[2,0,2,4,2,4]]);
+  assert.deepEqual(bounds(8.47),[[3,0,2,5,2,4]]);
+  assert.equal(guidedMicroblockHitKey(aim(8.4375-1e-9)),guidedMicroblockHitKey(aim(8.4375+1e-9)));
+  assert.deepEqual(bounds(8.4375-1e-9),bounds(8.4375+1e-9));
+});
 const origin = {x: .125, y: .25 - 1.62, z: -2};
 
 test('hollow bars share one slot and target rays must reach the exact part', () => {

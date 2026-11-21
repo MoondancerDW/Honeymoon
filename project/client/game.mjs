@@ -29,7 +29,7 @@ import {seatFor, SEATED_EYE, SEATED_HEIGHT} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
 import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,HIGH_FLIGHT_Y,WORLD_GRAVITY,playerBody} from '../world/player-body.mjs';
-import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox, publicMicroPart} from '../world/microblocks.mjs';
+import {guidedMicroblockHitKey,isMicroblockCell,microblockPlacement,partBoxesOverlapBox,publicMicroPart} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
 import {canLogLiquid, liquidKind} from '../world/logged-fluid.mjs';
@@ -193,6 +193,7 @@ const movementSync=createMovementSync({
 const positionTrail=movementSync.queued;
 let crouchUntil = 0;
 let hoofSwing = 0;
+let localActionSwing = 0;
 let nextAttack = Infinity;
 let repeatPlacement = false, nextPlacement = 0, resumeOnEscape = false, resuming = false;
 let pointerReleasedAt = -Infinity;
@@ -1507,7 +1508,7 @@ async function saveSign(event) {
   closeSign();
 }
 
-const flushPosition = () => movementSync.flush();
+const flushPosition = options => movementSync.flush(options);
 
 const getKey = cell => typeof cell === 'string' ? cell : cell?.key;
 const labelFor = key => {
@@ -1568,7 +1569,9 @@ function updatePlacement(target) {
       placement = previewVoxel(target);
     }
   } else {
-    const key = [x,y,z,partSlot,dx,dy,dz,Math.floor(hit.x * 8),Math.floor(hit.y * 8),Math.floor(hit.z * 8),
+    const hitKey = heldPart.pattern ? guidedMicroblockHitKey(target) :
+      [Math.floor(hit.x * 8),Math.floor(hit.y * 8),Math.floor(hit.z * 8)].join(',');
+    const key = [x,y,z,partSlot,dx,dy,dz,hitKey,
       revision,adjacentRevision,adjacentLoaded,partRotation].join(',');
     if (key !== placementKey) {
       placementKey = key;
@@ -1654,7 +1657,7 @@ function toggleChiselSize() {
   updateChiselHint();
 }
 
-function updateSelection() {
+function updateSelection(force = false) {
   if (!playing || spectator || orbitHeading || modeUi.death) {
     selection = null;
     seatTarget = null;
@@ -1668,7 +1671,7 @@ function updateSelection() {
   const {x,y,z} = position;
   const {yaw,pitch} = heading;
   const stamp = [x,y,z,yaw,pitch,selectionRevision,metrics.chunksLoaded,chiseling,chiselSize,seat,movement.stance];
-  const changed = !selectionInputs || stamp.some((value, index) => value !== selectionInputs[index]);
+  const changed = force || !selectionInputs || stamp.some((value, index) => value !== selectionInputs[index]);
   const vehicleChanged=changed || world.minecarts.size || world.boats.size || seatTarget;
   if (!vehicleChanged && !view.npcs && !modeUi.active && !world.droppedItems.size && !dropTarget) return;
   selectionInputs = stamp;
@@ -1715,6 +1718,8 @@ async function action(type, sneaking = false, tapTool = false) {
   if (modeUi.death) return;
   if (type==='copy'&&!modeUi.creative) {notice('Копирование доступно в креативе'); return;}
   if (acting || resetting || spectator || !playing) return;
+  updateCamera();
+  updateSelection(true);
   if (wieldWorldEdit() && (type==='remove' || type==='place' || type==='copy' && tapTool)) {
     repeatPlacement=false;
     await worldEdit.tool(type,selection);
@@ -1726,6 +1731,7 @@ async function action(type, sneaking = false, tapTool = false) {
       const result=await post('combat',{target:hitPlayer.id},AbortSignal.timeout(5000));
       if (result.ok&&result.body.hit) {
         hoofSwing=(hoofSwing+1)&0x7fffffff;
+        localActionSwing=(localActionSwing+1)&0x7fffffff;
         presenceDirty=true;
       }
     } catch {notice('Связь с сервером прервана');}
@@ -1739,6 +1745,7 @@ async function action(type, sneaking = false, tapTool = false) {
         const result=await npcCommand(npcTarget.id,'attack');
         if (result.ok) {
           hoofSwing=(hoofSwing+1)&0x7fffffff;
+          localActionSwing=(localActionSwing+1)&0x7fffffff;
           presenceDirty=true;
         } else if (result.body.error!=='npc_attack_cooldown') {
           notice(messages[result.body.error]??'Не удалось атаковать NPC');
@@ -1871,10 +1878,12 @@ async function action(type, sneaking = false, tapTool = false) {
   }
   request.expectedRevision = frame?.revision ?? world.revisionAt(request.x, request.y, request.z);
   const started = performance.now();
+  const blockEdit = /^(?:place|remove)(?:_|$)/.test(type);
+  if (blockEdit) localActionSwing=(localActionSwing+1)&0x7fffffff;
   acting = true;
   try {
     if (pendingPlacement) movement.pendingPlacement = pendingPlacement;
-    if (!await flushPosition()) { notice(messages.movement_blocked); return; }
+    if (!await flushPosition({urgent:blockEdit})) { notice(messages.movement_blocked); return; }
     if (pendingPlacement && overlapsPlacement(position,pendingPlacement,movement.body)) { notice(messages.occupied); return; }
     const result = await postAction(request);
     if (!result.ok) {
@@ -1884,7 +1893,7 @@ async function action(type, sneaking = false, tapTool = false) {
       notice(messages[result.body.error] || result.body.error || 'Действие отклонено');
       return;
     }
-    if (/^(?:place|remove)(?:_|$)/.test(type)) {
+    if (blockEdit) {
       hoofSwing = (hoofSwing + 1) & 0x7fffffff;
       presenceDirty = true;
     }
@@ -2062,7 +2071,7 @@ function tick(now) {
     view.viewBob.step(0, dt, true, 0);
   }
   view.updateVehicles();
-  view.updateLocalAvatar(now, dt, framePosition, playerPose(), horizontalSpeed, seat, spectator,modeUi.death);
+  view.updateLocalAvatar(now,dt,framePosition,{...playerPose(),swing:localActionSwing},horizontalSpeed,seat,spectator,modeUi.death);
   updateCamera();
   view.players.frame(now, dt);
   updateSelection();
@@ -2138,7 +2147,6 @@ function holdAttack(held) {
     return;
   }
   if (spectator || orbitHeading || resetting || modeUi.death || !teleportLoading.hidden) return;
-  if (touchMode) updateSelection();
   if (!wieldWorldEdit()) nextAttack=performance.now()+300;
   void action('remove');
 }
@@ -2883,7 +2891,7 @@ function startScene() {
   requestAnimationFrame(tick);
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
-      revision: worldRevision, position: {...position}, seat, audio:audio.stats(),
+      revision: worldRevision, position: {...position}, localActionSwing, seat, audio:audio.stats(),
       terrainPreload:terrainPreload?.status(),
       terrainNetwork:terrainNetwork.status(),
       flying, spectator, autoMovement, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),

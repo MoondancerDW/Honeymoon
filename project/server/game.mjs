@@ -1135,7 +1135,9 @@ export function createGame(base, store, geometry, {
       const copied = input.creativeItem ? item?.part && {part:item.part, pattern:item.part.pattern} : clipboardFor(player);
       if (!copied?.pattern || input.part.material !== copied.part.material || input.part.shape !== copied.part.shape ||
           input.part.sourceSlot !== (copied.part.sourceSlot ?? copied.part.slot)) throw new RequestError(409, 'nothing_to_copy');
-      const proposal = guidedMicroblock({...against, hit: anchor.hit, offset: anchor.face}, copied.part, copied.pattern, input.orientation);
+      const normal = axes[anchor.face.findIndex(Boolean)];
+      const verifiedHit = {...hit,[normal]:anchor.hit[normal]};
+      const proposal = guidedMicroblock({...against, hit:verifiedHit, offset:anchor.face}, copied.part, copied.pattern, input.orientation);
       if (!proposal || !samePoint(proposal, input) ||
           JSON.stringify(proposal.part.bounds) !== JSON.stringify(input.part.bounds)) throw new RequestError(403, 'outside_reach');
     }

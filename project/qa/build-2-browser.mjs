@@ -28,7 +28,7 @@ const raceQa=test==='races-desktop'||test==='races-mobile';
 const jumpChargeQa=test==='jump-charge-hud'||test==='jump-charge-hud-mobile';
 const adminGameplayQa=test==='admin-gameplay'||test==='admin-gameplay-mobile';
 const afkQa=test==='afk-status';
-const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile','jump-charge-hud-mobile','admin-gameplay-mobile'].includes(test);
+const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile','jump-charge-hud-mobile','admin-gameplay-mobile','click-edit-latency-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const startupQa=test==='startup-network';
@@ -2146,6 +2146,166 @@ try {
     result.checks.push({shortClickHits:1,heldHits:hits.length-1,firstHitMs:first-presses[1],
       firstRepeatMs:repeat-presses[1],repeatIntervalsMs});
     await shot('hold-attack');
+  } else if (test==='click-edit-latency' || test==='click-edit-latency-mobile') {
+    await skipPreload();
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка отклика строительства'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await owner.json();
+    const lanes=[{z:1467,delay:0},{z:1471,delay:170}];
+    const anchorX=3362, anchorY=101;
+    const full=(x,y,z)=>({x,y,z,cell:'legacy:1:0',object:null});
+    const platform=[];
+    for (let x=3358;x<=3364;x++) for (let z=1465;z<=1473;z++) platform.push(full(x,anchorY-1,z));
+    app.game.worldEdit.write(playerId,[...platform,...lanes.map(({z})=>full(anchorX,anchorY,z))]);
+    let relayDelay=0;
+    await page.route(/\/api\/(?:action|position)$/,async route=>{
+      if (relayDelay) await new Promise(resolve=>setTimeout(resolve,relayDelay));
+      await route.continue();
+    });
+    await page.route('**/game.mjs',async route=>{
+      const response=await route.fetch();
+      const source=await response.text();
+      const marker='globalThis.honeymoon = Object.freeze({';
+      const qaAim=`qaAimAt(x,y,z) {
+        const [ox,oy,oz]=view.sightOrigin(position,seat ? SEATED_EYE : EYE);
+        const dx=x-ox,dy=y-oy,dz=z-oz;
+        heading.yaw=Math.atan2(-dx,-dz);
+        heading.pitch=Math.atan2(dy,Math.hypot(dx,dz));
+        updateCamera();
+      },`;
+      assert.ok(source.includes(marker));
+      await route.fulfill({response,body:source.replace(marker,marker+qaAim)});
+    });
+    await start(false);
+    await hop(3360.5,72,1467.51);
+    const playing=()=>page.waitForFunction(mobile=>document.getElementById('game').classList.contains('playing') &&
+      (mobile || !!document.pointerLockElement),mobileQa);
+    await playing();
+    const touch=mobileQa ? await page.context().newCDPSession(page) : null;
+    async function aimAt(x,y,z) {
+      await page.evaluate(async ([x,y,z])=>{
+        for (let frame=0;frame<5;frame++) {
+          honeymoon.qaAimAt(x,y,z);
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+      },[x,y,z]);
+    }
+    await aimAt(3362.5,72.25,1467.75);
+    await page.waitForFunction(()=>honeymoon.target()?.partSlot===9);
+    if (mobileQa) await page.locator('#touch-build').tap();
+    const copied=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/action'&&r.request().postDataJSON()?.type==='copy_part');
+    if (mobileQa) await page.locator('#touch-copy').tap();
+    else await page.keyboard.press('KeyO');
+    const copy=await copied;
+    assert.equal(copy.status(),200,await copy.text());
+    assert.deepEqual((await copy.json()).part,{slot:9,shape:2,material:3});
+    if (mobileQa) await page.locator('#touch-build').tap();
+    if (mobileQa) await page.locator('#touch-camera').tap();
+    else await page.keyboard.press('F5');
+    await page.waitForFunction(()=>honeymoon.perspective().mode==='back');
+
+    await page.evaluate(mobile=>{
+      performance.clearResourceTimings();
+      performance.setResourceTimingBufferSize(2000);
+      document.addEventListener(mobile?'pointerdown':'mousedown',event=>{
+        const probe=globalThis.qaClickEdit;
+        if (!probe || !event.isTrusted || probe.pressAt!==undefined) return;
+        if (mobile ? event.pointerType!=='touch' || !event.target.closest(probe.placed?'#scene canvas':'#touch-remove') :
+            !document.pointerLockElement || event.button!==probe.button) return;
+        const initial=honeymoon.stats().localActionSwing;
+        probe.pressAt=performance.now();
+        function observe() {
+          if (probe.feedbackAt===undefined && honeymoon.stats().localActionSwing!==initial) probe.feedbackAt=performance.now();
+          const cell=honeymoon.getCell(probe.x,probe.y,probe.z);
+          if (probe.commitAt===undefined && Boolean(cell?.parts?.length)===probe.placed) probe.commitAt=performance.now();
+          if (probe.feedbackAt!==undefined && probe.commitAt!==undefined || performance.now()-probe.pressAt>5000) {
+            probe.done=true;
+          } else requestAnimationFrame(observe);
+        }
+        requestAnimationFrame(observe);
+      },true);
+    },mobileQa);
+    async function measureClick(type,button,z,placed) {
+      const point={x:anchorX,y:anchorY+1,z};
+      await page.evaluate(probe=>{globalThis.qaClickEdit=probe;},{...point,button:button==='left'?0:2,placed});
+      const requestForEdit=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/action' &&
+        response.request().postDataJSON()?.type===type,{timeout:8000});
+      if (mobileQa) {
+        if (placed) {
+          const size=page.viewportSize();
+          await page.touchscreen.tap(size.width/2,size.height/2);
+        } else await page.locator('#touch-remove').tap();
+      } else {
+        await page.mouse.down({button});
+        await page.mouse.up({button});
+      }
+      const response=await requestForEdit;
+      assert.equal(response.status(),200,await response.text());
+      const {changes}=await response.json();
+      assert.ok(changes.some(change=>change.x===point.x && change.y===point.y && change.z===point.z &&
+        Boolean(change.parts?.length)===placed),JSON.stringify(changes));
+      await page.waitForFunction(()=>qaClickEdit.done,undefined,{timeout:6500});
+      const timing=await page.evaluate(()=>{
+        const {pressAt,feedbackAt,commitAt}=qaClickEdit;
+        const requests=performance.getEntriesByName(location.origin+'/api/action').filter(entry=>entry.startTime>=pressAt);
+        return {inputs:pressAt===undefined?0:1,requestCount:requests.length,
+          requestMs:requests[0]?.startTime-pressAt,feedbackMs:feedbackAt-pressAt,responseMs:requests[0]?.responseEnd-pressAt,
+          commitMs:commitAt-pressAt};
+      });
+      assert.equal(timing.inputs,1);
+      assert.equal(timing.requestCount,1,`${type} must succeed on its first click`);
+      assert.ok(timing.feedbackMs>=0 && timing.feedbackMs<110,JSON.stringify({type,timing}));
+      assert.ok(timing.commitMs>=timing.requestMs,JSON.stringify({type,timing}));
+      if (relayDelay) assert.ok(timing.feedbackMs<timing.responseMs && timing.responseMs>=relayDelay,JSON.stringify({type,timing}));
+      return timing;
+    }
+    for (const {z,delay} of lanes) {
+      relayDelay=delay;
+      await hop(anchorX-2.5,anchorY,z+.52);
+      await playing();
+      await page.evaluate(()=>honeymoon.look(-Math.PI/2,0));
+      if (touch) {
+        const pad=await page.locator('#stick').boundingBox();
+        const thumb={x:pad.x+pad.width/2,y:pad.y+pad.height*.17,id:5};
+        await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[thumb]});
+      } else await page.keyboard.down('KeyW');
+      try {
+        await page.waitForFunction(x=>honeymoon.stats().position.x>x-.58,anchorX);
+      } finally {
+        if (touch) await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+        else await page.keyboard.up('KeyW');
+      }
+      const before=await stat();
+      assert.ok(before.position.x<anchorX && anchorX-before.position.x<.62,JSON.stringify(before.position));
+      async function aimOnTop(localX) {
+        await aimAt(anchorX+localX,anchorY+1,z+.52);
+        try {
+          await page.waitForFunction(({anchorX,anchorY,z,localX})=>{
+            const hit=honeymoon.target();
+            const next=honeymoon.placement();
+            return hit?.x===anchorX&&hit.y===anchorY&&hit.z===z&&hit.offset[1]===1&&
+              Math.abs(hit.hit.x-anchorX-localX)<.018&&next?.x===anchorX&&next.y===anchorY+1&&next.z===z&&!next.blocked;
+          },{anchorX,anchorY,z,localX},{timeout:4500});
+        } catch (error) {
+          const actual=await page.evaluate(()=>({hit:honeymoon.target(),preview:honeymoon.placement()}));
+          throw new Error(`aiming at ${localX} failed: ${JSON.stringify(actual)}`,{cause:error});
+        }
+        return page.evaluate(()=>({hit:honeymoon.target().hit,firstX:honeymoon.placement().part.bounds[0][0]}));
+      }
+      const left=await aimOnTop(.4);
+      const right=await aimOnTop(.47);
+      assert.equal(Math.floor(left.hit.x*8),Math.floor(right.hit.x*8),'both hits are within one eighth of the anchor');
+      assert.equal(right.firstX,left.firstX+1,'the placement preview must cross the half-eighth boundary immediately');
+      const rightClick=await measureClick('place_part','right',z,true);
+      await aimAt(anchorX+.47,anchorY+1.3,z+.52);
+      await page.waitForFunction(({anchorX,anchorY,z})=>{
+        const target=honeymoon.target();
+        return target?.x===anchorX&&target.y===anchorY+1&&target.z===z&&Number.isInteger(target.partSlot);
+      },{anchorX,anchorY,z});
+      const leftClick=await measureClick('remove_part','left',z,false);
+      result.checks.push({relayDelayMs:delay,distanceToAnchor:anchorX-before.position.x,rightClick,leftClick});
+    }
+    await shot(test);
   } else if (test==='copy-corner') {
     await skipPreload();
     const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка микроблоков'}});
@@ -2184,14 +2344,17 @@ try {
       assert.equal(reply.status(),200,await reply.text());
       return reply.json();
     }
+    async function pressMouse(button) {
+      await page.mouse.down({button});
+      await page.mouse.up({button});
+    }
     const target=[3362,72,1467];
     await aim(3362.5,72.25,1467.75);
     await page.waitForFunction(()=>honeymoon.target()?.partSlot===9);
     const microblockId='id 750:5123';
     assert.equal(await page.locator('#selected-id').innerText(),microblockId);
     await page.waitForFunction(()=>!document.getElementById('toast').textContent);
-    await page.mouse.down({button:'right'});
-    await page.mouse.up({button:'right'});
+    await pressMouse('right');
     assert.equal(await page.locator('#toast').textContent(),'');
     await aim(3362.5,72.25,1467.75);
     await page.waitForFunction(()=>honeymoon.target()?.partSlot===9);
@@ -2201,14 +2364,18 @@ try {
     await page.waitForFunction(()=>document.querySelector('#hotbar [aria-pressed="true"] canvas'));
     assert.equal((await selected.getAttribute('aria-description'))?.trim().split('\n').at(-1),microblockId);
     await shot('copy-corner-selected');
-    await edit('remove_part',()=>page.mouse.click(500,320));
+    await page.waitForFunction(([x,y,z])=>{
+      const hit=honeymoon.target();
+      return hit?.x===x && hit.y===y && hit.z===z && hit.partSlot===9;
+    },target);
+    await edit('remove_part',()=>pressMouse('left'));
     await page.waitForFunction(([x,y,z])=>!honeymoon.getCell(x,y,z)?.parts.some(part=>part.slot===9),target);
     await aim(3363,72.25,1467.75);
     await page.waitForFunction(([x,y,z])=>{
       const next=honeymoon.placement();
       return next?.x===x && next.y===y && next.z===z && !next.blocked;
     },target);
-    const placed=await edit('place_part',()=>page.mouse.click(500,320,{button:'right'}));
+    const placed=await edit('place_part',()=>pressMouse('right'));
     await page.waitForFunction(([x,y,z])=>honeymoon.getCell(x,y,z)?.parts.length===2,target);
     assert.ok(placed.changes.some(change=>change.parts?.some(part=>part.sourceSlot===9 && part.material===3)));
     result.checks.push({target,slot:Number(slot),part:copied.part,microblockId});

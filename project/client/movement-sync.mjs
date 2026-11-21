@@ -1,5 +1,6 @@
 import {positionBatch,positionSendInterval} from './position-packet.mjs';
 import {connectionFailure} from './connection-report.mjs';
+import {POSITION_FLIGHT_DROP_LIMIT} from '../world/player-body.mjs';
 
 const maxInFlight=4;
 const maxPredictedSteps=256;
@@ -171,7 +172,7 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     return probe;
   }
 
-  function pump(limit) {
+  function pump(limit, urgent = false) {
     const time=now();
     if (!confirmed || status==='replaced') return;
     if (!epoch) return reconcile(time);
@@ -179,7 +180,7 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     const stalledFor=sent.size ? time-lastProgress : 0;
     if (stalledFor>=recoveryDelay()) reconcile(time);
     if (stalledFor>=expirationMs) return;
-    if (sent.size>=maxInFlight || active.size>=maxInFlight || time<nextSend) return;
+    if (sent.size>=maxInFlight || active.size>=maxInFlight || !urgent && time<nextSend) return;
     const offset=submitted-accepted, end=limit ? queued.indexOf(limit)+1 : queued.length;
     if (offset>=end) return;
     const from=offset ? queued[offset-1] : confirmed;
@@ -188,9 +189,10 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     for (let i=offset;i<end && samples.get(queued[i]).flying===flying;i++) selected.push(queued[i]);
     const avatarPose=pose(flying);
     const batch=positionBatch(from,selected,limit,flying);
-    const readyAt=dispatched+positionSendInterval(from,batch.trail,movementInterval,flying);
+    const interval=urgent && from[1]-batch.target[1]<=POSITION_FLIGHT_DROP_LIMIT ? 0 : movementInterval;
+    const readyAt=dispatched+positionSendInterval(from,batch.trail,interval,flying);
     if (time<readyAt) {
-      nextSend=readyAt;
+      nextSend=Math.max(nextSend,readyAt);
       return;
     }
     if (!sent.size) lastProgress=time;
@@ -234,13 +236,13 @@ export function createMovementSync({now=()=>performance.now(),post,pose,correct,
     busy:()=>active.size>0,
     inspect:()=>({pending:sent.size,active:active.size,status,ackSource,acks:{...acks},pos:confirmed?.slice(0,3),
       queueAgeMs:queued.length ? Math.round(now()-samples.get(queued[0]).at) : 0}),
-    async flush() {
+    async flush({urgent = false} = {}) {
       const last=queued.at(-1);
       if (status==='binding') await pump();
       const generation=actionEpoch, deadline=now()+4400;
       while (last && queued.includes(last) && actionEpoch===generation && now()<deadline) {
-        pump(last);
-        await pause(30);
+        const delivery=pump(last,urgent);
+        await (delivery ? Promise.race([delivery,pause(30)]) : pause(30));
       }
       return status==='ready' && actionEpoch===generation && !(last && queued.includes(last));
     },
