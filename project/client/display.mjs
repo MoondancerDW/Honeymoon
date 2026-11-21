@@ -651,11 +651,16 @@ export class Display {
     };
   }
 
-  updateLocalAvatar(now, dt, position, pose, speed, seat, spectator, death) {
+  resetLocalPonyFacing(position, retainHeading) {
+    if (retainHeading) this.localPonyFacing?.rebase(position);
+    else this.localPonyFacing = undefined;
+  }
+
+  updateLocalAvatar(now, dt, position, pose, speed, seat, spectator, death, motionPosition = position) {
     this.localPonyFacing ??= createPonyFacing();
-    const facing = this.localPonyFacing(position, pose.yaw, dt, seat?.yaw, pose.motion);
+    const facing = this.localPonyFacing(motionPosition, pose.yaw, dt, seat?.yaw, pose.motion, pose.stance);
     if (!this.localAvatar) {
-      this.localAvatar = createPonyAvatar(this.ponyAirAt);
+      this.localAvatar = createPonyAvatar(this.ponyAirAt,{player:true});
       this.scene.add(this.localAvatar.object);
       this.localAvatar.setSkin(this.localSkin);
     }

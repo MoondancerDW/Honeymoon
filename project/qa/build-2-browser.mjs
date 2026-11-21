@@ -913,6 +913,196 @@ try {
       result.checks.push({twoBlockWall:true,landed:(await stat()).position});
       await shot('earth-pony-two-block-wall');
     }
+  } else if (test==='pony-locomotion') {
+    await skipPreload();
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка движения пони'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await owner.json();
+    const center={x:3359.5,y:101,z:1468.5};
+    const platform=[];
+    for (let x=3350;x<=3368;x++) for (let z=1459;z<=1477;z++) {
+      platform.push({x,y:center.y-1,z,cell:'legacy:1:0',object:null});
+    }
+    app.game.worldEdit.write(playerId,platform);
+    await start(false);
+    await hop(center.x,center.y,center.z);
+    await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+    await page.keyboard.press('KeyY');
+    await page.waitForFunction(()=>honeymoon.localAvatar()?.firstPersonBody===false);
+
+    const figures=[['small',[255,190,83]],['normal',[0,0,0]],['large',[206,50,84]]];
+    const directions=[['KeyW','z',-1],['KeyS','z',1],['KeyA','x',-1],['KeyD','x',1]];
+    const floor=()=>page.waitForFunction(()=>honeymoon.stats().grounded&&honeymoon.stats().movementSync.status==='ready');
+    const hover=()=>page.waitForFunction(()=>{
+      const avatar=honeymoon.localAvatar();
+      return avatar?.motion==='fly' && avatar.flightBoost<.025 && avatar.legAngles.every(angle=>Math.abs(angle)<.035);
+    });
+    const legRange=frames=>frames[0].legAngles.map((_,leg)=>{
+      const values=frames.map(frame=>frame.legAngles[leg]);
+      return Math.max(...values)-Math.min(...values);
+    });
+    function checkFacing(yaw,key,label) {
+      const angle=Math.atan2(Math.sin(yaw),Math.cos(yaw));
+      if (key==='KeyW') assert.ok(Math.abs(angle)<.20,`${label} forward facing ${angle}`);
+      if (key==='KeyS') assert.ok(Math.abs(angle)>.75&&Math.abs(angle)<1.32,`${label} backwards facing ${angle}`);
+      if (key==='KeyA') assert.ok(angle>.55&&angle<1.10,`${label} left facing ${angle}`);
+      if (key==='KeyD') assert.ok(angle<-.55&&angle>-1.10,`${label} right facing ${angle}`);
+    }
+    async function framesFor(duration) {
+      return page.evaluate(duration=>new Promise(resolve=>{
+        const frames=[];
+        const started=performance.now();
+        function sample(now) {
+          const {position}=honeymoon.stats();
+          const {legAngles,legRoll,yaw,phase,heldGrip,wingsExtended}=honeymoon.localAvatar();
+          frames.push({now,position,legAngles,legRoll,yaw,phase,heldGrip,wingsExtended});
+          if (now-started>=duration) resolve(frames);
+          else requestAnimationFrame(sample);
+        }
+        requestAnimationFrame(sample);
+      }),duration);
+    }
+    async function measure([key,axis,sign],motion,boosted=false) {
+      const start=(await stat()).position[axis];
+      if (boosted) await page.keyboard.down('ShiftLeft');
+      await page.keyboard.down(key);
+      try {
+        await page.waitForFunction(({axis,start,sign,motion,boosted})=>{
+          const {position}=honeymoon.stats();
+          const avatar=honeymoon.localAvatar();
+          return (position[axis]-start)*sign>.55 && avatar?.motion===motion &&
+            (!boosted || motion!=='fly' || avatar.flightBoost>.95);
+        },{axis,start,sign,motion,boosted},{timeout:5000});
+        if (motion==='fly'&&!boosted) await page.waitForTimeout(200);
+        const frames=await framesFor(motion==='fly'?260:420);
+        const first=frames[0], last=frames.at(-1);
+        const distance=(last.position[axis]-first.position[axis])*sign;
+        assert.ok(distance>.35,`${motion}/${key} travel`);
+        return {frames,range:legRange(frames),speed:distance*1000/(last.now-first.now)};
+      } finally {
+        await page.keyboard.up(key);
+        if (boosted) await page.keyboard.up('ShiftLeft');
+      }
+    }
+    async function loadPony(size,marker) {
+      const encoded=await page.evaluate(async marker=>{
+        const {defaultPonyPixels}=await import('/world/pony-skins.mjs');
+        const skin=defaultPonyPixels();
+        skin.set([136,202,240,255],0);
+        skin.set([...marker,255],12);
+        const canvas=document.createElement('canvas');
+        canvas.width=64;
+        canvas.height=32;
+        canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(skin),64,32),0,0);
+        return canvas.toDataURL('image/png').split(',')[1];
+      },marker);
+      await page.evaluate(()=>document.exitPointerLock());
+      await page.locator('#pause-home').waitFor({state:'visible'});
+      await pauseSection('profile');
+      await page.locator('#pony-skin').setInputFiles({name:`${size}.png`,mimeType:'image/png',buffer:Buffer.from(encoded,'base64')});
+      await page.waitForFunction(size=>document.getElementById('skin-status').textContent.includes(size+'.png'),size);
+      await click('#play');
+      await page.waitForFunction(size=>Boolean(document.pointerLockElement) && honeymoon.localAvatar()?.size===size &&
+        honeymoon.localAvatar()?.hasWings,size);
+    }
+
+    let eyeHeight=0;
+    for (const [size,marker] of figures) {
+      await loadPony(size,marker);
+      await floor();
+      await page.evaluate(()=>honeymoon.look(0,0));
+      const eye=await page.evaluate(()=>{
+        const {eyes,position}=honeymoon.localAvatar();
+        return eyes[1]-position[1];
+      });
+      assert.ok(eye>eyeHeight+.09,`${size} geometry eye height ${eye}`);
+      eyeHeight=eye;
+      await shot(`pony-${size}-stand`);
+
+      const walked={};
+      for (const direction of directions) {
+        const sample=await measure(direction,'walk');
+        assert.ok(sample.range.every(range=>range>.26),`${size}/${direction[0]} ${sample.range}`);
+        assert.ok(sample.frames.every(({legRoll})=>legRoll.every(roll=>Math.abs(roll)<.06)),`${size}/${direction[0]} lateral hoof roll`);
+        checkFacing(sample.frames.at(-1).yaw,direction[0],`${size} walk`);
+        walked[direction[0]]={range:sample.range,speed:sample.speed,yaw:sample.frames.at(-1).yaw};
+        await page.waitForFunction(()=>honeymoon.localAvatar()?.motion==='idle');
+      }
+      const ran={};
+      for (const direction of directions) {
+        const key=direction[0];
+        const sample=await measure(direction,'run',true);
+        assert.ok(Math.max(...sample.range)>Math.max(...walked[key].range),`${size}/${key} run stride`);
+        assert.ok(sample.speed>1.15*walked[key].speed,`${size}/${key} run speed`);
+        checkFacing(sample.frames.at(-1).yaw,key,`${size} run`);
+        ran[key]={range:sample.range,speed:sample.speed,yaw:sample.frames.at(-1).yaw};
+      }
+
+      await page.keyboard.press('KeyF');
+      await page.waitForFunction(()=>honeymoon.stats().flying);
+      const beforeTakeoff=(await stat()).position.y;
+      await page.keyboard.down('Space');
+      try {await page.waitForFunction(y=>honeymoon.stats().position.y>y+6,beforeTakeoff);}
+      finally {await page.keyboard.up('Space');}
+      await hover();
+      await shot(`pony-${size}-hover`);
+      const cruise={};
+      for (const direction of directions) {
+        const sample=await measure(direction,'fly');
+        assert.ok(sample.frames.every(({legAngles:[frontRight,frontLeft,hindRight,hindLeft],wingsExtended})=>wingsExtended&&
+          frontRight<-.15&&frontRight>-.65&&frontLeft<-.15&&frontLeft>-.65&&
+          hindRight>.15&&hindRight<.65&&hindLeft>.15&&hindLeft<.65),
+          `${size}/${direction[0]} cruise pose`);
+        assert.ok(sample.range.every(range=>range<.10),`${size}/${direction[0]} cruise leg jitter ${sample.range}`);
+        checkFacing(sample.frames.at(-1).yaw,direction[0],`${size} fly`);
+        cruise[direction[0]]={angles:sample.frames.at(-1).legAngles,range:sample.range,speed:sample.speed,yaw:sample.frames.at(-1).yaw};
+        await hover();
+      }
+      const shiftFlight={};
+      for (const direction of directions) {
+        const key=direction[0];
+        const sample=await measure(direction,'fly',true);
+        assert.ok(sample.frames.every(({legAngles:[frontRight,frontLeft,hindRight,hindLeft]})=>
+          frontRight<-1.3&&frontLeft<-1.3&&hindRight>1.3&&hindLeft>1.3),`${size}/${key} Shift pose`);
+        assert.ok(sample.speed>1.5*cruise[key].speed,`${size}/${key} Shift flight speed`);
+        checkFacing(sample.frames.at(-1).yaw,key,`${size} Shift flight`);
+        shiftFlight[key]={angles:sample.frames.at(-1).legAngles,speed:sample.speed,yaw:sample.frames.at(-1).yaw};
+        await hover();
+      }
+      await page.keyboard.press('KeyF');
+      await hop(center.x,center.y,center.z);
+      await floor();
+      result.checks.push({size,eye,walked,run:ran,cruise,shiftFlight});
+    }
+    await page.keyboard.press('KeyI');
+    await click('#creative-tabs [data-tab="all"]');
+    await page.locator('#creative-search').fill('legacy:50:0');
+    await click('#creative-grid [data-key="legacy:50:0"]');
+    const [given]=await Promise.all([
+      page.waitForResponse(response=>response.url()===url+'api/action' && response.request().postDataJSON()?.type==='inventory_give'),
+      click('#inventory-hotbar [data-slot="0"]'),
+    ]);
+    assert.equal(given.status(),200,await given.text());
+    await click('#creative-close');
+    if (await visible('#play')) await click('#play');
+    await page.keyboard.press('Digit1');
+    await page.waitForFunction(()=>honeymoon.localAvatar()?.held?.key==='legacy:50:0'&&Boolean(honeymoon.localAvatar()?.heldGrip));
+    await page.keyboard.press('KeyF');
+    await page.keyboard.down('Space');
+    try {await page.waitForFunction(y=>honeymoon.stats().position.y>y+6,center.y);}
+    finally {await page.keyboard.up('Space');}
+    await page.waitForFunction(()=>{
+      const avatar=honeymoon.localAvatar();
+      return avatar?.motion==='fly' && avatar.heldGrip && avatar.legAngles.slice(1).every(angle=>Math.abs(angle)<.035);
+    });
+    const held=await framesFor(550);
+    assert.ok(held.every(({heldGrip})=>heldGrip?.every(Number.isFinite)),'held item grip in flight');
+    const heldRange=legRange(held);
+    assert.ok(heldRange.every(range=>range<.10),`held idle leg jitter ${heldRange}`);
+    const heldFlight=await measure(directions[0],'fly');
+    assert.ok(heldFlight.frames.every(({heldGrip})=>heldGrip?.every(Number.isFinite)),'held item grip while travelling');
+    assert.ok(heldFlight.range.slice(1).every(range=>range<.10),`held flight leg jitter ${heldFlight.range}`);
+    result.checks.push({heldItem:'legacy:50:0',heldIdle:true,modelLegRanges:heldRange,travellingLegRanges:heldFlight.range});
   } else if (raceQa) {
     await skipPreload();
     await start();
@@ -1139,9 +1329,8 @@ try {
       if (!(await stat()).flying) await activate('#touch-flight','KeyF');
       await page.waitForFunction(()=>honeymoon.stats().flying);
       const airStrafe=[await strafeYaw('KeyA',1),await strafeYaw('KeyD',-1)];
-      airStrafe.forEach((yaw,index)=>assert.ok(Math.abs(yaw-groundStrafe[index])<.055));
-      await page.waitForFunction(()=>Math.abs(honeymoon.localAvatar()?.yaw)<.04);
-      result.checks.push({flightStrafe:{groundYaw:groundStrafe,airYaw:airStrafe,recentered:true}});
+      airStrafe.forEach((yaw,index)=>assert.equal(Math.sign(yaw),Math.sign(groundStrafe[index])));
+      result.checks.push({flightStrafe:{groundYaw:groundStrafe,airYaw:airStrafe}});
       const hover=()=>page.waitForFunction(()=>{
         const avatar=honeymoon.localAvatar();
         return avatar?.motion==='fly' && avatar.legAngles.every(angle=>Math.abs(angle)<.025);
@@ -1149,7 +1338,10 @@ try {
       await hover();
       await page.keyboard.down('KeyW');
       try {
-        await page.waitForFunction(()=>honeymoon.localAvatar()?.legAngles.every(angle=>angle<-.14&&angle>-.23));
+        await page.waitForFunction(()=>{
+          const angles=honeymoon.localAvatar()?.legAngles;
+          return angles?.every((angle,index)=>(index<2?-angle:angle)>.45 && Math.abs(angle)<.65);
+        });
         const flightAngles=await page.evaluate(async()=>{
           const frames=[];
           for(let i=0;i<15;i++) {

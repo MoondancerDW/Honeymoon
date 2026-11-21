@@ -16,7 +16,7 @@ function createPreview(canvas) {
   const camera = new THREE.OrthographicCamera(-aspect*1.13,aspect*1.13,1.13,-1.13,.01,10);
   camera.position.set(2.1,1.55,-3.6);
   camera.lookAt(0,.91,0);
-  const avatar = createPonyAvatar(()=>true);
+  const avatar = createPonyAvatar(()=>true,{player:true});
   scene.add(avatar.object);
   return {renderer,scene,avatar,camera,lastSkin:undefined};
 }

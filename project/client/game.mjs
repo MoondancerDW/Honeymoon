@@ -155,6 +155,7 @@ let entered = false, multiplayer = false, presenceDirty = true, presenceRequest 
 let activeAt = 0, activityTimer, lastPresenceActivity, nextPresenceHeartbeat = 0, lastPoseSequence = 0;
 let nextFallbackPresence=0;
 let horizontalSpeed = 0;
+let ponySpeed = 0, lastPonyPosition;
 let nextSprintDust = 0;
 const movementSync=createMovementSync({
   post,
@@ -169,8 +170,9 @@ const movementSync=createMovementSync({
     const dx=position.x-state.position.x, dy=position.y-state.position.y, dz=position.z-state.position.z;
     if (state.seat || seat) setSeat(state.seat,state.position,state.stance);
     else {
-      setAuthoritativePosition(state.position,state.stance);
-      if (Math.hypot(dx,dy,dz)<.7) correctionOffset={x:dx,y:dy,z:dz,started:performance.now()};
+      const blendCorrection = Math.hypot(dx,dy,dz)<.7;
+      setAuthoritativePosition(state.position,state.stance,blendCorrection);
+      if (blendCorrection) correctionOffset={x:dx,y:dy,z:dz,started:performance.now()};
     }
   },
   commit(data) {
@@ -816,7 +818,7 @@ function playerPose() {
   const moving=playing || automaticTravelEnabled();
   const activePose=moving || multiplayer && entered && !modeUi.death;
   const motion = seat ? 'sit' : !activePose ? 'idle' : flying ? 'fly' : movement.stance === 'swim' ? 'swim' :
-    !movement.grounded && !movement.medium && movement.stance === 'stand' ? 'air' : moving && horizontalSpeed > .15 ?
+    !movement.grounded && !movement.medium && movement.stance === 'stand' ? 'air' : moving && ponySpeed > .15 ?
       (sprinting() && movement.stance === 'stand' ? 'run' : 'walk') : 'idle';
   return {yaw: Math.atan2(Math.sin(heading.yaw), Math.cos(heading.yaw)), pitch:heading.pitch, motion,
     stance:seat?.bed ? 'crawl' : movement.stance, boost:!seat && flying && moving && sprinting(), eye:view.eyeOffset(),
@@ -1220,11 +1222,14 @@ function recordPosition(feet, chargedJump = false) {
   movementSync.record(feet,movement.stance,flying && !seat,chargedJump);
 }
 
-function setAuthoritativePosition(feet, stance = 'stand') {
+function setAuthoritativePosition(feet, stance = 'stand', retainHeading = false) {
   Object.assign(position, feet);
   view?.viewBob.reset();
   movementSync.reset(feet,stance);
   previousFramePosition=framePosition={...position};
+  lastPonyPosition = undefined;
+  if (!retainHeading) ponySpeed = 0;
+  view?.resetLocalPonyFacing(feet,retainHeading);
   correctionOffset=undefined;
   physicsTime=0;
   jump=false;
@@ -2036,10 +2041,20 @@ function tick(now) {
   const blend=Math.min(1,physicsTime/physicsStep);
   const previous=previousFramePosition??position;
   const fade=correctionOffset ? Math.max(0,1-(now-correctionOffset.started)/150) : 0;
+  const ponyPosition = {
+    x:previous.x+(position.x-previous.x)*blend,
+    y:previous.y+(position.y-previous.y)*blend,
+    z:previous.z+(position.z-previous.z)*blend,
+  };
+  // Pose follows continuous physics interpolation, without counting reconciliation as walking.
+  const distance = lastPonyPosition && Math.hypot(ponyPosition.x-lastPonyPosition.x,ponyPosition.z-lastPonyPosition.z);
+  const poseSpeed = seat ? seatedSpeed : dt > 0 && distance ? distance / dt : 0;
+  ponySpeed += (poseSpeed-ponySpeed)*(1-Math.exp(-dt*24));
+  lastPonyPosition = ponyPosition;
   framePosition={
-    x:previous.x+(position.x-previous.x)*blend+(correctionOffset?.x??0)*fade,
-    y:previous.y+(position.y-previous.y)*blend+(correctionOffset?.y??0)*fade,
-    z:previous.z+(position.z-previous.z)*blend+(correctionOffset?.z??0)*fade,
+    x:ponyPosition.x+(correctionOffset?.x??0)*fade,
+    y:ponyPosition.y+(correctionOffset?.y??0)*fade,
+    z:ponyPosition.z+(correctionOffset?.z??0)*fade,
   };
   if (!fade) correctionOffset=undefined;
   if (entered) {
@@ -2071,7 +2086,7 @@ function tick(now) {
     view.viewBob.step(0, dt, true, 0);
   }
   view.updateVehicles();
-  view.updateLocalAvatar(now,dt,framePosition,{...playerPose(),swing:localActionSwing},horizontalSpeed,seat,spectator,modeUi.death);
+  view.updateLocalAvatar(now,dt,framePosition,{...playerPose(),swing:localActionSwing},ponySpeed,seat,spectator,modeUi.death,ponyPosition);
   updateCamera();
   view.players.frame(now, dt);
   updateSelection();

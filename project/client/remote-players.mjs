@@ -73,7 +73,10 @@ function setProfile(player,{nickname,skin,size}) {
 function setPose(player, pose) {
   const {x, y, z} = pose.position;
   const relocated = player.object.position.distanceToSquared(player.target.set(x,y,z)) > 64;
-  if (relocated) player.object.position.copy(player.target);
+  if (relocated) {
+    player.object.position.copy(player.target);
+    player.facing = createPonyFacing();
+  }
   const grounded = pose.motion === 'idle' || pose.motion === 'walk' || pose.motion === 'run';
   if (pose.motion === 'air') player.airTop = Math.max(y,relocated ? y : player.airTop ?? y);
   else if (player.airTop !== undefined) {
@@ -126,7 +129,7 @@ export class RemotePlayers {
     }
     for (const profile of profiles) {
       if (!this.entries.has(profile.id)) {
-        const avatar = createPonyAvatar(this.isAir);
+        const avatar = createPonyAvatar(this.isAir,{player:true});
         const object = new THREE.Group();
         const label = new THREE.Sprite(new THREE.SpriteMaterial({transparent:true, depthWrite:false, toneMapped:false}));
         object.add(avatar.object, label);
@@ -183,7 +186,7 @@ export class RemotePlayers {
       object.position.lerp(target, mix);
       player.drawnLookYaw += angleBetween(player.drawnLookYaw, player.lookYaw) * mix;
       const seatYaw = player.motion === 'sit' ? player.yaw : undefined;
-      const facing = player.facing(object.position, player.drawnLookYaw, dt, seatYaw, player.motion);
+      const facing = player.facing(object.position, player.drawnLookYaw, dt, seatYaw, player.motion, player.stance);
       object.rotation.y = facing.bodyYaw;
       if (!object.visible) {
         player.landing = 0;
