@@ -141,6 +141,7 @@ test('a world-height fall starts at Minecraft speed, accelerates and arrives thr
   let first = 1;
   let from = start;
   let largestDrop = 0;
+  let largestTrail = 0;
   while (!movement.grounded && now < 11000) {
     const samples = [];
     for (let step = 0; step < 8 && !movement.grounded; step++) {
@@ -155,6 +156,7 @@ test('a world-height fall starts at Minecraft speed, accelerates and arrives thr
     const batch = positionBatch(from,samples);
     assert.equal(batch.trail.length,samples.length);
     largestDrop = Math.max(largestDrop,from[1]-batch.target[1]);
+    largestTrail = Math.max(largestTrail,batch.trail.length);
     const packet = {...point(batch.target),page,epoch,first,from,trail:batch.trail,requestId:`fall-batch-${first}`};
     const state = game.movementChannel.receive(player,'device',packet,body => game.position(player,body));
     first += batch.trail.length;
@@ -162,6 +164,7 @@ test('a world-height fall starts at Minecraft speed, accelerates and arrives thr
     from = tuple(state.position);
   }
   assert.ok(largestDrop > 12);
+  assert.ok(largestTrail > 32,'the faster fall sends more than 32 collision steps in a packet');
   const duration = (Math.sqrt(FREE_FALL_START_SPEED**2 + 2*WORLD_GRAVITY*(start[1]-1)) - FREE_FALL_START_SPEED) / WORLD_GRAVITY;
   assert.ok(Math.abs(now/1000 - duration) < .128);
   assert.ok(movement.grounded);

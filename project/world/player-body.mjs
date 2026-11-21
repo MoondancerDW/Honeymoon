@@ -28,10 +28,11 @@ export const HIGH_FLIGHT_Y = 256;
 export const HIGH_FLIGHT_SPEED = FLIGHT_SPEED * 1.4;
 export const HIGH_FLIGHT_SPRINT_SPEED = FLIGHT_SPRINT_SPEED * 2 * 1.2;
 export const FLIGHT_VERTICAL_MULTIPLIER = 1;
-export const WORLD_GRAVITY = 9.81;
+export const WORLD_GRAVITY = 24;
 export const FREE_FALL_START_SPEED = 1.568;
 export const MINECRAFT_JUMP_HEIGHT = 1.252203352512;
-export const POSITION_TRAIL_LIMIT = 32;
+// A 130 ms packet can include about 45 substeps near the bottom of a world-height fall.
+export const POSITION_TRAIL_LIMIT = 48;
 // Allow the longest 16 ms flight sprint step plus rounding and diagonal collision corrections.
 export const POSITION_STEP_LIMIT = .34;
 export const POSITION_VERTICAL_STEP_LIMIT = .55;

@@ -4,14 +4,14 @@ import {test} from 'node:test';
 import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
 import {positionBatch, positionSendInterval} from './position-packet.mjs';
-import {FLIGHT_SPRINT_SPEED, FLIGHT_VERTICAL_MULTIPLIER, POSITION_BATCH_LIMIT} from '../world/player-body.mjs';
+import {FLIGHT_SPRINT_SPEED, FLIGHT_VERTICAL_MULTIPLIER, POSITION_BATCH_LIMIT, POSITION_TRAIL_LIMIT} from '../world/player-body.mjs';
 
 test('batches a long fall in steps allowed by the server', () => {
   const start = [0,220,0];
-  const falling = Array.from({length:32}, (_, index) => [0,220 - (index + 1) * .5,0]);
+  const falling = Array.from({length:POSITION_TRAIL_LIMIT+1}, (_, index) => [0,220 - (index + 1) * .5,0]);
   const sent = positionBatch(start, falling);
-  assert.equal(sent.trail.length, 32);
-  assert.deepEqual(sent.target, [0,204,0]);
+  assert.equal(sent.trail.length, POSITION_TRAIL_LIMIT);
+  assert.deepEqual(sent.target, falling[POSITION_TRAIL_LIMIT-1]);
   const flying = positionBatch(start, falling, undefined, true);
   assert.deepEqual(flying.target, [0,214,0]);
 });

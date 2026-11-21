@@ -40,6 +40,7 @@ import { createTestRangeNpc } from './test-range-npc.mjs';
 
 const PROJECT = fileURLToPath(new URL('..', import.meta.url));
 const MAX_BODY = 4096;
+const MAX_MOVEMENT_BODY = 6144;
 const MAX_CHAT_BODY = 8192;
 const MAX_ACTION_BODY = 16384;
 const MAX_NPC_EDITOR_BODY = 4 * 1024 * 1024;
@@ -825,8 +826,8 @@ export function createHoneymoonServer({
         if (!ownerBootstrap) access.requireUnbanned(player);
         return result;
       }
-      async function readMovementInput() {
-        const input=await readInput();
+      async function readMovementInput(limit) {
+        const input=await readInput(limit);
         const current=access.authenticate(readAccessCookie(request));
         if (current?.uid!==player || current?.deviceId!==credential.deviceId) throw new RequestError(401,'session_required');
         if (activeElsewhere(current)) throw new RequestError(409,'profile_active_elsewhere');
@@ -1189,7 +1190,7 @@ export function createHoneymoonServer({
         return json(response,200,state);
       }
       if (path === '/api/position' && method === 'POST') {
-        const body = await readMovementInput();
+        const body = await readMovementInput(MAX_MOVEMENT_BODY);
         if (body.page !== undefined) {
           // Parse the pose before storing a packet that arrived out of order.
           if (body.pose !== undefined) body.pose=readPose(body.pose);

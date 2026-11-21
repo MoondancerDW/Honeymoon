@@ -241,6 +241,7 @@ test('flight-off and cliff free fall start at speed and accelerate at world grav
         movement.update(position,0,0,false,dt);
         if (++step===1 || step===125) assert.ok(Math.abs(position.y-(start-dropAt(step*dt)))<1e-6);
       } while (!movement.grounded && step<575);
+      assert.ok(step*dt<6,'a 400-block drop takes less than six seconds');
       assert.ok(dropAt((step-1)*dt)<400 && dropAt(step*dt)>=400);
       assert.ok(Math.abs(position.y-1)<.001);
     }

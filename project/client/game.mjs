@@ -28,7 +28,7 @@ import {blockState, jammyUseSound} from '../world/block-interactions.mjs';
 import {seatFor, SEATED_EYE, SEATED_HEIGHT} from '../world/seats.mjs';
 import {extractedModel, isJammyConnectableSeat, placementModelObject} from '../world/extracted-models.mjs';
 import {jammyBenchState} from '../world/jammy-benches.mjs';
-import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,WORLD_GRAVITY,playerBody} from '../world/player-body.mjs';
+import {CRAWL_SPEED,FLIGHT_VERTICAL_MULTIPLIER,HIGH_FLIGHT_Y,WORLD_GRAVITY,playerBody} from '../world/player-body.mjs';
 import {isMicroblockCell, microblockPlacement, partBoxesOverlapBox, publicMicroPart} from '../world/microblocks.mjs';
 import {minecartSeat} from '../world/minecarts.mjs';
 import {boatSeat} from '../world/boats.mjs';
@@ -2662,7 +2662,10 @@ function streamNearby(scenery) {
   function updateArea() {
     const x = Math.floor(position.x / 16), z = Math.floor(position.z / 16);
     view.updateAltitude(position,performance.now());
-    const highOnly=Boolean(view.altitudeOverview?.supported && position.y >= (area?.highOnly ? 291 : 308));
+    const landingLead = .6;
+    const landingAhead = !flying && movement.fall < 0 &&
+      position.y + movement.fall * landingLead - .5 * WORLD_GRAVITY * landingLead ** 2 <= HIGH_FLIGHT_Y;
+    const highOnly=Boolean(view.altitudeOverview?.supported && !landingAhead && position.y >= (area?.highOnly ? 291 : 308));
     const radius = highOnly ? (view.lowDevice?3:5) : view.detailedDistance + 1;
     if (area?.x === x && area.z === z && area.radius === radius && area.highOnly===highOnly) return;
     const forwardX = area ? Math.sign(x - area.x) : 0;

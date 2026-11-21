@@ -6,7 +6,7 @@ import {chromium} from 'playwright-core';
 import {createHoneymoonServer} from '../server/index.mjs';
 import * as geometry from '../world/geometry.mjs';
 import {stackRevision} from '../world/item-text.mjs';
-import {playerBody} from '../world/player-body.mjs';
+import {FREE_FALL_START_SPEED,playerBody,WORLD_GRAVITY} from '../world/player-body.mjs';
 import {tickFromTime} from '../world/world-time.mjs';
 import {voxelBrush,voxelIndex,voxelKey,writeVoxelBrush} from '../world/voxel-chisel.mjs';
 
@@ -436,6 +436,58 @@ try {
     },undefined,{timeout:15_000});
     assert.ok(await visible('#pause-menu'));
     result.checks.push({hoverWhileFlying:flying.position,fallingWhilePaused:falling.position,landed:(await stat()).position});
+  } else if (test==='fast-freefall') {
+    await skipPreload();
+    await start();
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>honeymoon.stats().flying);
+    // This column reaches grass without passing through the imported floating structures.
+    const dropPoint={x:-274.5,y:500,z:-429.5};
+    await hop(dropPoint.x,dropPoint.y,dropPoint.z);
+    await page.waitForFunction(()=>{
+      const {altitude,overviewVisible,movementSync}=honeymoon.stats();
+      return altitude==='high' && overviewVisible && movementSync.status==='ready' &&
+        Math.abs(movementSync.confirmed[1]-500)<.05;
+    },undefined,{timeout:40_000});
+    const before=await stat();
+    await page.evaluate(()=>{
+      const samples=globalThis.freefallSamples=[];
+      const deadline=performance.now()+25_000;
+      function sample(time) {
+        const {flying,grounded,fallSpeed,position:{y},altitude}=honeymoon.stats();
+        if (!flying) samples.push({time,y,speed:-fallSpeed,grounded,altitude});
+        if (time<deadline && (flying || !grounded)) requestAnimationFrame(sample);
+      }
+      requestAnimationFrame(sample);
+    });
+    await page.keyboard.press('KeyF');
+    await page.waitForFunction(()=>{
+      const {position,flying,grounded,movementSync}=honeymoon.stats();
+      return !flying && grounded && position.y<75 &&
+        Math.abs(movementSync.confirmed[1]-position.y)<.02 && movementSync.queued===0;
+    },undefined,{timeout:20_000});
+    const landed=await stat();
+    const samples=await page.evaluate(()=>freefallSamples);
+    const first=samples.at(0), last=samples.at(-1);
+    const slower=samples.find(({speed})=>speed>20);
+    const faster=samples.find(({speed})=>speed>90);
+    assert.ok(first && last?.grounded && slower && faster,JSON.stringify(samples.slice(-5)));
+    const gravity=(faster.speed**2-slower.speed**2)/(2*(slower.y-faster.y));
+    const fallen=before.position.y-landed.position.y;
+    const durationMs=last.time-first.time;
+    const predictedMs=1000*(Math.sqrt(FREE_FALL_START_SPEED**2+2*WORLD_GRAVITY*fallen)-FREE_FALL_START_SPEED)/WORLD_GRAVITY;
+    assert.ok(fallen>420 && Math.abs(landed.position.x-dropPoint.x)<.05 &&
+      Math.abs(landed.position.z-dropPoint.z)<.05);
+    assert.ok(Math.abs(gravity-WORLD_GRAVITY)<.2 && gravity>=20,JSON.stringify({gravity,slower,faster}));
+    assert.ok(durationMs>=predictedMs*.9 && durationMs<predictedMs*1.8,JSON.stringify({durationMs,predictedMs}));
+    const movementErrors=landed.movementSync.errors-before.movementSync.errors;
+    const corrections=landed.movementSync.corrections-before.movementSync.corrections;
+    assert.deepEqual({movementErrors,corrections},{movementErrors:0,corrections:0});
+    await page.waitForFunction(()=>honeymoon.stats().altitude==='ground',undefined,{timeout:25_000});
+    await shot('fast-freefall-ground');
+    result.checks.push({from:before.position,to:landed.position,serverY:landed.movementSync.confirmed[1],
+      gravity,durationMs,predictedMs,movementErrors,corrections,
+      altitudeModes:[...new Set(samples.map(({altitude})=>altitude))]});
   } else if (test==='rounded-logs') {
     await skipPreload();
     await page.route('**/game.mjs',async route=>{
