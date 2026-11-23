@@ -10,6 +10,7 @@ import {withLoggedFluid} from '../world/logged-fluid.mjs';
 import {isRideableMinecart, minecartHit} from '../world/minecarts.mjs';
 import {isRideableBoat,boatHit} from '../world/boats.mjs';
 import {itemFrameHit} from '../world/item-frames.mjs';
+import {isDecoration,paintingHit} from '../world/paintings.mjs';
 import {isChiselMaterial, voxelBox, voxelMaterialAt} from '../world/voxel-chisel.mjs';
 import {chiselMaterialKey, chiselVoxelAtHit} from '../world/chisel-surface.mjs';
 import {JUMP_CHARGE_BONUS,JUMP_CHARGE_HOVER_SECONDS,ponyAbilities} from '../world/pony-abilities.mjs';
@@ -72,28 +73,31 @@ export function cameraClearance(world, origin, direction, distance = CAMERA_OFFS
 export function pickItemFrame(world,origin,direction,block) {
   let target = null, nearest = Math.min(6,block?.length ?? 6);
   const consider = entity => {
-    const length = itemFrameHit(entity,origin,direction,nearest);
+    if (entity.removed || !Array.isArray(entity.position)) return;
+    const painting=entity.type==='Painting';
+    const length=(painting?paintingHit:itemFrameHit)(entity,origin,direction,nearest);
     if (length >= nearest) return;
     nearest = length;
     const [x,y,z] = entity.position.map(Math.floor);
     const [hx,hy,hz] = origin.map((value,index) => value + length * direction[index]);
-    target = {x,y,z,entity:entity.key,length,revision:entity.revision ?? 0,hit:{x:hx,y:hy,z:hz},
+    target = {x,y,z,kind:painting?'painting':'frame',entity:entity.key,length,revision:entity.revision ?? 0,hit:{x:hx,y:hy,z:hz},
       ...(entity.data?.Item && {item:entity.data.Item})};
   };
   const [ox,,oz] = origin;
-  for (let z = Math.floor((oz - 7) / 16); z <= Math.floor((oz + 7) / 16); z++) {
-    for (let x = Math.floor((ox - 7) / 16); x <= Math.floor((ox + 7) / 16); x++) {
+  for (let z = Math.floor((oz - 8) / 16); z <= Math.floor((oz + 8) / 16); z++) {
+    for (let x = Math.floor((ox - 8) / 16); x <= Math.floor((ox + 8) / 16); x++) {
       const source = world.chunks?.get(x + ',' + z);
       if (!source || source.visualOnly) continue;
-      if (!framesByChunk.has(source)) framesByChunk.set(source,(source.entities ?? []).filter(entity => entity.type === 'ItemFrame'));
+      if (!framesByChunk.has(source)) framesByChunk.set(source,(source.entities ?? []).filter(isDecoration));
       for (const entity of framesByChunk.get(source)) {
         if (!world.frames?.has(entity.key)) consider(entity);
       }
     }
   }
   for (const entity of world.frames?.values() ?? []) {
+    if (entity.removed || !Array.isArray(entity.position)) continue;
     const [x,,z] = entity.position;
-    if (Math.abs(x-ox) <= 7 && Math.abs(z-oz) <= 7 && world.hasChunk(x,z)) consider(entity);
+    if (Math.abs(x-ox) <= 8 && Math.abs(z-oz) <= 8 && world.hasChunk(x,z)) consider(entity);
   }
   return target;
 }

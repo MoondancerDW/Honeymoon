@@ -92,6 +92,7 @@ function setPose(player, pose) {
   player.boost = pose.boost === true;
   player.groundSeat = pose.groundSeat === true;
   player.spectator = pose.spectator === true;
+  player.invisible = pose.invisible === true;
   player.avatar.setGhost(player.spectator);
   player.typing = pose.typing === true;
   player.afk = pose.afk === true;
@@ -161,7 +162,7 @@ export class RemotePlayers {
   pick(origin,direction,limit) {
     let selected;
     for (const [id,player] of this.entries) {
-      if (player.spectator||player.death) continue;
+      if (player.spectator||player.death||player.invisible) continue;
       const {height,halfWidth}=playerBody(player.size,player.stance);
       const dx=player.target.x-origin[0],dy=player.target.y+height*.56-origin[1],dz=player.target.z-origin[2];
       const range=dx*direction[0]+dy*direction[1]+dz*direction[2];
@@ -181,7 +182,7 @@ export class RemotePlayers {
       const overlapsCamera = Math.abs(eye.y - target.y - PLAYER.eye) < .75 &&
         Math.hypot(target.x - eye.x, target.z - eye.z) < .4;
       const distance = eye.distanceToSquared(target);
-      object.visible = distance < maxVisibleDistance ** 2 && !overlapsCamera;
+      object.visible = distance < maxVisibleDistance ** 2 && !overlapsCamera && !player.invisible;
       const {x, z} = object.position;
       object.position.lerp(target, mix);
       player.drawnLookYaw += angleBetween(player.drawnLookYaw, player.lookYaw) * mix;

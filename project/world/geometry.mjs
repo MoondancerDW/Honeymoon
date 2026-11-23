@@ -10,6 +10,7 @@ import {campfireMesh} from './campfire-model.mjs';
 import {railShape} from './rail-models.mjs';
 import {creativeBlock} from './creative-blocks.mjs';
 import {carpentryModel} from './carpentry-model.mjs';
+import {pottedPlantKey} from './decorative-blocks.mjs';
 
 export const ATLAS_GRID = 64;
 export const TILE_SIZE = 16;
@@ -902,10 +903,16 @@ function specialShape(id, meta, cell, neighbors) {
     const tile = tiles.cloud + 36 + (meta >= 1 && meta <= 4 ? meta - 1 : 0);
     return [box([0, 0, 0, 1, height, 1], tile)];
   }
-  if (id === 2168) return [
+  if (id === 2168) {
+    const content=cell?.object?.data?.jarContent;
+    return [
     box([3 / 16, 0, 3 / 16, 13 / 16, 14 / 16, 13 / 16], topSides(3742, 3741), {mode: 'cutout'}),
     box([4 / 16, 12 / 16, 4 / 16, 12 / 16, 1, 12 / 16], 3743),
-  ];
+    ...(content==='firefly'?[box([.43,.32,.43,.57,.46,.57],tiles.white,{tint:0xffda4c,emissive:true,solid:false})]:[]),
+    ...(content==='cookie'?[box([.28,.09,.29,.72,.15,.71],tiles.white,{tint:0xbd864f,solid:false}),
+      ...[[.34,.37],[.58,.42],[.51,.57]].map(([x,z])=>box([x,.15,z,x+.07,.156,z+.07],tiles.white,{tint:0x61331d,solid:false}))]:[]),
+    ];
+  }
   if (id === 3000 || id === 3001) return [campfireCollision];
   if (id === 4000) return cross(tiles.flowers + 16 + (meta > 13 ? 0 : meta));
   if (id === 3248 || id >= 4051 && id <= 4066) {
@@ -1195,10 +1202,13 @@ function vanillaShape(id, meta, neighbors) {
       box(CUBE, 49, GLASS),
       box([.1875, .1875, .1875, .8125, .875, .8125], 41),
     ];
-    case 140: return [
-      box([0.3125, 0, 0.3125, 0.6875, 0.375, 0.6875], 186),
-      ...(meta > 0 ? cross(meta === 2 ? 13 : 12, 0.81).map(part => ({ ...part, y0: 0.375 })) : []),
-    ];
+    case 140: {
+      const plant=pottedPlantKey(meta);
+      return [box([.3125,0,.3125,.6875,.375,.6875],186),
+        ...(plant ? shapeFor(plant).map(part=>({...part,solid:false,
+          x0:.25+part.x0*.5,x1:.25+part.x1*.5,z0:.25+part.z0*.5,z1:.25+part.z1*.5,
+          y0:.31+part.y0*.64,y1:.31+part.y1*.64})) : [])];
+    }
     case 145: return [
       turnedBox([0.125, 0, 0, 0.875, 0.25, 1], 215, meta & 1),
       turnedBox([0.25, 0.25, 0.1875, 0.75, 0.625, 0.8125], 215, meta & 1),
@@ -1239,7 +1249,7 @@ const simpleCache = new Map();
 const neighborDependent = new Set([2, 8, 9, 10, 11, 54, 64, 71, 85, 101, 102, 107, 113, 132, 139, 750, 1527, 2802, 2803, 4095,
   ...Array.from({length:24}, (_, i) => 2808 + i),
   ...Object.keys(STAIRS).map(Number), ...wool.map((_, color) => 4035 + color)]);
-const dynamic = new Set([...neighborDependent, 751, 763, 765, 766, 768, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
+const dynamic = new Set([...neighborDependent, 751, 761, 763, 765, 766, 767, 768, 2168, 2240, 2248, 2250, 2252, 2253, 2254, 2255]);
 const chiselMaterialShapes = new Map();
 const jammyCubeTiles = 3880;
 const chiselWater = box(CUBE, tiles.water, {mode:'blend', solid:false, fluid:'water'});

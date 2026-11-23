@@ -4,6 +4,8 @@ const totalsKey='totals';
 const lruIndex='lru';
 const partitionIndex='partition-lru';
 const policyKey='policy';
+const versionsKey='versions';
+const versionsRequestedAtKey='versions-requested-at';
 
 function resultOf(request) {
   return new Promise((resolve,reject)=>{
@@ -45,7 +47,7 @@ function trim(entries,totals,{bytes,count,oldest},partition,retire) {
   });
 }
 
-export function createPersistentCache({name,maxBytes,maxEntries,maxAgeMs,indexedDB,partitionOf,partitions,quotaReliefPartition}) {
+export function createPersistentCache({name,maxBytes,maxEntries,maxAgeMs,indexedDB,partitionOf,partitions,versionOf,quotaReliefPartitions=[]}) {
   const partitioned=Boolean(partitionOf);
   const scopes=partitioned?Object.keys(partitions):[null];
   const defaultLimits={maxBytes,maxEntries,maxAgeMs};
@@ -60,7 +62,7 @@ export function createPersistentCache({name,maxBytes,maxEntries,maxAgeMs,indexed
     const entries=oldVersion===0?db.createObjectStore(entriesStore):transaction.objectStore(entriesStore);
     const meta=oldVersion===0?db.createObjectStore(metaStore):transaction.objectStore(metaStore);
     if (oldVersion===0) entries.createIndex(lruIndex,['accessed','size']);
-    if (!partitioned) return;
+    if (!partitioned || oldVersion>=2) return;
     entries.createIndex(partitionIndex,['partition','accessed','size']);
     if (oldVersion!==1) return;
 
@@ -92,7 +94,9 @@ export function createPersistentCache({name,maxBytes,maxEntries,maxAgeMs,indexed
     const opening=new Promise((resolve,reject)=>{
       const factory=indexedDB===undefined ? globalThis.indexedDB : indexedDB;
       if (!factory) {reject(new Error('IndexedDB unavailable')); return;}
-      const request=factory.open(name,partitioned?2:1);
+      // Old terrain clients do not enforce active asset versions. After upgrade
+      // their opens fall back to the network instead of repopulating obsolete tiles.
+      const request=factory.open(name,versionOf?3:partitioned?2:1);
       let blocked=false;
       request.onupgradeneeded=event=>upgrade(request,event.oldVersion);
       request.onerror=()=>reject(request.error);
@@ -130,12 +134,14 @@ export function createPersistentCache({name,maxBytes,maxEntries,maxAgeMs,indexed
       return result;
     } catch (error) {
       try {transaction.abort();} catch {}
-      await completion.catch(()=>{});
-      throw error;
+      const transactionError=await completion.catch(failure=>failure);
+      throw transactionError?.name==='QuotaExceededError'?transactionError:error;
     }
   }
 
   const readPolicy=async meta=>partitioned?(await resultOf(meta.get(policyKey))??partitions):null;
+  const readVersions=async meta=>versionOf?(await resultOf(meta.get(versionsKey))??{}):{};
+  const isCurrent=(versions,scope,key)=>versions[scope]===undefined || versions[scope]===versionOf(key,scope);
   const limitsFor=(policy,scope)=>scope===null?defaultLimits:policy[scope];
   const readTotals=async(meta,scope)=>await resultOf(meta.get(totalsAt(scope)))??emptyTotals();
   const saveTotals=(meta,scope,totals)=>resultOf(meta.put(totals,totalsAt(scope)));
@@ -166,10 +172,12 @@ export function createPersistentCache({name,maxBytes,maxEntries,maxAgeMs,indexed
     } catch {return null;}
   }
 
-  async function write(key,scope,blob) {
+  async function write(key,scope,blob,requirements) {
     return transact(async(entries,meta)=>{
+      if (versionOf && !isCurrent(await readVersions(meta),scope,key)) return 'obsolete';
       const {maxBytes,maxEntries,maxAgeMs}=limitsFor(await readPolicy(meta),scope);
-      if (blob.size>maxBytes || maxEntries<1) return false;
+      if (Math.max(blob.size,requirements?.bytes??0)>maxBytes ||
+          Math.max(1,requirements?.count??0)>maxEntries) return 'limit';
       const totals=await readTotals(meta,scope);
       const previous=await resultOf(entries.get(key));
       if (previous) {
@@ -184,42 +192,59 @@ export function createPersistentCache({name,maxBytes,maxEntries,maxAgeMs,indexed
       totals.bytes+=blob.size;
       totals.count++;
       await saveTotals(meta,scope,totals);
-      return true;
+      return 'saved';
     });
   }
 
-  async function pruneScopes(affectedScopes,shrink=false,policy,retire={}) {
+  async function pruneScopes(affectedScopes,shrink=false,policy,versions,requestedAt) {
     return transact(async(entries,meta)=>{
+      const previousVersions=versions && await readVersions(meta);
+      if (versions && Number.isFinite(requestedAt)) {
+        const newest=await resultOf(meta.get(versionsRequestedAtKey));
+        // A manifest fetched by an older tab may finish initializing after the new world.
+        if (newest>requestedAt && Object.keys(versions).some(scope=>versions[scope]!==previousVersions[scope])) return false;
+        if (!(newest>=requestedAt)) await resultOf(meta.put(requestedAt,versionsRequestedAtKey));
+      }
       if (policy) await resultOf(meta.put(policy,policyKey));
       const limits=policy??await readPolicy(meta);
+      if (versions) await resultOf(meta.put({...previousVersions,...versions},versionsKey));
       for (const scope of affectedScopes) {
-        const {maxBytes,maxEntries,maxAgeMs}=limitsFor(limits,scope);
+        const {maxBytes,maxEntries,maxAgeMs,preserveOnQuota}=limitsFor(limits,scope);
+        if (shrink && preserveOnQuota) continue;
         const totals=await readTotals(meta,scope);
+        if (versions?.[scope]!==undefined && versions[scope]!==previousVersions[scope]) {
+          await trim(entries,totals,{bytes:Infinity,count:Infinity,oldest:-Infinity},scope,
+            key=>!isCurrent(versions,scope,key));
+        }
         const bytes=shrink?Math.min(maxBytes,Math.floor(totals.bytes*.75)):maxBytes;
-        await trim(entries,totals,{bytes,count:maxEntries,oldest:Date.now()-maxAgeMs},scope,retire[scope]);
+        await trim(entries,totals,{bytes,count:maxEntries,oldest:Date.now()-maxAgeMs},scope);
         await saveTotals(meta,scope,totals);
       }
       return true;
     });
   }
 
+  async function putWithStatus(key,blob,requirements) {
+    const scope=scopeOf(key);
+    if (!(blob instanceof Blob) || !scopes.includes(scope)) return 'storage';
+    try {
+      return await write(key,scope,blob,requirements);
+    } catch (error) {
+      if (error?.name!=='QuotaExceededError') return 'storage';
+      try {
+        // Commit the eviction separately so disk space is available to the retry.
+        await pruneScopes([...new Set([...quotaReliefPartitions,scope])],true);
+        return await write(key,scope,blob,requirements);
+      } catch (failure) {
+        return failure?.name==='QuotaExceededError'?'quota':'storage';
+      }
+    }
+  }
+
   return {
     get,
-    async put(key,blob) {
-      const scope=scopeOf(key);
-      if (!(blob instanceof Blob) || !scopes.includes(scope)) return false;
-      try {
-        return await write(key,scope,blob);
-      } catch (error) {
-        if (error?.name!=='QuotaExceededError') return false;
-        try {
-          // Commit the eviction separately so disk space is available to the retry.
-          const affected=quotaReliefPartition && quotaReliefPartition!==scope?[quotaReliefPartition,scope]:[scope];
-          await pruneScopes(affected,true);
-          return await write(key,scope,blob);
-        } catch {return false;}
-      }
-    },
+    async put(key,blob) {return await putWithStatus(key,blob)==='saved';},
+    putWithStatus,
     async delete(key) {
       try {
         return await transact(async(entries,meta)=>{
@@ -234,10 +259,14 @@ export function createPersistentCache({name,maxBytes,maxEntries,maxAgeMs,indexed
       try {return await pruneScopes(scopes);}
       catch {return false;}
     },
-    async configure(policy,retire) {
-      if (!partitioned) return false;
-      try {return await pruneScopes(scopes,false,policy,retire);}
-      catch {return false;}
+    async configure(policy,versions,requestedAt) {
+      if (!partitioned) return 'storage';
+      try {
+        const applied=await pruneScopes(scopes,false,policy,versionOf?versions:undefined,requestedAt);
+        return applied?'configured':'unavailable';
+      } catch (error) {
+        return error?.name==='QuotaExceededError'?'quota':'storage';
+      }
     },
     async missing(keys) {
       try {

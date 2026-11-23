@@ -13,7 +13,8 @@ import { createInventory, inventoryInput, isInventoryAction } from './inventory.
 import {offhandAppearance} from '../world/item-appearance.mjs';
 import { containerActions, containerInput, createContainers } from './containers.mjs';
 import { withoutContainerContents } from '../world/containers.mjs';
-import { basicRecipes,classifyTool,harvestRule } from '../world/survival-tools.mjs';
+import { basicRecipes,classifyTool,harvestRule,hoedCell,meleeDamage } from '../world/survival-tools.mjs';
+import {createHeldItems} from './held-items.mjs';
 import { createBoats } from './boats.mjs';
 import { createItemFrames } from './item-frames.mjs';
 import { guidedMicroblock, isMicroblockCell, isMicroPart, microblockAddition, microblockKey, microblockPattern,
@@ -39,6 +40,11 @@ import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxe
 import {JUMP_CHARGE_BONUS,JUMP_CHARGE_LIMIT,JUMP_CHARGE_RECHARGE_MS,MAGIC_TELEPORT_COOLDOWN_MS,MAGIC_TELEPORT_HORIZONTAL,
   MAGIC_TELEPORT_VERTICAL,ponyAbilities} from '../world/pony-abilities.mjs';
 import {grassBlock, isTreeLog, plainDirt} from '../world/tree-logs.mjs';
+import {cakeBlock, cakeItemKey, decorationContents, flowerPot, flowerPotItemKey, glassJar, jarInsert,
+  pottedPlantMeta, workbenchBlock} from '../world/decorative-blocks.mjs';
+import {orientFurnitureObject, orientPlacedBlock, placementHeading} from '../world/placement-heading.mjs';
+import {craftingTableRecipe,workbenchRecipes} from '../world/workbench-recipes.mjs';
+import {paintingItemKey} from '../world/paintings.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
@@ -103,7 +109,7 @@ function normalizeAction(body) {
     if (body.creativeItem !== vehiclePlacements.get(body.type)) throw new RequestError(400,'unknown_cell_type');
     input.creativeItem = body.creativeItem;
   } else if (body.type === 'place_frame' || body.type === 'frame_item') {
-    if (body.type === 'place_frame' && ![CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY].includes(body.creativeItem) ||
+    if (body.type === 'place_frame' && ![CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,paintingItemKey].includes(body.creativeItem) ||
         body.creativeItem !== undefined && !/^creative:\d{1,5}:\d{1,5}$/.test(body.creativeItem)) {
       throw new RequestError(400,'unknown_cell_type');
     }
@@ -113,8 +119,8 @@ function normalizeAction(body) {
       input.cell = body.cell;
     }
   } else if (body.creativeItem !== undefined) {
-    const sign = body.type === 'place' && body.creativeItem === signItemKey;
-    if (!sign && (!['place','place_part'].includes(body.type) || typeof body.creativeItem !== 'string' ||
+    const placeableItem = body.type === 'place' && [signItemKey,cakeItemKey,flowerPotItemKey].includes(body.creativeItem);
+    if (!placeableItem && (!['place','place_part'].includes(body.type) || typeof body.creativeItem !== 'string' ||
         !/^creative:(?:750|753|768):\d{1,5}$/.test(body.creativeItem))) throw new RequestError(400, 'unknown_cell_type');
     input.creativeItem = body.creativeItem;
   }
@@ -235,6 +241,10 @@ export function newCreativeObject(key, position, input, item) {
   const [id, meta] = blockState(key);
   let type = jammyAppliance(id, meta) ? 'JammyAppliance' : id === 2255 ? 'WeaponCaseTile' : id === 23 ? 'Trap' : null;
   let data = {};
+  if (id===glassJar) {
+    type='FireflyJar';
+    data={jarContent:'empty'};
+  }
   const face = input.against && signalSides.findIndex(offset => axes.every((axis,i) => position[i] - input.against[axis] === offset[i]));
   const mount = face >= 0 ? face ^ 1 : 0;
   if (id === 750 && [1,2,3,5,12].includes(meta)) {
@@ -411,6 +421,13 @@ export function createGame(base, store, geometry, {
   };
   const physical = physics(base, geometry, cellAt, models);
   const inventory = createInventory(store, creativeBlocks, creativeItems,{canOffhand:player=>abilitiesFor(player).horn});
+  const heldItems=survival && createHeldItems({inventory,survival,clock,
+    eye(player) {
+      const position=playerSight(player);
+      return [position.x,position.y+(position.eye??PLAYER.eye),position.z];
+    },
+    body:player=>({id:player,...playerAt(player),...bodyFor(player)}),visible:physical.visiblePoint,
+    canUse:checkHeldAction,damage:damagePlayer,changed:survivalChanged});
   const containers=createContainers({store,inventory,getCell:getCurrent,getOriginalCell:base.getCell,creativeBlocks,creativeItems});
   const drops = createDroppedItems({base, store, clock, collides:physical.collides, visible:physical.visiblePoint,
     liquidAt:(x,y,z)=>fluidAt(cellAt,x,y,z,models),
@@ -612,10 +629,11 @@ export function createGame(base, store, geometry, {
     const armor = state.equipment;
     const equipment = armor?.some(Boolean) ? armor : undefined;
     const offhand = offhandPose(player,state);
-    if (spectators.has(player)) return {...pose, equipment, offhand, spectator:true, stance:'stand'};
+    const invisible=survival?.effect(player,'invisibility') ? true:undefined;
+    if (spectators.has(player)) return {...pose, equipment, offhand, invisible, spectator:true, stance:'stand'};
     const seat = publicSeat(player);
-    if (!seat) return {...pose, equipment, offhand, stance:stanceFor(player), ...(pose?.motion === 'sit' && {motion:'idle'})};
-    return {...pose, equipment, offhand, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit', groundSeat:seat.kind === 'ground',
+    if (!seat) return {...pose, equipment, offhand, invisible, stance:stanceFor(player), ...(pose?.motion === 'sit' && {motion:'idle'})};
+    return {...pose, equipment, offhand,invisible, yaw:seat.yaw, lookYaw:pose?.yaw ?? seat.yaw, pitch:pose?.pitch ?? 0, motion:'sit', groundSeat:seat.kind === 'ground',
       stance:seat.bed ? 'crawl' : 'stand', boost:false};
   }
 
@@ -888,9 +906,9 @@ export function createGame(base, store, geometry, {
   function creativePlacement(input, current, player) {
     const {x, y, z} = current;
     const [id, meta] = blockState(input.cell);
-    if (!pairedBlocks.has(id)) return {cell:input.cell};
+    if (!pairedBlocks.has(id)) return {cell:geometry.isSofa?.(input.cell)?input.cell:orientPlacedBlock(input.cell,input,current,models)};
     const isBed = id === 26;
-    const orientation = !isBed && input.yaw !== undefined ? (1 - Math.round(input.yaw * 2 / Math.PI)) & 3 : meta & 3;
+    const orientation = input.yaw === undefined ? meta&3 : isBed ? (2-placementHeading(input.yaw))&3 : (1-placementHeading(input.yaw))&3;
     const [dx, dz] = bedDirections[orientation];
     const second = {x:x + (isBed ? dx : 0), y:y + (isBed ? 0 : 1), z:z + (isBed ? dz : 0)};
     if (!base.inBounds(second.x, second.y, second.z) || reserved(second.x, second.y, second.z) ||
@@ -906,6 +924,25 @@ export function createGame(base, store, geometry, {
     if (playerOverlaps(x, y, z, cell, player, atOther) ||
         playerOverlaps(second.x, second.y, second.z, other, player, atOrigin)) throw new RequestError(409, 'occupied');
     return {cell, companion:{...second, cell:other, object:null}, paired:true};
+  }
+
+  function joinChest(current,cell) {
+    const [id,meta]=blockState(cell);
+    if (id!==54) return {cell,adjusted:[]};
+    const {x,y,z}=current;
+    const adjacent=bedDirections.map(([dx,dz])=>getCurrent(x+dx,y,z+dz)).filter(near=>blockState(near)[0]===54);
+    if (!adjacent.length) return {cell,adjusted:[]};
+    const [partner]=adjacent;
+    if (adjacent.length>1 || bedDirections.some(([dx,dz])=>blockState(getCurrent(partner.x+dx,y,partner.z+dz))[0]===54)) {
+      throw new RequestError(409,'chest_already_joined');
+    }
+    if (reserved(partner.x,y,partner.z) || spawnProtected(partner.x,y,partner.z) ||
+        !allowRemoval && !store.getEditOwner(partner.x,y,partner.z)) throw new RequestError(403,'protected_cell');
+    const faces=partner.x!==x?[2,3]:[4,5];
+    const previous=blockState(partner)[1];
+    const facing=faces.includes(previous)?previous:faces.includes(meta)?meta:faces[1];
+    cell=blockKey(id,facing);
+    return {cell,adjusted:previous===facing?[]:[{...partner,cell,moveOwner:store.getEditOwner(partner.x,y,partner.z)}]};
   }
 
   function controlPlacement(input) {
@@ -1322,7 +1359,11 @@ export function createGame(base, store, geometry, {
         stack = heldStack(input.cell,input.creativeItem,player);
         if (!stack) throw new RequestError(400,'unknown_cell_type');
       }
-      return frames.edit(input,playerSight(player),stack);
+      const {removedStack,...output}=frames.edit(input,playerSight(player),stack);
+      if (removedStack && survival?.enabled && survival.isGame(player)) {
+        transport.containerDrops=drops.prepareScatter([removedStack],[x,y,z]);
+      }
+      return output;
     }
     if (vehicleRemovals.has(type)) {
       const ship = type === 'remove_boat';
@@ -1343,6 +1384,7 @@ export function createGame(base, store, geometry, {
     }
     if (type === 'place_frame') {
       const frame = creativeItems.get(input.creativeItem);
+      if (input.creativeItem===paintingItemKey && frame) return frames.placePainting(input,playerSight(player));
       if (frame?.kind !== 'item-frame') throw new RequestError(400,'unknown_cell_type');
       return frames.place(input,playerSight(player),frame.invisible);
     }
@@ -1400,28 +1442,33 @@ export function createGame(base, store, geometry, {
         if (playerOverlaps(x,y,z,{key:control,object},player)) throw new RequestError(409,'occupied');
         return writeCell(player,current,control,object);
       }
-      const actual = input.creative ? creativePlacement(input, current, player) : input;
+      const actual = input.creative || input.yaw!==undefined ? creativePlacement(input,current,player) : {cell:input.cell};
+      const chest=joinChest(current,actual.cell);
+      actual.cell=chest.cell;
       const [actualId] = blockState(actual.cell);
       const isGroundSprite = geometry.shapeFor?.(actual.cell,neighbors).some(box=>box.kind === 'cross');
       const plant = plantBlock.ground.includes(actualId) || plantBlock.aquatic.includes(actualId) || isGroundSprite && actualId > 255;
       const floor = faceSupports(x,y-1,z,1,.35);
+      const jarCeiling=actualId===glassJar && input.against?.y===y+1 && faceSupports(x,y+1,z,0,.35);
       const supportiveAnchor = input.against && signalSides.findIndex(offset => axes.every((axis,i)=>
         input[axis] - input.against[axis] === offset[i]));
       const backedLiquid = floor || allowRemoval && supportiveAnchor >= 0 && input.against &&
         faceSupports(input.against.x,input.against.y,input.against.z,supportiveAnchor,.35);
-      if (plant && !intoLiquid && !floor && ![8,9,18,60,243,4095].includes(blockState(getCurrent(x,y-1,z))[0]) ||
+      if ([cakeBlock,flowerPot,glassJar].includes(actualId) && !floor && !jarCeiling ||
+          plant && !intoLiquid && !floor && ![8,9,18,60,243,4095].includes(blockState(getCurrent(x,y-1,z))[0]) ||
           ((!allowRemoval && isGroundSprite) || actualId === 51) && !floor || liquidKind(actual.cell) && !backedLiquid) {
         throw new RequestError(409,'missing_support');
       }
       const copied = input.creative ? null : clipboardFor(player, actual.cell);
       const copiedObject = input.creative || item ? newCreativeObject(actual.cell, [x, y, z], input, item) :
         copied?.cell === actual.cell ? withoutContainerContents(actual.cell,copied.object) : null;
+      const orientedObject=orientFurnitureObject(actual.cell,copiedObject,[x,y,z],input,models);
       const object = geometry.placementObject
-        ? geometry.placementObject(actual.cell, copiedObject, [x, y, z], input.turns)
-        : copiedObject ? { ...copiedObject, position: [x, y, z], key: `tile:${x}:${y}:${z}` } : null;
+        ? geometry.placementObject(actual.cell, orientedObject, [x, y, z], input.turns, input.yaw)
+        : orientedObject ? { ...orientedObject, position: [x, y, z], key: `tile:${x}:${y}:${z}` } : null;
       const parts = base.manifest.compositions?.[actual.cell]?.parts;
       if (!actual.paired && playerOverlaps(x, y, z, {key:actual.cell, object, parts}, player)) throw new RequestError(409, 'occupied');
-      return writeCell(player, current, actual.cell, object, actual.companion, [], intoLiquid ? fluid : undefined);
+      return writeCell(player, current, actual.cell, object, actual.companion, chest.adjusted, intoLiquid ? fluid : undefined);
     }
 
     if (type === 'remove' && reserved(x, y, z)) throw new RequestError(403, 'protected_cell');
@@ -1448,6 +1495,8 @@ export function createGame(base, store, geometry, {
       return writePlan({}, {cells:[change]});
     }
     if (type === 'interact') {
+      const decoration=interactDecoration(player,current,input,transport);
+      if (decoration) return decoration;
       for (const module of mechanics) {
         const plan = module.prepareInteraction?.(moduleContext(module,player,{x,y,z,current,input,
           stack:heldStack(input.heldCell,input.heldItem,player)}));
@@ -1462,7 +1511,7 @@ export function createGame(base, store, geometry, {
       store.putClipboard(player, { cell: current.cell, object });
       return { worldRevision: store.worldRevision(), changes: [], effects: [], cell: current.cell };
     }
-    const storedStacks = containers.contents(player,current);
+    const storedStacks = [...containers.contents(player,current),...[decorationContents(current)].filter(Boolean)];
     if (type === 'remove' && current.fluid) {
       const replacement = writeCell(player,current,liquidCell(current.fluid),null);
       transport.containerDrops = drops.prepareScatter(storedStacks,[x,y,z]);
@@ -1517,17 +1566,57 @@ export function createGame(base, store, geometry, {
     return {...output,inventory:next};
   }
 
-  function craft(player,id) {
+  function interactDecoration(player,current,input,transport) {
+    if (input.sneaking) return;
+    const [id,meta]=blockState(current);
+    if (![cakeBlock,flowerPot,glassJar].includes(id)) return;
+    const {x,y,z}=current;
+    const living=survival?.enabled && survival.isGame(player);
+    if (reserved(x,y,z) || spawnProtected(x,y,z)) throw new RequestError(403,'protected_cell');
+    if (id===cakeBlock) {
+      const state=living && survival.heal(player,2);
+      if (living && !state) throw new RequestError(409,'full_health');
+      const output=writeCell(player,current,meta>=5?null:blockKey(id,meta+1),null);
+      if (state) transport.survival=state;
+      return output;
+    }
+    const selected=inventory.selected(player);
+    const inside=decorationContents(current);
+    const content=id===flowerPot?pottedPlantMeta(selected):jarInsert(selected);
+    if (selected && (!content || inside)) throw new RequestError(409,inside?'decoration_occupied':'invalid_decoration');
+    if (!selected && !inside) throw new RequestError(409,'no_interaction');
+    const cell=id===flowerPot?blockKey(id,content||0):current.cell;
+    const object=id===glassJar ? {type:'FireflyJar',key:`tile:${x}:${y}:${z}`,position:[x,y,z],
+      data:{jarContent:content??'empty'}} : current.object;
+    const result=writePlan({}, {cells:[{...current,cell,object,moveOwner:store.getEditOwner(x,y,z)}],
+      effects:[{type:'sound',sound:'block.place',cell,position:[x,y,z]}]});
+    if (content && living) return {...result,inventory:inventory.take(player,{count:1}).inventory};
+    if (inside) transport.containerDrops=drops.prepareScatter([inside],[x,y,z]);
+    return result;
+  }
+
+  function craft(player,id,station) {
     if (survival?.dead(player)) throw new RequestError(409,'player_dead');
-    const recipe=basicRecipes.find(entry=>entry.id===id);
+    if (spectators.has(player)) throw new RequestError(403,'spectator_action');
+    const recipe=[craftingTableRecipe,...basicRecipes,...workbenchRecipes].find(entry=>entry.id===id);
     if (!recipe) throw new RequestError(400,'invalid_recipe');
+    if (station!==undefined) {
+      const {x,y,z}=point(station,true);
+      const table=getCurrent(x,y,z);
+      if (!base.inBounds(x,y,z) || blockState(table)[0]!==workbenchBlock) throw new RequestError(409,'workbench_required');
+      if (station.expectedRevision!==table.revision) throw new RequestError(409,'stale_cell');
+      const hit=station.hit===undefined?undefined:point(station.hit);
+      if (!physical.visible(playerSight(player),x,y,z,hit)) throw new RequestError(403,'workbench_too_far');
+    } else if (recipe.station==='workbench') throw new RequestError(409,'workbench_required');
     return store.atomic(()=>{
       const state=inventory.read(player);
       for (const ingredient of recipe.ingredients) {
         let need=ingredient.count;
         for (let slot=0;slot<state.slots.length&&need;slot++) {
           const stack=state.slots[slot];
-          if (!stack||(ingredient.key ? stack.key!==ingredient.key : blockState(stack.cell??stack.key)[0]!==ingredient.block)) continue;
+          const [block,meta]=blockState(stack?.cell??stack?.key);
+          if (!stack || (ingredient.key ? stack.key!==ingredient.key :
+            block!==ingredient.block || ingredient.meta!==undefined && ingredient.meta!==meta)) continue;
           const count=Math.min(need,stack.count);
           need-=count;
           state.slots[slot]=count===stack.count ? null : {...stack,count:stack.count-count};
@@ -1537,6 +1626,9 @@ export function createGame(base, store, geometry, {
       const block=recipe.output.startsWith('legacy:');
       const stack={key:recipe.output,count:recipe.count,...(block&&{cell:recipe.output})};
       if (inventory.insert(state,stack)) throw new RequestError(409,'inventory_full');
+      for (const returned of recipe.returns??[]) {
+        if (inventory.insert(state,returned)) throw new RequestError(409,'inventory_full');
+      }
       return inventory.replace(player,state);
     });
   }
@@ -1619,6 +1711,36 @@ export function createGame(base, store, geometry, {
     return state;
   }
 
+  function checkHeldAction(player) {
+    if (survival?.dead(player)) throw new RequestError(409,'player_dead');
+    if (spectators.has(player)) throw new RequestError(403,'spectator_action');
+  }
+
+  function heldDamage(player) {
+    const selected=inventory.selected(player);
+    return Math.max(0,meleeDamage(selected,creativeItems.get(selected?.key))+(survival?.meleeModifier(player)??0));
+  }
+
+  function heldUse(player,input,onlinePlayers,ranged) {
+    chargeAction(player,clock());
+    if (input?.type!=='hoe') return heldItems.use(player,input,onlinePlayers,ranged);
+    checkHeldAction(player);
+    const selected=inventory.selected(player);
+    if (classifyTool(selected,creativeItems.get(selected?.key)).tool!=='hoe') throw new RequestError(409,'held_item_changed');
+    const {x,y,z}=input;
+    if (![x,y,z].every(Number.isSafeInteger)||!base.inBounds(x,y,z)) throw new RequestError(400,'invalid_coordinates');
+    if (!physical.visible(playerSight(player),x,y,z)) throw new RequestError(403,'outside_reach');
+    if (reserved(x,y,z)||!allowRemoval&&spawnProtected(x,y,z)) throw new RequestError(403,'protected_cell');
+    const current=getCurrent(x,y,z), above=getCurrent(x,y+1,z);
+    const next=hoedCell(current,above);
+    if (!next || current.parts?.length || current.voxels || current.fluid || above.parts?.length || above.voxels || above.fluid) {
+      throw new RequestError(409,'cannot_till');
+    }
+    const result=store.atomic(()=>writeCell(player,current,next,null));
+    if (result.changes.length) refreshMechanicCells();
+    return result;
+  }
+
   function clipboardFor(player, cell) {
     const selected = inventory.selected(player);
     if (selected?.copied && (cell ? selected.cell === cell : selected.part)) return selected;
@@ -1696,6 +1818,7 @@ export function createGame(base, store, geometry, {
       boats.accept(transport.placedBoat,result.output.removedBoat);
       drops.accept(transport.drop,transport.removedDrop);
       for (const drop of transport.containerDrops ?? []) drops.accept(drop);
+      if (transport.survival) survivalChanged?.(player,transport.survival);
     }
     return result;
   }
@@ -1878,14 +2001,15 @@ export function createGame(base, store, geometry, {
     // from the saved race/mode, while the preference controls what a reconnect resumes.
     const flight = body.pose?.motion === 'fly' && stanceFor(player) === 'stand' && (observing || flightAllowed(player));
     const elapsed = Math.min(sequenced && !groundSeat ? 1.5 : .65, (now - (old?.updated ?? now - 100)) / 1000);
-    const limit = sequenced ? RUN_SPEED * 1.5 : POSITION_BATCH_LIMIT + .4;
+    const mobility=observing?1:survival?.movementScale(player)??1;
+    const limit = (sequenced ? RUN_SPEED * 1.5 : POSITION_BATCH_LIMIT + .4)*Math.max(1,mobility);
     const gravityDrop = sequenced && !flight && !groundSeat;
     const dropBudget = gravityDrop ? Math.min(POSITION_FLIGHT_DROP_LIMIT + maximumFallSpeed * 1.5,
       (old?.fallBudget ?? POSITION_FLIGHT_DROP_LIMIT) + elapsed * maximumFallSpeed) : POSITION_FLIGHT_DROP_LIMIT;
     const seatedLimit = .65 * CRAWL_SPEED + .14;
     const budget = groundSeat ? Math.min(seatedLimit,Math.min(sequenced ? seatedLimit : .14,old?.budget ?? 0) + elapsed * CRAWL_SPEED) :
-      Math.min(limit, (old?.budget ?? 1) + elapsed * RUN_SPEED);
-    const groundRate=GROUND_SPRINT_SPEED*race.sprintMultiplier+.35;
+      Math.min(limit, (old?.budget ?? 1) + elapsed * RUN_SPEED * Math.max(1,mobility));
+    const groundRate=GROUND_SPRINT_SPEED*race.sprintMultiplier*mobility+.35;
     const groundBudget=Math.min(groundRate*1.5,(old?.groundBudget??.75)+elapsed*groundRate);
     const hasTrail = body.trail !== undefined || body.from !== undefined;
     const reject = () => {
@@ -2145,6 +2269,7 @@ export function createGame(base, store, geometry, {
         selected,offhand:null});
     },
     craft,
+    heldUse,heldDamage,
     damageFromNpc:(player,amount)=>damagePlayer(player,amount),
     healFromNpc(player) {
       const state=survival?.enabled&&survival.heal(player);
@@ -2159,7 +2284,7 @@ export function createGame(base, store, geometry, {
       if (Math.hypot(...target.map((coordinate,index)=>coordinate-origin[index]))>4.2||!physical.visiblePoint(origin,target)) {
         throw new RequestError(403,'outside_reach');
       }
-      if (survival.canStrike(attacker)) return damagePlayer(defender,1);
+      if (survival.canStrike(attacker)) return damagePlayer(defender,heldDamage(attacker));
     },
     position,
     movementChannel,

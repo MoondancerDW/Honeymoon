@@ -3,6 +3,7 @@ import {chunkKey, sectionKey, json} from './world-data.mjs';
 import {celestialAngle, sunlightAt, writeLightmap} from './lighting.mjs';
 import {CHISEL_FANTASY} from '../world/connected-textures.mjs';
 import {itemFrameModel} from '../world/item-frames.mjs';
+import {isDecoration,paintingMount} from '../world/paintings.mjs';
 import {isRideableMinecart, minecartQuads, minecartRotation, minecartTilt} from '../world/minecarts.mjs';
 import {boatHeading,isRideableBoat} from '../world/boats.mjs';
 import {boatModel} from '../world/boat-model.mjs';
@@ -676,7 +677,7 @@ export class Display {
     this.localAvatar.animate({time:now / 1000, dt, speed, pitch:pose.pitch, motion:pose.motion, stance:pose.stance, boost:pose.boost,
       yawOffset:facing.yawOffset, forward:facing.forward, strafe:facing.strafe,
       position, groundSeat:pose.groundSeat || seat?.kind === 'ground', swing:pose.swing, held:pose.held, offhand:pose.offhand,
-      equipment:pose.equipment, itemAssets:this.heldItemAssets(), emote:pose.emote});
+      equipment:pose.equipment, itemAssets:this.heldItemAssets(), emote:pose.emote,bowTension:pose.bowTension});
     this.localAvatar.ragdoll(death?.cause==='lava'?null:death,dt);
     const ash=this.localAvatar.lavaDeath(death,now);
     if (ash) this.burnPlayer(ash,object.position,now);
@@ -763,7 +764,7 @@ export class Display {
           object.userData.vehicleKey = entity.key;
           object.visible = !this.world.minecarts.has(entity.key) && !this.world.boats.has(entity.key);
           this.importedVehicles.set(entity.key,object);
-        } else if (entity.type === 'ItemFrame') {
+        } else if (isDecoration(entity)) {
           object.userData.frameKey = entity.key;
           object.visible = !this.world.frames?.has(entity.key);
           this.importedFrames.set(entity.key,object);
@@ -1147,10 +1148,9 @@ export class Display {
     if (isRideableMinecart(entity)) return this.makeMinecart(entity);
     if (isRideableBoat(entity)) return this.makeBoat(entity);
     if (!this.paint || entity.type !== 'Painting') return;
-    const art = paintings[entity.data.Motive];
-    const dir = entity.data.Dir ?? entity.data.Direction;
-    if (!art || !Number.isInteger(dir) || !Array.isArray(entity.position)) return;
-    const [u, v, w, h] = art;
+    const mount=paintingMount(entity);
+    if (!mount) return;
+    const [u, v, w, h] = mount.art;
     const tex = this.paint.clone();
     tex.repeat.set(w / 256, h / 256);
     tex.offset.set(u / 256, 1 - (v + h) / 256);
@@ -1165,7 +1165,7 @@ export class Display {
     mesh.userData.painting = true;
     this.trackEntityLight(mesh, position);
     mesh.position.set(...entity.position);
-    mesh.rotation.y = [0, Math.PI / 2, Math.PI, -Math.PI / 2][dir & 3];
+    mesh.rotation.y = mount.rotationY;
     return mesh;
   }
 
@@ -1267,13 +1267,14 @@ export class Display {
     for (const [key,original] of this.importedFrames) original.visible = !frames.has(key);
     for (const [key,group] of this.editedFrames) {
       const frame = frames.get(key);
-      if (frame?.revision === group.userData.frameRevision && this.world.hasChunk(frame.position[0],frame.position[2])) continue;
+      if (frame && !frame.removed && frame.revision === group.userData.frameRevision &&
+          this.world.hasChunk(frame.position[0],frame.position[2])) continue;
       this.discardGroup(group);
       this.editedFrames.delete(key);
     }
     for (const [key,frame] of frames) {
-      if (this.editedFrames.has(key) || !this.world.hasChunk(frame.position[0],frame.position[2])) continue;
-      const group = this.makeItemFrame(frame);
+      if (frame.removed || this.editedFrames.has(key) || !this.world.hasChunk(frame.position[0],frame.position[2])) continue;
+      const group = this.makeEntity(frame);
       if (!group) continue;
       group.userData.frameRevision = frame.revision;
       this.editedFrames.set(key,group);
@@ -1284,7 +1285,7 @@ export class Display {
 
   breakBlock(effect) {
     this.blockDebris ??= new BlockDebris(this.scene,this.world);
-    this.blockDebris.add(effect,this.materials?.cutout,this.atlasRows,performance.now());
+    return this.blockDebris.add(effect,this.materials?.cutout,this.atlasRows,performance.now());
   }
 
   burnPlayer(parts,center,now) {
@@ -1942,13 +1943,3 @@ function createSky() {
   mesh.renderOrder = 1000;
   return mesh;
 }
-
-const paintings = {
-  Kebab:[0,0,16,16], Aztec:[16,0,16,16], Alban:[32,0,16,16], Aztec2:[48,0,16,16],
-  Bomb:[64,0,16,16], Plant:[80,0,16,16], Wasteland:[96,0,16,16], Pool:[0,32,32,16],
-  Courbet:[32,32,32,16], Sea:[64,32,32,16], Sunset:[96,32,32,16], Creebet:[128,32,32,16],
-  Wanderer:[0,64,16,32], Graham:[16,64,16,32], Match:[0,128,32,32], Bust:[32,128,32,32],
-  Stage:[64,128,32,32], Void:[96,128,32,32], SkullAndRoses:[128,128,32,32],
-  Wither:[160,128,32,32], Fighters:[0,96,64,32], Pointer:[0,192,64,64],
-  Pigscene:[64,192,64,64], BurningSkull:[128,192,64,64], Skeleton:[192,64,64,48], DonkeyKong:[192,112,64,48]
-};

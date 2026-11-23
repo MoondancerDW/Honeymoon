@@ -321,7 +321,7 @@ export function createHoneymoonServer({
   const testNpcSource=testRange ? createTestRangeNpc(base) : undefined;
   const lod = !testRange && base.manifest.chunkPalettes ? loadLodAssets(generated,base.hash) : null;
   const vista = lod ? loadVistaAssets(generated) : null;
-  const terrainPreload = !singlePlayer && createTerrainPreload(lod,vista);
+  const terrainPreload = !singlePlayer && createTerrainPreload(lod,vista,project);
   const publicWorld = base.publicManifest ?? base.manifest;
   const chunkCacheVersion = createHash('sha256').update(JSON.stringify([
     CHUNK_CACHE_FORMAT, base.hash, publicWorld.fullChunks?.hash,
@@ -538,7 +538,8 @@ export function createHoneymoonServer({
     const {flight,flightAllowed}=game.abilityState(player);
     sendSocial('game-mode',{...state,admin:npcs.isAdmin(player),flight,flightAllowed},id=>id===player);
     const position=presence.onlinePosition(player);
-    if (position) presence.update(player,game.session(player).position,{death:survival.avatarDeath(player)});
+    if (position) presence.update(player,game.session(player).position,{death:survival.avatarDeath(player),
+      invisible:Boolean(state.effects?.invisibility)});
     if (state.death && !game.isSpectator(player)) chat.playerDeath(profileFor(player),state.death.cause,player);
   }
 
@@ -851,9 +852,15 @@ export function createHoneymoonServer({
         return json(response,200,legacyRoute?{...body,editor:true}:body,token?{'Set-Cookie':accessCookie(token,requestSecure)}:{});
       }
       if (!player) throw new RequestError(401, 'session_required');
+      if (terrainPreload && path==='/api/terrain-preload/plan' && method==='GET') {
+        requireSameOrigin(request,requestSecure,requestOrigin);
+        const plan=await terrainPreload.plan();
+        if (!response.destroyed) return json(response,200,plan,{'Vary':'Cookie'});
+        return;
+      }
       if (terrainPreload && path==='/api/terrain-preload' && method==='GET') {
         requireSameOrigin(request,requestSecure,requestOrigin);
-        return terrainPreload(response,url.searchParams,player);
+        return terrainPreload.sendPacket(response,url.searchParams,player);
       }
       if (path==='/api/altitude-music' && (method==='GET' || method==='HEAD')) {
         requireSameOrigin(request,requestSecure,requestOrigin);
@@ -1060,10 +1067,26 @@ export function createHoneymoonServer({
         if (!defender) throw new RequestError(404,'player_missing');
         return json(response,200,{hit:Boolean(game.hitPlayer(player,defender))});
       }
-      if (path==='/api/craft' && method==='POST' && survival.enabled) {
-        const {recipe}=await readInput();
+      if (path==='/api/held-use' && method==='POST' && survival.enabled) {
+        const input=await readInput();
         if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
-        return json(response,200,{inventory:game.craft(player,recipe)});
+        const online=[...new Set([...streams].map(stream=>stream.player))].filter(id=>!game.isSpectator(id) && presence.onlinePosition(id));
+        const output=game.heldUse(player,input,online,{targets:()=>npcs.projectileTargets(player),
+          hit:(id,damage)=>npcs.projectileHit(player,id,damage)});
+        if (output.changes?.length) broadcast(player,output);
+        if (output.projectile) {
+          const [x,y,z]=output.projectile.points[0];
+          sendSocial('item-flight',output.projectile,id=>{
+            const position=presence.onlinePosition(id);
+            return id!==player && position && Math.hypot(position.x-x,position.y-y,position.z-z)<128;
+          });
+        }
+        return json(response,200,output);
+      }
+      if (path==='/api/craft' && method==='POST' && survival.enabled) {
+        const {recipe,station}=await readInput();
+        if (!presence.onlineProfile(player)) throw new RequestError(409,'not_online');
+        return json(response,200,{inventory:game.craft(player,recipe,station)});
       }
       if (path === '/api/chat' && method === 'POST') {
         const body = await readInput(MAX_CHAT_BODY);

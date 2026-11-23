@@ -37,5 +37,5 @@ export function renderInventoryPreview(canvas,equipment,skin) {
     preview.lastSkin = skin;
     void avatar.setSkin(skin).then(draw);
   }
-  if (equipment?.some(Boolean)) void equipmentTextureReady().then(draw);
+  if (equipment?.some(Boolean)) void equipmentTextureReady(equipment).then(draw);
 }

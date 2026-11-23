@@ -70,13 +70,14 @@ export function createPresence({store, profileFor = player => publicProfile(play
     return players.get(player);
   }
 
-  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, offhand, spectator, stance, boost,equipment,groundSeat,emote,death,afk}) => ({
+  const motionOf = ({profile, position, yaw, pitch, motion, lookYaw, typing, swing, held, offhand, spectator, stance, boost,equipment,groundSeat,emote,death,afk,invisible}) => ({
     id:profile.id, position, yaw, pitch, motion, lookYaw,
     ...(typing !== undefined && {typing}), ...(swing !== undefined && {swing}), ...(held !== undefined && {held}),
     ...(offhand && {offhand}),
     ...(spectator !== undefined && {spectator}), ...(stance !== undefined && {stance}), ...(boost !== undefined && {boost}),
     ...(equipment !== undefined && {equipment}), ...(groundSeat !== undefined && {groundSeat}),
-    ...(emote !== undefined && {emote}),...(death !== undefined && {death}),...(afk !== undefined && {afk})});
+    ...(emote !== undefined && {emote}),...(death !== undefined && {death}),...(afk !== undefined && {afk}),
+    ...(invisible !== undefined && {invisible})});
   function snapshot(viewer) {
     const admin=canSeeSpectators(viewer);
     return [...players].flatMap(([player,entry])=>player!==viewer && entry.visible && (admin || !entry.spectator)
@@ -121,7 +122,7 @@ export function createPresence({store, profileFor = player => publicProfile(play
     const previous = entry.position;
     let dirty = previous.x !== next.x || previous.y !== next.y || previous.z !== next.z;
     if (dirty) entry.position = next;
-    for (const key of ['spectator','stance','death']) {
+    for (const key of ['spectator','stance','death','invisible']) {
       if (pose?.[key] !== undefined && entry[key] !== pose[key]) {
         if (key==='spectator' && Boolean(entry.spectator)!==pose[key] && entry.visible) rosterChanged=true;
         entry[key] = pose[key];

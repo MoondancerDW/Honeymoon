@@ -45,6 +45,7 @@ export function createNpcs({generated,store,creativeBlocks,creativeItems,adminKe
   const inventory=createInventory(store,creativeBlocks,creativeItems);
   const interactions=createNpcInteraction({
     store,inventory,definitions,shared,actors,profile,now,random,teleportPlayer,healPlayer,prepareLoot:game.prepareNpcLoot,
+    heldDamage:game.heldDamage,
     worldBounds:travelBounds,worldTick:()=>worldTime.snapshot().tick,
     near:(player,point,npc)=>game.npcReach ? game.npcReach(player,point,clamp(npc.scale,.35,2.5)) : near(player,point),
   });
@@ -60,6 +61,10 @@ export function createNpcs({generated,store,creativeBlocks,creativeItems,adminKe
     editorAvailable:auth.available,
     sounds,
     snapshot:player=>({npcs:actors.snapshot(location(player)),editor:auth.isAdmin(player),editorAvailable:auth.available}),
+    projectileTargets:player=>actors.snapshot(location(player)).filter(npc=>npc.health>0).map(npc=>({
+      id:{npc:npc.id},...npc.position,height:1.6*clamp(npc.scale,.35,2.5),halfWidth:.35*clamp(npc.scale,.35,2.5),
+    })),
+    projectileHit:(player,npcId,damage)=>interactions.act(player,{npcId,action:'attack'},location(player),undefined,damage),
     admin(player,key,source) {
       if (!auth.unlock) throw new RequestError(403,'owner_only');
       auth.unlock(player,key,source);

@@ -1,6 +1,8 @@
 import {basicRecipes} from '../world/survival-tools.mjs';
+import {craftingTableRecipe,workbenchRecipes} from '../world/workbench-recipes.mjs';
 
 const labels={game:'Игровой',creative:'Креатив',spectator:'Наблюдатель'};
+const handRecipes=[...basicRecipes,craftingTableRecipe];
 function selectMode(value,inherit=false) {
   const select=document.createElement('select');
   for (const [mode,title] of [...(inherit?[['','Как на сервере']]:[]),...Object.entries(labels)]) {
@@ -14,7 +16,7 @@ function selectMode(value,inherit=false) {
   return select;
 }
 
-export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,changed,pause,notice,receiveSpectator}) {
+export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,changed,pause,resume,notice,receiveSpectator}) {
   const health=element('health'), death=element('death-screen'), deathTitle=element('death-title'), reviveButton=element('revive');
   const admin=element('mode-menu'), administrator=element('mode-toggle'), list=element('mode-players');
   const selfMode=element('self-mode-toggle');
@@ -22,6 +24,7 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
   const right=element('mode-error'), craftError=element('craft-error');
   let cells=[];
   let state, deathTime, retry, selfUid, pending=false;
+  let craftContext;
   function update(next) {
     if (!next) return;
     state=next;
@@ -110,29 +113,47 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
   });
   element('mode-close').addEventListener('click',()=>admin.close());
   element('craft-close').addEventListener('click',()=>craftMenu.close());
-  craftToggle.addEventListener('click',()=>{
-    if (state?.mode!=='game'||state.death||craftMenu.open) return;
+  craftMenu.addEventListener('close',()=>{
+    const workbench=craftContext?.station;
+    craftContext=undefined;
+    if (workbench) resume?.();
+  });
+  craftToggle.addEventListener('click',()=>openCraft());
+  function openCraft(station) {
+    if ((!station && state?.mode!=='game') || state?.death || state?.spectator || craftMenu.open) return false;
+    const context={station,pending:false};
+    craftContext=context;
+    const recipes=station ? [...handRecipes,...workbenchRecipes] : handRecipes;
+    element('craft-title').textContent=station ? 'Верстак' : 'Изготовить';
+    element('craft-list').replaceChildren(...recipes.map(recipe=>craftButton(recipe,context)));
     pause();
     craftError.textContent='';
     craftMenu.showModal();
-  });
-  for (const recipe of basicRecipes) {
+    return true;
+  }
+  function craftButton(recipe,context) {
     const button=document.createElement('button'),name=document.createElement('strong'),details=document.createElement('small');
     button.type='button';
+    button.dataset.recipe=recipe.id;
     name.textContent=recipe.title;
     details.textContent=recipe.ingredients.map(value=>`${value.name} ×${value.count}`).join(' · ');
     button.append(name,details);
     button.addEventListener('click',async()=>{
-      if (pending) return;
-      pending=true;
+      if (context.pending) return;
+      context.pending=button.disabled=true;
+      craftError.textContent='';
       try {
-        const result=await craft(recipe.id);
-        craftError.textContent=result.ok ? 'Готово' : result.body.error==='missing_ingredients' ?
-          'В инвентаре не хватает материалов' : 'Не удалось изготовить';
-      } catch {craftError.textContent='Связь с сервером прервана';}
-      finally {pending=false;}
+        const result=await craft(recipe.id,context.station);
+        if (craftContext!==context || !craftMenu.open) return;
+        const errors={missing_ingredients:'В инвентаре не хватает материалов',inventory_full:'В инвентаре нет места',
+          workbench_required:'Подойдите к верстаку и откройте его снова',workbench_too_far:'Верстак слишком далеко',
+          stale_cell:'Верстак изменился. Откройте его снова'};
+        craftError.textContent=result.ok ? 'Готово' : errors[result.body?.error]??'Не удалось изготовить';
+      } catch {
+        if (craftContext===context && craftMenu.open) craftError.textContent='Связь с сервером прервана';
+      } finally {context.pending=button.disabled=false;}
     });
-    element('craft-list').append(button);
+    return button;
   }
   reviveButton.addEventListener('click',async()=>{
     if (!state?.death||reviveButton.disabled) return;
@@ -142,6 +163,9 @@ export function createPlayerModeUi({element,fetchModes,changeMode,craft,revive,c
     finally {reviveButton.disabled=false;}
   });
   return {update,setSelf(uid){selfUid=uid;},
+    openWorkbench({x,y,z,hit,revision,expectedRevision}) {
+      return openCraft({x,y,z,hit,expectedRevision:expectedRevision??revision??0});
+    },
     setAdmin(allowed) {if(state && state.admin!==allowed) update({...state,admin:allowed});},
     setSpectator(enabled) {if(state && state.spectator!==enabled) update({...state,spectator:enabled});},
     changeSelf(mode) {if(state?.admin && selfUid) return change({target:selfUid,mode});},

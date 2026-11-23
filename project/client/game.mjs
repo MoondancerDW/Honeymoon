@@ -36,8 +36,14 @@ import {canLogLiquid, liquidKind} from '../world/logged-fluid.mjs';
 import {FAKE_WATER,bucketCell,bucketKeys,fluidState} from '../world/fluid-state.mjs';
 import {detailCoverage} from '../world/full-detail.mjs';
 import {bookType,itemTooltip,plainMinecraftText,stackRevision} from '../world/item-text.mjs';
+import {blockedPlaceTargets, cakeBlock, flowerPot, glassJar, workbenchBlock} from '../world/decorative-blocks.mjs';
+import {paintingItemKey} from '../world/paintings.mjs';
+import {placementHeading} from '../world/placement-heading.mjs';
 import {formatMinecraftId,minecraftItemCode,minecraftTargetCode} from '../world/minecraft-id.mjs';
 import {containerSpec} from '../world/containers.mjs';
+import {consumableProfile,hasEffect,movementEffect} from '../world/held-consumables.mjs';
+import {classifyTool} from '../world/survival-tools.mjs';
+import {createItemFlights} from './item-flight.mjs';
 import {chiselMaterialShape, coverBoxes, signFor} from '../world/geometry.mjs';
 import {creativeMicroblock,signItemKey,signPlacementCell} from '../world/creative-items.mjs';
 import {isChiselMaterial, voxelBrush, voxelKey, voxelMaterialAt, voxelRemovalBrush, VOXEL_MATERIAL_LIMIT} from '../world/voxel-chisel.mjs';
@@ -100,7 +106,7 @@ const heading = {yaw: 0, pitch: -.045};
 let orbitHeading = null, orbitReturn = 0;
 const stick = {x: 0, z: 0};
 let world, view, movement, position, selection, clipboard, worldRevision = 0;
-let worldCheckpoint, terrainPreload;
+let worldCheckpoint, terrainPreload, terrainCacheConfiguration;
 let heldPart = null, heldPonyPart, partRotation = 0, placement = null, placementKey = '';
 let heldSofa = null, sofaTurns = 0;
 let chiseling = false, chiselMaterial = null, chiselSize = 1;
@@ -132,7 +138,8 @@ const positionMetrics = {requests: 0, corrections: 0, errors: 0};
 let playing = false, jump = false, lastFrame = 0, physicsTime = 0, timer;
 let profileSwapPending=false;
 let profileUid;
-let nightVisionRevision=0;
+let nightVisionRevision=0, personalNightVision=false, potionEffects;
+let bowDraw, bowGauge, itemFlights;
 const nightVisionPreference='honeymoon-night-vision';
 let autoMovement=null;
 let previousFramePosition, framePosition, correctionOffset;
@@ -148,7 +155,7 @@ let seatedMoveSince;
 let signTarget;
 let acting = false, resetting = false;
 let arrivalVersion = 0;
-let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0};
+let metrics = {started: performance.now(), playable: 0, chunksLoaded: 0, visualChunksLoaded: 0, lastEdit: 0, breakParticles:0};
 let feed,feedRetry;
 let nearbyStream;
 let entered = false, multiplayer = false, presenceDirty = true, presenceRequest = null, lastSentPose, nextPresence = 0;
@@ -253,11 +260,12 @@ const npcUi=createNpcUi({command:npcCommand,onTeleport:receiveNpcTeleport,
   position:()=>position,lookYaw:()=>heading.yaw,isPlaying:()=>playing,
   preview:(canvas,appearance)=>view.npcs?.preview(canvas,appearance,performance.now()),
   clearPreview:canvas=>view.npcs?.clearPreview(canvas),pause,resume,notice});
-const modeUi=createPlayerModeUi({element,notice,pause,changed:updateGameMode,revive:revivePlayer,receiveSpectator:applySpectatorState,
+const modeUi=createPlayerModeUi({element,notice,pause,resume,changed:updateGameMode,revive:revivePlayer,receiveSpectator:applySpectatorState,
   fetchModes:()=>json('/api/modes',{signal:AbortSignal.timeout(5000)}),
   changeMode:fields=>post('modes',fields,AbortSignal.timeout(5000)),
-  async craft(recipe) {
-    const result=await post('craft',{recipe},AbortSignal.timeout(5000));
+  async craft(recipe,station) {
+    if (station && !await flushPosition()) return {ok:false,body:{error:'workbench_too_far'}};
+    const result=await post('craft',{recipe,...(station&&{station})},AbortSignal.timeout(5000));
     if (result.ok) applyInventory(result.body.inventory);
     return result;
   }});
@@ -332,6 +340,7 @@ function updateInventoryControls() {
 }
 
 function updateGameMode(next) {
+  potionEffects=next.effects;
   creative.setCatalogEnabled(modeUi.creative&&!spectator);
   creativeToggle.disabled=spectator||!creativeAvailable||!modeUi.creative;
   creativeToggle.hidden=modeUi.active&&!modeUi.creative;
@@ -342,6 +351,7 @@ function updateGameMode(next) {
   setWorldAdmin(next.admin);
   game.classList.toggle('dead',Boolean(next.death));
   if (!view) return;
+  showNightVision();
   element('touch-flight').hidden=!canFly();
   if (!spectator && !canFly() && (flying || pendingFlight?.enabled)) stopFlight();
   if (next.death&&!deathOrbit) {
@@ -471,7 +481,7 @@ function applyInventory(value) {
   heldVersion++;
   fromCreative = Boolean(stack && !stack.copied);
   heldCreativeItem = entry?.kind && !stack.copied ? entry : null;
-  clipboard = stack?.part ? null : stack?.key === signItemKey ? signPlacementCell : stack?.cell ?? bucketCell(stack?.key);
+  clipboard = stack?.part ? null : stack?.key === signItemKey ? signPlacementCell : stack?.cell ?? entry?.blockKey ?? bucketCell(stack?.key);
   heldSofa = isJammyConnectableSeat(world.models?.jammy,clipboard) ? {object:stack.object} : null;
   sofaTurns = 0;
   chiselMaterial = isChiselMaterial(clipboard) ? chiselMaterialKey(clipboard) : null;
@@ -519,6 +529,8 @@ const messages = {
   occupied: 'Здесь уже есть блок или игрок', stale_cell: 'Ячейка изменилась. Повторите действие.',
   out_of_reach: 'Цель вне досягаемости', not_visible: 'Блок закрыт', outside_bounds: 'Граница района',
   reserved: 'Это часть контрольной механики', nothing_to_copy: 'Выбранный блок больше недоступен',
+  full_health: 'Здоровье уже полное', decoration_occupied: 'Сначала выньте содержимое',
+  invalid_decoration: 'Этот предмет сюда не подходит', chest_already_joined: 'Можно соединить только два сундука',
   empty_cell: 'В ячейке нет блока', cannot_interact: 'С этим объектом нельзя взаимодействовать',
   movement_blocked: 'Позиция скорректирована сервером', outside_reach: 'Цель вне досягаемости',
   teleport_blocked: 'У цели нет свободного места для телепорта',
@@ -661,7 +673,7 @@ function effects(data, showMessages = true) {
   audio.effects(data.effects ?? [], world);
   for (const effect of data.effects || []) {
     if (effect.type === 'dispense') view.dispense(effect);
-    if (effect.type === 'break') view.breakBlock(effect);
+    if (effect.type === 'break') metrics.breakParticles+=view.breakBlock(effect)??0;
     if (showMessages && effect.message) notice(effect.message);
   }
 }
@@ -777,6 +789,7 @@ function stream() {
   });
   feed.addEventListener('weather',event=>updateWeather(JSON.parse(event.data)));
   feed.addEventListener('game-mode',event=>modeUi.update(JSON.parse(event.data)));
+  feed.addEventListener('item-flight',event=>addItemFlight(JSON.parse(event.data)));
   feed.addEventListener('profile-race',event=>{
     if (feed===source) applyRaceUpdate(JSON.parse(event.data));
   });
@@ -1046,15 +1059,16 @@ function applyRaceUpdate(body) {
   presenceDirty=true;
 }
 
-function showNightVision(enabled) {
-  view.setNightVision(enabled);
+function showNightVision(enabled=personalNightVision) {
+  personalNightVision=enabled;
+  view.setNightVision(enabled || hasEffect({effects:potionEffects},'nightVision'));
   element('night-vision').setAttribute('aria-pressed',String(enabled));
   element('inventory-night-vision').setAttribute('aria-pressed',String(enabled));
 }
 
 async function toggleNightVision() {
   if (nightVisionPending || !view) return;
-  const previous=view.nightVision, before=nightVisionRevision;
+  const previous=personalNightVision, before=nightVisionRevision;
   const buttons=[element('night-vision'),element('inventory-night-vision')];
   nightVisionPending=true;
   for (const button of buttons) button.disabled=true;
@@ -1441,8 +1455,9 @@ function interact(sneaking = false) {
     return;
   }
   if (seat || seatTarget) return toggleSeat();
-  if (frameTarget) return action('interact');
+  if (frameTarget && frameTarget.kind!=='painting') return action('interact');
   const cell = selection?.cell;
+  if (!sneaking && blockState(cell)[0]===workbenchBlock) return openWorkbench();
   if (!sneaking && containerSpec(cell)) {
     acting=true;
     void storage.open(selection).catch(()=>notice('Не удалось открыть хранилище')).finally(()=>{acting=false;});
@@ -1455,13 +1470,20 @@ function interact(sneaking = false) {
   showSignEditor({x,y,z,hit},sign.lines);
 }
 
+function openWorkbench() {
+  if (!selection) return;
+  const {x,y,z,hit}=selection;
+  modeUi.openWorkbench({x,y,z,hit,revision:world.revisionAt(x,y,z)});
+}
+
 function tapWorld() {
   if (!playing || menuOpen() || modeUi.death || spectator || orbitHeading || resetting || !teleportLoading.hidden) return;
   updateSelection();
   const item = heldCreativeItem;
-  const rightClickItem = item?.kind === 'item-frame' || item?.kind === 'minecart' || item?.kind === 'boat' ||
+  const rightClickItem = item?.kind === 'item-frame' || item?.kind === 'minecart' || item?.kind === 'boat' || item?.key===paintingItemKey ||
     (item?.key === bucketKeys.empty && fluidState(selection?.cell)) || (frameTarget && item) ||
-    bookType(inventoryStackAt(inventory.selected));
+    bookType(inventoryStackAt(inventory.selected)) || consumableProfile(inventoryStackAt(inventory.selected)) ||
+    classifyTool(inventoryStackAt(inventory.selected),item).tool==='hoe';
   const canPlace = chiseling ? chiselMaterial : heldPart || clipboard || rightClickItem;
   if (!seat && (wieldWorldEdit() || canPlace)) {
     void action('place');
@@ -1550,10 +1572,10 @@ function updatePlacement(target) {
   if (!chiseling && heldSofa) {
     const [dx, dy, dz] = target.offset;
     const x = target.x + dx, y = target.y + dy, z = target.z + dz;
-    const key = `sofa,${x},${y},${z},${sofaTurns},${selectionRevision},${metrics.chunksLoaded}`;
+    const key = `sofa,${x},${y},${z},${sofaTurns},${placementHeading(heading.yaw)},${selectionRevision},${metrics.chunksLoaded}`;
     if (key !== placementKey) {
       placementKey = key;
-      const object = placementModelObject(world.models, clipboard, heldSofa.object, [x, y, z], sofaTurns);
+      const object = placementModelObject(world.models, clipboard, heldSofa.object, [x, y, z], sofaTurns, heading.yaw);
       const model = extractedModel(world.models, {key: clipboard, object},
         (ox, oy, oz) => world.cellAt(x + ox, y + oy, z + oz));
       placement = model && {x, y, z, boxes: model.collision, surfaces: model.surfaces,
@@ -1719,6 +1741,62 @@ function setTargetDetail(node,text) {
   node.hidden=!text;
 }
 
+function addItemFlight(projectile) {
+  itemFlights ??= createItemFlights(view.scene);
+  itemFlights.add(projectile);
+}
+
+function itemAim() {
+  const {yaw,pitch}=heading, horizontal=Math.cos(pitch);
+  return [-Math.sin(yaw)*horizontal,Math.sin(pitch),-Math.cos(yaw)*horizontal];
+}
+
+async function useHeldItem(type,details={}) {
+  const result=await post('held-use',{type,...details},AbortSignal.timeout(5000));
+  if (!result.ok) {
+    const error=result.body.error;
+    if (type!=='cancel' && error!=='item_use_cooldown') notice(({arrows_required:'В инвентаре нет стрел',
+      full_health:'Здоровье уже полное',cannot_till:'Здесь нельзя вспахать землю',
+      held_item_changed:'Предмет в копыте изменился'})[error] ?? messages[error] ?? 'Не удалось использовать предмет');
+    return false;
+  }
+  if (result.body.inventory) applyInventory(result.body.inventory);
+  if (result.body.changes) changes(result.body.changes,result.body.worldRevision,result.body.frames);
+  if (result.body.effects) effects(result.body);
+  if (result.body.projectile) addItemFlight(result.body.projectile);
+  return true;
+}
+
+function startBow() {
+  if (bowDraw) return;
+  if (!bowGauge) {
+    bowGauge=document.createElement('progress');
+    bowGauge.id='bow-draw';
+    bowGauge.max=1000;
+    bowGauge.setAttribute('aria-label','Натяжение лука');
+    Object.assign(bowGauge.style,{position:'absolute',left:'50%',top:'calc(50% + 25px)',width:'90px',
+      transform:'translateX(-50%)',accentColor:'#eabb63',pointerEvents:'none'});
+    game.append(bowGauge);
+  }
+  bowGauge.hidden=false;
+  bowGauge.value=0;
+  const draw={at:performance.now(),slot:inventory.selected};
+  bowDraw=draw;
+  draw.ready=useHeldItem('bow-start').catch(()=>{notice('Связь с сервером прервалась');return false;});
+  void draw.ready.then(ok=>{if (!ok && bowDraw===draw) finishBow(false);});
+}
+
+function finishBow(release) {
+  const draw=bowDraw;
+  if (!draw) return;
+  bowDraw=undefined;
+  bowGauge.hidden=true;
+  const look=itemAim();
+  const fired=release && draw.slot===inventory.selected && inventoryStackAt(draw.slot)?.key==='creative:261:0' && playing && !menuOpen();
+  void draw.ready.then(ok=>ok&&useHeldItem(fired?'bow-release':'cancel',{look}))
+    .catch(()=>{if (fired) notice('Связь с сервером прервалась');});
+}
+
 async function action(type, sneaking = false, tapTool = false) {
   if (modeUi.death) return;
   if (type==='copy'&&!modeUi.creative) {notice('Копирование доступно в креативе'); return;}
@@ -1743,7 +1821,11 @@ async function action(type, sneaking = false, tapTool = false) {
     finally {acting=false;}
     return;
   }
-  if (npcTarget) {
+  const held=inventoryStackAt(inventory.selected);
+  const usingItem=modeUi.active && type==='place' && !chiseling;
+  const heldTool=usingItem?classifyTool(held,heldCreativeItem).tool:undefined;
+  const edible=usingItem&&consumableProfile(held);
+  if (npcTarget && heldTool!=='bow' && !edible) {
     if (type==='remove' && !chiseling) {
       acting=true;
       try {
@@ -1760,12 +1842,39 @@ async function action(type, sneaking = false, tapTool = false) {
     }
     return;
   }
-  const frame = frameTarget && !chiseling && ['place','remove','interact'].includes(type) ? frameTarget : null;
+  const frame = frameTarget && !chiseling && ['place','remove','interact'].includes(type) &&
+    (frameTarget.kind!=='painting' || type==='remove') ? frameTarget : null;
+  const selectedBlock=heldTool==='bow' && (npcTarget||hitPlayer)?0:blockState(selection?.cell)[0];
+  if (!frame && !chiseling && !sneaking && type==='place' && blockedPlaceTargets.has(selectedBlock)) {
+    repeatPlacement=false;
+    if (selectedBlock===workbenchBlock) return openWorkbench();
+    type='interact';
+  }
+  if (modeUi.active && type==='place' && !frame && !chiseling) {
+    if (heldTool==='bow') {
+      repeatPlacement=false;
+      startBow();
+      return;
+    }
+    if (heldTool==='hoe' || edible) {
+      repeatPlacement=false;
+      acting=true;
+      try {
+        if (heldTool==='hoe') {
+          if (!selection) return;
+          const {x,y,z}=selection;
+          if (await flushPosition({urgent:true})) await useHeldItem('hoe',{x,y,z});
+        } else await useHeldItem('consume',{key:held.key,look:itemAim()});
+      } catch { notice('Связь с сервером прервалась'); }
+      finally { acting=false; }
+      return;
+    }
+  }
   if (type==='place' && !frame && !chiseling && bookType(inventoryStackAt(inventory.selected))) {
     itemDocuments.openBook(inventory.selected,{world:true});
     return;
   }
-  const placingFrame = !frame && type === 'place' && heldCreativeItem?.kind === 'item-frame';
+  const placingFrame = !frame && type === 'place' && (heldCreativeItem?.kind === 'item-frame' || heldCreativeItem?.key===paintingItemKey);
   const placingCart = !frame && type === 'place' && heldCreativeItem?.kind === 'minecart';
   const placingBoat = !frame && type === 'place' && heldCreativeItem?.kind === 'boat';
   const removingVehicle = type === 'remove' && !chiseling && seatTarget;
@@ -2009,7 +2118,7 @@ function tick(now) {
         previousFramePosition={...position};
         physicsTime-=physicsStep;
         const speed = movementSpeed({flying,sprint:sprinting(),stance:movement.stance,y:position.y,
-          ponyType:spectator ? undefined : movement.ponyType}) / inputSize;
+          ponyType:spectator ? undefined : movement.ponyType})*(spectator?1:movementEffect(potionEffects)) / inputSize;
         const dx = (-sin * forward + cos * strafe) * speed;
         const dz = (-cos * forward - sin * strafe) * speed;
         if (flying) movement.fly(position, dx, vertical * speed * FLIGHT_VERTICAL_MULTIPLIER, dz, physicsStep, recordPosition, spectator, automaticTravel);
@@ -2086,9 +2195,15 @@ function tick(now) {
     view.viewBob.step(0, dt, true, 0);
   }
   view.updateVehicles();
-  view.updateLocalAvatar(now,dt,framePosition,{...playerPose(),swing:localActionSwing},ponySpeed,seat,spectator,modeUi.death,ponyPosition);
+  const bowTension=bowDraw?Math.max(0,Math.min(1,(now-bowDraw.at)/1000)):0;
+  view.updateLocalAvatar(now,dt,framePosition,{...playerPose(),swing:localActionSwing,bowTension},ponySpeed,seat,spectator,modeUi.death,ponyPosition);
   updateCamera();
   view.players.frame(now, dt);
+  if (bowDraw) {
+    if (modeUi.death||!playing||menuOpen()||inventory.selected!==bowDraw.slot||inventoryStackAt(bowDraw.slot)?.key!=='creative:261:0') finishBow(false);
+    else bowGauge.value=bowTension*1000;
+  }
+  itemFlights?.update(now);
   updateSelection();
   worldEdit.frame();
   updatePlacement(npcTarget||hitPlayer?null:selection);
@@ -2118,7 +2233,11 @@ function tick(now) {
     selection?.voxelMaterial ? labelFor(selection.voxelMaterial) :
     selection?.part ? partLabel(selection.part) : labelFor(getKey(selection?.cell));
   const targetSeat = !npcTarget && !seat && !seatTarget && !frameTarget && seatFor(selection?.cell,world.models);
+  const propId=blockState(selection?.cell)[0];
+  const propHint=({[workbenchBlock]:'открыть верстак',[cakeBlock]:'съесть кусок',[flowerPot]:'посадить или вынуть растение',
+    [glassJar]:'поместить или вынуть содержимое'})[propId];
   const interaction = npcTarget ? `${useHint} — ${npcEdit?'настроить NPC':'разговор'}` : targetSeat ? `${useHint} — ${targetSeat.bed?'лечь':'сесть'}` :
+    !frameTarget && propHint ? `${touchMode?'Тап':'ПКМ'} — ${propHint}` :
     !seat && !seatTarget && !frameTarget && selection && signFor(selection.cell) ? `${useHint} — редактировать` : '';
   const fluidHint = npcTarget?'':selection?.cell?.fluid === 'water' ? `${attackHint} — убрать воду` :
     selection?.cell?.fluid === 'lava' ? `${attackHint} — убрать лаву` : '';
@@ -2126,7 +2245,7 @@ function tick(now) {
   const framedItem=!hitPlayer && !npcTarget && framedItemStack(frameTarget?.item);
   const aimedItem=!editing && (dropTarget?.item || framedItem);
   const entry=aimedItem && entryForInventoryStack(aimedItem);
-  const status = editing ? worldEdit.hint(touchMode) :
+  const status = editing ? worldEdit.hint(touchMode) : frameTarget?.kind==='painting' ? `Картина · ${attackHint} — снять` :
     entry ? entry.name : [selected,interaction,fluidHint].filter(Boolean).join('  /  ');
   const sourceId=entry ? formatMinecraftId(minecraftItemCode(aimedItem,entry)) :
     editing || hitPlayer || npcTarget || frameTarget || seatTarget?.entity ? '' :
@@ -2169,8 +2288,16 @@ function holdAttack(held) {
 function bindCacheStatus() {
   if (!worldCheckpoint) return;
   const output=element('game-cache-usage');
+  const preload=element('game-cache-preload');
   const numbers=new Intl.NumberFormat('ru',{maximumFractionDigits:1});
   const size=bytes=>numbers.format(bytes/1024/1024);
+  const messages={
+    limited:'часть слоёв превышает лимит игры',
+    unavailable:'предзагрузка рельефа недоступна',
+    quota:'браузер ограничил хранилище',
+    storage:'не удалось записать кеш',
+    retry:'ожидание повторной загрузки рельефа',
+  };
   output.hidden=false;
   let pending=false;
   async function update() {
@@ -2179,16 +2306,28 @@ function bindCacheStatus() {
     try {
       const [terrain,edits]=await Promise.all([terrainCacheUsage(),worldCheckpointUsage()]);
       const job=terrainPreload?.status();
-      const detail=job?.phase==='loading'? ` · загрузка карты ${job.loaded}/${job.total}` :
-        job?.phase==='storage'?' · не хватает места':'';
-      const summary=terrain&&edits ?
-        `Кэш игры · ${size(terrain.bytes+edits.bytes)} из ${size(terrain.maxBytes+edits.maxBytes)} МиБ${detail}` :
-        'Кэш игры · недоступен';
+      preload.hidden=!touchMode || !job || job.blocked || job.phase==='ready' || job.phase==='limited';
+      preload.disabled=['starting','loading','retry'].includes(job?.phase);
+      const lowDevice=view.lowDevice;
+      const actionLabel=lowDevice?'Загрузить панораму':'Загрузить дальний рельеф';
+      if (preload.textContent!==actionLabel) preload.textContent=actionLabel;
+      const detail=job?.phase==='loading' ? `загрузка ${lowDevice?'панорамы':'рельефа'} ${job.loaded}/${job.total}` :
+        job?.phase==='ready' ? (lowDevice?'панорама сохранена':'дальний рельеф сохранён') : messages[job?.phase];
+      const incomplete=job?.phase==='limited' && job.unavailable?.length
+        ? 'часть слоёв недоступна' : undefined;
+      const usage=terrain&&edits ?
+        `${size(terrain.bytes+edits.bytes)} из ${size(terrain.maxBytes+edits.maxBytes)} МиБ` : undefined;
+      const summary=['Кэш игры',usage,detail??(!usage?'недоступен':undefined),incomplete].filter(Boolean).join(' · ');
       if (summary!==output.textContent) output.textContent=summary;
     } finally {
       pending=false;
     }
   }
+  preload.addEventListener('click',()=>{
+    preload.disabled=true;
+    terrainPreload?.request();
+    void update();
+  });
   new MutationObserver(()=>void update()).observe(game,{attributes:true,attributeFilter:['class']});
   setInterval(()=>void update(),2500);
 }
@@ -2351,9 +2490,12 @@ function bindControls() {
       if (!event.repeat) creative.selectSlot(Number(event.code.slice(-1)) - 1);
       return;
     }
-    if (event.code === 'KeyI' && !event.repeat && !creativeToggle.disabled) {
+    if (event.code === 'KeyI' && (!spectator || modeUi.admin)) {
       event.preventDefault();
-      creative.open();
+      if (!event.repeat) {
+        if (creativeToggle.disabled) creative.openInventory();
+        else creative.open();
+      }
       return;
     }
     if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.code)) event.preventDefault();
@@ -2425,9 +2567,10 @@ function bindControls() {
   });
   document.addEventListener('mouseup', event => {
     if (event.button === 0) nextAttack = Infinity;
-    if (event.button === 2) repeatPlacement = false;
+    if (event.button === 2) { repeatPlacement = false;finishBow(true); }
   }, {capture:true});
   window.addEventListener('blur', () => {
+    finishBow(false);
     nextAttack = Infinity;
     repeatPlacement = resumeOnEscape = resuming = false;
     movement?.releaseJumpCharge();
@@ -2482,7 +2625,8 @@ function bindControls() {
     use(sneaking) { updateSelection(); interact(sneaking); },
     block(type) { if (type==='rotate') cyclePlacement(); else void action(type,false,true); },
     attack:holdAttack,
-    repeat(held) {
+    repeat(held,released) {
+      if (!held) finishBow(released);
       repeatPlacement=held&&!spectator;
       if (held) nextPlacement=performance.now()+350;
     },
@@ -2508,8 +2652,15 @@ function bindControls() {
     try {
       const enabled=!view.lowDevice;
       localStorage.setItem(lowDevicePreference,enabled?'1':'0');
-      const budget=worldCheckpoint ? configureTerrainCache({mobile:touchMode,lowDevice:enabled,altitudeBuild})
-        .then(()=>terrainPreload?.setMode(enabled)) : undefined;
+      if (worldCheckpoint) {
+        terrainCacheConfiguration='configuring';
+        terrainPreload?.setMode(enabled,terrainCacheConfiguration);
+      }
+      const budget=worldCheckpoint ? configureTerrainCache({mobile:touchMode,lowDevice:enabled})
+        .then(configuration=>{
+          terrainCacheConfiguration=configuration;
+          terrainPreload?.setMode(enabled,configuration);
+        }) : undefined;
       await Promise.all([view.setLowDevice(enabled),budget]);
       nearbyStream?.update();
     } catch (error) {notice(error.message);}
@@ -2792,7 +2943,7 @@ function bindSoloWorld(kind) {
   });
 }
 
-let startupSession, startupManifest, startupMap;
+let startupSession, startupManifest, startupManifestRequestedAt, startupMap;
 let startupStep=0, startupRequest, failedStartupStep;
 const startupModels=new Map();
 
@@ -2832,12 +2983,16 @@ function initializeStartupSession() {
 }
 
 async function loadStartupManifest() {
-  startupManifest=await json('/generated/world/world.json',{signal:AbortSignal.timeout(15000)});
+  const requestedAt=performance.timeOrigin+performance.now();
+  const manifest=await json('/generated/world/world.json',{signal:AbortSignal.timeout(15000)});
+  startupManifest=manifest;
+  startupManifestRequestedAt=requestedAt;
 }
 
 async function createStartupWorld() {
   const session=startupSession;
   const manifest=startupManifest;
+  const requestedAt=startupManifestRequestedAt;
   const lowDevice=localStorage.getItem(lowDevicePreference)==='1';
   const models=await Promise.allSettled((session.modelFamilies ?? []).filter(family=>!startupModels.has(family)).map(async family=>{
     const model=await json(`/generated/models/${family}.json`,{signal:AbortSignal.timeout(15000)});
@@ -2846,7 +3001,7 @@ async function createStartupWorld() {
   const failed=models.find(result=>result.status==='rejected');
   if (failed) throw failed.reason;
   if (!session.access?.singlePlayer && manifest.chunkCacheVersion) {
-    await configureTerrainCache({mobile:touchMode,lowDevice,altitudeBuild});
+    terrainCacheConfiguration=await configureTerrainCache({mobile:touchMode,lowDevice,altitudeBuild,manifest,requestedAt});
     worldCheckpoint=createWorldCheckpoint(manifest.chunkCacheVersion);
   }
   world = new World(manifest);
@@ -2907,6 +3062,7 @@ function startScene() {
   globalThis.honeymoon = Object.freeze({
     stats: () => ({...metrics, ...view.statistics(), residentChunks:world.chunks.size, streaming:nearbyStream?.status(),
       revision: worldRevision, position: {...position}, localActionSwing, seat, audio:audio.stats(),
+      potionEffects,bowDraw:bowGauge?.hidden===false?(bowGauge.value/1000):0,
       terrainPreload:terrainPreload?.status(),
       terrainNetwork:terrainNetwork.status(),
       flying, spectator, autoMovement, stance:movement.stance, body:movement.body, chiseling, chiselMaterial, chiselSize, perspective:cameraMode(),
@@ -2967,8 +3123,9 @@ function finishStartup() {
   if (worldCheckpoint && (manifest.vista || manifest.lod)) {
     terrainPreload=createTerrainPreload({manifest,build:altitudeBuild,mobile:touchMode,
       backgroundBusy:()=>document.hidden || terrainNetwork.urgent || terrainNetwork.constrained()});
-    if (mapWarmup) void mapWarmup.then(()=>terrainPreload.setMode(view.lowDevice));
-    else terrainPreload.setMode(view.lowDevice);
+    const setPreloadMode=()=>terrainPreload.setMode(view.lowDevice,terrainCacheConfiguration);
+    if (mapWarmup && !touchMode) void mapWarmup.then(setPreloadMode);
+    else setPreloadMode();
   }
   if (manifest.chunkPalettes) nearbyStream = streamNearby(manifest.visualChunks ?? []);
   const pending = nearbyStream?.done ?? streamChunks(manifest.chunks.filter(([x,z])=>!world.chunks.has(chunkKey(x,z))),manifest.visualChunks ?? []);

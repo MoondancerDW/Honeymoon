@@ -1,6 +1,6 @@
 import * as THREE from '/vendor/three/three.module.js';
 import {ponyArmorModel} from '../world/pony-armor-data.mjs';
-import {ponyArmor,ponyArmorFamilies} from '../world/pony-armor.mjs';
+import {ponyAccessory,ponyArmor,ponyArmorFamilies} from '../world/pony-armor.mjs';
 
 const native = ponyArmorModel.native;
 const layers = [
@@ -10,10 +10,10 @@ const layers = [
   [[0,['frontRight']], [1,['frontLeft']], [2,['hindRight.ext']], [3,['hindLeft.ext']]],
 ];
 const scale = 1/16;
-let texture, ready;
+let texture, ready, accessoriesReady;
 const cached = new Map();
 
-export function equipmentTextureReady() {
+function armorTextureReady() {
   if (!ready) {
     ready = new Promise(resolve => {
       texture = new THREE.TextureLoader().load('/generated/textures/pony-armor.png',resolve,undefined,()=>resolve(null));
@@ -24,6 +24,67 @@ export function equipmentTextureReady() {
     });
   }
   return ready;
+}
+
+function accessoryAssets() {
+  return accessoriesReady ??= fetch('/generated/models/biblio.json').then(response=>{
+    if (!response.ok) throw new Error('Accessory sprites unavailable');
+    return response.json();
+  }).then(async ({items,armor})=>{
+    const map=await new THREE.TextureLoader().loadAsync('/generated/models/biblio.png');
+    map.flipY=false;
+    map.colorSpace=THREE.SRGBColorSpace;
+    map.magFilter=map.minFilter=THREE.NearestFilter;
+    map.generateMipmaps=false;
+    map.needsUpdate=true;
+    return {items,armor,map};
+  }).catch(()=>null);
+}
+
+export function equipmentTextureReady(equipment=[]) {
+  return Promise.all([
+    equipment.some(stack=>ponyArmor(stack?.key)) && armorTextureReady(),
+    equipment.some(stack=>ponyAccessory(stack?.key)) && accessoryAssets(),
+  ]);
+}
+
+const accessoryTransforms = {
+  hat:{anchor:'head',width:.64,height:.64,y:-.36,z:-.383},
+  face:{anchor:'head',width:.59,height:.54,y:-.1,z:-.39},
+  neck:{anchor:'neck',width:.34,height:.34,y:.22,z:-.215},
+  body:{anchor:'body',width:.50,height:.55,y:.45,z:.115},
+};
+
+function accessoryGeometry(accessory,assets) {
+  const captured=assets.armor?.[`${accessory.id}:16777215`];
+  if (accessory.placement==='hat' && captured?.length) {
+    const positions=[], uv=[], indices=[];
+    for (const face of captured) {
+      const start=positions.length/3;
+      for (let offset=0;offset<face.positions.length;offset+=3) {
+        const [x,y,z]=face.positions.slice(offset,offset+3);
+        positions.push(x-.5,1.72-y,z-.61);
+      }
+      uv.push(...face.uv);
+      indices.push(start,start+1,start+2,start,start+2,start+3);
+    }
+    const geometry=new THREE.BufferGeometry();
+    geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+    geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
+    geometry.setIndex(indices);
+    return geometry;
+  }
+  const source=assets.items?.[`${accessory.id}:0`]?.uv;
+  if (!source) return null;
+  const [u0,v0,u1,v1]=source;
+  const {width,height,y,z}=accessoryTransforms[accessory.placement];
+  const geometry=new THREE.PlaneGeometry(width,height);
+  const uv=geometry.attributes.uv;
+  for (let vertex=0;vertex<uv.count;vertex++) {
+    uv.setXY(vertex,u0+(u1-u0)*uv.getX(vertex),v0+(v1-v0)*uv.getY(vertex));
+  }
+  geometry.translate(0,y,z);
+  return geometry;
 }
 
 function armorGeometry(row,slot,names) {
@@ -86,12 +147,15 @@ function armorGeometry(row,slot,names) {
 }
 
 export function createPonyArmor(rig) {
-  const parts = layers.map(()=>({key:null,meshes:[],material:null}));
+  const parts = layers.map(()=>({key:null,meshes:[],material:null,accessoryGeometry:null,pending:null}));
   let armorLight = 0xffffff;
 
   function clear(part) {
     for (const mesh of part.meshes) mesh.removeFromParent();
     part.material?.dispose();
+    part.accessoryGeometry?.dispose();
+    part.accessoryGeometry=null;
+    part.pending=null;
     part.material = null;
     part.meshes.length = 0;
   }
@@ -104,10 +168,28 @@ export function createPonyArmor(rig) {
         if (part.key === key) continue;
         part.key = key;
         clear(part);
+        const accessory=ponyAccessory(key);
+        if (accessory?.slot===slot) {
+          const pending=Symbol();
+          part.pending=pending;
+          void accessoryAssets().then(assets=>{
+            if (!assets || part.pending!==pending) return;
+            const geometry=accessoryGeometry(accessory,assets);
+            if (!geometry) return;
+            const material=new THREE.MeshBasicMaterial({map:assets.map,color:armorLight,
+              alphaTest:.4,alphaToCoverage:true,side:THREE.DoubleSide});
+            const mesh=new THREE.Mesh(geometry,material);
+            rig[accessoryTransforms[accessory.placement].anchor].add(mesh);
+            part.accessoryGeometry=geometry;
+            part.material=material;
+            part.meshes.push(mesh);
+          });
+          continue;
+        }
         const armor = ponyArmor(key);
         if (armor?.slot !== slot) continue;
         const row = ponyArmorFamilies.indexOf(armor.material);
-        equipmentTextureReady();
+        armorTextureReady();
         const material = new THREE.MeshBasicMaterial({
           map:texture, color:armorLight, alphaTest:.4, alphaToCoverage:true, vertexColors:true, side:THREE.DoubleSide,
         });

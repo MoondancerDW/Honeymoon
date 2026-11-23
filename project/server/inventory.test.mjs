@@ -31,6 +31,28 @@ test('older inventories gain equipment and armor only moves to the matching slot
   assert.throws(()=>inventoryInput({type:'drop_item',slot:offhandSlot+1,yaw:0},{}),error=>error.code === 'invalid_drop');
 });
 
+test('Lilium headwear and pendants use their equipment slots and keep their original item data',()=>{
+  const hood='creative:5930:0', glasses='creative:6293:0', pendant='creative:5872:0';
+  let value={selected:0,slots:Array(36).fill(null)};
+  value.slots[0]={key:hood,count:1};
+  value.slots[1]={key:pendant,count:1,nbt:{display:{Name:'Амулет'}}};
+  value.slots[2]={key:glasses,count:1};
+  const store={getState:()=>({value:structuredClone(value)}),
+    putState(_module,_player,_record,_version,state) {value=structuredClone(state);}};
+  const inventory=createInventory(store,new Set(),new Map());
+  const move=(from,to)=>inventory.edit('pony',{type:'inventory_move',from,to});
+  assert.throws(()=>move(1,36),{code:'invalid_equipment'});
+  assert.throws(()=>move(0,37),{code:'invalid_equipment'});
+  assert.equal(move(0,36).equipment[0].key,hood);
+  assert.equal(move(1,37).equipment[1].nbt.display.Name,'Амулет');
+  const worn=move(2,36);
+  assert.equal(worn.equipment[0].key,glasses);
+  assert.equal(worn.slots[2].key,hood);
+  assert.equal(worn.slots[0],null);
+  assert.equal(worn.slots[1],null);
+  assert.equal(move(37,1).slots[1].key,pendant);
+});
+
 test('the second hand stores full stacks and hides access when the player loses the horn',()=>{
   const torch={key:'legacy:50:0',cell:'legacy:50:0',count:32};
   const book={key:'creative:387:0',count:1,damage:2,nbt:{pages:['Текст'],title:'Журнал',author:'Пони'}};

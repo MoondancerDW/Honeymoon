@@ -16,6 +16,7 @@ const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
 const MAX_CACHED_CHUNKS = 160;
 const unavailableCell = Object.freeze({key:'legacy:1:0',object:null});
 const safeTileFields = new Set([
+  'jarContent', 'deskAngle',
   'Text1', 'Text2', 'Text3', 'Text4', 'rotation', 'Rotation', 'direction', 'Direction',
   'orientation', 'Orientation', 'rot', 'Rot', 'facing', 'Facing', 'color', 'Color',
   'Colour', 'colour', 'type', 'Type', 'style', 'Style', 'open', 'Open', 'active', 'Active', 'sid',
@@ -285,6 +286,13 @@ export function loadBase(directory, {cleanSnow = true, partial} = {}) {
     return chunk && hydrateFrameItem(chunk,cx,cz,chunk.source.entities.find(entity=>entity.key===key));
   }
 
+  function publicDecorations(cx,cz) {
+    const chunk=getChunk(cx,cz);
+    if (!chunk) return [];
+    return chunk.source.entities.filter(entity=>entity.type==='Painting' || entity.type==='ItemFrame')
+      .map(entity=>displayEntity(hydrateFrameItem(chunk,cx,cz,entity)));
+  }
+
   return { manifest:{...manifest,bounds}, publicManifest, hash, catalog, inBounds, getCell, getEntity, publicChunk,
-    hasPlayableChunk, worldCoverage };
+    publicDecorations, hasPlayableChunk, worldCoverage };
 }

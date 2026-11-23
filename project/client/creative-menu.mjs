@@ -1,5 +1,5 @@
 import {arrangeCreativeCatalog} from './creative-layout.mjs';
-import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
+import {equipmentLabels, ponyEquipment} from '../world/pony-armor.mjs';
 import {itemStackLimit,offhandSlot} from '../world/item-stack.mjs';
 import {bookType,stackType,writtenBookInfo} from '../world/item-text.mjs';
 import {iconSignature,inventoryItemEntry,pendingItemIcon} from './creative-icons.mjs';
@@ -96,7 +96,7 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   function mayMove(source,slot) {
     if ((slot === offhandSlot || source.slot === offhandSlot) && !offhandAvailable) return false;
     const entry = source.entry ?? entryFor(stackAt(source.slot));
-    return slot < inventorySize || slot === offhandSlot || ponyArmor(entry?.key)?.slot === slot - inventorySize;
+    return slot < inventorySize || slot === offhandSlot || ponyEquipment(entry?.key)?.slot === slot - inventorySize;
   }
 
   async function transferTo(source,destination,single = false) {
@@ -181,9 +181,9 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
   function quickMove(slot) {
     const stack = stackAt(slot);
     if (!stack) return;
-    const armor = ponyArmor(stack.key);
-    if (armor && slot < inventorySize && !state.equipment[armor.slot]) {
-      void request(move,slot,inventorySize+armor.slot);
+    const equipment = ponyEquipment(stack.key);
+    if (equipment && slot < inventorySize && !state.equipment[equipment.slot]) {
+      void request(move,slot,inventorySize+equipment.slot);
       return;
     }
     const start = slot < columns ? columns : 0;

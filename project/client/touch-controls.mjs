@@ -68,7 +68,7 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
       if (captured.get(id)!==event.pointerId) return;
       captured.delete(id);
       button.classList.remove('holding');
-      act(false);
+      act(false,event.type==='pointerup');
     }
     button.addEventListener('pointerup',finish);
     button.addEventListener('pointercancel',finish);
@@ -76,14 +76,14 @@ export function bindTouchControls({element,stick,enabled,sendKey,crouch,use,bloc
     button.addEventListener('click',event=>{
       if (event.detail || !allowed()) return;
       act(true);
-      act(false);
+      act(false,true);
     });
   }
   hold('jump',pressed=>sendKey('Space',pressed));
   hold('touch-lower',pressed=>sendKey('KeyC',pressed),()=>enabled() && flying);
   lowerButton.addEventListener('click',()=>{if (enabled() && !flying) crouch();});
-  hold('touch-place',pressed=>{
-    repeat(pressed);
+  hold('touch-place',(pressed,released)=>{
+    repeat(pressed,released);
     if (pressed) block('place');
   });
   hold('touch-remove',attack);

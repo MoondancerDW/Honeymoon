@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { gzipSync } from 'node:zlib';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { altitudeFiles } from '../client/altitude-assets.mjs';
 import { loadBase } from './base.mjs';
 import { backupState } from './backup.mjs';
 import { createHoneymoonServer } from './index.mjs';
@@ -131,6 +132,42 @@ test('the full city advertises and serves versioned prebuilt terrain without cha
   assert.equal((await request(app,`/generated/lod/${base.hash}/-1.0.bin`)).status,404);
   assert.equal((await request(app,`/generated/lod/${assetHash}/1.0.bin`)).status,404);
   assert.equal((await request(app,'/generated/world/chunks/0.0.json')).status,200);
+});
+
+test('terrain preload plan measures the decoded packet layers independently', async t => {
+  const directory = makeWorkspace();
+  const base = writeFixture(directory, {hash:'c'.repeat(64), chunkPalettes:true});
+  const lodHash = 'e'.repeat(64);
+  const lod = join(directory, 'lod');
+  const vista = join(directory, 'vista');
+  mkdirSync(lod);
+  mkdirSync(vista);
+  const regions = [[-1,0],[0,0]];
+  writeFileSync(join(lod,'manifest.json'), JSON.stringify({schemaVersion:3, contentHash:base.hash,
+    assetHash:lodHash, maxDistance:32, tileChunks:4, regions}));
+  writeFileSync(join(vista,'manifest.json'), JSON.stringify({version:2, hash:'a'.repeat(64), regions}));
+  // The background packet uses the gzip payload even if the identity file has a different size.
+  for (const [x, z] of regions) {
+    writeFileSync(join(lod,`${x}.${z}.bin`), Buffer.alloc(29));
+    writeFileSync(join(lod,`${x}.${z}.bin.gz`), gzipSync(Buffer.alloc(256)));
+    writeFileSync(join(lod,`${x}.${z}.outer.bin.gz`), gzipSync(Buffer.alloc(96)));
+  }
+  writeFileSync(join(vista,'-1.0.bin.gz'), gzipSync(Buffer.alloc(48)));
+  const app = await start(base, ':memory:', {generated:directory});
+  t.after(async () => {await app.close();rmSync(directory, {recursive:true, force:true});});
+
+  const location = '/api/terrain-preload/plan';
+  assert.equal((await request(app, location)).status, 401);
+  const {cookie} = await request(app, '/api/session', {payload:{}});
+  const plan = await request(app, location, {cookie});
+  const altitudeBytes = altitudeFiles.reduce((sum, path) => sum + statSync(new URL('../client'+path, import.meta.url)).size, 0);
+  assert.equal(plan.status, 200);
+  assert.deepEqual(plan.data, {layers:{
+    primitive:{hash:lodHash, bytes:192, count:2},
+    simplified:{hash:lodHash, bytes:512, count:2},
+    altitude:{bytes:altitudeBytes, count:4},
+  }});
+  assert.equal((await request(app, location, {cookie, headers:{Origin:'https://example.test'}})).status, 403);
 });
 
 async function events(app, cookie) {

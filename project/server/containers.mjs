@@ -184,8 +184,9 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
     const state = inventory.read(player);
     const slots = {inventory:state.slots,storage:view.slots};
     const {from,to,count} = input;
-    if (!inSlot(from.slot,slots[from.side].length) || !inSlot(to.slot,slots[to.side].length) ||
-        from.side === 'inventory' && to.side === 'inventory') throw new RequestError(400,'invalid_inventory_slot');
+    if (!inSlot(from.slot,slots[from.side].length) || !inSlot(to.slot,slots[to.side].length)) {
+      throw new RequestError(400,'invalid_inventory_slot');
+    }
     if (from.side === to.side && from.slot === to.slot) return {cells:[],effects:[]};
     const first = slots[from.side][from.slot], second = slots[to.side][to.slot];
     if (!first) return {cells:[],effects:[]};

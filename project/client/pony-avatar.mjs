@@ -462,7 +462,7 @@ export function createPonyAvatar(isAir, {player = false} = {}) {
 
   function animate({time: now = time, dt = 1 / 60, speed = 0, yawOffset = 0, pitch = 0, forward = 1, strafe = 0,
     motion: nextMotion = 'idle', stance: nextStance = 'stand', boost: flightBoost = false,
-    position, groundSeat = false, swing: swingId = 0, held = null, offhand = null, equipment, itemAssets, emote} = {}) {
+    position, groundSeat = false, swing: swingId = 0, held = null, offhand = null, equipment, itemAssets, emote,bowTension=0} = {}) {
     time = now;
     motion = nextMotion === 'air' ? 'jump' : nextMotion;
     stance = nextStance;
@@ -626,7 +626,7 @@ export function createPonyAvatar(isAir, {player = false} = {}) {
     heldAssets = itemAssets;
     worn = equipment;
     armor.update(worn);
-    updateHeldItem();
+    updateHeldItem(bowTension);
   }
 
   function raiseHoof(hoof,prop,lift,side) {
@@ -760,7 +760,7 @@ export function createPonyAvatar(isAir, {player = false} = {}) {
     }
   }
 
-  function updateHeldItem() {
+  function updateHeldItem(bowTension=0) {
     if (!heldItem && activeProp && heldAssets) heldItem = createPonyHeldItem();
     if (!offhandItem && activeOffhand && heldAssets) offhandItem = createPonyHeldItem();
     const magic = rig.horn ? skin.glowColor : null;
@@ -775,6 +775,10 @@ export function createPonyAvatar(isAir, {player = false} = {}) {
       item.object.scale.setScalar(heldScale(item.pose));
     }
     show(heldItem,activeProp,rig.legs[0],1,strike);
+    if (bowTension && activeProp?.key==='261:0' && heldItem?.object.visible) {
+      heldItem.object.rotateX(-.45*bowTension);
+      heldItem.object.translateZ(.15*bowTension);
+    }
     show(offhandItem,activeOffhand,rig.legs[1],-1,0);
     const magicActive = Boolean(activeProp || activeOffhand);
     if (rig.horn && magicActive && !hornGlow) {

@@ -2,18 +2,20 @@ import { biblioFor } from './biblio-models.mjs';
 import { jammyBenchModel, jammyBenchState } from './jammy-benches.mjs';
 import { isJammySofa, jammySofaModel } from './jammy-sofas.mjs';
 import { redPowerLamp } from './redpower-lamps.mjs';
+import {placementHeading} from './placement-heading.mjs';
 
 export const modelFamilies = ['jammy', 'biblio', 'redpower'];
 
 export const isJammyConnectableSeat = (catalog, key) =>
   isJammySofa(catalog, key) || Boolean(jammyBenchState(catalog, key));
 
-export function placementModelObject(catalogs, key, copiedObject, position, turns = 0) {
+export function placementModelObject(catalogs, key, copiedObject, position, turns = 0, yaw) {
   let object = copiedObject;
   if (isJammyConnectableSeat(catalogs?.jammy, key)) {
     const type = isJammySofa(catalogs.jammy, key) ? 'JammySofa' : 'JammyBench';
     const copiedTurns = copiedObject?.type === type ? copiedObject.data?.rotation ?? 0 : 0;
-    const rotation = (copiedTurns + turns) & 3;
+    const initial=yaw===undefined?copiedTurns:2-placementHeading(yaw)-Number(key.split(':')[2]);
+    const rotation = (initial + turns) & 3;
     object = {type, data: rotation ? {rotation} : {}};
   }
   return object ? { ...object, position, key: `tile:${position.join(':')}` } : null;
@@ -42,7 +44,7 @@ export function withExtractedModels(geometry, catalogs) {
     isSofa: key => isJammyConnectableSeat(catalogs?.jammy, key),
     neighborCollisionShapeDependsOn: cell => isJammyConnectableSeat(catalogs?.jammy, cell)
       || Boolean(geometry.neighborCollisionShapeDependsOn?.(cell)),
-    placementObject: (key, copiedObject, position, turns) => placementModelObject(catalogs, key, copiedObject, position, turns),
+    placementObject: (key, copiedObject, position, turns, yaw) => placementModelObject(catalogs, key, copiedObject, position, turns,yaw),
     collisionFor: (cell, neighbors) => extractedModel(catalogs, cell, neighbors)?.collision ?? geometry.collisionFor(cell, neighbors),
     shapeFor: (cell, neighbors) => extractedModel(catalogs, cell, neighbors)?.selection ?? geometry.shapeFor(cell, neighbors),
     selectionFor: (cell, neighbors) => extractedModel(catalogs, cell, neighbors)?.selection ??

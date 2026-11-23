@@ -8,6 +8,11 @@ export const CREATIVE_INVISIBLE_FRAME_KEY = 'creative:389:1';
 export const signItemKey = 'creative:323:0';
 export const signPlacementCell = 'legacy:63:0';
 
+export const itemPlacementCells = new Map([
+  ['creative:354:0','legacy:92:0'],
+  ['creative:390:0','legacy:140:0'],
+]);
+
 // RedPower's legacy item damage stores its material in the low byte and
 // selects a cover, corner, strip or post using the high byte.
 const coverDamage = [[0,0,0],[16,0,1],[17,0,2],[18,6,0],[19,6,1],[20,6,2],

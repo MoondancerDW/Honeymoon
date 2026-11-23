@@ -82,7 +82,7 @@ function ownBank(tenant,bank) {
 }
 
 export function createNpcInteraction({store,inventory,definitions,shared,actors,profile,now,worldTick,near,worldBounds,
-  teleportPlayer,healPlayer,prepareLoot,random=Math.random}) {
+  teleportPlayer,healPlayer,prepareLoot,heldDamage,random=Math.random}) {
   function tx(player,run) {
     return store.atomic(()=>{
       const progress=store.getState('npcs',player,playerStateKey)?.value ?? noData();
@@ -252,17 +252,17 @@ export function createNpcInteraction({store,inventory,definitions,shared,actors,
     ctx.flags.progress=true;
   }
 
-  function act(player,body,position,cancelled) {
+  function act(player,body,position,cancelled,rangedDamage) {
     const npc=definitions.get(body.npcId);
     const current=actors.get(body.npcId);
     if (!npc || !current || current.health<=0) throw new RequestError(404,'npc_missing');
-    if (!near(player,current.position,npc)) throw new RequestError(403,'outside_reach');
+    if (rangedDamage===undefined&&!near(player,current.position,npc)) throw new RequestError(403,'outside_reach');
     const active=opened.get(player);
     if (body.action==='attack') {
       const time=now();
-      if ((attackAt.get(player)??-Infinity)+300>time) throw new RequestError(429,'npc_attack_cooldown');
+      if (rangedDamage===undefined&&(attackAt.get(player)??-Infinity)+300>time) throw new RequestError(429,'npc_attack_cooldown');
       attackAt.set(player,time);
-      const killed=actors.receiveAttack(npc,player,position,time);
+      const killed=actors.receiveAttack(npc,player,position,time,rangedDamage??heldDamage?.(player));
       let releaseLoot;
       const result=tx(player,ctx=>{
         if (killed) {

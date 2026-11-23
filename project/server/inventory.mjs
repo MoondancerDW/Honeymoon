@@ -1,5 +1,5 @@
 import {RequestError} from './errors.mjs';
-import {equipmentLabels, ponyArmor} from '../world/pony-armor.mjs';
+import {equipmentLabels, ponyEquipment} from '../world/pony-armor.mjs';
 import {itemStackLimit,offhandSlot} from '../world/item-stack.mjs';
 import {bookPageLimit,bookPages,bookPagesLimit,bookTitleLimit,bookType,itemNameLimit,loreLimit,loreLineLimit,
   stackRevision,stackType,writtenBook} from '../world/item-text.mjs';
@@ -129,7 +129,7 @@ export function createInventory(store, creativeBlocks, creativeItems, {canOffhan
   }
 
   function accepts(slot, stack) {
-    return !stack || itemSlot(slot) || slot === offhandSlot || ponyArmor(stack.key)?.slot === slot-inventorySize;
+    return !stack || itemSlot(slot) || slot === offhandSlot || ponyEquipment(stack.key)?.slot === slot-inventorySize;
   }
 
   function move(state, {from, to, count}) {

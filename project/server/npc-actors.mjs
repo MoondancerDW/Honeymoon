@@ -88,10 +88,10 @@ export function createNpcActors({definitions,shared,walk,visibility,damagePlayer
     current.hurtUntil=time+300;
     return false;
   }
-  function receiveAttack(npc,player,point,time=now()) {
+  function receiveAttack(npc,player,point,time=now(),damage=3) {
     const current=state(npc);
-    if (current.health<=0 || npc.invulnerable || faction(npc)?.canBeAttacked===false) return false;
-    const killed=hurt(npc,current,3,time);
+    if (damage<=0 || current.health<=0 || npc.invulnerable || faction(npc)?.canBeAttacked===false) return false;
+    const killed=hurt(npc,current,damage,time);
     if (!killed && npc.combat.behavior!=='ignore') {
       current.target={player,until:time+8000};
       current.yaw=turn(current.position,point);

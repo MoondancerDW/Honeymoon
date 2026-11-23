@@ -91,6 +91,33 @@ test('double chest preserves original slots, NBT, optimistic transfers and persi
   assert.deepEqual(second('container_read',a).output.container.slots[31].nbt,originalTag);
 });
 
+test('open chests support inventory-only movement, splitting, stacking and swapping without touching storage',t=>{
+  const {add}=clients(t);
+  const player=add();
+  const opened=player('container_open',a,{containerView:'summary'}).output.container;
+  const move=(version,from,to,count)=>player('container_move',a,{containerView:'details',version,from,to,count});
+  const withdrawal=move(opened.version,slot('storage',40),slot('inventory',9));
+  assert.equal(withdrawal.status,200);
+  const {version,contentVersion}=withdrawal.output.container;
+  const split=move(version,slot('inventory',9),slot('inventory',10),7);
+  assert.equal(split.status,200);
+  assert.deepEqual(split.output.inventory.slots.slice(9,11).map(stack=>stack.count),[13,7]);
+  const merged=move(version,slot('inventory',9),slot('inventory',10));
+  assert.equal(merged.status,200);
+  assert.equal(merged.output.inventory.slots[9],null);
+  assert.equal(merged.output.inventory.slots[10].count,20);
+  assert.equal(merged.output.container.version,version);
+  assert.equal(merged.output.container.contentVersion,contentVersion);
+  assert.deepEqual(merged.output.changes,[]);
+  const book=move(version,slot('storage',7),slot('inventory',9));
+  assert.equal(book.status,200);
+  const swap=move(book.output.container.version,slot('inventory',9),slot('inventory',10));
+  assert.equal(swap.status,200);
+  assert.equal(swap.output.inventory.slots[9].count,20);
+  assert.deepEqual(swap.output.inventory.slots[10].nbt,originalTag);
+  assert.deepEqual(swap.output.inventory.slots[10].legacyNbt,{Extra:7});
+});
+
 test('staged chest responses send counts first and keep a content version across lid changes',t=>{
   const {add}=clients(t);
   const first=add();

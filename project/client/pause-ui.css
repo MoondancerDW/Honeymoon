@@ -328,6 +328,7 @@
 #pause-menu .audio-menu-controls { display: flex; gap: .45rem; }
 #pause-menu #audio-mute-toggle { flex: 0 0 44px; width: 44px; }
 .cache-usage { color: #cbdadb; font-size: .84rem; }
+#game-cache-preload { justify-self: start; }
 
 #pause-profile .profile { margin: 0; max-width: none; }
 #pause-profile .pause-profile-note { min-height: 0; margin: .55rem 0 0; color: #c2d0d1; font-size: .82rem; }

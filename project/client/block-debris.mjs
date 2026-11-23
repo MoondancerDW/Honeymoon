@@ -24,8 +24,7 @@ export class BlockDebris {
 
   add({position,cell,material,voxelMaterial,boxes}, surface, rows, time) {
     if (!surface || !cell || !this.world.hasChunk(position[0],position[2])) return;
-    const appearance = debrisMaterial(voxelMaterial ?? cell,material);
-    if (!appearance) return;
+    const appearance = debrisMaterial(voxelMaterial ?? cell,material) ?? debrisMaterial('legacy:5:0');
     const volumes = boxes?.length ? boxes : material === undefined && !voxelMaterial ? appearance.shapes : [fallback];
     const light = this.world.lightAt(...position);
     const particles = [];
@@ -46,6 +45,7 @@ export class BlockDebris {
       }
     }
     this.addBurst(particles,appearance,surface,rows,light,time,.72);
+    return particles.length;
   }
 
   ground(feet, contact, motion, fall, surface, rows, time) {

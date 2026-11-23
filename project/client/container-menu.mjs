@@ -46,7 +46,7 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
 
   const slots=side=>side==='storage'?active?.container?.slots:inventory().slots;
   const at=ref=>ref && slots(ref.side)?.[ref.slot];
-  const same=(a,b)=>a?.side===b.side && a?.slot===b.slot;
+  const same=(a,b)=>Boolean(a && b && a.side===b.side && a.slot===b.slot);
   const ready=()=>Boolean(active?.authorized && active.container?.slots && !active.transfer);
 
   function setCursor(source) {
@@ -196,15 +196,21 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
 
   async function move(from,to,count) {
     const context=active;
-    if (!ready()||same(from,to)||!at(from)) return;
+    const source=at(from);
+    if (!ready()||same(from,to)||!source) return;
+    const carried=same(picked,from)?picked.count:0;
     context.transfer=true;
     status.textContent='';
     try {
       const response=await action('container_move',context.target,{...detailsView,version:context.container.version,
         from:{side:from.side,slot:from.slot},to,...(count&&{count:Math.min(64,count)})});
       if (active!==context) return;
-      if (response.ok) setCursor(null);
       accept(context,response.body?.container);
+      if (response.ok) {
+        const remainder=at(from);
+        const remaining=remainder && stackType(remainder)===stackType(source) ? carried-(source.count-remainder.count) : 0;
+        setCursor(remaining>0 ? {...from,count:Math.min(remaining,remainder.count)} : null);
+      }
       if (response.body?.error) status.textContent=response.body.message??'Действие не выполнено';
     } catch {
       if (active===context) status.textContent='Связь с сервером прервалась';

@@ -17,7 +17,10 @@ await mkdir(output,{recursive:true});
 const solo=test==='solo'||test==='admin-race-solo';
 const raceAdminQa=test==='admin-race'||test==='admin-race-solo';
 const iphoneQa=test==='iphone-fullscreen';
-const preloadQa=test==='terrain-preload-mobile'||test==='terrain-preload-desktop';
+const preloadLowMobileQa=['terrain-preload-low-mobile','terrain-preload-low-limited-mobile'].includes(test);
+const preloadLowQa=preloadLowMobileQa||test==='terrain-preload-low-desktop';
+const preloadLimitQa=test==='terrain-preload-limited'||test==='terrain-preload-low-limited-mobile';
+const preloadQa=test==='terrain-preload-mobile'||test==='terrain-preload-desktop'||preloadLowQa||preloadLimitQa;
 const onlineCacheQa=test==='online-cache'||test==='online-cache-mobile';
 const controlsQa=test==='controls-update'||test==='controls-update-mobile';
 const touchGameplayQa=test==='touch-gameplay';
@@ -28,7 +31,7 @@ const raceQa=test==='races-desktop'||test==='races-mobile';
 const jumpChargeQa=test==='jump-charge-hud'||test==='jump-charge-hud-mobile';
 const adminGameplayQa=test==='admin-gameplay'||test==='admin-gameplay-mobile';
 const afkQa=test==='afk-status';
-const mobileQa=iphoneQa||touchGameplayQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile','jump-charge-hud-mobile','admin-gameplay-mobile','click-edit-latency-mobile'].includes(test);
+const mobileQa=iphoneQa||touchGameplayQa||preloadLowMobileQa||['mobile','online-cache-mobile','controls-update-mobile','terrain-preload-mobile','pause-mobile','races-mobile','chat-tools-mobile','jump-charge-hud-mobile','admin-gameplay-mobile','click-edit-latency-mobile'].includes(test);
 const lavaQa=test==='lava-death';
 const networkQa=test==='network-diagnostics';
 const startupQa=test==='startup-network';
@@ -96,7 +99,105 @@ async function hop(x,y,z) {
 }
 
 try {
-  if (adminGameplayQa) {
+  if (test==='inventory-gameplay') {
+    await skipPreload();
+    const owner=await page.request.post(url+'api/access/owner',{data:{key:ownerKey,profileName:'Проверка инвентаря'}});
+    assert.equal(owner.status(),200,await owner.text());
+    const {playerId}=await page.request.post(url+'api/session',{data:{}}).then(response=>response.json());
+    assert.ok(playerId);
+    const [x,y,z]=[3359,101,1467];
+    const chest={x,y,z:z+2}, workbench={x:x+2,y,z};
+    const cells=[];
+    for (let dx=-2;dx<=3;dx++) for (let dz=-2;dz<=3;dz++) {
+      cells.push({x:x+dx,y:y-1,z:z+dz,cell:'legacy:1:0',object:null});
+      for (let dy=0;dy<=2;dy++) {
+        const blockX=x+dx, blockZ=z+dz;
+        const cell=dy===0 && blockX===chest.x && blockZ===chest.z ? 'legacy:54:2' :
+          dy===0 && blockX===workbench.x && blockZ===workbench.z ? 'legacy:58:0' : null;
+        cells.push({x:blockX,y:y+dy,z:blockZ,cell,object:null});
+      }
+    }
+    app.game.worldEdit.write(playerId,cells);
+    for (const [slot,key,count] of [[9,'legacy:5:0',18],[10,'legacy:5:0',10],
+      [11,'creative:5930:0',1],[12,'creative:5872:0',1]]) {
+      const seeded=app.game.action(playerId,{type:'inventory_give',slot,key,count,requestId:`inventory-fixture-${slot}`});
+      assert.equal(seeded.status,200,JSON.stringify(seeded));
+    }
+    app.game.teleport(playerId,{x:x+.5,y,z:z+.5});
+    const survival=await page.request.post(url+'api/modes',{data:{target:playerId,mode:'game'}});
+    assert.equal(survival.status(),200,await survival.text());
+    await start(false);
+    await page.waitForFunction(()=>honeymoon.health().mode==='game');
+
+    async function playerResponse(path,test,interact) {
+      const [response]=await Promise.all([page.waitForResponse(response=>response.url()===url+'api/'+path &&
+        response.request().method()==='POST' && test(response.request().postDataJSON())),interact()]);
+      assert.equal(response.status(),200,await response.text());
+      return response.json();
+    }
+    async function aim(point) {
+      await page.evaluate(({x,y,z})=>{
+        const [cx,cy,cz]=honeymoon.perspective().position;
+        const dx=x+.5-cx, dy=y+.5-cy, dz=z+.5-cz;
+        honeymoon.look(Math.atan2(-dx,-dz),Math.atan2(dy,Math.hypot(dx,dz)));
+      },point);
+      await page.waitForFunction(({x,y,z})=>{
+        const hit=honeymoon.target();
+        return hit?.x===x && hit.y===y && hit.z===z;
+      },point);
+    }
+    await page.keyboard.press('KeyI');
+    await page.locator('#creative-menu.inventory-only').waitFor({state:'visible'});
+    const equip=async (from,to,key)=>{
+      await click(`#creative-menu [data-slot="${from}"]`);
+      const body=await playerResponse('action',input=>input?.type==='inventory_move',()=>click(`#inventory-equipment [data-slot="${to}"]`));
+      assert.equal(body.inventory.equipment[to-36].key,key);
+    };
+    await equip(11,36,'creative:5930:0');
+    await equip(12,37,'creative:5872:0');
+    await page.waitForFunction(()=>honeymoon.localAvatar()?.armor?.slice(0,2).every(part=>part.meshes>0));
+    await shot('inventory-accessories');
+    await click('#creative-close');
+    if (await visible('#play')) await click('#play');
+
+    await aim(chest);
+    await page.keyboard.press('KeyE');
+    const bag=slot=>page.locator(`#container-inventory [data-slot="${slot}"]`);
+    await page.waitForFunction(()=>{
+      const slot=document.querySelector('#container-inventory [data-slot="9"]');
+      return slot && !slot.disabled;
+    });
+    const move=interact=>playerResponse('action',input=>input?.type==='container_move',interact);
+    const moved=await move(()=>bag(9).dragTo(bag(14)));
+    assert.equal(moved.inventory.slots[9],null);
+    assert.equal(moved.inventory.slots[14].count,18);
+    await page.waitForFunction(()=>document.querySelector('#container-inventory [data-slot="14"] .stack-count')?.textContent==='18');
+    await bag(14).click();
+    const stacked=await move(()=>bag(10).click());
+    assert.equal(stacked.inventory.slots[10].count,28);
+    await page.waitForFunction(()=>document.querySelector('#container-inventory [data-slot="10"] .stack-count')?.textContent==='28');
+    await bag(10).click({button:'right'});
+    assert.equal((await move(()=>bag(15).click({button:'right'}))).inventory.slots[15].count,1);
+    await page.waitForFunction(()=>document.querySelector('#container-carried .stack-count')?.textContent==='13');
+    const split=await move(()=>bag(16).click({button:'right'}));
+    assert.equal(split.inventory.slots[16].count,1);
+    assert.equal(split.inventory.slots[10].count,26);
+    await shot('inventory-move-with-chest-open');
+    await click('#container-close');
+    if (await visible('#play')) await click('#play');
+
+    await aim(workbench);
+    await page.keyboard.press('KeyE');
+    await page.locator('#craft-menu[open]').waitFor({state:'visible'});
+    assert.equal(await page.locator('#craft-title').innerText(),'Верстак');
+    const crafted=await playerResponse('craft',input=>input?.recipe==='chest',()=>click('#craft-list [data-recipe="chest"]'));
+    assert.equal(crafted.inventory.slots.find(stack=>stack?.key.startsWith('legacy:54:'))?.count,1);
+    assert.equal(crafted.inventory.slots.filter(stack=>stack?.key==='legacy:5:0').reduce((n,item)=>n+item.count,0),20);
+    await page.waitForFunction(()=>document.getElementById('craft-error').textContent==='Готово');
+    await shot('workbench-recipe');
+    await click('#craft-close');
+    result.checks.push({survivalInventoryKey:'I',equipment:['5930:0','5872:0'],inventoryWithChest:true,splitStacks:true,workbenchRecipe:'chest'});
+  } else if (adminGameplayQa) {
     await skipPreload();
     if (!mobileQa) await page.setViewportSize({width:1300,height:760});
     await start();
@@ -1432,43 +1533,114 @@ try {
     result.checks.push({iphoneFullscreenFallback:true});
   } else if (preloadQa) {
     const requests=[];
+    const oversizedLayer=preloadLowQa?'vista':'primitive';
     app.server.on('request',request=>{
       const address=new URL(request.url,url);
       if (address.pathname==='/api/terrain-preload') requests.push(address.searchParams.get('layer'));
     });
+    if (preloadLimitQa) await page.context().route('**/api/terrain-preload/plan',async route=>{
+      const response=await route.fetch();
+      const plan=await response.json();
+      plan.layers[oversizedLayer].bytes=(preloadLowQa?65:193)*1024*1024;
+      await route.fulfill({response,json:plan});
+    });
+    if (preloadLowQa) await page.addInitScript(origin=>{
+      if (location.origin===origin && localStorage.getItem('honeymoon-low-device')===null) {
+        localStorage.setItem('honeymoon-low-device','1');
+      }
+    },new URL(url).origin);
     await start();
     const response=await page.request.get(url+'generated/world/world.json');
     assert.equal(response.status(),200);
     const manifest=await response.json();
     assert.equal(manifest.upperChunksEmpty,true);
-    const expected={altitude:4,primitive:manifest.lod.regions.length,vista:manifest.vista.regions.length,
-      ...(mobileQa?{}:{simplified:manifest.lod.regions.length})};
-    const expectedTotal=Object.values(expected).reduce((total,count)=>total+count,0);
-    const readyPreload=()=>page.waitForFunction(()=>honeymoon.stats().terrainPreload?.phase==='ready',
-      undefined,{polling:250,timeout:120_000});
+    const expectedLayers=lowDevice=>({
+      altitude:4,
+      ...(!(preloadLimitQa&&oversizedLayer==='vista')&&{vista:manifest.vista.regions.length}),
+      ...(!lowDevice&&{simplified:manifest.lod.regions.length}),
+      ...(!lowDevice&&!(preloadLimitQa&&oversizedLayer==='primitive')&&{primitive:manifest.lod.regions.length}),
+    });
+    async function readyPreload(lowDevice) {
+      const layers=expectedLayers(lowDevice);
+      const limited=preloadLimitQa&&!(oversizedLayer==='primitive'&&lowDevice);
+      const total=Object.values(layers).reduce((sum,count)=>sum+count,0);
+      await page.waitForFunction(({lowDevice,phase,total})=>{
+        const stats=honeymoon.stats();
+        const preload=stats.terrainPreload;
+        return stats.lowDevice===lowDevice && preload?.phase===phase && preload.total===total && preload.loaded===total;
+      },{lowDevice,phase:limited?'limited':'ready',total},{polling:250,timeout:180_000});
+      if (limited) assert.deepEqual((await stat()).terrainPreload.skipped,[oversizedLayer]);
+    }
+    async function openCacheSettings() {
+      if (mobileQa) await page.locator('#touch-pause').tap();
+      else {
+        await page.waitForFunction(()=>Boolean(document.pointerLockElement));
+        await page.keyboard.press('Escape');
+      }
+      await pauseSection('settings');
+      await page.locator('#game-cache-usage').waitFor({state:'visible'});
+    }
+    async function requestMobilePreload() {
+      assert.equal((await stat()).terrainPreload.phase,'idle');
+      const before=requests.length;
+      await openCacheSettings();
+      assert.equal(requests.length,before,'mobile does not request packets until the player opts in');
+      if (preloadLowQa) {
+        const panorama=page.getByRole('button',{name:'Загрузить панораму'});
+        await panorama.waitFor({state:'visible'});
+      }
+      await click('#game-cache-preload');
+      await click('#play');
+    }
     const usage=()=>page.evaluate(async()=>{
       const {terrainCacheUsage}=await import('/terrain-cache.mjs');
       const {worldCheckpointUsage}=await import('/world-checkpoint.mjs');
       return {terrain:await terrainCacheUsage(),edits:await worldCheckpointUsage()};
     });
     const MiB=1024*1024;
-    const normalCap=mobileQa?782:2462, lowCap=mobileQa?300:512;
-    await readyPreload();
+    const normalCap=mobileQa?1124:2660, lowCap=mobileQa?434:646;
+    const lowDetailed=mobileQa?76:226, lowSimplified=mobileQa?34:96;
+    async function checkUsage(lowDevice) {
+      const stored=await usage();
+      const cap=lowDevice?lowCap:normalCap;
+      const {buckets,maxBytes,bytes}=stored.terrain;
+      for (const [layer,count] of Object.entries(expectedLayers(lowDevice))) assert.equal(buckets[layer].entries,count,layer);
+      assert.equal(buckets.detailed.maxBytes,(lowDevice?lowDetailed:mobileQa?512:2048)*MiB);
+      assert.equal(buckets.simplified.maxBytes,(lowDevice?lowSimplified:288)*MiB);
+      assert.ok(buckets.detailed.bytes<=buckets.detailed.maxBytes);
+      assert.ok(buckets.simplified.bytes<=buckets.simplified.maxBytes);
+      assert.equal(stored.edits.maxBytes,64*MiB);
+      assert.equal(maxBytes+stored.edits.maxBytes,cap*MiB);
+      assert.ok(bytes+stored.edits.bytes<=cap*MiB);
+      return stored;
+    }
+    if (mobileQa) await requestMobilePreload();
+    await readyPreload(preloadLowQa);
     const preload=(await stat()).terrainPreload;
-    assert.equal(preload.loaded,expectedTotal);
-    const cold=await usage();
-    for (const [layer,count] of Object.entries(expected)) assert.equal(cold.terrain.buckets[layer].entries,count,layer);
-    assert.equal(cold.terrain.buckets.detailed.maxBytes,(mobileQa?512:2048)*MiB);
-    assert.equal(cold.terrain.buckets.simplified.maxBytes,(mobileQa?80:224)*MiB);
-    assert.equal(cold.edits.maxBytes,64*MiB);
-    assert.ok(requests.includes('primitive')&&requests.includes('vista'));
-    assert.equal(requests.includes('simplified'),!mobileQa);
+    if (preloadLimitQa) {
+      const path=oversizedLayer==='vista'
+        ? `/generated/vista/${manifest.vista.hash}/${manifest.vista.regions.at(-1).join('.')}.bin`
+        : `/generated/lod/${manifest.lod.contentHash}/${manifest.lod.regions.at(-1).join('.')}.outer.bin`;
+      const signature=await page.evaluate(async path=>{
+        const {readTerrain}=await import('/terrain-cache.mjs');
+        return readTerrain(path,{},true,async response=>{
+          if (!response.ok) throw new Error(`Foreground tile returned ${response.status}`);
+          return new DataView(await response.arrayBuffer()).getUint32(0);
+        },{waitForStore:true});
+      },path);
+      assert.equal(signature,oversizedLayer==='vista'?0x48565354:0x484c4f44,
+        'a skipped preload layer still serves tiles on demand');
+    }
+    const cold=await checkUsage(preloadLowQa);
+    const {altitude,...packetLayers}=expectedLayers(preloadLowQa);
+    assert.deepEqual([...new Set(requests)].sort(),Object.keys(packetLayers).sort());
     const firstRequestCount=requests.length;
     await page.goto('about:blank');
     await start(false);
-    await readyPreload();
+    if (mobileQa) await requestMobilePreload();
+    await readyPreload(preloadLowQa);
     assert.equal(requests.length,firstRequestCount,'a repeat visit reuses the prefetched layers');
-    if (mobileQa) {
+    if (mobileQa&&!preloadLowQa) {
       await page.evaluate(async version=>{
         const {storePrefetchedTerrain}=await import('/terrain-cache.mjs');
         const tile=new Blob([new Uint8Array(45*1024*1024)]);
@@ -1479,29 +1651,42 @@ try {
         }
       },manifest.chunkCacheVersion);
       assert.ok((await usage()).terrain.buckets.detailed.bytes>=90*MiB);
-      await page.locator('#touch-pause').tap();
-    } else {
-      await page.waitForFunction(()=>Boolean(document.pointerLockElement));
-      await page.keyboard.press('Escape');
     }
-    await pauseSection('settings');
+    await openCacheSettings();
     const output=page.locator('#game-cache-usage');
-    await output.waitFor({state:'visible'});
     const expectLimit=limit=>page.waitForFunction(limit=>
       document.getElementById('game-cache-usage').textContent.replace(/\s+/g,'').includes(`из${limit}МиБ`),limit);
-    await expectLimit(normalCap);
-    await click('#low-device');
-    await expectLimit(lowCap);
-    const pruned=await usage();
-    assert.equal(pruned.terrain.maxBytes+pruned.edits.maxBytes,lowCap*MiB);
-    assert.ok(pruned.terrain.bytes+pruned.edits.bytes<=lowCap*MiB);
-    assert.ok(pruned.terrain.buckets.detailed.bytes<=(mobileQa?76:226)*MiB);
-    for (const layer of ['altitude','primitive','vista']) assert.equal(pruned.terrain.buckets[layer].entries,expected[layer]);
-    await shot('terrain-cache-limit');
-    await click('#low-device');
-    await expectLimit(normalCap);
-    const restored=await usage();
-    assert.equal(restored.terrain.maxBytes+restored.edits.maxBytes,normalCap*MiB);
+    await expectLimit(preloadLowQa?lowCap:normalCap);
+    if (preloadLimitQa) assert.match(await output.textContent(),/превышает лимит игры/);
+    else if (preloadLowQa) assert.match(await output.textContent(),/панорама сохранена/);
+    let pruned,restored;
+    if (!preloadLowQa) {
+      await click('#low-device');
+      await expectLimit(lowCap);
+      await readyPreload(true);
+      pruned=await checkUsage(true);
+      assert.equal(pruned.terrain.buckets.primitive.entries,cold.terrain.buckets.primitive.entries);
+      assert.equal(requests.length,firstRequestCount,'low graphics reuses its complete subset');
+      await shot('terrain-cache-limit');
+      await click('#low-device');
+      await expectLimit(normalCap);
+      await readyPreload(false);
+      restored=await checkUsage(false);
+      assert.deepEqual([...new Set(requests.slice(firstRequestCount))],['simplified'],
+        'restoring normal graphics downloads only the additional layer');
+    } else {
+      await shot('terrain-cache-limit');
+      if (mobileQa&&!preloadLimitQa) {
+        await click('#low-device');
+        await expectLimit(normalCap);
+        await page.waitForFunction(()=>{
+          const stats=honeymoon.stats();
+          return !stats.lowDevice && stats.terrainPreload?.phase==='idle';
+        });
+        await page.locator('#game-cache-preload').waitFor({state:'visible'});
+        assert.equal(requests.length,firstRequestCount,'low-only consent does not download missing normal layers');
+      }
+    }
     result.checks.push({preload,requests:firstRequestCount,hadWarmCache:true,normalCap,lowCap,cold,pruned,restored});
   } else if (test==='upper-with-cache') {
     await skipPreload();
