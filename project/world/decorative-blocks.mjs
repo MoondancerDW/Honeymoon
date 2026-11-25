@@ -4,8 +4,6 @@ export const cakeBlock = 92;
 export const flowerPot = 140;
 export const glassJar = 2168;
 export const workbenchBlock = 58;
-export const cakeItemKey = 'creative:354:0';
-export const flowerPotItemKey = 'creative:390:0';
 export const blockedPlaceTargets = new Set([cakeBlock,flowerPot,glassJar,workbenchBlock]);
 
 const plants=[null,[38,0],[37,0],[6,0],[6,1],[6,2],[6,3],[40,0],[39,0],[81,0],[32,0],[31,2]];

@@ -11,6 +11,7 @@ export const signPlacementCell = 'legacy:63:0';
 export const itemPlacementCells = new Map([
   ['creative:354:0','legacy:92:0'],
   ['creative:390:0','legacy:140:0'],
+  ...Array.from({length:5},(_,damage)=>[`creative:397:${damage}`,'legacy:144:1']),
 ]);
 
 // RedPower's legacy item damage stores its material in the low byte and

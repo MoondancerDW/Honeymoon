@@ -7,6 +7,7 @@ import {consumableName} from '../world/held-consumables.mjs';
 import {isCoverMaterial} from '../world/geometry.mjs';
 import {FAKE_WATER} from '../world/fluid-state.mjs';
 import {NPC_EDITOR_WAND_ID,NPC_EDITOR_WAND_KEY} from '../world/npc-editor-wand.mjs';
+import {lightingPlacementName} from '../world/placement-lighting.mjs';
 
 const rails = [
   [66, 'Рельсы', 'Rail'],
@@ -61,7 +62,7 @@ export function readCreativeCatalog(generated, project = fileURLToPath(new URL('
         typeof name !== 'string' || !name) continue;
     const key = 'creative:' + id + ':' + damage;
     const blockKey=itemPlacementCells.get(key);
-    if (!extra.has(key) && !captured.has(key)) extra.set(key,{key,id,damage,name,english,mod,kind:blockKey?'block-item':'flat-item',
+    if (!extra.has(key) && (blockKey || !captured.has(key))) extra.set(key,{key,id,damage,name,english,mod,kind:blockKey?'block-item':'flat-item',
       ...consumableName(id,damage),...(blockKey&&{blockKey}),category:'items',technical:false,placeable:true});
   }
   catalog.entries.push(...extra.values());
@@ -69,6 +70,8 @@ export function readCreativeCatalog(generated, project = fileURLToPath(new URL('
   const placeable = new Set();
   const items = new Map();
   for (const entry of catalog.entries) {
+    const fixtureName=lightingPlacementName(entry.id,entry.meta);
+    if (fixtureName) entry.name=fixtureName;
     if (extra.has(entry.key)) {
       items.set(entry.key, entry);
       continue;

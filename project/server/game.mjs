@@ -29,7 +29,7 @@ import { isRideableBoat,boatHeading,boatHit,boatSeat } from '../world/boats.mjs'
 import { pistonHead } from './pistons.mjs';
 import { orientedRail, railFor } from '../world/rails.mjs';
 import { blockKey, blockState, buttonDuration, jammyAppliance, pressurePlate, relatedBlockStates, signalSides } from '../world/block-interactions.mjs';
-import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,shapedLampData,
+import { CREATIVE_BOAT_KEY,CREATIVE_FRAME_KEY,CREATIVE_INVISIBLE_FRAME_KEY,CREATIVE_MINECART_KEY,itemPlacementCells,shapedLampData,
   signItemKey,signPlacementCell } from '../world/creative-items.mjs';
 import { fluidAt, fluidCurrent, liquidLevel, movementMedium } from '../world/block-movement.mjs';
 import { canLogLiquid, liquidCavity, liquidCell, liquidKind } from '../world/logged-fluid.mjs';
@@ -40,9 +40,11 @@ import { chiselMaterialKey, chiselPlacementAtHit, chiselSourceVolume, chiselVoxe
 import {JUMP_CHARGE_BONUS,JUMP_CHARGE_LIMIT,JUMP_CHARGE_RECHARGE_MS,MAGIC_TELEPORT_COOLDOWN_MS,MAGIC_TELEPORT_HORIZONTAL,
   MAGIC_TELEPORT_VERTICAL,ponyAbilities} from '../world/pony-abilities.mjs';
 import {grassBlock, isTreeLog, plainDirt} from '../world/tree-logs.mjs';
-import {cakeBlock, cakeItemKey, decorationContents, flowerPot, flowerPotItemKey, glassJar, jarInsert,
+import {cakeBlock, decorationContents, flowerPot, glassJar, jarInsert,
   pottedPlantMeta, workbenchBlock} from '../world/decorative-blocks.mjs';
-import {orientFurnitureObject, orientPlacedBlock, placementHeading} from '../world/placement-heading.mjs';
+import {orientPlacedBlock,orientWallAttachment,placementFace,placementHeading,placementRotation} from '../world/placement-heading.mjs';
+import {orientedLightPlacement} from '../world/placement-lighting.mjs';
+import {modWallPlacement,orientModBlock,orientModObject} from '../world/placement-mods.mjs';
 import {craftingTableRecipe,workbenchRecipes} from '../world/workbench-recipes.mjs';
 import {paintingItemKey} from '../world/paintings.mjs';
 
@@ -119,7 +121,7 @@ function normalizeAction(body) {
       input.cell = body.cell;
     }
   } else if (body.creativeItem !== undefined) {
-    const placeableItem = body.type === 'place' && [signItemKey,cakeItemKey,flowerPotItemKey].includes(body.creativeItem);
+    const placeableItem=body.type==='place' && (body.creativeItem===signItemKey || itemPlacementCells.has(body.creativeItem));
     if (!placeableItem && (!['place','place_part'].includes(body.type) || typeof body.creativeItem !== 'string' ||
         !/^creative:(?:750|753|768):\d{1,5}$/.test(body.creativeItem))) throw new RequestError(400, 'unknown_cell_type');
     input.creativeItem = body.creativeItem;
@@ -245,7 +247,8 @@ export function newCreativeObject(key, position, input, item) {
     type='FireflyJar';
     data={jarContent:'empty'};
   }
-  const face = input.against && signalSides.findIndex(offset => axes.every((axis,i) => position[i] - input.against[axis] === offset[i]));
+  const [x,y,z]=position;
+  const face=placementFace({x,y,z},input.against);
   const mount = face >= 0 ? face ^ 1 : 0;
   if (id === 750 && [1,2,3,5,12].includes(meta)) {
     type = ({1:'Redwire',2:'InsRedwire',3:'RedCable',5:'Bluewire',12:'RPConRibbon'})[meta];
@@ -903,10 +906,23 @@ export function createGame(base, store, geometry, {
     return candidates.some(([ax, ay, az]) => physical.visible(position, ax, ay, az, input.hit));
   }
 
+  function doorHinge(id,{x,y,z},dx,dz) {
+    const side=(ax,az)=>{
+      const levels=[y,y+1];
+      return {
+        door:levels.some(ay=>blockState(getCurrent(ax,ay,az))[0]===id),
+        solid:levels.filter(ay=>faceSupports(ax,ay,az,0,.01)&&faceSupports(ax,ay,az,1,.01)).length,
+      };
+    };
+    const left=side(x+dx,z+dz), right=side(x-dx,z-dz);
+    return Number(left.door&&!right.door || right.solid>left.solid);
+  }
+
   function creativePlacement(input, current, player) {
     const {x, y, z} = current;
     const [id, meta] = blockState(input.cell);
-    if (!pairedBlocks.has(id)) return {cell:geometry.isSofa?.(input.cell)?input.cell:orientPlacedBlock(input.cell,input,current,models)};
+    if (!pairedBlocks.has(id)) return {cell:geometry.isSofa?.(input.cell)?input.cell:
+      orientModBlock(input.cell,input,current,models)??orientPlacedBlock(input.cell,input,current)};
     const isBed = id === 26;
     const orientation = input.yaw === undefined ? meta&3 : isBed ? (2-placementHeading(input.yaw))&3 : (1-placementHeading(input.yaw))&3;
     const [dx, dz] = bedDirections[orientation];
@@ -918,7 +934,8 @@ export function createGame(base, store, geometry, {
     }
     if (getCurrent(second.x, second.y, second.z).cell !== null) throw new RequestError(409, 'occupied');
     const cell = blockKey(id, isBed ? orientation : orientation | (meta & 4));
-    const other = blockKey(id, isBed ? orientation | 8 : 8 | (meta & 8 ? meta & 1 : 0));
+    const hinge=isBed?0:input.yaw===undefined?(meta&8?meta&1:0):doorHinge(id,current,dx,dz);
+    const other = blockKey(id,8|(isBed?orientation:hinge));
     const atOther = (ax, ay, az) => x + ax === second.x && y + ay === second.y && z + az === second.z ? other : undefined;
     const atOrigin = (ax, ay, az) => second.x + ax === x && second.y + ay === y && second.z + az === z ? cell : undefined;
     if (playerOverlaps(x, y, z, cell, player, atOther) ||
@@ -955,12 +972,11 @@ export function createGame(base, store, geometry, {
       return blockKey(id,id === 23 || Math.abs(pitch) < Math.PI / 3 ? direction : Number(pitch < 0));
     }
     const button = Boolean(buttonDuration(id));
-    const torch = id === 50 || id === 75 || id === 76 || id >= 3909 && id <= 3924;
     const repeater = id === 93 || id === 94;
     const floor = repeater || pressurePlate(id) || id === 55;
-    if (!floor && !button && !torch && id !== 69) return null;
-    const face = signalSides.findIndex(offset => axes.every((axis,index) => input[axis] - input.against[axis] === offset[index]));
-    if (face < 0 || floor && face !== 1 || (torch || button) && face === 0 || button && face === 1) {
+    if (!floor && !button && id !== 69) return null;
+    const face=placementFace(input,input.against);
+    if (face < 0 || floor && face !== 1 || button && face < 2) {
       throw new RequestError(409,'invalid_control_face');
     }
     const {x,y,z} = input.against;
@@ -969,7 +985,7 @@ export function createGame(base, store, geometry, {
     if (repeater) return blockKey(93,heading | (meta & 12));
     if (floor) return blockKey(id,0);
     if (id === 69 && face <= 1) return blockKey(id,face ? 5 + (heading & 1) : (heading & 1) * 7);
-    return blockKey(id === 75 ? 76 : id,mountingMeta[face]);
+    return blockKey(id,mountingMeta[face]);
   }
 
   function faceSupports(x,y,z,face,inset) {
@@ -984,12 +1000,12 @@ export function createGame(base, store, geometry, {
 
   function placeSign(player, current, input) {
     const {x, y, z, against, hit} = input;
-    const face = against ? signalSides.findIndex(offset => axes.every((axis, index) => input[axis] - against[axis] === offset[index])) : undefined;
+    const face=against?placementFace(input,against):undefined;
     const fromItem = input.creativeItem === signItemKey;
     const orient = fromItem || input.creative || input.yaw !== undefined;
     if (orient && face === 0 || fromItem && face === undefined) throw new RequestError(409, 'invalid_sign_face');
     if (face === -1 || (!against && hit)) throw new RequestError(403, 'outside_reach');
-    if (fromItem && !faceSupports(against.x,against.y,against.z,face,.35)) throw new RequestError(409,'missing_support');
+    if (orient && against && !faceSupports(against.x,against.y,against.z,face,.35)) throw new RequestError(409,'missing_support');
     const standing = input.yaw === undefined ? blockState(input.cell)[1] : -Math.round(input.yaw * 8 / Math.PI) & 15;
     const cell = !orient ? input.cell : face === 1 ? blockKey(63, standing) : face >= 2 ? blockKey(68, face) : input.cell;
     const position = [x, y, z];
@@ -1436,13 +1452,20 @@ export function createGame(base, store, geometry, {
       if (signBlocks.has(blockState(input.cell)[0])) return placeSign(player, current, input);
       const rail = railFor(input.cell);
       if (rail) return placeRail(player, current, input, rail);
-      const control = controlPlacement(input);
-      if (control) {
-        const object = newCreativeObject(control,[x,y,z],input,item);
-        if (playerOverlaps(x,y,z,{key:control,object},player)) throw new RequestError(409,'occupied');
-        return writeCell(player,current,control,object);
+      const interactive=input.creative || input.yaw!==undefined || Boolean(item);
+      const mounting=interactive ? orientedLightPlacement(input.cell,input,current,models) ??
+        orientWallAttachment(input.cell,input,current) ?? modWallPlacement(input.cell,input,current,models) : undefined;
+      if (mounting?.error) throw new RequestError(409,mounting.error);
+      if (mounting?.requireSupport!==undefined) {
+        const anchor=input.against;
+        if (!faceSupports(anchor.x,anchor.y,anchor.z,mounting.requireSupport,.35)) throw new RequestError(409,'missing_support');
+        if (mounting.jungleLog) {
+          const [supportId,supportMeta]=blockState(getCurrent(anchor.x,anchor.y,anchor.z));
+          if (supportId!==17 || (supportMeta&3)!==3) throw new RequestError(409,'missing_support');
+        }
       }
-      const actual = input.creative || input.yaw!==undefined ? creativePlacement(input,current,player) : {cell:input.cell};
+      const oriented=mounting?.cell ?? controlPlacement(input);
+      const actual=oriented?{cell:oriented}:interactive?creativePlacement(input,current,player):{cell:input.cell};
       const chest=joinChest(current,actual.cell);
       actual.cell=chest.cell;
       const [actualId] = blockState(actual.cell);
@@ -1450,19 +1473,26 @@ export function createGame(base, store, geometry, {
       const plant = plantBlock.ground.includes(actualId) || plantBlock.aquatic.includes(actualId) || isGroundSprite && actualId > 255;
       const floor = faceSupports(x,y-1,z,1,.35);
       const jarCeiling=actualId===glassJar && input.against?.y===y+1 && faceSupports(x,y+1,z,0,.35);
-      const supportiveAnchor = input.against && signalSides.findIndex(offset => axes.every((axis,i)=>
-        input[axis] - input.against[axis] === offset[i]));
+      const supportiveAnchor=placementFace(input,input.against);
       const backedLiquid = floor || allowRemoval && supportiveAnchor >= 0 && input.against &&
         faceSupports(input.against.x,input.against.y,input.against.z,supportiveAnchor,.35);
-      if ([cakeBlock,flowerPot,glassJar].includes(actualId) && !floor && !jarCeiling ||
+      if ([cakeBlock,flowerPot,glassJar].includes(actualId) && !floor && !jarCeiling || !mounting && (
           plant && !intoLiquid && !floor && ![8,9,18,60,243,4095].includes(blockState(getCurrent(x,y-1,z))[0]) ||
-          ((!allowRemoval && isGroundSprite) || actualId === 51) && !floor || liquidKind(actual.cell) && !backedLiquid) {
+          ((!allowRemoval && isGroundSprite) || actualId === 51) && !floor) || liquidKind(actual.cell) && !backedLiquid) {
         throw new RequestError(409,'missing_support');
       }
-      const copied = input.creative ? null : clipboardFor(player, actual.cell);
-      const copiedObject = input.creative || item ? newCreativeObject(actual.cell, [x, y, z], input, item) :
-        copied?.cell === actual.cell ? withoutContainerContents(actual.cell,copied.object) : null;
-      const orientedObject=orientFurnitureObject(actual.cell,copiedObject,[x,y,z],input,models);
+      const copied=input.creative?null:clipboardFor(player,input.cell);
+      const position=[x,y,z];
+      let copiedObject=copied?.cell===input.cell?withoutContainerContents(actual.cell,copied.object):null;
+      if (!copiedObject && (input.creative || item || oriented)) copiedObject=newCreativeObject(actual.cell,position,input,item);
+      if (actualId===768 && mounting?.mountFace!==undefined && copiedObject) {
+        copiedObject={...copiedObject,data:{...copiedObject.data,rot:mounting.mountFace^1}};
+      }
+      if (actualId===144 && mounting) {
+        copiedObject={type:'Skull',key:`tile:${position.join(':')}`,position,data:{...copiedObject?.data,
+          SkullType:item?.damage??copiedObject?.data?.SkullType??0,Rot:mounting.requireSupport===1?placementRotation(input.yaw??0):0}};
+      }
+      const orientedObject=orientModObject(actual.cell,copiedObject,position,input,models);
       const object = geometry.placementObject
         ? geometry.placementObject(actual.cell, orientedObject, [x, y, z], input.turns, input.yaw)
         : orientedObject ? { ...orientedObject, position: [x, y, z], key: `tile:${x}:${y}:${z}` } : null;

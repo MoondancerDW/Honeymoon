@@ -8,6 +8,7 @@ const localShade = [.7, .7, .5, 1, .7, .7];
 const directions = [[0, 0, -1], [0, 0, 1], [-1, 0, 0], [1, 0, 0]];
 // MathLib.orientMatrix(side, 0), as signed local axes for the world X/Y/Z coordinates.
 const axesForSide = [[1, 2, 3], [1, -2, -3], [3, 1, 2], [-3, 1, -2], [2, 1, -3], [-2, 1, 3]];
+const axesForSpin = [[1, 2, 3], [3, 2, -1], [-1, 2, -3], [-3, 2, 1]];
 const wireKey = /^(?:legacy|cover):750:(1|2|3|5)(?::|$)/;
 const vanillaConnectors = new Set([23, 55, 69, 70, 72, 75, 76, 77, 143]);
 const sidesOf = cell => (cell?.object?.data ?? cell?.data)?.cons ?? 0;
@@ -79,7 +80,7 @@ function exteriorWireConnection(neighbor, mount, direction, offset, neighbors, p
     !blockedByCover(diagonal, mount ^ 1));
 }
 
-function reducedBox(local, axes, faces, flags, tint, shift, shade) {
+function reducedBox(local, axes, faces, flags, tint, shift, shade=localShade) {
   const offset = shift ? worldOffset(axes, shift) : [0, 0, 0];
   const first = axes.map((axis, i) => offset[i] + (axis > 0 ? local[axis - 1] : 1 - local[-axis + 2]));
   const last = axes.map((axis, i) => offset[i] + (axis > 0 ? local[axis + 2] : 1 - local[-axis - 1]));
@@ -89,6 +90,34 @@ function reducedBox(local, axes, faces, flags, tint, shift, shade) {
     redPowerUv:localFaces.map(face => (flags >> (rpFaceForBox[face] * 3)) & 7),
     redPowerLocalShade:localFaces.map(face => shade[face]),
     redPowerAxes:axes, redPowerFaces:localFaces, ...(shift && {redPowerOffset:offset})};
+}
+
+function boardAxes(rotation) {
+  const mount = (rotation >> 2) & 7;
+  const spin = axesForSpin[rotation & 3];
+  return (axesForSide[mount] ?? axesForSide[0]).map(axis => Math.sign(axis)*spin[Math.abs(axis)-1]);
+}
+
+export function redPowerBoardFace(rotation, localFace) {
+  const axes=boardAxes(rotation);
+  return rpFaceForBox.findIndex((_,face)=>localDirection(axes,face)===localFace);
+}
+
+export function redPowerBoardShape(tile, rotation) {
+  const axes=boardAxes(rotation);
+  const result = reducedBox([0,0,0,1,1/8,1], axes, Array(6).fill(tile), 0);
+  return {...result, solid:true, mode:'opaque', approximation:'Simplified RedPower logic board'};
+}
+
+export function redPowerBoardSpin(mount, yaw, pitch=0) {
+  const look = [-Math.sin(yaw)*Math.cos(pitch),Math.sin(pitch),-Math.cos(yaw)*Math.cos(pitch)];
+  const axes = axesForSide[mount];
+  const along = axis => {
+    const worldAxis = axes.findIndex(component=>Math.abs(component)===axis);
+    return look[worldAxis]*Math.sign(axes[worldAxis]);
+  };
+  const x = along(1), z = along(3);
+  return Math.hypot(x,z)<1e-6 ? 0 : Math.round(Math.atan2(-x,-z)*2/Math.PI)&3;
 }
 
 function textureFor(style, row, face) {

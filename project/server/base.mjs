@@ -16,6 +16,7 @@ const CHUNK_BYTES_PER_SECTION = 16 ** 3 * 2;
 const MAX_CACHED_CHUNKS = 160;
 const unavailableCell = Object.freeze({key:'legacy:1:0',object:null});
 const safeTileFields = new Set([
+  'SkullType',
   'jarContent', 'deskAngle',
   'Text1', 'Text2', 'Text3', 'Text4', 'rotation', 'Rotation', 'direction', 'Direction',
   'orientation', 'Orientation', 'rot', 'Rot', 'facing', 'Facing', 'color', 'Color',

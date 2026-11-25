@@ -4,7 +4,7 @@ import * as geometry from '../world/geometry.mjs';
 import {createGame} from './game.mjs';
 import {openStore} from './store.mjs';
 
-const stone='legacy:1:0', flower='legacy:37:0', gate='legacy:107:0';
+const stone='legacy:1:0', flower='legacy:37:0', gate='legacy:107:0', door='legacy:64:0';
 const unsupportedMaterials=['legacy:51:0','legacy:9:0','legacy:11:0',flower];
 const fixture=new Map([
   ['10,1,8',flower],
@@ -17,7 +17,7 @@ function sandbox(t) {
   t.after(()=>store.close());
   const base={
     hash:'placement-test',
-    catalog:new Set([stone,flower,gate,...unsupportedMaterials]),
+    catalog:new Set([stone,flower,gate,door,...unsupportedMaterials]),
     manifest:{spawn:[8.5,1,8.5],bounds:{minX:0,maxX:15,minY:0,maxY:15,minZ:0,maxZ:15}},
     inBounds:(x,y,z)=>[x,y,z].every(value=>value>=0&&value<=15),
     getCell:(x,y,z)=>({key:fixture.get(`${x},${y},${z}`) ?? (y===0?stone:'air'),object:null}),
@@ -70,4 +70,15 @@ test('gate placement follows each cardinal facing and fence corners leave the di
   const contains=(x,z)=>corners.some(box=>x>=box.x0&&x<=box.x1&&z>=box.z0&&z<=box.z1);
   assert.ok(contains(.5,.9)&&contains(.9,.5));
   assert.equal(contains(.9,.9),false);
+});
+
+test('adjacent doors face the player with their hinges on opposing outer edges',t=>{
+  const action=sandbox(t);
+  const place=x=>action({type:'place',x,y:1,z:10,against:{x,y:0,z:10},expectedRevision:0,cell:door,yaw:0,
+    requestId:`adjacent-door-${x}`});
+  for (const [x,hinge] of [[7,0],[8,1]]) {
+    const result=place(x);
+    assert.equal(result.status,200,JSON.stringify(result.output));
+    assert.deepEqual(result.output.changes.map(cell=>cell.cell),['legacy:64:1',`legacy:64:${8|hinge}`]);
+  }
 });

@@ -1,4 +1,6 @@
 import {blockKey,blockState} from './block-interactions.mjs';
+import {isChiselStair} from './placement-heading.mjs';
+import {isCandle,isTwilightCritter} from './placement-lighting.mjs';
 
 const toolGroups={
   pickaxe:[270,274,257,285,278], axe:[271,275,258,286,279],
@@ -31,10 +33,22 @@ export function hoedCell(cell,above) {
   return [2,3].includes(id) && blockState(above)[0]===0 ? blockKey(60,0) : null;
 }
 
+function blockDropDamage(id,meta) {
+  if ([17,18,2163,2176].includes(id)) return meta&3;
+  if (isChiselStair(id)) return meta&8;
+  if (id===2174 || id>=2783 && id<=2785) return meta>=12?13:1;
+  if (id===219 || id===220) return meta>=12?0:meta&12;
+  if (isTwilightCritter(id) || isCandle(id) || id===3247 || id>=4035 && id<=4066) return 0;
+  if (id===3248) return meta&7;
+  if (id>158 || [35,43,44,95,97,98,125,126].includes(id)) return meta;
+  return 0;
+}
+
 export function harvestRule(cell,stack,entry) {
   const [id,meta]=blockState(cell);
   const {tool,rank}=classifyTool(stack,entry);
   if (!id||indestructible.has(id)) return null;
+  if (id===144) return {drops:[{key:`creative:397:${Math.min(4,Math.max(0,cell.object?.data?.SkullType|0))}`,count:1}]};
   if (id===49 && (tool!=='pickaxe'||rank<4)) return null;
   if ((rock.has(id)||id>=750&&id<=768||id>=2160&&id<=2180&&!soft.has(id)) &&
       (tool!=='pickaxe'||rank<(oreRanks[id]??1))) return null;
@@ -44,8 +58,8 @@ export function harvestRule(cell,stack,entry) {
   const native={1:[4,0],2:[3,0],16:[263,0],21:[351,4],30:[287,0],31:[295,0],
     52:[0,0],56:[264,0],59:[296,0],60:[3,0],62:[61,0],63:[323,0],68:[323,0],
     73:[331,0],74:[331,0],78:[332,0],89:[348,0],93:[356,0],94:[356,0],
-    124:[123,0],129:[388,0],141:[391,0],142:[392,0],153:[406,0]};
-  const mapped=native[id]??[id,[17,18,35,43,44,95,97,98,125,126,159,171,243].includes(id) ? meta & (id===17||id===18?3:15) : id<=158?0:meta];
+    124:[123,0],129:[388,0],141:[391,0],142:[392,0],145:[145,Math.min(2,meta>>2)],153:[406,0]};
+  const mapped=native[id]??[id,blockDropDamage(id,meta)];
   const [dropId,damage]=mapped;
   if (!dropId) return {drops:[]};
   const item=dropId>=256&&dropId<512 || [263,264,295,296,323,331,332,348,351,356,388,391,392,406].includes(dropId);

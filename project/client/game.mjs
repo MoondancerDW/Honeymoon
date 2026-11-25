@@ -564,6 +564,7 @@ const messages = {
   invalid_frame_face: 'Для рамки нужна широкая сторона прочного блока',
   frame_limit: 'Достигнут предел рамок',
   invalid_control_face: 'Этот механизм нельзя закрепить на выбранной грани',
+  invalid_mount_face: 'Выберите подходящую грань опоры',
   rail_needs_support: 'Рельсам нужна опора снизу',
   minecart_requires_rail: 'Поставьте вагонетку на рельсы',
   not_a_minecart: 'Здесь больше нет вагонетки',
