@@ -17,13 +17,16 @@ const importedPainting={...paintingAt([1,66,3],3,'Aztec2'),key:'entity:qa-painti
 const importedFrame={type:'ItemFrame',key:'entity:qa-frame',position:[3.5,66.5,4.0625],
   data:{TileX:3,TileY:66,TileZ:3,Direction:0,Dir:2,ItemRotation:0}};
 const entities=[importedPainting,importedFrame];
+const isolatedSupport=[0,66,5];
+const isolatedFace=[.5,66.5,6];
 const bounds={minX:0,maxX:15,minY:0,maxY:255,minZ:0,maxZ:15};
 const palette=['air','legacy:1:0'];
 const hash='ab'.repeat(32);
 const hasPlayableChunk=(x,z)=>x===0&&z===0;
 const inBounds=(x,y,z)=>x>=0&&x<16&&y>=0&&y<256&&z>=0&&z<16;
 // Keep the spawn platform inside radius 1 so the test's clear sightline does not get a diagnostic gate.
-const isStone=(x,y,z)=>y===64 && x>=0&&x<=2&&z>=6&&z<=8 || x>=0&&x<=6&&y>=65&&y<=68&&z===3;
+const isStone=(x,y,z)=>y===64 && x>=0&&x<=2&&z>=6&&z<=8 || x>=0&&x<=6&&y>=65&&y<=68&&z===3 ||
+  x===isolatedSupport[0]&&y===isolatedSupport[1]&&z===isolatedSupport[2];
 const indices=Buffer.alloc(8192);
 for (let y=64;y<=68;y++) for (let z=0;z<16;z++) for (let x=0;x<16;x++) {
   if (isStone(x,y,z)) indices.writeUInt16LE(1,2*(x+z*16+(y&15)*256));
@@ -107,8 +110,29 @@ try {
   const removedFrame=await click('left','frame_remove');
   assert.equal(removedFrame.frames.find(entry=>entry.key===importedFrame.key)?.removed,true);
   assert.equal(await page.evaluate(()=>honeymoon.getCell(3,66,3)),palette[1]);
-  assert.deepEqual(results.pageErrors,[]);
   results.checks.push('removed the new painting and an original empty frame while keeping the wall');
+
+  await look(isolatedFace);
+  const motives=new Set();
+  for (let attempt=0;attempt<12;attempt++) {
+    const placed=await click('right','place_frame');
+    const painting=placed.frames.find(entity=>entity.type==='Painting'&&entity.placed);
+    assert.ok(painting);
+    const mount=paintingMount(painting);
+    assert.deepEqual(mount.normal,[0,0,1]);
+    assert.deepEqual(mount.supports,[isolatedSupport]);
+    assert.deepEqual(mount.art.slice(2),[16,16]);
+    motives.add(painting.data.Motive);
+
+    await hasLabel('Картина');
+    const removed=await click('left','frame_remove');
+    assert.equal(removed.frames.some(entity=>entity.key===painting.key),false);
+    await page.waitForFunction(()=>!document.getElementById('selected-label').textContent.includes('Картина'));
+  }
+  results.oneBlockPaintingMotives=[...motives].sort();
+  assert.ok(motives.size>=3,`Only selected ${[...motives].join(', ')} over 12 placements`);
+  results.checks.push('placed and removed 12 paintings on one support, all 16×16 with at least three different motives');
+  assert.deepEqual(results.pageErrors,[]);
   await page.screenshot({path:join(output,'decorations-browser.png')});
 } catch (error) {
   results.failure=error.stack;

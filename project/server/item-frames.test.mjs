@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import {pickItemFrame} from '../client/movement.mjs';
 import {CREATIVE_FRAME_KEY} from '../world/creative-items.mjs';
 import {itemFrameHit} from '../world/item-frames.mjs';
-import {paintingAt,paintingHit,paintingItemKey,paintingMount} from '../world/paintings.mjs';
+import {paintingArt,paintingAt,paintingHit,paintingItemKey,paintingMount} from '../world/paintings.mjs';
 import {createItemFrames} from './item-frames.mjs';
 import {openStore} from './store.mjs';
 
@@ -13,13 +13,15 @@ const originalFrame={key:'entity:original-frame',type:'ItemFrame',position:[2.5,
 const originalPainting={...paintingAt(support,2,'Aztec2'),key:'entity:original-painting',placed:false};
 const sight={x:2.5,y:3,z:1.5,eye:.5};
 const direction=[0,0,1];
+const placement={x:2,y:3,z:4,hit:{x:2.5,y:3.5,z:4}};
 
-function fixture(t,entities=[],{face=[0,0,-1],wall=(x,y)=>x===2&&y===3,protectedCell=()=>false,visible=true}={}) {
+function fixture(t,entities=[],{face=[0,0,-1],wall=(x,y)=>x===2&&y===3,protectedCell=()=>false,visible=true,
+  blockAt=()=>null,randomIndex}={}) {
   const store=openStore(':memory:');
   t.after(()=>store.close());
   const base={inBounds:(...point)=>point.every(value=>value>=0&&value<16),
     publicDecorations:(x,z)=>x===0&&z===0?entities:[]};
-  const config={base,store,protectedCell,faceSupports:(x,y)=>wall(x,y),getCurrent:()=>({cell:null}),
+  const config={base,store,protectedCell,faceSupports:(x,y)=>wall(x,y),getCurrent:(...point)=>({cell:blockAt(...point)}),randomIndex,
     physical:{targetAtHit:()=>({face}),visiblePoint:()=>visible}};
   const frames=createItemFrames(config);
   return {frames,reopen:()=>createItemFrames(config)};
@@ -60,8 +62,10 @@ test('an original painting disappears from picking after its persisted removal',
 });
 
 test('paintings fit the actual wall, do not share a face with frames, and detach with their support',t=>{
-  const {frames}=fixture(t,[],{wall:(x,y)=>x>=1&&x<=2&&y>=3&&y<=4});
-  const placement={x:2,y:3,z:4,hit:{x:2.5,y:3.5,z:4}};
+  const {frames}=fixture(t,[],{wall:(x,y)=>x>=1&&x<=2&&y>=3&&y<=4,randomIndex:count=>{
+    assert.equal(count,20);
+    return count-1;
+  }});
   const [art]=frames.placePainting(placement,sight).frames;
   assert.equal(art.type,'Painting');
   const mount=paintingMount(art);
@@ -69,6 +73,46 @@ test('paintings fit the actual wall, do not share a face with frames, and detach
   assert.deepEqual(mount.art.slice(2),[32,32]);
   assert.throws(()=>frames.place(placement,sight),{code:'occupied'});
   assert.deepEqual(frames.removeSupported(1,4,4),[]);
+});
+
+test('hanging another painting on the same one-block wall draws again from all seven small motifs',t=>{
+  const draws=[0,6];
+  const {frames}=fixture(t,[],{randomIndex:count=>{
+    assert.equal(count,7);
+    return draws.shift();
+  }});
+  const [first]=frames.placePainting(placement,sight).frames;
+  assert.equal(first.data.Motive,'Kebab');
+  frames.edit(removeInput(first),sight);
+  const [second]=frames.placePainting(placement,sight).frames;
+  assert.equal(second.key,first.key);
+  assert.equal(second.data.Motive,'Wasteland');
+  assert.deepEqual(paintingMount(second).supports,[support]);
+});
+
+test('a large wall offers every motif to the same draw, including the small ones',t=>{
+  const expected=Object.keys(paintingArt);
+  let next=0;
+  const {frames}=fixture(t,[],{wall:()=>true,randomIndex:count=>{
+    assert.equal(count,expected.length);
+    return next++;
+  }});
+  const seen=expected.map(()=>{
+    const [painted]=frames.placePainting(placement,sight).frames;
+    assert.deepEqual(frames.removeSupported(...support),[]);
+    return painted.data.Motive;
+  });
+  assert.deepEqual(seen,expected);
+});
+
+test('a block in front of the upper wall excludes taller paintings from the draw',t=>{
+  const {frames}=fixture(t,[],{wall:(x,y)=>x>=1&&x<=2&&y>=3&&y<=4,
+    blockAt:(x,y,z)=>x===2&&y===4&&z===3?'legacy:1:0':null,randomIndex:count=>{
+      assert.equal(count,12);
+      return count-1;
+    }});
+  const [painted]=frames.placePainting(placement,sight).frames;
+  assert.deepEqual(paintingMount(painted).art.slice(2),[32,16]);
 });
 
 test('genuine reserved decorations and occluded targets remain protected',t=>{

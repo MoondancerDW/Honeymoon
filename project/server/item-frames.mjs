@@ -1,3 +1,4 @@
+import {randomInt} from 'node:crypto';
 import {displayEntity} from './base.mjs';
 import {RequestError} from './errors.mjs';
 import {signalSides} from '../world/block-interactions.mjs';
@@ -11,10 +12,7 @@ const state = 'entities';
 const axes = ['x','y','z'];
 const samePoint = (left,right) => left?.every((value,index) => value === right[index]);
 const faceKey=(support,side)=>`${support.join(',')}:${side}`;
-const motives=Object.keys(paintingArt).sort((a,b)=>{
-  const [, ,aw,ah]=paintingArt[a], [, ,bw,bh]=paintingArt[b];
-  return bw*bh-aw*ah;
-});
+const motives=Object.keys(paintingArt);
 
 function mountData(entity) {
   if (entity.type==='Painting') return paintingMount(entity);
@@ -31,7 +29,7 @@ function tombstone({key,position,type},revision) {
   return {key,position,type,revision,removed:true};
 }
 
-export function createItemFrames({base,store,physical,getCurrent,faceSupports,protectedCell}) {
+export function createItemFrames({base,store,physical,getCurrent,faceSupports,protectedCell,randomIndex=randomInt}) {
   const snapshot = () => store.getState(module,world,state)?.value ?? [];
   const publicFrames=entries=>entries.map(entity=>entity.removed ? entity :
     {...displayEntity(entity),revision:entity.revision,...(entity.placed&&{placed:true})});
@@ -103,18 +101,25 @@ export function createItemFrames({base,store,physical,getCurrent,faceSupports,pr
     const entries=snapshot();
     if (entries.filter(entry=>entry.placed&&!entry.removed).length>=512) throw new RequestError(409,'frame_limit');
     const occupied=occupiedFaces([support],entries);
+    const checked=new Map();
+    const fits=back=>{
+      const key=faceKey(back,side);
+      if (!checked.has(key)) {
+        const front=back.map((value,axis)=>value+at.face[axis]);
+        checked.set(key,!occupied.has(key) && [back,front].every(([x,y,z])=>base.inBounds(x,y,z) &&
+          (!base.hasPlayableChunk || base.hasPlayableChunk(x>>4,z>>4)) && !protectedCell(x,y,z)) &&
+          faceSupports(...back,side,.125) && getCurrent(...front).cell===null);
+      }
+      return checked.get(key);
+    };
+    const available=[];
     for (const motive of motives) {
       const entity=paintingAt(support,side,motive);
-      const mount=paintingMount(entity);
-      if (!mount.supports.every(back=>{
-        const front=back.map((value,axis)=>value+at.face[axis]);
-        return [back,front].every(([x,y,z])=>base.inBounds(x,y,z) &&
-          (!base.hasPlayableChunk || base.hasPlayableChunk(x>>4,z>>4)) && !protectedCell(x,y,z)) &&
-          faceSupports(...back,side,.125) && getCurrent(...front).cell===null && !occupied.has(faceKey(back,side));
-      })) continue;
-      return write(entries,entity,entity.key);
+      if (paintingMount(entity).supports.every(fits)) available.push(entity);
     }
-    throw new RequestError(409,'invalid_frame_face');
+    if (!available.length) throw new RequestError(409,'invalid_frame_face');
+    const entity=available[randomIndex(available.length)];
+    return write(entries,entity,entity.key);
   }
 
   function edit(input,sight,stack) {
