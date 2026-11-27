@@ -10,7 +10,7 @@ const detailsView = {containerView:'details'};
 const cacheKey = ({x,y,z}) => [x,y,z].join(',');
 const countsFor = slots => slots.map(stack=>stack?.count??null);
 
-export function createContainerMenu({action,entryFor,draw,inventory,pause,resume}) {
+export function createContainerMenu({action,bagAction,entryFor,draw,inventory,pause,resume}) {
   const node=id=>document.getElementById(id);
   const dialog=node('container-menu'), storage=node('container-slots'), bag=node('container-inventory');
   const heading=node('container-title'), status=node('container-status'), closeButton=node('container-close');
@@ -47,6 +47,7 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
   const slots=side=>side==='storage'?active?.container?.slots:inventory().slots;
   const at=ref=>ref && slots(ref.side)?.[ref.slot];
   const same=(a,b)=>Boolean(a && b && a.side===b.side && a.slot===b.slot);
+  const locked=ref=>active?.portable && ref.side==='inventory' && ref.slot===active.container.inventorySlot;
   const ready=()=>Boolean(active?.authorized && active.container?.slots && !active.transfer);
 
   function setCursor(source) {
@@ -63,6 +64,8 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
     const container=active?.container;
     if (!container) return;
     heading.textContent=plainMinecraftText(container.title);
+    storage.classList.toggle('seed-bag',Boolean(active.portable && container.counts?.length===9));
+    storage.setAttribute('aria-label',active.portable?heading.textContent:'Хранилище');
     storage.setAttribute('aria-busy',String(!active.authorized || !container.slots));
     function cells(side) {
       const stacks=slots(side);
@@ -75,7 +78,7 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
         button.className='inventory-slot';
         button.dataset.side=side;
         button.dataset.slot=slot;
-        button.disabled=!active.authorized || !container.slots;
+        button.disabled=!active.authorized || !container.slots || locked(position);
         button.draggable=!!stack&&!button.disabled;
         const entry=stack && entryFor(stack);
         const label=count && !stack ? `Ячейка ${slot+1}, количество ${count}, загрузка` :
@@ -109,13 +112,14 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
   }
 
   function click(to,event,right) {
-    if (!ready()) return;
+    if (!ready() || locked(to)) return;
     const stack=at(to);
     if (event.shiftKey&&stack) {
       const side=to.side==='storage'?'inventory':'storage';
       const available=slots(side);
-      const match=available.findIndex(other=>other&&stackType(other)===stackType(stack)&&other.count<itemStackLimit(other.key));
-      const slot=match>=0?match:available.indexOf(null);
+      const match=available.findIndex((other,slot)=>!locked({side,slot})&&other&&
+        stackType(other)===stackType(stack)&&other.count<itemStackLimit(other.key));
+      const slot=match>=0?match:available.findIndex((other,slot)=>!other&&!locked({side,slot}));
       if (slot>=0) void move(to,{side,slot});
     } else if (picked) {
       if (same(picked,to)) setCursor(null);
@@ -182,34 +186,48 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
 
   function accept(context,current) {
     if (!current) return;
-    const {summary,details}=remember(current);
-    const slots=details??(summary.counts.every(count=>count===null)?summary.counts:undefined);
-    const container={...summary,slots};
+    let container;
+    if (context.portable) {
+      if (!Array.isArray(current.slots)) return;
+      container={...current,counts:countsFor(current.slots)};
+    } else {
+      const {summary,details}=remember(current);
+      const slots=details??(summary.counts.every(count=>count===null)?summary.counts:undefined);
+      container={...summary,slots};
+    }
     context.container=container;
     context.authorized=true;
     if (active===context) {
-      status.textContent=slots?'':'Загружаем предметы…';
+      status.textContent=container.slots?'':'Загружаем предметы…';
       render();
     }
-    if (!slots) hydrate(context,container);
+    if (!container.slots) hydrate(context,container);
   }
 
   async function move(from,to,count) {
     const context=active;
     const source=at(from);
-    if (!ready()||same(from,to)||!source) return;
+    if (!ready()||same(from,to)||!source||locked(from)||locked(to)) return;
     const carried=same(picked,from)?picked.count:0;
     context.transfer=true;
     status.textContent='';
     try {
-      const response=await action('container_move',context.target,{...detailsView,version:context.container.version,
-        from:{side:from.side,slot:from.slot},to,...(count&&{count:Math.min(64,count)})});
+      const fields={version:context.container.version,from:{side:from.side,slot:from.slot},to,
+        ...(count&&{count:Math.min(64,count)})};
+      const response=context.portable
+        ? await bagAction('bag_move',{...fields,slot:context.container.inventorySlot})
+        : await action('container_move',context.target,{...detailsView,...fields});
       if (active!==context) return;
-      accept(context,response.body?.container);
+      accept(context,context.portable?response.body?.bag:response.body?.container);
       if (response.ok) {
         const remainder=at(from);
         const remaining=remainder && stackType(remainder)===stackType(source) ? carried-(source.count-remainder.count) : 0;
         setCursor(remaining>0 ? {...from,count:Math.min(remaining,remainder.count)} : null);
+      }
+      if (context.portable && ['not_a_bag','invalid_bag_contents'].includes(response.body?.error)) {
+        context.authorized=false;
+        setCursor(null);
+        render();
       }
       if (response.body?.error) status.textContent=response.body.message??'Действие не выполнено';
     } catch {
@@ -244,11 +262,7 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
     const spec=containerSpec(target.cell);
     const context={target,container:preview?.fresh ? preview.summary :
       {title:spec?.title??'Хранилище',counts:Array(spec?.size??0).fill(null)}};
-    active=context;
-    status.textContent='Проверяем содержимое…';
-    render();
-    dialog.showModal();
-    pause();
+    reveal(context);
     const previousClose=pendingClose;
     context.opening=(async()=>{
       if (previousClose) await previousClose;
@@ -268,6 +282,32 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
     return context.opening;
   }
 
+  function reveal(context) {
+    active=context;
+    status.textContent='Проверяем содержимое…';
+    render();
+    dialog.showModal();
+    pause();
+  }
+
+  async function openBag({slot,title,size,fromInventory=false}) {
+    if (active) return false;
+    const context={portable:true,fromInventory,container:{title,counts:Array(size).fill(null)}};
+    reveal(context);
+    try {
+      const response=await bagAction('bag_open',slot===undefined?{}:{slot});
+      if (active!==context) return false;
+      if (response.ok && Array.isArray(response.body?.bag?.slots)) {
+        accept(context,response.body.bag);
+        return true;
+      }
+      status.textContent=response.body?.message??'Не удалось открыть сумку';
+    } catch {
+      if (active===context) status.textContent='Не удалось открыть сумку';
+    }
+    return false;
+  }
+
   function close() {
     const context=active;
     if (!context || context.transfer) return;
@@ -275,7 +315,8 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
     dragged=null;
     active=null;
     dialog.close();
-    resume();
+    if (!context.fromInventory) resume();
+    if (context.portable) return;
     const closing=context.opening.then(async opened=>{
       if (!opened) return;
       const response=await action('container_close',context.target,summaryView);
@@ -294,7 +335,7 @@ export function createContainerMenu({action,entryFor,draw,inventory,pause,resume
   function changed(changes) {
     const affects=({x,y,z})=>changes.some(change=>change.y===y && Math.abs(change.x-x)+Math.abs(change.z-z)<=1);
     contentsCache.forEach(record=>{if (affects(record.summary)) record.fresh=false;});
-    if (active?.authorized && affects(active.target)) void refresh(active);
+    if (active?.authorized && !active.portable && affects(active.target)) void refresh(active);
   }
-  return {isOpen:()=>dialog.open,open,changed};
+  return {isOpen:()=>dialog.open,open,openBag,changed};
 }

@@ -11,7 +11,9 @@ import { createDroppedItems } from './dropped-items.mjs';
 import { createFluidSimulation } from './fluids.mjs';
 import { createInventory, inventoryInput, isInventoryAction } from './inventory.mjs';
 import {offhandAppearance} from '../world/item-appearance.mjs';
+import {itemStackPortion} from '../world/item-stack.mjs';
 import { containerActions, containerInput, createContainers } from './containers.mjs';
+import {bagOpenInput,bagMoveInput,createBags} from './bags.mjs';
 import { withoutContainerContents } from '../world/containers.mjs';
 import { basicRecipes,classifyTool,harvestRule,hoedCell,meleeDamage } from '../world/survival-tools.mjs';
 import {createHeldItems} from './held-items.mjs';
@@ -47,6 +49,7 @@ import {orientedLightPlacement} from '../world/placement-lighting.mjs';
 import {modWallPlacement,orientModBlock,orientModObject} from '../world/placement-mods.mjs';
 import {craftingTableRecipe,workbenchRecipes} from '../world/workbench-recipes.mjs';
 import {paintingItemKey} from '../world/paintings.mjs';
+import {seedPlant,seedSoil,seedSpiral} from '../world/seed-plants.mjs';
 
 const partActions = new Set(['copy_part', 'place_part', 'remove_part']);
 const voxelActions = new Set(['copy_voxel', 'place_voxel', 'remove_voxel']);
@@ -58,7 +61,7 @@ const unlimitedActions = new Set(['inventory_copy','inventory_give','inventory_c
 const vehiclePlacements = new Map([['place_minecart',CREATIVE_MINECART_KEY],['place_boat',CREATIVE_BOAT_KEY]]);
 const vehicleRemovals = new Map([['remove_minecart','not_a_minecart'],['remove_boat','not_a_boat']]);
 const actions = new Set(['place', 'remove', 'remove_microblocks', 'copy', 'interact', 'edit_sign', ...containerActions,
-  'place_frame', ...vehiclePlacements.keys(), ...vehicleRemovals.keys(), ...frameActions, ...partActions, ...voxelActions, ...liquidActions]);
+  'bag_plant','place_frame', ...vehiclePlacements.keys(), ...vehicleRemovals.keys(), ...frameActions, ...partActions, ...voxelActions, ...liquidActions]);
 const axes = ['x', 'y', 'z'];
 const faceOffsets = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
 const bedDirections = [[0,1], [-1,0], [0,-1], [1,0]];
@@ -100,6 +103,8 @@ const slotNumber = value => Number.isInteger(value) && value >= 0 && value < PAR
 
 function normalizeAction(body) {
   if (typeof body.requestId !== 'string' || !REQUEST_ID.test(body.requestId)) throw new RequestError(400, 'invalid_request_id');
+  if (body.type==='bag_open') return bagOpenInput(body,{type:body.type});
+  if (body.type==='bag_move') return bagMoveInput(body,{type:body.type});
   if (isInventoryAction(body.type)) {
     return inventoryInput(body, {type:body.type, ...(body.eye !== undefined && {eye:readEye(body.eye)})});
   }
@@ -127,6 +132,7 @@ function normalizeAction(body) {
     input.creativeItem = body.creativeItem;
   }
   if (body.hit !== undefined) input.hit = point(body.hit);
+  if (body.type==='bag_plant' && !input.hit) throw new RequestError(400,'invalid_coordinates');
   if (vehicleRemovals.has(body.type) || frameActions.has(body.type)) {
     if (typeof body.entity !== 'string' || body.entity.length > 160) {
       throw new RequestError(400,vehicleRemovals.get(body.type) ?? 'not_a_frame');
@@ -432,6 +438,7 @@ export function createGame(base, store, geometry, {
     body:player=>({id:player,...playerAt(player),...bodyFor(player)}),visible:physical.visiblePoint,
     canUse:checkHeldAction,damage:damagePlayer,changed:survivalChanged});
   const containers=createContainers({store,inventory,getCell:getCurrent,getOriginalCell:base.getCell,creativeBlocks,creativeItems});
+  const bags=createBags({inventory,creativeBlocks,creativeItems});
   const drops = createDroppedItems({base, store, clock, collides:physical.collides, visible:physical.visiblePoint,
     liquidAt:(x,y,z)=>fluidAt(cellAt,x,y,z,models),
     currentAt:(x,y,z,kind)=>fluidCurrent(cellAt,x,y,z,kind)});
@@ -1347,8 +1354,43 @@ export function createGame(base, store, geometry, {
       [{type:'sound', sound:'block.place', cell:liquidCell(fluid), position:[x,y,z]}] : []};
   }
 
+  function plantFromBag(player,{x,y,z,hit}) {
+    const origin=physical.targetAtHit(playerSight(player),x,y,z,hit);
+    if (!origin) throw new RequestError(403,'outside_reach');
+    if (origin.face[1]!==1) throw new RequestError(409,'seed_soil_required');
+    const seeds=bags.seedContents(player);
+    if (!seeds) throw new RequestError(409,'empty_seed_bag');
+    const plant=seedPlant(seeds.key);
+    if (!plant) throw new RequestError(409,'seed_soil_required');
+
+    const consume=survival?.enabled && survival.isGame(player);
+    const cells=[];
+    const above=y+1;
+    for (const [ax,az] of seedSpiral(x,z)) {
+      const allowed=base.inBounds(ax,above,az) && (!base.hasPlayableChunk || base.hasPlayableChunk(ax>>4,az>>4)) &&
+        !reserved(ax,above,az) && !spawnProtected(ax,above,az) &&
+        (allowRemoval || base.getCell(ax,above,az).key==='air');
+      const target=allowed&&getCurrent(ax,above,az);
+      if (!target || target.cell!==null || target.parts?.length || target.voxels || target.fluid ||
+          !seedSoil(plant,getCurrent(ax,y,az)) || playerOverlaps(ax,above,az,plant.cell,player)) {
+        if (cells.length===0) throw new RequestError(409,'seed_soil_required');
+        continue;
+      }
+      cells.push({x:ax,y:above,z:az,cell:plant.cell,object:null});
+      if (consume && cells.length>=seeds.count) break;
+    }
+    const inventoryState=consume?bags.consumeSeeds(player,{...seeds,count:cells.length}):inventory.read(player);
+    const keys=new Set(cells.map(cell=>cellAddress(cell.x,cell.y,cell.z)));
+    const effects=[{type:'sound',sound:'block.place',cell:plant.cell,position:[x,above,z]}];
+    return {...writePlan({}, {cells,effects}, {keys,player}),inventory:inventoryState};
+  }
+
   function execute(player, input, transport) {
     const { x, y, z, type } = input;
+    if (type==='bag_open' || type==='bag_move') {
+      const result=type==='bag_open'?bags.open(player,input):bags.move(player,input);
+      return {worldRevision:store.worldRevision(),changes:[],effects:[],...result};
+    }
     if (isInventoryAction(type)) {
       const output = {worldRevision:store.worldRevision(), changes:[], effects:[]};
       if (type === 'drop_item') {
@@ -1359,7 +1401,7 @@ export function createGame(base, store, geometry, {
       if (type === 'pickup_item') {
         const item = drops.nearest(playerAt(player),playerSight(player));
         if (!item) return {...output, inventory:inventory.read(player)};
-        const state = inventory.put(player,{...item.stack,count:1});
+        const state = inventory.put(player,itemStackPortion(item.stack,1));
         transport.drop = drops.pick(item);
         transport.removedDrop = !transport.drop && item.key;
         return {...output, inventory:state, pickedItem:item.key};
@@ -1398,6 +1440,7 @@ export function createGame(base, store, geometry, {
     if (input.expectedRevision !== current.revision) {
       throw new RequestError(409, 'stale_cell', {current:publicChange(current), worldRevision:store.worldRevision()});
     }
+    if (type==='bag_plant') return plantFromBag(player,input);
     if (type === 'place_frame') {
       const frame = creativeItems.get(input.creativeItem);
       if (input.creativeItem===paintingItemKey && frame) return frames.placePainting(input,playerSight(player));

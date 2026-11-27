@@ -1,18 +1,21 @@
 import {ATLAS_GRID,TILE_SIZE,tiles} from '../world/geometry.mjs';
 import {creativeMicroblock} from '../world/creative-items.mjs';
 import {blockItemAppearance} from '../world/item-appearance.mjs';
+import {bagKind} from '../world/item-stack.mjs';
 import {itemName,plainMinecraftText,writtenBookInfo} from '../world/item-text.mjs';
 import {createContainerCache} from './container-cache.mjs';
 
 const images=new Map();
 const icons=createContainerCache({limit:512,ttl:15*60_000});
 const texturePath=family=>family==='terrain'?'/generated/textures/atlas.png':`/generated/models/${family}.png`;
+const bagNames={canvas:'Canvas Bag',seed:'Seed Bag'};
 
 export function inventoryItemEntry(stack, known, labelFor = key => key) {
   if (!stack) return null;
   const [,id,variant] = /^(?:creative|legacy):(\d+):(\d+)$/.exec(stack.key) ?? [];
   const name = plainMinecraftText(itemName(stack)) || writtenBookInfo(stack)?.title ||
-    stack.name || known?.name || (stack.cell ? labelFor(stack.cell) : id === undefined ? stack.key : `Предмет ${id}`);
+    stack.name || known?.name || bagNames[bagKind(stack.key)] ||
+    (stack.cell ? labelFor(stack.cell) : id === undefined ? stack.key : `Предмет ${id}`);
   return {
     ...known,
     key:stack.key,

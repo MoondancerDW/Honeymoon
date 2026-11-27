@@ -13,7 +13,7 @@ import {PlayerProfile, skinDescription, skinTooLarge} from './player-profile.mjs
 import {createSocialHud} from './social-hud.mjs';
 import {createCreativeMenu} from './creative-menu.mjs';
 import {offhandAppearance} from '../world/item-appearance.mjs';
-import {offhandSlot} from '../world/item-stack.mjs';
+import {bagKind,canvasBagSize,offhandSlot,seedBagSize} from '../world/item-stack.mjs';
 import {createItemDocuments} from './item-documents.mjs';
 import {createContainerMenu} from './container-menu.mjs';
 import {createAccessUi} from './access-ui.mjs';
@@ -249,7 +249,7 @@ const inventoryStackAt=slot=>slot===offhandSlot ? inventory.offhand :
 const holdingNpcWand=()=>isNpcEditorWand(inventoryStackAt(inventory.selected)) ||
   hasOffhand() && isNpcEditorWand(inventory.offhand);
 const itemDocuments=createItemDocuments({stackAt:inventoryStackAt,act:inventoryAction,pause,resume});
-const storage=createContainerMenu({action:containerAction,entryFor:entryForInventoryStack,
+const storage=createContainerMenu({action:containerAction,bagAction,entryFor:entryForInventoryStack,
   draw:drawCreativeIcon,inventory:()=>inventory,pause,resume});
 const npcUi=createNpcUi({command:npcCommand,onTeleport:receiveNpcTeleport,
   nameVisible:npc=>npcNameVisible(npc,holdingNpcWand()),
@@ -303,7 +303,7 @@ const creative = createCreativeMenu({load:loadCreative,
   trash:slot=>inventoryAction('inventory_trash',{slot}),
   drop:fields=>inventoryAction('drop_item',{...fields,yaw:heading.yaw,eye:view.eyeOffset()}),
   preview:(canvas,equipment)=>renderInventoryPreview(canvas,equipment,view?.localSkin),
-  editItem:itemDocuments.openItem,readBook:itemDocuments.openBook,
+  editItem:itemDocuments.openItem,readBook:itemDocuments.openBook,openBag,
   swap:swapHands,
   canCopy:()=>modeUi.creative&&!spectator,
   pause() { social.close(false); pause(); }, resume, notice, icon:drawCreativeIcon});
@@ -466,6 +466,30 @@ async function containerAction(type,target,fields={}) {
   return result;
 }
 
+function bagAction(type,fields) {
+  const run=inventoryRequest.then(async()=>{
+    const result=await postAction({requestId:requestId(),type,...fields});
+    applyInventory(result.body.inventory);
+    if (!result.ok) result.body.message=messages[result.body.error]??result.body.error;
+    return result;
+  });
+  inventoryRequest=run.catch(()=>{});
+  return run;
+}
+
+function openBag(slot) {
+  const kind=bagKind(inventoryStackAt(slot??inventory.selected)?.key);
+  if (!kind || spectator || resetting || modeUi.death) return;
+  const seed=kind==='seed';
+  return storage.openBag({slot,fromInventory:slot!==undefined,
+    title:seed?'Мешочек с семенами':'Холщовая сумка',size:seed?seedBagSize:canvasBagSize});
+}
+
+function bagSneaking(modifier=false) {
+  return modifier || touchCrouching || keys.has('KeyC') ||
+    keys.has('ShiftLeft') || keys.has('ShiftRight') || movement?.stance==='crouch';
+}
+
 function applyInventory(value) {
   if (!value || !Array.isArray(value.slots)) return;
   if (value.offhand && profile.confirmed && !hasOffhand()) value = {...value,offhand:null};
@@ -550,6 +574,10 @@ const messages = {
   stale_container: 'Хранилище изменилось. Повторите действие',
   not_a_container: 'Хранилище больше недоступно',
   wrong_container_item: 'Этот предмет не подходит для ячейки',
+  not_a_bag:'Сумка больше недоступна', stale_bag:'Содержимое сумки изменилось. Повторите действие',
+  invalid_bag_contents:'Содержимое сумки не удалось прочитать', bag_slot_locked:'Открытую сумку нельзя переместить',
+  bag_nesting:'Эту сумку нельзя положить внутрь', wrong_bag_item:'В этот мешочек можно класть только подходящие семена',
+  empty_seed_bag:'В мешочке нет семян', seed_soil_required:'Здесь нельзя посадить эти семена',
   stale_inventory_item: 'Предмет изменился. Откройте его снова',
   invalid_item_text: 'Проверьте текст предмета',
   book_already_signed: 'Книга уже подписана',
@@ -1483,7 +1511,8 @@ function tapWorld() {
   const item = heldCreativeItem;
   const rightClickItem = item?.kind === 'item-frame' || item?.kind === 'minecart' || item?.kind === 'boat' || item?.key===paintingItemKey ||
     (item?.key === bucketKeys.empty && fluidState(selection?.cell)) || (frameTarget && item) ||
-    bookType(inventoryStackAt(inventory.selected)) || consumableProfile(inventoryStackAt(inventory.selected)) ||
+    bookType(inventoryStackAt(inventory.selected)) || bagKind(inventoryStackAt(inventory.selected)?.key) ||
+    consumableProfile(inventoryStackAt(inventory.selected)) ||
     classifyTool(inventoryStackAt(inventory.selected),item).tool==='hoe';
   const canPlace = chiseling ? chiselMaterial : heldPart || clipboard || rightClickItem;
   if (!seat && (wieldWorldEdit() || canPlace)) {
@@ -1804,6 +1833,18 @@ async function action(type, sneaking = false, tapTool = false) {
   if (acting || resetting || spectator || !playing) return;
   updateCamera();
   updateSelection(true);
+  const held=inventoryStackAt(inventory.selected);
+  const heldBag=type==='place' && !chiseling && bagKind(held?.key);
+  if (heldBag) {
+    repeatPlacement=false;
+    const crouched=bagSneaking(sneaking);
+    if (heldBag==='canvas' || crouched) {
+      if (heldBag==='seed' || !crouched) await openBag();
+      return;
+    }
+    if (selection?.offset?.[1]!==1) return;
+    type='bag_plant';
+  }
   if (wieldWorldEdit() && (type==='remove' || type==='place' || type==='copy' && tapTool)) {
     repeatPlacement=false;
     await worldEdit.tool(type,selection);
@@ -1822,7 +1863,6 @@ async function action(type, sneaking = false, tapTool = false) {
     finally {acting=false;}
     return;
   }
-  const held=inventoryStackAt(inventory.selected);
   const usingItem=modeUi.active && type==='place' && !chiseling;
   const heldTool=usingItem?classifyTool(held,heldCreativeItem).tool:undefined;
   const edible=usingItem&&consumableProfile(held);
@@ -1993,7 +2033,7 @@ async function action(type, sneaking = false, tapTool = false) {
   }
   request.expectedRevision = frame?.revision ?? world.revisionAt(request.x, request.y, request.z);
   const started = performance.now();
-  const blockEdit = /^(?:place|remove)(?:_|$)/.test(type);
+  const blockEdit = type==='bag_plant' || /^(?:place|remove)(?:_|$)/.test(type);
   if (blockEdit) localActionSwing=(localActionSwing+1)&0x7fffffff;
   acting = true;
   try {
@@ -2264,7 +2304,8 @@ function tick(now) {
   nearbyStream?.update();
   const eye=view.sightOrigin(position,movement.body.eye);
   touchControls?.update({flying,spectator,stance:movement.stance,crawlRequested,touchCrouching,seated:seat?.kind==='ground',
-    orbit:Boolean(orbitHeading),chisel:chiseling,actionLabel:seat?'Встать':npcTarget?(npcEdit?'Настроить NPC':'Диалог'):
+    orbit:Boolean(orbitHeading),chisel:chiseling,actionLabel:!chiseling && bagKind(inventoryStackAt(inventory.selected)?.key)?'Открыть сумку':
+      seat?'Встать':npcTarget?(npcEdit?'Настроить NPC':'Диалог'):
       containerSpec(selection?.cell)?'Открыть':targetSeat?(targetSeat.bed?'Лечь':'Сесть'):undefined});
   view.render(now, npcTarget||hitPlayer?null:selection, playing && !openMenu || automaticTravel, placement, document.hasFocus(),{x:eye[0],y:eye[1],z:eye[2]});
   connection.frames(view.renderedFrames,now);
@@ -2590,7 +2631,7 @@ function bindControls() {
     if (event.button === 2) {
       repeatPlacement = !spectator;
       nextPlacement = performance.now() + 350;
-      action('place');
+      action('place',event.shiftKey && Boolean(bagKind(inventoryStackAt(inventory.selected)?.key)));
     }
     if (event.button === 0) holdAttack(true);
     if (event.button === 1) action('copy',false,true);
@@ -2623,7 +2664,15 @@ function bindControls() {
       if (touchCrouching) crawlRequested=false;
       pickUpNearbyItem();
     },
-    use(sneaking) { updateSelection(); interact(sneaking); },
+    use(sneaking) {
+      const kind=!chiseling && bagKind(inventoryStackAt(inventory.selected)?.key);
+      if (kind) {
+        if (kind==='seed' || !bagSneaking(sneaking)) void openBag();
+        return;
+      }
+      updateSelection();
+      interact(sneaking);
+    },
     block(type) { if (type==='rotate') cyclePlacement(); else void action(type,false,true); },
     attack:holdAttack,
     repeat(held,released) {

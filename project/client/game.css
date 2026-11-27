@@ -411,6 +411,7 @@ button:disabled { cursor: wait; opacity: .45; }
 #book-author { margin-bottom:6px; }
 #item-document-error,#container-status { color:#84251c; min-height:1.25em; margin:5px 0; }
 .container-grid { display:grid; grid-template-columns:repeat(9,minmax(0,1fr)); gap:2px; max-width:440px; }
+#container-slots.seed-bag { grid-template-columns:repeat(3,minmax(0,1fr)); width:min(33.33%,146px); margin-inline:auto; }
 .container-grid .inventory-slot {
   aspect-ratio:1; width:100%; min-height:0; position:relative;
   border:2px inset #a6bac8; padding:3px; background:#8dafc4;

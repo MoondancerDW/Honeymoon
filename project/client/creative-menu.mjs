@@ -1,6 +1,6 @@
 import {arrangeCreativeCatalog} from './creative-layout.mjs';
 import {equipmentLabels, ponyEquipment} from '../world/pony-armor.mjs';
-import {itemStackLimit,offhandSlot} from '../world/item-stack.mjs';
+import {bagKind,itemStackLimit,offhandSlot} from '../world/item-stack.mjs';
 import {bookType,stackType,writtenBookInfo} from '../world/item-text.mjs';
 import {iconSignature,inventoryItemEntry,pendingItemIcon} from './creative-icons.mjs';
 import {updateItemTooltip} from './item-tooltip.mjs';
@@ -18,7 +18,7 @@ function cardData({entry,icon,code}) {
     search:normalized([name,entry.english,entry.mod,entry.key,icon.name,icon.key,code,entry.variant].filter(Boolean).join(' '))};
 }
 
-export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pause,resume,notice,icon,preview,editItem,readBook,swap,canCopy=()=>true}) {
+export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pause,resume,notice,icon,preview,editItem,readBook,openBag,swap,canCopy=()=>true}) {
   const byId = id => document.getElementById(id);
   const dialog = byId('creative-menu');
   const toggle = byId('creative-toggle');
@@ -203,6 +203,10 @@ export function createCreativeMenu({load,choose,select,move,clone,trash,drop,pau
       return;
     }
     const stack = stackAt(slot);
+    if (secondary && slot<inventorySize && bagKind(stack?.key) && openBag) {
+      void openBag(slot);
+      return;
+    }
     if (stack) setPicked({slot,count:secondary ? Math.ceil(stack.count/2) : stack.count});
   }
 

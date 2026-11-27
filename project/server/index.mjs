@@ -724,7 +724,7 @@ export function createHoneymoonServer({
   }
 
   function broadcast(player, output) {
-    const {inventory: _,container:_container,...publicOutput} = output;
+    const {inventory: _,container:_container,bag:_bag,...publicOutput} = output;
     for (const stream of streams) {
       const effects = player === stream.player ? [] : output.effects.filter(effect => effect.sound)
         .map(({message: _, ...effect}) => effect);

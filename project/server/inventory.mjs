@@ -1,6 +1,6 @@
 import {RequestError} from './errors.mjs';
 import {equipmentLabels, ponyEquipment} from '../world/pony-armor.mjs';
-import {itemStackLimit,offhandSlot} from '../world/item-stack.mjs';
+import {itemStackLimit,itemStackPortion,offhandSlot} from '../world/item-stack.mjs';
 import {bookPageLimit,bookPages,bookPagesLimit,bookTitleLimit,bookType,itemNameLimit,loreLimit,loreLineLimit,
   stackRevision,stackType,writtenBook} from '../world/item-text.mjs';
 
@@ -146,7 +146,7 @@ export function createInventory(store, creativeBlocks, creativeItems, {canOffhan
     }
     const moved = Math.min(transfer, itemStackLimit(source.key) - (target?.count ?? 0));
     if (moved <= 0) return;
-    setStack(state,to,{...source,count:(target?.count ?? 0) + moved});
+    setStack(state,to,{...itemStackPortion(source,moved),count:(target?.count ?? 0) + moved});
     setStack(state,from,source.count > moved ? {...source,count:source.count-moved} : null);
   }
 
@@ -156,7 +156,7 @@ export function createInventory(store, creativeBlocks, creativeItems, {canOffhan
     if (!accepts(to,source)) throw new RequestError(409,'invalid_equipment');
     if (target && stackType(source)!==stackType(target)) throw new RequestError(409,'occupied_inventory_slot');
     const limit=itemStackLimit(source.key);
-    setStack(state,to,{...source,count:Math.min(limit,(target?.count??0)+(count??limit))});
+    setStack(state,to,itemStackPortion(source,Math.min(limit,(target?.count??0)+(count??limit))));
   }
 
   function updateDocument(player,state,input) {
@@ -220,10 +220,10 @@ export function createInventory(store, creativeBlocks, creativeItems, {canOffhan
     }
     const stack = stackAt(state,slot);
     if (!stack) throw new RequestError(409, 'empty_inventory_slot');
-    if (clone) return {stack:{...stack,count:Math.min(count??itemStackLimit(stack.key),itemStackLimit(stack.key))},inventory:state};
+    if (clone) return {stack:itemStackPortion(stack,Math.min(count??itemStackLimit(stack.key),itemStackLimit(stack.key))),inventory:state};
     const taken = Math.min(stack.count,count ?? (all ? stack.count : 1));
     setStack(state,slot,taken < stack.count ? {...stack,count:stack.count-taken} : null);
-    return {stack:{...stack,count:taken}, inventory:write(player, state)};
+    return {stack:itemStackPortion(stack,taken), inventory:write(player, state)};
   }
 
   function insert(state,stack) {
@@ -241,7 +241,7 @@ export function createInventory(store, creativeBlocks, creativeItems, {canOffhan
       const free = state.slots.indexOf(null);
       if (free === -1) break;
       const amount = Math.min(left,limit);
-      state.slots[free] = {...stack,count:amount};
+      state.slots[free] = itemStackPortion({...stack,count:left},amount);
       left -= amount;
     }
     return left;

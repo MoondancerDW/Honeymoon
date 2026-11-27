@@ -3,7 +3,7 @@ import {RequestError} from './errors.mjs';
 import {containerSpec,containerVisualState} from '../world/containers.mjs';
 import {blockKey,blockState} from '../world/block-interactions.mjs';
 import {paneOpaqueBlocks} from '../world/block-geometry-properties.mjs';
-import {itemStackLimit} from '../world/item-stack.mjs';
+import {itemStackLimit,itemStackPortion} from '../world/item-stack.mjs';
 import {stackType} from '../world/item-text.mjs';
 import {ponyArmor} from '../world/pony-armor.mjs';
 
@@ -207,7 +207,7 @@ export function createContainers({store, inventory, getCell, getOriginalCell, cr
       const moved = Math.min(amount,limit(to,first) - (second?.count ?? 0));
       if (moved <= 0) throw new RequestError(409,'inventory_full');
       set(from,moved < first.count ? {...first,count:first.count-moved} : null);
-      set(to,{...first,count:(second?.count ?? 0)+moved});
+      set(to,{...itemStackPortion(first,moved),count:(second?.count ?? 0)+moved});
     }
     for (const [slot,stack] of changes.inventory) state.slots[slot] = stack;
     if (changes.inventory.size) inventory.replace(player,state);
